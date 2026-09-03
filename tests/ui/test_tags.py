@@ -118,3 +118,91 @@ def test_create_tag_modal_cancel_and_backdrop(server, page: Page):
     expect(modal).to_be_visible()
     page.locator("#newTagBackdrop").click(position={"x": 10, "y": 10})
     expect(modal).to_be_hidden()
+
+
+def test_delete_tag(server, page: Page):
+    """Deleting a tag sends DELETE /api/tags/:id, removes it from the sidebar, and resets filter if active."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # 1. Create a temporary tag to delete
+    page.locator("#newTagBtn").click()
+    page.locator("#tagNameInput").fill("ToDelete Tag")
+    page.locator("#tagCategorySelect").select_option("keyword")
+    page.locator("#createTagSubmitBtn").click()
+
+    tag_item = page.locator("#tagCategoryKeyword .tag-item", has_text="ToDelete Tag")
+    expect(tag_item).to_be_visible()
+
+    # Click delete button on the new tag
+    tag_item.locator(".delete-tag-btn").click()
+    expect(page.locator("#tagCategoryKeyword .tag-item", has_text="ToDelete Tag")).to_have_count(0)
+
+    # 2. Delete an active tag and verify filter resets
+    sunset_tag = page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")
+    sunset_tag.click()
+    expect(page.locator("#filterLabel")).to_contain_text("Tag: Sunset")
+    expect(cards).to_have_count(2)
+
+    # Delete the active "Sunset" tag
+    sunset_tag.locator(".delete-tag-btn").click()
+    expect(page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")).to_have_count(0)
+    # Filter resets back to all media
+    expect(cards).to_have_count(6)
+
+
+def test_delete_tag_removes_from_sidebar_and_photos(server, page: Page):
+    """Verify deleting a tag from the left panel removes it from sidebar and from photo metadata in inspector."""
+    page.goto(server["url"])
+
+    # 1. Select mountain.bmp which is tagged with 'Alps' and 'Sunset'
+    mountain_card = page.locator(".photo-card", has_text="mountain.bmp")
+    mountain_card.click()
+
+    inspector_tags = page.locator("#inspectorTags")
+    expect(inspector_tags.locator(".tag-badge", has_text="Sunset")).to_be_visible()
+    expect(inspector_tags.locator(".tag-badge", has_text="Alps")).to_be_visible()
+
+    # Verify Sunset is present in the left Keywords panel with count 2
+    sunset_item = page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")
+    expect(sunset_item).to_be_visible()
+    expect(sunset_item.locator(".count-badge")).to_have_text("2")
+
+    # 2. Delete "Sunset" from the left Keywords tag panel
+    sunset_item.locator(".delete-tag-btn").click()
+
+    # Verify "Sunset" is completely gone from the left sidebar
+    expect(page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")).to_have_count(0)
+
+    # Verify "Sunset" was removed from the active photo in inspector (Alps remains)
+    expect(inspector_tags.locator(".tag-badge", has_text="Sunset")).to_have_count(0)
+    expect(inspector_tags.locator(".tag-badge", has_text="Alps")).to_be_visible()
+
+    # 3. Select another photo that was tagged with "Sunset" (sunset.bmp)
+    sunset_card = page.locator(".photo-card", has_text="sunset.bmp")
+    sunset_card.click()
+
+    # sunset.bmp previously had Sunset and Beach; Sunset should now be absent
+    expect(inspector_tags.locator(".tag-badge", has_text="Sunset")).to_have_count(0)
+    expect(inspector_tags.locator(".tag-badge", has_text="Beach")).to_be_visible()
+
+    # 4. Remove a tag from the photo via inspector (detach from photo, retain in sidebar)
+    beach_badge = inspector_tags.locator(".tag-badge", has_text="Beach")
+    beach_badge.locator(".remove-tag").click()
+
+    # Removed from photo inspector
+    expect(inspector_tags.locator(".tag-badge", has_text="Beach")).to_have_count(0)
+    expect(inspector_tags).to_contain_text("No tags")
+
+    # Still present in sidebar under Places, but count dropped from 1 to 0
+    beach_item = page.locator("#tagCategoryPlaces .tag-item", has_text="Beach")
+    expect(beach_item).to_be_visible()
+    expect(beach_item.locator(".count-badge")).to_have_text("0")
+
+    # 5. Delete "Beach" from sidebar as well
+    beach_item.locator(".delete-tag-btn").click()
+    expect(page.locator("#tagCategoryPlaces .tag-item", has_text="Beach")).to_have_count(0)
+
+

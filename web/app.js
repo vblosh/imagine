@@ -603,8 +603,9 @@
       const li = document.createElement('li');
       li.className = 'tag-item' + (state.activeTagId === tag.id ? ' active' : '');
       li.innerHTML = `
-        <span>${tag.name}</span>
+        <span class="tag-name">${tag.name}</span>
         <span class="count-badge">${tag.media_count || 0}</span>
+        <button class="delete-tag-btn" title="Delete tag">&times;</button>
       `;
       li.addEventListener('click', () => {
         if (state.activeTagId === tag.id) {
@@ -617,6 +618,25 @@
         updateSidebarActive();
         loadMedia();
       });
+
+      const delBtn = li.querySelector('.delete-tag-btn');
+      if (delBtn) {
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            await api.del(`/api/tags/${tag.id}`);
+            if (state.activeTagId === tag.id) {
+              state.activeTagId = null;
+            }
+            await loadMetadata();
+            loadMedia();
+            updateInspector();
+          } catch (err) {
+            console.error('Failed to delete tag:', err);
+          }
+        });
+      }
+
       container.appendChild(li);
     });
   }

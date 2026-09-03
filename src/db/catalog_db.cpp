@@ -441,6 +441,13 @@ Status CatalogDb::removeTagFromMedia(MediaId mediaId, TagId tagId) {
 
 Status CatalogDb::deleteTag(TagId tagId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto s1 = conn_.prepare("DELETE FROM media_tags WHERE tag_id = ?;");
+    if (s1.isOk()) {
+        auto stmt1 = std::move(s1.value());
+        stmt1.bind(1, tagId);
+        stmt1.step();
+    }
+
     auto stmtRes = conn_.prepare("DELETE FROM tags WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());

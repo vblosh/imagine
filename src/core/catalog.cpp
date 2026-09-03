@@ -179,6 +179,14 @@ Status Catalog::removeTag(MediaId id, TagId tagId) {
     return db_->removeTagFromMedia(id, tagId);
 }
 
+Status Catalog::deleteTag(TagId tagId) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+    return db_->deleteTag(tagId);
+}
+
 Result<TagId> Catalog::createOrGetTag(const std::string& name, const std::string& category) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!isOpen_ || !db_) {

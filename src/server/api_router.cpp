@@ -407,6 +407,17 @@ void ApiRouter::registerTagRoutes(httplib::Server& server) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }
     });
+
+    // DELETE /api/tags/:id
+    server.Delete(R"(/api/tags/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        TagId tagId = std::stoll(req.matches[1]);
+        Status s = catalog_ ? catalog_->deleteTag(tagId) : db().deleteTag(tagId);
+        if (!s.isOk()) {
+            sendError(res, s.message(), 500);
+            return;
+        }
+        sendJson(res, {{"status", "ok"}});
+    });
 }
 
 void ApiRouter::registerAlbumRoutes(httplib::Server& server) {

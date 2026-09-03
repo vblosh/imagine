@@ -180,7 +180,8 @@ Adopt the professional Lightroom/Elements culling workflow:
 1. Select a photo in the grid.
 2. In the right **Inspector** panel, locate the **Tags** section.
 3. Type a tag name into the *"Add tag..."* input box and press **Enter** or click **"Add"**.
-4. To remove a tag, click the `×` button on any tag pill badge.
+4. To detach a tag from an individual photo, click the `×` button on any tag pill badge in the Inspector.
+5. To delete a tag entirely from the catalog and all photos, click the `×` button next to the tag in the left sidebar under **Keyword Tags**.
 
 ### Creating Categories & Hierarchies
 Click the `+` button next to **Keyword Tags** in the left sidebar to create a tag with a designated category:
@@ -346,6 +347,7 @@ The embedded C++ HTTP server provides a full REST API for developers and externa
 | `GET` | `/api/photos/:id/original` | Fetch original full-resolution image |
 | `GET` | `/api/tags` | List all tags grouped by category |
 | `POST` | `/api/tags` | Create a new tag |
+| `DELETE` | `/api/tags/:id` | Delete a tag completely from catalog and all photos |
 | `GET` | `/api/albums` | List all albums |
 | `POST` | `/api/albums` | Create a new album |
 | `DELETE` | `/api/albums/:id` | Delete an album |

@@ -55,6 +55,7 @@ public:
     Status addTag(MediaId id, const std::string& tagName, const std::string& category = "keyword");
     Status addTag(MediaId id, TagId tagId);
     Status removeTag(MediaId id, TagId tagId);
+    Status deleteTag(TagId tagId);
     Result<TagId> createOrGetTag(const std::string& name, const std::string& category = "keyword");
     Result<std::vector<Tag>> getTags();
     Result<std::vector<Tag>> getTagsForMedia(MediaId id);

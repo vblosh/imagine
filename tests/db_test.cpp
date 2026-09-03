@@ -140,6 +140,15 @@ TEST_F(CatalogDbTest, TagManagement) {
     ASSERT_TRUE(tagsAfter.isOk());
     EXPECT_EQ(tagsAfter.value().size(), 1);
     EXPECT_EQ(tagsAfter.value()[0].name, "Paris");
+
+    // Delete tag completely
+    EXPECT_TRUE(db.deleteTag(tagPlace.value()).isOk());
+    auto tagsAfterDelete = db.getTagsForMedia(mid);
+    ASSERT_TRUE(tagsAfterDelete.isOk());
+    EXPECT_EQ(tagsAfterDelete.value().size(), 0);
+    auto allTags = db.getAllTags();
+    ASSERT_TRUE(allTags.isOk());
+    EXPECT_EQ(allTags.value().size(), 1); // Only "Alice" remains
 }
 
 TEST_F(CatalogDbTest, AlbumManagement) {

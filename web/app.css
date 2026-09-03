@@ -397,7 +397,8 @@ body, html {
   border-radius: 10px;
 }
 
-.delete-album-btn {
+.delete-album-btn,
+.delete-tag-btn {
   margin-left: 6px;
   background: none;
   border: none;
@@ -411,7 +412,8 @@ body, html {
   transition: opacity 0.15s, color 0.15s;
 }
 
-.delete-album-btn:hover {
+.delete-album-btn:hover,
+.delete-tag-btn:hover {
   opacity: 1;
   color: #ff5555;
 }

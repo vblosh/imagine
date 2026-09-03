@@ -108,6 +108,19 @@ TEST_F(ServerTest, TagsApi) {
     auto tags = nlohmann::json::parse(getRes->body);
     EXPECT_EQ(tags.size(), 1u);
     EXPECT_EQ(tags[0]["name"].get<std::string>(), "Mountains");
+
+    // DELETE /api/tags/:id
+    TagId tagId = created["id"].get<TagId>();
+    auto delRes = client.Delete(std::string("/api/tags/") + std::to_string(tagId));
+    ASSERT_TRUE(delRes);
+    EXPECT_EQ(delRes->status, 200);
+
+    // Verify tag is deleted
+    auto getResAfter = client.Get("/api/tags");
+    ASSERT_TRUE(getResAfter);
+    EXPECT_EQ(getResAfter->status, 200);
+    auto tagsAfter = nlohmann::json::parse(getResAfter->body);
+    EXPECT_EQ(tagsAfter.size(), 0u);
 }
 
 TEST_F(ServerTest, AlbumsApi) {
