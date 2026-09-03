@@ -180,15 +180,20 @@ def test_delete_tag_removes_from_sidebar_and_photos(server, page: Page):
     expect(inspector_tags.locator(".tag-badge", has_text="Sunset")).to_have_count(0)
     expect(inspector_tags.locator(".tag-badge", has_text="Alps")).to_be_visible()
 
-    # 3. Select another photo that was tagged with "Sunset" (sunset.bmp)
+    # 3. Select sunset.bmp which was previously tagged only with "Sunset"
     sunset_card = page.locator(".photo-card", has_text="sunset.bmp")
     sunset_card.click()
 
-    # sunset.bmp previously had Sunset and Beach; Sunset should now be absent
+    # sunset.bmp should now have no tags at all since Sunset was deleted from catalog
     expect(inspector_tags.locator(".tag-badge", has_text="Sunset")).to_have_count(0)
+    expect(inspector_tags).to_contain_text("No tags")
+
+    # 4. Select beach.bmp which has "Beach" tag
+    beach_card = page.locator(".photo-card", has_text="beach.bmp")
+    beach_card.click()
     expect(inspector_tags.locator(".tag-badge", has_text="Beach")).to_be_visible()
 
-    # 4. Remove a tag from the photo via inspector (detach from photo, retain in sidebar)
+    # Detach tag from photo via inspector (detach from photo, retain in sidebar)
     beach_badge = inspector_tags.locator(".tag-badge", has_text="Beach")
     beach_badge.locator(".remove-tag").click()
 
