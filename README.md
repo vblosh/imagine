@@ -47,9 +47,14 @@ cmake --build build -j$(nproc)
 
 ### 2. Run Tests
 ```bash
+# Run all tests (unit tests and Playwright UI tests):
 ctest --test-dir build --output-on-failure
-# Or directly:
+
+# Or run unit tests directly:
 ./build/imagine_tests
+
+# Or run the deterministic UI test suite directly:
+./tests/ui/run_ui_tests.sh
 ```
 
 ### 3. Import Photos
@@ -99,5 +104,7 @@ imagine/
 │   ├── index.html
 │   ├── app.css
 │   └── app.js
-└── tests/                      # 30 Unit tests across 7 test suites
+└── tests/                      # Automated test suites
+    ├── ui/                     # 45 Deterministic Playwright UI tests across all 13 feature areas
+    └── *.cpp                   # 30 Unit tests across 7 C++ test suites
 ```

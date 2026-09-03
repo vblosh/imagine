@@ -116,6 +116,11 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 criteria.min_rating = std::stoi(req.get_param_value("rating"));
             } catch (...) {}
         }
+        if (req.has_param("max_rating")) {
+            try {
+                criteria.max_rating = std::stoi(req.get_param_value("max_rating"));
+            } catch (...) {}
+        }
         if (req.has_param("flag")) {
             try {
                 criteria.flag = static_cast<FlagState>(std::stoi(req.get_param_value("flag")));
@@ -474,6 +479,17 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }
+    });
+
+    // DELETE /api/albums/:id
+    server.Delete(R"(/api/albums/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        AlbumId albumId = std::stoll(req.matches[1]);
+        Status s = catalog_ ? catalog_->deleteAlbum(albumId) : db().deleteAlbum(albumId);
+        if (!s.isOk()) {
+            sendError(res, s.message(), 500);
+            return;
+        }
+        sendJson(res, {{"status", "ok"}});
     });
 }
 

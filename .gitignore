@@ -34,3 +34,7 @@
 # Caches and runtime dirs
 .cache/
 .imagine/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/

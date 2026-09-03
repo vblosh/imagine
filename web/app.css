@@ -397,6 +397,25 @@ body, html {
   border-radius: 10px;
 }
 
+.delete-album-btn {
+  margin-left: 6px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 4px;
+  opacity: 0.7;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.delete-album-btn:hover {
+  opacity: 1;
+  color: #ff5555;
+}
+
 /* Tags Tree in Sidebar */
 .tags-tree {
   padding: 0 6px;
@@ -1037,6 +1056,11 @@ body, html {
   align-items: center;
   justify-content: space-between;
   padding: 20px;
+  pointer-events: none;
+}
+
+.loupe-content > * {
+  pointer-events: auto;
 }
 
 .loupe-image-container {

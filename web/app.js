@@ -18,6 +18,7 @@
     activeTagId: null,
     activeAlbumId: null,
     activeFolder: null,
+    allFolders: new Set(),
     activeTimelinePeriod: null, // { year, month }
     searchText: '',
     sortBy: 'date_taken',
@@ -231,7 +232,10 @@
       // Nav filters (picks, rejects, unrated)
       if (state.activeNavFilter === 'picks') params.flag = 1;
       else if (state.activeNavFilter === 'rejects') params.flag = -1;
-      else if (state.activeNavFilter === 'unrated') params.rating = 0;
+      else if (state.activeNavFilter === 'unrated') {
+        params.rating = 0;
+        params.max_rating = 0;
+      }
 
       // Timeline filter
       if (state.activeTimelinePeriod) {
@@ -246,7 +250,18 @@
       state.mediaItems = res.items || [];
       state.totalCount = res.total || 0;
 
+      // Track all discovered folders across loads so filtering doesn't remove folders from sidebar
+      state.mediaItems.forEach(item => {
+        if (item.file_path) {
+          const lastSlash = item.file_path.lastIndexOf('/');
+          if (lastSlash > 0) {
+            state.allFolders.add(item.file_path.substring(0, lastSlash));
+          }
+        }
+      });
+
       renderGrid();
+      renderSidebarFolders();
       updateFilterLabel();
       updateBatchBar();
       updateInspector();
@@ -620,8 +635,9 @@
       li.className = 'menu-item' + (state.activeAlbumId === album.id ? ' active' : '');
       li.innerHTML = `
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        <span>${album.name}</span>
+        <span class="album-name">${album.name}</span>
         <span class="count-badge">${album.item_count || 0}</span>
+        <button class="delete-album-btn" title="Delete album">&times;</button>
       `;
       li.addEventListener('click', () => {
         if (state.activeAlbumId === album.id) {
@@ -634,6 +650,24 @@
         updateSidebarActive();
         loadMedia();
       });
+
+      const delBtn = li.querySelector('.delete-album-btn');
+      if (delBtn) {
+        delBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          try {
+            await api.del(`/api/albums/${album.id}`);
+            if (state.activeAlbumId === album.id) {
+              state.activeAlbumId = null;
+            }
+            await loadMetadata();
+            loadMedia();
+          } catch (err) {
+            console.error('Failed to delete album:', err);
+          }
+        });
+      }
+
       dom.albumsList.appendChild(li);
     });
   }
@@ -642,23 +676,25 @@
     if (!dom.foldersTree) return;
     dom.foldersTree.innerHTML = '';
 
-    // Extract unique directories from current media items
-    const folders = new Set();
-    state.mediaItems.forEach(item => {
-      if (item.file_path) {
-        const lastSlash = item.file_path.lastIndexOf('/');
-        if (lastSlash > 0) {
-          folders.add(item.file_path.substring(0, lastSlash));
+    // If allFolders is empty, populate from current media items
+    if (state.allFolders.size === 0) {
+      state.mediaItems.forEach(item => {
+        if (item.file_path) {
+          const lastSlash = item.file_path.lastIndexOf('/');
+          if (lastSlash > 0) {
+            state.allFolders.add(item.file_path.substring(0, lastSlash));
+          }
         }
-      }
-    });
+      });
+    }
 
-    if (folders.size === 0) {
+    if (state.allFolders.size === 0) {
       dom.foldersTree.innerHTML = '<div style="color:var(--text-dim);font-style:italic;">No folders</div>';
       return;
     }
 
-    folders.forEach(folder => {
+    const sortedFolders = Array.from(state.allFolders).sort();
+    sortedFolders.forEach(folder => {
       const el = document.createElement('div');
       el.className = 'folder-item' + (state.activeFolder === folder ? ' active' : '');
       const parts = folder.split('/');
@@ -669,8 +705,19 @@
         <span title="${folder}">${shortName}</span>
       `;
       el.addEventListener('click', () => {
-        state.searchText = folder;
-        dom.searchInput.value = folder;
+        if (state.activeFolder === folder) {
+          state.activeFolder = null;
+          state.searchText = '';
+          dom.searchInput.value = '';
+        } else {
+          state.activeFolder = folder;
+          state.searchText = folder;
+          dom.searchInput.value = folder;
+          state.activeTagId = null;
+          state.activeAlbumId = null;
+          state.activeNavFilter = 'all';
+        }
+        updateSidebarActive();
         loadMedia();
       });
       dom.foldersTree.appendChild(el);
@@ -721,12 +768,19 @@
   }
 
   function updateSidebarActive() {
-    dom.navAllMedia.classList.toggle('active', state.activeNavFilter === 'all' && !state.activeTagId && !state.activeAlbumId);
+    dom.navAllMedia.classList.toggle('active', state.activeNavFilter === 'all' && !state.activeTagId && !state.activeAlbumId && !state.activeFolder && !state.searchText);
     dom.navPicks.classList.toggle('active', state.activeNavFilter === 'picks');
     dom.navRejects.classList.toggle('active', state.activeNavFilter === 'rejects');
     dom.navUnrated.classList.toggle('active', state.activeNavFilter === 'unrated');
     renderSidebarTags();
     renderSidebarAlbums();
+    if (dom.foldersTree) {
+      dom.foldersTree.querySelectorAll('.folder-item').forEach(el => {
+        const titleSpan = el.querySelector('span');
+        const folderPath = titleSpan ? titleSpan.getAttribute('title') : '';
+        el.classList.toggle('active', Boolean(state.activeFolder && state.activeFolder === folderPath));
+      });
+    }
   }
 
   function updateFilterLabel() {
@@ -752,7 +806,11 @@
       isFiltered = true;
     }
 
-    if (state.searchText) {
+    if (state.activeFolder) {
+      const folderName = state.activeFolder.split('/').pop() || state.activeFolder;
+      label = `Folder: ${folderName}`;
+      isFiltered = true;
+    } else if (state.searchText) {
       label += ` • Search: "${state.searchText}"`;
       isFiltered = true;
     }
@@ -771,6 +829,7 @@
     state.activeNavFilter = 'all';
     state.activeTagId = null;
     state.activeAlbumId = null;
+    state.activeFolder = null;
     state.activeTimelinePeriod = null;
     state.searchText = '';
     dom.searchInput.value = '';
@@ -914,6 +973,18 @@
 
   // --- Event Listeners Setup ---
   function setupEventListeners() {
+    // Deselect on background click
+    if (dom.gridScrollContainer) {
+      dom.gridScrollContainer.addEventListener('click', (e) => {
+        if (!e.target.closest('.photo-card')) {
+          state.selectedIds.clear();
+          document.querySelectorAll('.photo-card.selected').forEach(c => c.classList.remove('selected'));
+          updateBatchBar();
+          updateInspector();
+        }
+      });
+    }
+
     // Zoom slider
     dom.zoomSlider.addEventListener('input', (e) => {
       document.documentElement.style.setProperty('--thumb-size', `${e.target.value}px`);
@@ -932,6 +1003,8 @@
     dom.clearSearchBtn.addEventListener('click', () => {
       dom.searchInput.value = '';
       state.searchText = '';
+      state.activeFolder = null;
+      updateSidebarActive();
       loadMedia();
     });
 
@@ -1160,7 +1233,19 @@
         }
       } else {
         // Grid mode shortcuts
-        if (e.key === ' ' || e.key === 'Enter') {
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+          e.preventDefault();
+          state.selectedIds.clear();
+          state.mediaItems.forEach(item => state.selectedIds.add(item.id));
+          document.querySelectorAll('.photo-card').forEach(c => c.classList.add('selected'));
+          updateBatchBar();
+          updateInspector();
+        } else if (e.key === 'Escape') {
+          state.selectedIds.clear();
+          document.querySelectorAll('.photo-card.selected').forEach(c => c.classList.remove('selected'));
+          updateBatchBar();
+          updateInspector();
+        } else if (e.key === ' ' || e.key === 'Enter') {
           if (state.selectedIds.size > 0) {
             e.preventDefault();
             openLoupeForMedia(Array.from(state.selectedIds)[0]);

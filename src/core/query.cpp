@@ -208,8 +208,9 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
     }
 
     if (!criteria_.search_text.empty()) {
-        clauses.push_back("(file_name LIKE ? OR camera_make LIKE ? OR camera_model LIKE ? OR lens LIKE ?)");
+        clauses.push_back("(file_name LIKE ? OR file_path LIKE ? OR camera_make LIKE ? OR camera_model LIKE ? OR lens LIKE ?)");
         std::string pattern = "%" + criteria_.search_text + "%";
+        params.push_back(pattern);
         params.push_back(pattern);
         params.push_back(pattern);
         params.push_back(pattern);
