@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IMAGINE Organizer</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="app" class="elements-app">
+    <!-- Top Bar -->
+    <header class="top-bar">
+      <div class="top-bar-left">
+        <div class="logo">
+          <svg class="logo-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+          <span class="logo-text">IMAGINE <span class="logo-sub">Organizer</span></span>
+        </div>
+
+        <nav class="view-tabs" id="viewTabs">
+          <button class="tab-btn active" data-tab="media">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            Media
+          </button>
+          <button class="tab-btn" data-tab="people">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            People
+          </button>
+          <button class="tab-btn" data-tab="places">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Places
+          </button>
+          <button class="tab-btn" data-tab="events">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Events
+          </button>
+        </nav>
+      </div>
+
+      <div class="top-bar-center">
+        <div class="search-box">
+          <svg class="search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="searchInput" placeholder="Search photos, camera, tags..." autocomplete="off">
+          <button class="clear-search" id="clearSearchBtn" title="Clear search">&times;</button>
+        </div>
+      </div>
+
+      <div class="top-bar-right">
+        <!-- Zoom Slider -->
+        <div class="zoom-control" title="Thumbnail Size">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="6" height="6"/></svg>
+          <input type="range" id="zoomSlider" min="120" max="360" value="180" step="10">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+        </div>
+
+        <button class="btn btn-secondary" id="refreshBtn" title="Refresh media">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        </button>
+
+        <button class="btn btn-primary" id="importBtn">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+          Import Folder
+        </button>
+
+        <button class="btn btn-icon" id="toggleInspectorBtn" title="Toggle Inspector Panel">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <div class="main-container">
+      <!-- Left Sidebar (Folders, Albums, Tags) -->
+      <aside class="left-sidebar" id="leftSidebar">
+        <!-- Sidebar Navigation Accordion -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <span class="section-title">Navigation</span>
+          </div>
+          <ul class="sidebar-menu">
+            <li class="menu-item active" data-filter="all" id="navAllMedia">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span>All Media</span>
+              <span class="count-badge" id="totalMediaCount">0</span>
+            </li>
+            <li class="menu-item" data-filter="picks" id="navPicks">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>Picks</span>
+            </li>
+            <li class="menu-item" data-filter="rejects" id="navRejects">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              <span>Rejects</span>
+            </li>
+            <li class="menu-item" data-filter="unrated" id="navUnrated">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+              <span>Unrated</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Albums Section -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <span class="section-title">Albums</span>
+            <button class="section-action-btn" id="newAlbumBtn" title="Create New Album">+</button>
+          </div>
+          <ul class="sidebar-menu" id="albumsList">
+            <!-- Dynamic Album items -->
+          </ul>
+        </div>
+
+        <!-- Keyword Tags Section -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <span class="section-title">Keyword Tags</span>
+            <button class="section-action-btn" id="newTagBtn" title="Create New Tag">+</button>
+          </div>
+          <div class="tags-tree" id="tagsTree">
+            <div class="tag-category-group" data-category="people">
+              <div class="category-header">
+                <span class="arrow">▼</span>
+                <span class="cat-label">People</span>
+              </div>
+              <ul class="tag-items" id="tagCategoryPeople"></ul>
+            </div>
+            <div class="tag-category-group" data-category="places">
+              <div class="category-header">
+                <span class="arrow">▼</span>
+                <span class="cat-label">Places</span>
+              </div>
+              <ul class="tag-items" id="tagCategoryPlaces"></ul>
+            </div>
+            <div class="tag-category-group" data-category="events">
+              <div class="category-header">
+                <span class="arrow">▼</span>
+                <span class="cat-label">Events</span>
+              </div>
+              <ul class="tag-items" id="tagCategoryEvents"></ul>
+            </div>
+            <div class="tag-category-group" data-category="keyword">
+              <div class="category-header">
+                <span class="arrow">▼</span>
+                <span class="cat-label">Keywords</span>
+              </div>
+              <ul class="tag-items" id="tagCategoryKeyword"></ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- Folders Tree Section -->
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <span class="section-title">Folders</span>
+          </div>
+          <div class="folders-tree" id="foldersTree">
+            <!-- Dynamically populated from file paths -->
+          </div>
+        </div>
+      </aside>
+
+      <!-- Center Grid Area -->
+      <main class="center-content">
+        <!-- Filter Bar / Breadcrumb & Batch Actions -->
+        <div class="content-toolbar">
+          <div class="filter-indicator" id="filterIndicator">
+            <span id="filterLabel">All Photos</span>
+            <button class="btn-link" id="clearFiltersBtn" style="display: none;">Clear Filter</button>
+          </div>
+
+          <div class="sort-selector">
+            <label for="sortSelect">Sort:</label>
+            <select id="sortSelect">
+              <option value="date_taken-desc">Date (Newest first)</option>
+              <option value="date_taken-asc">Date (Oldest first)</option>
+              <option value="rating-desc">Rating (High to Low)</option>
+              <option value="file_name-asc">File Name (A-Z)</option>
+              <option value="file_size-desc">File Size (Largest)</option>
+            </select>
+          </div>
+
+          <!-- Batch Action Bar (shown when photos are selected) -->
+          <div class="batch-action-bar" id="batchActionBar" style="display: none;">
+            <span class="batch-count" id="batchSelectedCount">0 selected</span>
+            <div class="batch-rating">
+              <span>Rate:</span>
+              <div class="star-rating batch-stars" id="batchRating">
+                <span data-star="1">★</span>
+                <span data-star="2">★</span>
+                <span data-star="3">★</span>
+                <span data-star="4">★</span>
+                <span data-star="5">★</span>
+              </div>
+            </div>
+            <button class="btn btn-sm" id="batchPickBtn" title="Pick selected">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Pick
+            </button>
+            <button class="btn btn-sm btn-danger" id="batchRejectBtn" title="Reject selected">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Reject
+            </button>
+            <button class="btn btn-sm" id="batchAddTagBtn">Add Tag</button>
+            <button class="btn btn-sm btn-secondary" id="batchClearBtn">Deselect</button>
+          </div>
+        </div>
+
+        <!-- Photo Grid Container -->
+        <div class="grid-scroll-container" id="gridScrollContainer">
+          <div class="media-grid" id="mediaGrid">
+            <!-- Grouped by date headers with photo cards -->
+          </div>
+          <div class="empty-state" id="emptyState" style="display: none;">
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <h3>No Photos Found</h3>
+            <p>Import photos from a folder on your computer to get started.</p>
+            <button class="btn btn-primary" id="emptyImportBtn">Import Folder</button>
+          </div>
+        </div>
+
+        <!-- Bottom Timeline Scrub Bar -->
+        <footer class="bottom-scrub-bar">
+          <div class="scrub-label">Timeline</div>
+          <div class="timeline-container" id="timelineContainer">
+            <!-- Dynamic month/year tick bars generated here -->
+          </div>
+          <button class="btn-link" id="resetTimelineBtn" title="Reset date range">Reset</button>
+        </footer>
+      </main>
+
+      <!-- Right Inspector Panel -->
+      <aside class="right-inspector" id="rightInspector">
+        <div class="inspector-header">
+          <span class="inspector-title">Inspector</span>
+          <button class="btn-icon-sm" id="closeInspectorBtn" title="Close panel">&times;</button>
+        </div>
+
+        <div class="inspector-body" id="inspectorBody">
+          <!-- Populated dynamically when photo is selected -->
+          <div class="no-selection" id="inspectorNoSelection">
+            <p>Select a photo to view metadata, EXIF properties, ratings, and tags.</p>
+          </div>
+
+          <div class="selection-details" id="inspectorSelection" style="display: none;">
+            <!-- Selected photo preview -->
+            <div class="inspector-preview" id="inspectorPreviewWrapper">
+              <img id="inspectorImg" src="" alt="Photo preview">
+              <div class="preview-overlay-btn" id="openLoupeFromInspector" title="Open Fullscreen Loupe">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+              </div>
+            </div>
+
+            <!-- Quick Rating & Flagging -->
+            <div class="inspector-section">
+              <div class="inspector-rating-flag">
+                <div class="star-rating" id="inspectorRating">
+                  <span data-star="1">★</span>
+                  <span data-star="2">★</span>
+                  <span data-star="3">★</span>
+                  <span data-star="4">★</span>
+                  <span data-star="5">★</span>
+                </div>
+                <div class="flag-toggle" id="inspectorFlag">
+                  <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                  </button>
+                  <button class="flag-btn flag-reject" data-flag="-1" title="Reject (Del)">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- File Properties Section -->
+            <div class="inspector-section">
+              <h4 class="section-heading">File Information</h4>
+              <dl class="prop-list">
+                <dt>Name</dt>
+                <dd id="infoFileName">-</dd>
+                <dt>Dimensions</dt>
+                <dd id="infoDimensions">-</dd>
+                <dt>File Size</dt>
+                <dd id="infoFileSize">-</dd>
+                <dt>Date Taken</dt>
+                <dd id="infoDateTaken">-</dd>
+                <dt>Path</dt>
+                <dd id="infoFilePath" class="break-all">-</dd>
+              </dl>
+            </div>
+
+            <!-- EXIF Metadata Section -->
+            <div class="inspector-section" id="exifSection">
+              <h4 class="section-heading">Camera & Exposure (EXIF)</h4>
+              <dl class="prop-list">
+                <dt>Camera</dt>
+                <dd id="infoCamera">-</dd>
+                <dt>Lens</dt>
+                <dd id="infoLens">-</dd>
+                <dt>Exposure</dt>
+                <dd id="infoExposure">-</dd>
+                <dt>Aperture</dt>
+                <dd id="infoAperture">-</dd>
+                <dt>ISO</dt>
+                <dd id="infoIso">-</dd>
+                <dt>Focal Length</dt>
+                <dd id="infoFocal">-</dd>
+                <dt>GPS</dt>
+                <dd id="infoGps">-</dd>
+              </dl>
+            </div>
+
+            <!-- Tags Section -->
+            <div class="inspector-section">
+              <h4 class="section-heading">Tags</h4>
+              <div class="tags-container" id="inspectorTags">
+                <!-- Tag badges with remove button -->
+              </div>
+              <div class="add-tag-inline">
+                <input type="text" id="addTagInput" placeholder="Add tag..." autocomplete="off">
+                <button class="btn btn-sm" id="addTagBtn">Add</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- Fullscreen Loupe Modal Viewer -->
+    <div class="loupe-modal" id="loupeModal" style="display: none;">
+      <div class="loupe-backdrop" id="loupeBackdrop"></div>
+      <div class="loupe-content">
+        <button class="loupe-btn loupe-prev" id="loupePrevBtn" title="Previous (Left Arrow)">&lsaquo;</button>
+        <div class="loupe-image-container">
+          <img id="loupeImg" src="" alt="Fullscreen Loupe View">
+          <div class="loupe-toolbar">
+            <div class="loupe-info">
+              <span id="loupeFileName">Photo</span>
+              <span id="loupeIndex">1 / 1</span>
+            </div>
+            <div class="star-rating loupe-stars" id="loupeRating">
+              <span data-star="1">★</span>
+              <span data-star="2">★</span>
+              <span data-star="3">★</span>
+              <span data-star="4">★</span>
+              <span data-star="5">★</span>
+            </div>
+            <div class="flag-toggle" id="loupeFlag">
+              <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)">✔</button>
+              <button class="flag-btn flag-reject" data-flag="-1" title="Reject (Del)">✖</button>
+            </div>
+          </div>
+        </div>
+        <button class="loupe-btn loupe-next" id="loupeNextBtn" title="Next (Right Arrow)">&rsaquo;</button>
+        <button class="loupe-close" id="loupeCloseBtn" title="Close (Escape)">&times;</button>
+      </div>
+    </div>
+
+    <!-- Import Modal Dialog -->
+    <div class="modal" id="importModal" style="display: none;">
+      <div class="modal-backdrop" id="importBackdrop"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Import Photos to Catalog</h3>
+          <button class="btn-icon-sm" id="closeImportModalBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="importPathInput">Directory Path on Server:</label>
+            <input type="text" id="importPathInput" placeholder="/path/to/photos (e.g. /home/slava/photos)" class="form-control">
+          </div>
+          <div class="form-checkbox">
+            <label>
+              <input type="checkbox" id="importRecursiveCheck" checked>
+              Scan Subdirectories Recursively
+            </label>
+          </div>
+
+          <!-- Progress status (shown while importing) -->
+          <div class="import-progress-container" id="importProgressBox" style="display: none;">
+            <div class="progress-bar-wrap">
+              <div class="progress-bar-fill" id="importProgressBar" style="width: 0%;"></div>
+            </div>
+            <div class="import-status-text">
+              <span id="importStatusCounts">Scanning files...</span>
+              <span id="importCurrentFile" class="text-ellipsis"></span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelImportBtn">Cancel</button>
+          <button class="btn btn-primary" id="startImportBtn">Start Import</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- New Album Modal Dialog -->
+    <div class="modal" id="newAlbumModal" style="display: none;">
+      <div class="modal-backdrop" id="newAlbumBackdrop"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Create New Album</h3>
+          <button class="btn-icon-sm" id="closeNewAlbumModalBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="albumNameInput">Album Name:</label>
+            <input type="text" id="albumNameInput" placeholder="e.g. Summer Vacation 2026" class="form-control">
+          </div>
+          <div class="form-group">
+            <label for="albumDescInput">Description (optional):</label>
+            <textarea id="albumDescInput" rows="2" class="form-control" placeholder="Album description"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelAlbumBtn">Cancel</button>
+          <button class="btn btn-primary" id="createAlbumSubmitBtn">Create Album</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- New Tag Modal Dialog -->
+    <div class="modal" id="newTagModal" style="display: none;">
+      <div class="modal-backdrop" id="newTagBackdrop"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Create Keyword Tag</h3>
+          <button class="btn-icon-sm" id="closeNewTagModalBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="tagNameInput">Tag Name:</label>
+            <input type="text" id="tagNameInput" placeholder="e.g. Mountain, John, Birthday" class="form-control">
+          </div>
+          <div class="form-group">
+            <label for="tagCategorySelect">Category:</label>
+            <select id="tagCategorySelect" class="form-control">
+              <option value="keyword">General Keyword</option>
+              <option value="people">People</option>
+              <option value="places">Places</option>
+              <option value="events">Events</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelTagBtn">Cancel</button>
+          <button class="btn btn-primary" id="createTagSubmitBtn">Create Tag</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

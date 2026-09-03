@@ -1,0 +1,36 @@
+# Build artifacts
+/build/
+/out/
+/bin/
+/lib/
+
+# IDE & Editor files
+/.vs/
+/.vscode/
+/.idea/
+*.swp
+*~
+
+# Compiled binaries and libraries
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# SQLite databases
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Coverage and profiling
+*.cov
+*.gcda
+*.gcno
+/CoverageReport*
+/LastCoverageResults.log
+
+# Caches and runtime dirs
+.cache/
+.imagine/
