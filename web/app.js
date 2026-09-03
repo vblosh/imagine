@@ -28,6 +28,9 @@
     timelineData: [],
     stats: {},
     loupeIndex: -1,
+    loupeZoom: 1.0,
+    loupePanX: 0,
+    loupePanY: 0,
     importPollInterval: null
   };
 
@@ -137,11 +140,17 @@
     addTagBtn: document.getElementById('addTagBtn'),
     loupeModal: document.getElementById('loupeModal'),
     loupeBackdrop: document.getElementById('loupeBackdrop'),
+    loupeImageViewport: document.getElementById('loupeImageViewport'),
     loupeImg: document.getElementById('loupeImg'),
     loupeFileName: document.getElementById('loupeFileName'),
     loupeIndex: document.getElementById('loupeIndex'),
     loupeRating: document.getElementById('loupeRating'),
     loupeFlag: document.getElementById('loupeFlag'),
+    loupeZoomControls: document.getElementById('loupeZoomControls'),
+    loupeZoomOutBtn: document.getElementById('loupeZoomOutBtn'),
+    loupeZoomInBtn: document.getElementById('loupeZoomInBtn'),
+    loupeZoomResetBtn: document.getElementById('loupeZoomResetBtn'),
+    loupeZoomSlider: document.getElementById('loupeZoomSlider'),
     loupePrevBtn: document.getElementById('loupePrevBtn'),
     loupeNextBtn: document.getElementById('loupeNextBtn'),
     loupeCloseBtn: document.getElementById('loupeCloseBtn'),
@@ -902,6 +911,10 @@
   }
 
   // --- Fullscreen Loupe Viewer ---
+  const LOUPE_MIN_ZOOM = 1.0;
+  const LOUPE_MAX_ZOOM = 5.0;
+  const LOUPE_ZOOM_STEPS = [1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0];
+
   function openLoupeForMedia(id) {
     const idx = state.mediaItems.findIndex(m => m.id === id);
     if (idx === -1) return;
@@ -912,6 +925,7 @@
 
   function closeLoupe() {
     state.loupeIndex = -1;
+    resetLoupeZoomToFit();
     dom.loupeModal.style.display = 'none';
   }
 
@@ -923,7 +937,120 @@
     dom.loupeFileName.textContent = item.file_name;
     dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length}`;
 
+    resetLoupeZoomToFit();
     updateLoupeControls();
+  }
+
+  function setLoupeZoom(targetZoom, focusClientX = null, focusClientY = null) {
+    const prevZoom = state.loupeZoom || 1.0;
+    const clampedZoom = Math.min(LOUPE_MAX_ZOOM, Math.max(LOUPE_MIN_ZOOM, Math.round(targetZoom * 100) / 100));
+
+    if (clampedZoom === 1.0) {
+      state.loupeZoom = 1.0;
+      state.loupePanX = 0;
+      state.loupePanY = 0;
+    } else {
+      if (focusClientX !== null && focusClientY !== null && dom.loupeImageViewport) {
+        const rect = dom.loupeImageViewport.getBoundingClientRect();
+        const cx = focusClientX - (rect.left + rect.width / 2);
+        const cy = focusClientY - (rect.top + rect.height / 2);
+        const zoomRatio = clampedZoom / prevZoom;
+        state.loupePanX = state.loupePanX - (cx - state.loupePanX) * (zoomRatio - 1);
+        state.loupePanY = state.loupePanY - (cy - state.loupePanY) * (zoomRatio - 1);
+      } else {
+        const zoomRatio = clampedZoom / prevZoom;
+        state.loupePanX = state.loupePanX * zoomRatio;
+        state.loupePanY = state.loupePanY * zoomRatio;
+      }
+      state.loupeZoom = clampedZoom;
+      clampLoupePan();
+    }
+
+    applyLoupeTransform();
+    updateLoupeZoomUI();
+  }
+
+  function clampLoupePan() {
+    if (!dom.loupeImg || !dom.loupeImageViewport) return;
+    if (state.loupeZoom <= 1.0) {
+      state.loupePanX = 0;
+      state.loupePanY = 0;
+      return;
+    }
+
+    const vpRect = dom.loupeImageViewport.getBoundingClientRect();
+    const imgW = dom.loupeImg.offsetWidth || 800;
+    const imgH = dom.loupeImg.offsetHeight || 600;
+    const scaledW = imgW * state.loupeZoom;
+    const scaledH = imgH * state.loupeZoom;
+
+    const maxPanX = Math.max(0, (scaledW - vpRect.width) / 2 + 50);
+    const maxPanY = Math.max(0, (scaledH - vpRect.height) / 2 + 50);
+
+    state.loupePanX = Math.min(maxPanX, Math.max(-maxPanX, state.loupePanX));
+    state.loupePanY = Math.min(maxPanY, Math.max(-maxPanY, state.loupePanY));
+  }
+
+  function applyLoupeTransform() {
+    if (!dom.loupeImg) return;
+    if (state.loupeZoom <= 1.0) {
+      dom.loupeImg.style.transform = '';
+      if (dom.loupeImageViewport) {
+        dom.loupeImageViewport.classList.remove('is-zoomed');
+      }
+    } else {
+      dom.loupeImg.style.transform = `translate(${state.loupePanX}px, ${state.loupePanY}px) scale(${state.loupeZoom})`;
+      if (dom.loupeImageViewport) {
+        dom.loupeImageViewport.classList.add('is-zoomed');
+      }
+    }
+  }
+
+  function updateLoupeZoomUI() {
+    const percent = Math.round(state.loupeZoom * 100);
+    if (dom.loupeZoomResetBtn) {
+      dom.loupeZoomResetBtn.textContent = `${percent}%`;
+      dom.loupeZoomResetBtn.title = state.loupeZoom > 1.0 ? 'Reset Zoom (Z or Ctrl+0)' : 'Zoom to 200% (Z)';
+    }
+    if (dom.loupeZoomSlider) {
+      dom.loupeZoomSlider.value = percent;
+    }
+    if (dom.loupeZoomOutBtn) {
+      dom.loupeZoomOutBtn.disabled = state.loupeZoom <= 1.0;
+    }
+    if (dom.loupeZoomInBtn) {
+      dom.loupeZoomInBtn.disabled = state.loupeZoom >= LOUPE_MAX_ZOOM;
+    }
+  }
+
+  function resetLoupeZoomToFit() {
+    state.loupeZoom = 1.0;
+    state.loupePanX = 0;
+    state.loupePanY = 0;
+    applyLoupeTransform();
+    updateLoupeZoomUI();
+  }
+
+  function loupeZoomIn() {
+    const curr = state.loupeZoom;
+    const nextStep = LOUPE_ZOOM_STEPS.find(s => s > curr + 0.05);
+    const target = nextStep !== undefined ? nextStep : Math.min(LOUPE_MAX_ZOOM, curr + 0.5);
+    setLoupeZoom(target);
+  }
+
+  function loupeZoomOut() {
+    const curr = state.loupeZoom;
+    const prevSteps = LOUPE_ZOOM_STEPS.filter(s => s < curr - 0.05);
+    const target = prevSteps.length > 0 ? prevSteps[prevSteps.length - 1] : LOUPE_MIN_ZOOM;
+    setLoupeZoom(target);
+  }
+
+  function resetLoupeZoom() {
+    if (state.loupeZoom > 1.05) {
+      setLoupeZoom(1.0);
+    } else {
+      setLoupeZoom(2.0);
+    }
   }
 
   function updateLoupeControls() {
@@ -1238,6 +1365,79 @@
     dom.loupeCloseBtn.addEventListener('click', closeLoupe);
     dom.loupeBackdrop.addEventListener('click', closeLoupe);
 
+    // Loupe zoom controls
+    if (dom.loupeZoomInBtn) {
+      dom.loupeZoomInBtn.addEventListener('click', loupeZoomIn);
+    }
+    if (dom.loupeZoomOutBtn) {
+      dom.loupeZoomOutBtn.addEventListener('click', loupeZoomOut);
+    }
+    if (dom.loupeZoomResetBtn) {
+      dom.loupeZoomResetBtn.addEventListener('click', resetLoupeZoom);
+    }
+    if (dom.loupeZoomSlider) {
+      dom.loupeZoomSlider.addEventListener('input', (e) => {
+        setLoupeZoom(parseFloat(e.target.value) / 100);
+      });
+    }
+
+    // Loupe pan and drag handling
+    let isLoupeDragging = false;
+    let loupeDragStartX = 0;
+    let loupeDragStartY = 0;
+
+    if (dom.loupeImageViewport) {
+      dom.loupeImageViewport.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        if (e.target.closest('.loupe-toolbar')) return;
+        if (state.loupeZoom <= 1.0) return;
+
+        isLoupeDragging = true;
+        loupeDragStartX = e.clientX - state.loupePanX;
+        loupeDragStartY = e.clientY - state.loupePanY;
+        dom.loupeImageViewport.classList.add('is-dragging');
+        e.preventDefault();
+      });
+
+      dom.loupeImageViewport.addEventListener('dblclick', (e) => {
+        if (e.target.closest('.loupe-toolbar')) return;
+        if (state.loupeZoom > 1.05) {
+          setLoupeZoom(1.0);
+        } else {
+          setLoupeZoom(2.0, e.clientX, e.clientY);
+        }
+      });
+
+      dom.loupeImageViewport.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+        setLoupeZoom(state.loupeZoom * zoomFactor, e.clientX, e.clientY);
+      }, { passive: false });
+    }
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isLoupeDragging) return;
+      state.loupePanX = e.clientX - loupeDragStartX;
+      state.loupePanY = e.clientY - loupeDragStartY;
+      clampLoupePan();
+      applyLoupeTransform();
+    });
+
+    window.addEventListener('mouseup', () => {
+      if (!isLoupeDragging) return;
+      isLoupeDragging = false;
+      if (dom.loupeImageViewport) {
+        dom.loupeImageViewport.classList.remove('is-dragging');
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      if (state.loupeIndex >= 0 && state.loupeZoom > 1.0) {
+        clampLoupePan();
+        applyLoupeTransform();
+      }
+    });
+
     const loupePickBtn = dom.loupeFlag.querySelector('.flag-pick');
     const loupeRejectBtn = dom.loupeFlag.querySelector('.flag-reject');
     loupePickBtn.addEventListener('click', () => {
@@ -1260,12 +1460,27 @@
 
       // Loupe mode active
       if (state.loupeIndex >= 0) {
-        if (e.key === 'ArrowRight') {
+        if (e.key === 'ArrowRight' || e.key === 'PageDown') {
           loupeNext();
-        } else if (e.key === 'ArrowLeft') {
+        } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
           loupePrev();
         } else if (e.key === 'Escape') {
           closeLoupe();
+        } else if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+          e.preventDefault();
+          setLoupeZoom(1.0);
+        } else if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+          e.preventDefault();
+          loupeZoomIn();
+        } else if ((e.ctrlKey || e.metaKey) && (e.key === '-' || e.key === '_')) {
+          e.preventDefault();
+          loupeZoomOut();
+        } else if (e.key === '+' || e.key === '=') {
+          loupeZoomIn();
+        } else if (e.key === '-' || e.key === '_') {
+          loupeZoomOut();
+        } else if (e.key === 'z' || e.key === 'Z') {
+          resetLoupeZoom();
         } else if (e.key >= '0' && e.key <= '5') {
           const item = state.mediaItems[state.loupeIndex];
           if (item) updateItemRating(item.id, parseInt(e.key, 10));

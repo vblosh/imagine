@@ -133,6 +133,7 @@ Helper utilities for programmatically creating:
   - Keyboard rating shortcuts (`1-5` sets rating, `0` clears rating).
   - Keyboard flagging shortcuts (`p`/`P` for Pick, `x`/`X`/`Delete` for Reject, `u`/`U` for Unflag).
   - Keyboard navigation and modal openers (`Enter` opens Loupe, `Escape` closes/deselects).
+  - Multi-selection batch keyboard operations (batch rating, picking, rejecting across multiple selected cards).
 
 #### [NEW] `tests/ui/test_sorting_and_search.py`
 * **Features Covered**:
@@ -169,9 +170,12 @@ Helper utilities for programmatically creating:
 #### [NEW] `tests/ui/test_tags.py`
 * **Features Covered**:
   - Tag category accordion (People, Places, Events, Keywords): expand/collapse toggle.
-  - Create Tag modal (`#newTagModal`): name input, category select, validation.
+  - Create Tag modal (`#newTagModal`): name input, category select, validation, cancel, and backdrop click.
   - Tag creation via POST `/api/tags`; appears in appropriate category list with count badge.
   - Clicking tag filters grid to photos with that tag.
+  - Tag deletion via sidebar button (`.delete-tag-btn`): sends DELETE `/api/tags/:id`, removes from sidebar, and resets filter if active.
+  - Tag deletion removes tag from sidebar and photo metadata; removing tag in inspector updates sidebar count badge.
+  - Category tagging in Inspector (`#addTagCategorySelect`): tagging photos with specific categories (places, people, events, keyword), autodetecting category on input, and updating sidebar counts and colored border pill accents.
 
 #### [NEW] `tests/ui/test_inspector.py`
 * **Features Covered**:
@@ -203,6 +207,12 @@ Helper utilities for programmatically creating:
   - Next / Previous navigation buttons (`#loupeNextBtn`, `#loupePrevBtn`) and Arrow keys (`ArrowLeft`, `ArrowRight`).
   - Rating & Flagging directly inside Loupe (`#loupeRating`, `#loupeFlag`).
   - Closing Loupe via Close button `#loupeCloseBtn`, Escape key, and backdrop click.
+  - Loupe Zoom In and Out controls: `#loupeZoomInBtn`, `#loupeZoomOutBtn`, `#loupeZoomSlider` (100%–500% in 5% increments), and `#loupeZoomResetBtn` (displays percentage and toggles/resets zoom).
+  - Keyboard shortcuts for Loupe zoom: `+`/`=` (zoom in), `-`/`_` (zoom out), `Z` (toggle 100%/200%), `Ctrl+0`/`Cmd+0` (reset to Fit 100%).
+  - Double-click zoom: double-clicking `#loupeImageViewport` toggles between Fit (100%) and 200% centered at cursor.
+  - Mouse wheel zoom: scrolling over `#loupeImageViewport` zooms in and out centered at mouse cursor.
+  - Click-and-drag panning: when zoomed in, dragging mouse across `#loupeImageViewport` pans the image with boundary clamping and cursor states (`grab`, `grabbing`).
+  - Automatic zoom/pan reset: navigating to next/prev photo (`#loupeNextBtn`, `#loupePrevBtn`) or closing loupe resets zoom to 100% Fit.
 
 #### [NEW] `tests/ui/test_timeline.py`
 * **Features Covered**:

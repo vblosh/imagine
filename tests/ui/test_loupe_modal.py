@@ -117,3 +117,182 @@ def test_loupe_close_mechanisms(server, page: Page):
     expect(loupe).to_be_visible()
     page.locator("#loupeBackdrop").click(position={"x": 10, "y": 10})
     expect(loupe).to_be_hidden()
+
+
+def test_loupe_zoom_buttons_and_slider(server, page: Page):
+    """Zooming in/out using the toolbar buttons and slider."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card").first
+    card.dblclick()
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+
+    zoom_in_btn = page.locator("#loupeZoomInBtn")
+    zoom_out_btn = page.locator("#loupeZoomOutBtn")
+    zoom_reset_btn = page.locator("#loupeZoomResetBtn")
+    zoom_slider = page.locator("#loupeZoomSlider")
+    img = page.locator("#loupeImg")
+
+    # Initial state: 100% zoom, zoom out disabled
+    expect(zoom_reset_btn).to_have_text("100%")
+    expect(zoom_slider).to_have_value("100")
+    expect(zoom_out_btn).to_be_disabled()
+
+    # Click Zoom In (+)
+    zoom_in_btn.click()
+    expect(zoom_reset_btn).to_have_text("125%")
+    expect(zoom_slider).to_have_value("125")
+    expect(zoom_out_btn).to_be_enabled()
+    expect(img).to_have_attribute("style", re.compile(r"scale\(1\.25\)"))
+
+    # Click Zoom In again
+    zoom_in_btn.click()
+    expect(zoom_reset_btn).to_have_text("150%")
+    expect(img).to_have_attribute("style", re.compile(r"scale\(1\.5\)"))
+
+    # Click Zoom Out (-)
+    zoom_out_btn.click()
+    expect(zoom_reset_btn).to_have_text("125%")
+
+    # Click Zoom Reset button (resets to 100%)
+    zoom_reset_btn.click()
+    expect(zoom_reset_btn).to_have_text("100%")
+    expect(zoom_out_btn).to_be_disabled()
+
+    # Use slider to set zoom to 250%
+    page.evaluate("""() => {
+        const slider = document.getElementById('loupeZoomSlider');
+        slider.value = '250';
+        slider.dispatchEvent(new Event('input'));
+    }""")
+    expect(zoom_reset_btn).to_have_text("250%")
+    expect(img).to_have_attribute("style", re.compile(r"scale\(2\.5\)"))
+
+
+def test_loupe_zoom_keyboard_shortcuts(server, page: Page):
+    """Zooming in/out using keyboard shortcuts (+, -, z, Ctrl+0)."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card").first
+    card.dblclick()
+    expect(page.locator("#loupeModal")).to_be_visible()
+
+    zoom_reset_btn = page.locator("#loupeZoomResetBtn")
+    expect(zoom_reset_btn).to_have_text("100%")
+
+    # Press '+' or '=' to zoom in
+    page.keyboard.press("=")
+    expect(zoom_reset_btn).to_have_text("125%")
+
+    page.keyboard.press("+")
+    expect(zoom_reset_btn).to_have_text("150%")
+
+    # Press '-' to zoom out
+    page.keyboard.press("-")
+    expect(zoom_reset_btn).to_have_text("125%")
+
+    # Press 'z' to reset zoom
+    page.keyboard.press("z")
+    expect(zoom_reset_btn).to_have_text("100%")
+
+    # Press 'z' again to toggle to 200%
+    page.keyboard.press("z")
+    expect(zoom_reset_btn).to_have_text("200%")
+
+    # Press 'Control+0' to reset to 100%
+    page.keyboard.press("Control+0")
+    expect(zoom_reset_btn).to_have_text("100%")
+
+
+def test_loupe_zoom_double_click_and_reset_on_nav(server, page: Page):
+    """Double-clicking toggles zoom, and navigating between photos resets zoom."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card").first
+    card.dblclick()
+    expect(page.locator("#loupeModal")).to_be_visible()
+
+    viewport = page.locator("#loupeImageViewport")
+    zoom_reset_btn = page.locator("#loupeZoomResetBtn")
+    expect(zoom_reset_btn).to_have_text("100%")
+
+    # Double click on the viewport image to zoom to 200%
+    viewport.dblclick()
+    expect(zoom_reset_btn).to_have_text("200%")
+
+    # Double click again to reset to 100%
+    viewport.dblclick()
+    expect(zoom_reset_btn).to_have_text("100%")
+
+    # Zoom in to 200% again, then navigate to next photo
+    viewport.dblclick()
+    expect(zoom_reset_btn).to_have_text("200%")
+    page.locator("#loupeNextBtn").click()
+
+    # Next photo should have reset zoom back to 100%
+    expect(page.locator("#loupeIndex")).to_have_text("2 / 6")
+    expect(zoom_reset_btn).to_have_text("100%")
+
+
+def test_loupe_zoom_pan_drag(server, page: Page):
+    """Dragging while zoomed in pans the image."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card").first
+    card.dblclick()
+    expect(page.locator("#loupeModal")).to_be_visible()
+
+    # Zoom in to 300% via slider
+    page.evaluate("""() => {
+        const slider = document.getElementById('loupeZoomSlider');
+        slider.value = '300';
+        slider.dispatchEvent(new Event('input'));
+    }""")
+    img = page.locator("#loupeImg")
+    expect(img).to_have_attribute("style", re.compile(r"scale\(3\)"))
+
+    viewport = page.locator("#loupeImageViewport")
+    box = viewport.bounding_box()
+    assert box is not None
+
+    start_x = box["x"] + box["width"] / 2
+    start_y = box["y"] + box["height"] / 2
+
+    # Drag image by 60px horizontally and 40px vertically
+    page.mouse.move(start_x, start_y)
+    page.mouse.down()
+    page.mouse.move(start_x - 60, start_y - 40)
+    page.mouse.up()
+
+    # Verify transform has non-zero translation
+    style = img.get_attribute("style") or ""
+    assert "translate(" in style
+    assert "translate(0px, 0px)" not in style
+
+
+def test_loupe_zoom_mouse_wheel(server, page: Page):
+    """Mouse wheel scrolling over the image zooms in and out."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card").first
+    card.dblclick()
+    expect(page.locator("#loupeModal")).to_be_visible()
+
+    zoom_reset_btn = page.locator("#loupeZoomResetBtn")
+    viewport = page.locator("#loupeImageViewport")
+    expect(zoom_reset_btn).to_have_text("100%")
+
+    box = viewport.bounding_box()
+    assert box is not None
+
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    # Scroll up (negative deltaY zooms in)
+    page.mouse.wheel(delta_x=0, delta_y=-100)
+    expect(zoom_reset_btn).not_to_have_text("100%")
+
+    # Scroll down (positive deltaY zooms out back to 100%)
+    page.mouse.wheel(delta_x=0, delta_y=300)
+    expect(zoom_reset_btn).to_have_text("100%")
+
+

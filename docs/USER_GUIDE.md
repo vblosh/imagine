@@ -220,15 +220,27 @@ Double-click any photo card or click the expand icon in the Inspector to enter *
 | [<]                      [ IMAGE ]                      [>] |
 |                                                             |
 |-------------------------------------------------------------|
-| DSC_0042.JPG (14 / 85)     [***..]   [✔ Pick] [✖ Reject] [X]|
+| DSC_0042.JPG (14 / 85)   [***..] [✔][✖]  [-] [100%] [+] [X]|
 +-------------------------------------------------------------+
 ```
+
+### Zoom & Pan
+- **Zoom In / Out**: Click the `+` / `−` buttons or use the zoom slider in the loupe toolbar.
+- **Mouse Wheel**: Scroll up/down over the photo to zoom smoothly in and out centered at your cursor.
+- **Double Click**: Double-click anywhere on the image to zoom in to 200% centered at that point; double-click again to reset to Fit (100%).
+- **Pan / Drag**: When zoomed in, click and drag the image to pan around and inspect fine details.
+- **Reset Zoom**: Click the zoom percentage button (e.g., `100%`) or press `Z` / `Ctrl+0` / `Cmd+0`.
+- **Automatic Reset**: Zoom and pan automatically reset to Fit when navigating to another photo or closing the viewer.
 
 ### Keyboard Shortcuts
 | Key | Action |
 |---|---|
 | `Left Arrow` / `Page Up` | Previous photo |
 | `Right Arrow` / `Page Down` | Next photo |
+| `+` or `=` | Zoom in |
+| `-` or `_` | Zoom out |
+| `Z` | Toggle zoom between Fit (100%) and 200% |
+| `Ctrl+0` / `Cmd+0` | Reset zoom to Fit (100%) |
 | `1` – `5` | Assign 1 to 5 star rating |
 | `0` | Clear rating (0 stars) |
 | `P` | Mark as Pick |
@@ -303,7 +315,7 @@ imagine list [options]
 **Options:**
 - `--catalog <file>`: Path to SQLite catalog database (default: `catalog.db`).
 - `--rating <N>`: Filter by minimum star rating (1–5).
-- `--search <text>`: Search keyword in filename, camera, or lens.
+- `--search <text>`: Search keyword in filename, camera, lens, or tags.
 - `--limit <N>`: Maximum items to display (default: `50`).
 - `--offset <N>`: Pagination offset.
 

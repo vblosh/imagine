@@ -338,7 +338,9 @@
       <div class="loupe-content">
         <button class="loupe-btn loupe-prev" id="loupePrevBtn" title="Previous (Left Arrow)">&lsaquo;</button>
         <div class="loupe-image-container">
-          <img id="loupeImg" src="" alt="Fullscreen Loupe View">
+          <div class="loupe-image-viewport" id="loupeImageViewport">
+            <img id="loupeImg" src="" alt="Fullscreen Loupe View" draggable="false">
+          </div>
           <div class="loupe-toolbar">
             <div class="loupe-info">
               <span id="loupeFileName">Photo</span>
@@ -354,6 +356,12 @@
             <div class="flag-toggle" id="loupeFlag">
               <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)">✔</button>
               <button class="flag-btn flag-reject" data-flag="-1" title="Reject (Del)">✖</button>
+            </div>
+            <div class="loupe-zoom-controls" id="loupeZoomControls">
+              <button class="loupe-zoom-btn" id="loupeZoomOutBtn" title="Zoom Out (-)">−</button>
+              <input type="range" class="loupe-zoom-slider" id="loupeZoomSlider" min="100" max="500" value="100" step="5" title="Zoom Slider">
+              <button class="loupe-zoom-btn" id="loupeZoomInBtn" title="Zoom In (+)">+</button>
+              <button class="loupe-zoom-value" id="loupeZoomResetBtn" title="Reset Zoom (Z or Ctrl+0)">100%</button>
             </div>
           </div>
         </div>
