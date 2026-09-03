@@ -142,6 +142,20 @@ TEST_F(QueryTest, FilterCameraAndSearchText) {
     ASSERT_TRUE(res3.isOk());
     EXPECT_EQ(res3.value().total_count, 1);
     EXPECT_EQ(res3.value().items[0].id, id1);
+
+    // Search text matching tag
+    QueryCriteria c4;
+    c4.search_text = "portrait";
+    auto res4 = QueryBuilder::execute(db, c4);
+    ASSERT_TRUE(res4.isOk());
+    EXPECT_EQ(res4.value().total_count, 1);
+    EXPECT_EQ(res4.value().items[0].id, id2);
+
+    QueryCriteria c5;
+    c5.search_text = "nature";
+    auto res5 = QueryBuilder::execute(db, c5);
+    ASSERT_TRUE(res5.isOk());
+    EXPECT_EQ(res5.value().total_count, 2);
 }
 
 TEST_F(QueryTest, FilterDateRange) {

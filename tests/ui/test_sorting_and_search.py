@@ -80,3 +80,13 @@ def test_realtime_search_and_clear(server, page: Page):
     search_input.fill("85mm")
     expect(cards).to_have_count(1)
     expect(cards.first.locator(".card-filename")).to_have_text("portrait.bmp")
+
+    # 5. Search by tag: "Alice" (matches birthday.bmp)
+    search_input.fill("Alice")
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("birthday.bmp")
+
+    # 6. Search by tag: "Alps" (matches mountain.bmp)
+    search_input.fill("Alps")
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("mountain.bmp")

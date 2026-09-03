@@ -78,7 +78,7 @@ Options for 'serve':
 Options for 'list':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
   --rating <N>        Filter by minimum star rating (0-5)
-  --search <text>     Search keyword in filename, camera, or lens
+  --search <text>     Search keyword in filename, camera, lens, or tags
   --limit <N>         Maximum items to display (default: 50)
   --offset <N>        Offset pagination (default: 0)
 
