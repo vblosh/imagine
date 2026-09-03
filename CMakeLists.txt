@@ -23,8 +23,8 @@ endif()
 option(ENABLE_COVERAGE "Build with coverage" OFF)
 if (ENABLE_COVERAGE)
     message(STATUS "Enabling gcov test coverage")
-    add_compile_options(-fprofile-arcs -ftest-coverage)
-    add_link_options(-lgcov)
+    add_compile_options(--coverage)
+    add_link_options(--coverage)
 endif()
 
 # External Dependencies
@@ -78,6 +78,9 @@ if (BUILD_TESTING)
     
     set(IMAGINE_TEST_SOURCES
         tests/test_main.cpp
+        tests/common_test.cpp
+        tests/concurrency_test.cpp
+        tests/catalog_test.cpp
         tests/db_test.cpp
         tests/exif_test.cpp
         tests/thumbnail_test.cpp

@@ -142,7 +142,8 @@ Status Connection::open(const std::string& dbPath) {
     if (dbPath != ":memory:") {
         std::filesystem::path p(dbPath);
         if (p.has_parent_path()) {
-            std::filesystem::create_directories(p.parent_path());
+            std::error_code ec;
+            std::filesystem::create_directories(p.parent_path(), ec);
         }
     }
 

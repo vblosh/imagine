@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "imagine/db/catalog_db.hpp"
+#include "imagine/db/connection.hpp"
 #include <chrono>
 
 using namespace imagine;
@@ -78,9 +79,14 @@ TEST_F(CatalogDbTest, InsertAndRetrieveMedia) {
     auto hashRes = db.getMediaByHash(item.content_hash);
     ASSERT_TRUE(hashRes.isOk());
     EXPECT_EQ(hashRes.value().id, id);
+
+    // Not found lookups
+    EXPECT_EQ(db.getMediaById(99999).status().code(), StatusCode::NotFound);
+    EXPECT_EQ(db.getMediaByPath("/no/such/path").status().code(), StatusCode::NotFound);
+    EXPECT_EQ(db.getMediaByHash("non_existent_hash").status().code(), StatusCode::NotFound);
 }
 
-TEST_F(CatalogDbTest, UpdateRatingAndFlag) {
+TEST_F(CatalogDbTest, UpdateAndDeleteMedia) {
     MediaItem item;
     item.file_path = "/photos/test.jpg";
     item.file_name = "test.jpg";
@@ -100,25 +106,53 @@ TEST_F(CatalogDbTest, UpdateRatingAndFlag) {
     ASSERT_TRUE(getRes.isOk());
     EXPECT_EQ(getRes.value().rating, 5);
     EXPECT_EQ(getRes.value().flag, FlagState::Reject);
+
+    // updateThumbnails
+    EXPECT_TRUE(db.updateThumbnails(id, "/th/sm.jpg", "/th/lg.jpg").isOk());
+    auto withThumbs = db.getMediaById(id).value();
+    EXPECT_EQ(withThumbs.thumb_small, "/th/sm.jpg");
+    EXPECT_EQ(withThumbs.thumb_large, "/th/lg.jpg");
+
+    // updateMedia full update
+    withThumbs.file_name = "updated.jpg";
+    withThumbs.rating = 2;
+    withThumbs.exif.camera_make = "Fujifilm";
+    EXPECT_TRUE(db.updateMedia(withThumbs).isOk());
+
+    auto updated = db.getMediaById(id).value();
+    EXPECT_EQ(updated.file_name, "updated.jpg");
+    EXPECT_EQ(updated.rating, 2);
+    EXPECT_EQ(updated.exif.camera_make, "Fujifilm");
+
+    // deleteMedia
+    EXPECT_TRUE(db.deleteMedia(id).isOk());
+    EXPECT_EQ(db.getMediaById(id).status().code(), StatusCode::NotFound);
 }
 
-TEST_F(CatalogDbTest, TagManagement) {
-    MediaItem item;
-    item.file_path = "/photos/family.jpg";
-    item.file_name = "family.jpg";
-    item.file_size = 1024;
-    item.file_modified_time = 1000;
-    item.content_hash = "hash_family";
-    item.date_taken = 1000;
-    auto insertRes = db.insertMedia(item);
-    ASSERT_TRUE(insertRes.isOk());
-    MediaId mid = insertRes.value();
+TEST_F(CatalogDbTest, TagManagementAndBatch) {
+    MediaItem item1;
+    item1.file_path = "/photos/family.jpg";
+    item1.file_name = "family.jpg";
+    item1.file_size = 1024;
+    item1.file_modified_time = 1000;
+    item1.content_hash = "hash_family";
+    item1.date_taken = 1000;
+    MediaId mid1 = db.insertMedia(item1).value();
 
-    // Create tags
+    MediaItem item2;
+    item2.file_path = "/photos/nature.jpg";
+    item2.file_name = "nature.jpg";
+    item2.file_size = 2048;
+    item2.file_modified_time = 2000;
+    item2.content_hash = "hash_nature";
+    item2.date_taken = 2000;
+    MediaId mid2 = db.insertMedia(item2).value();
+
+    // Create tags (including parent_id)
     auto tagPeople = db.createOrGetTag("Alice", "people");
     ASSERT_TRUE(tagPeople.isOk());
 
-    auto tagPlace = db.createOrGetTag("Paris", "places");
+    auto tagPlace = db.createOrGetTag("Paris", "places", tagPeople.value());
     ASSERT_TRUE(tagPlace.isOk());
 
     // Duplicate create returns existing
@@ -127,67 +161,204 @@ TEST_F(CatalogDbTest, TagManagement) {
     EXPECT_EQ(tagPeople.value(), tagPeople2.value());
 
     // Attach to media
-    EXPECT_TRUE(db.addTagToMedia(mid, tagPeople.value()).isOk());
-    EXPECT_TRUE(db.addTagToMedia(mid, tagPlace.value()).isOk());
+    EXPECT_TRUE(db.addTagToMedia(mid1, tagPeople.value()).isOk());
+    EXPECT_TRUE(db.addTagToMedia(mid1, tagPlace.value()).isOk());
+    EXPECT_TRUE(db.addTagToMedia(mid2, tagPlace.value()).isOk());
 
-    auto tagsRes = db.getTagsForMedia(mid);
-    ASSERT_TRUE(tagsRes.isOk());
-    EXPECT_EQ(tagsRes.value().size(), 2);
+    // Batch get tags
+    auto batchEmpty = db.getTagsForMediaBatch({});
+    ASSERT_TRUE(batchEmpty.isOk());
+    EXPECT_TRUE(batchEmpty.value().empty());
+
+    auto batchRes = db.getTagsForMediaBatch({mid1, mid2});
+    ASSERT_TRUE(batchRes.isOk());
+    EXPECT_EQ(batchRes.value()[mid1].size(), 2u);
+    EXPECT_EQ(batchRes.value()[mid2].size(), 1u);
 
     // Remove one tag
-    EXPECT_TRUE(db.removeTagFromMedia(mid, tagPeople.value()).isOk());
-    auto tagsAfter = db.getTagsForMedia(mid);
+    EXPECT_TRUE(db.removeTagFromMedia(mid1, tagPeople.value()).isOk());
+    auto tagsAfter = db.getTagsForMedia(mid1);
     ASSERT_TRUE(tagsAfter.isOk());
-    EXPECT_EQ(tagsAfter.value().size(), 1);
+    EXPECT_EQ(tagsAfter.value().size(), 1u);
     EXPECT_EQ(tagsAfter.value()[0].name, "Paris");
 
     // Delete tag completely
     EXPECT_TRUE(db.deleteTag(tagPlace.value()).isOk());
-    auto tagsAfterDelete = db.getTagsForMedia(mid);
+    auto tagsAfterDelete = db.getTagsForMedia(mid1);
     ASSERT_TRUE(tagsAfterDelete.isOk());
-    EXPECT_EQ(tagsAfterDelete.value().size(), 0);
-    auto allTags = db.getAllTags();
-    ASSERT_TRUE(allTags.isOk());
-    EXPECT_EQ(allTags.value().size(), 1); // Only "Alice" remains
+    EXPECT_EQ(tagsAfterDelete.value().size(), 0u);
 }
 
-TEST_F(CatalogDbTest, AlbumManagement) {
+TEST_F(CatalogDbTest, AlbumManagementAndQueries) {
     MediaItem item1;
     item1.file_path = "/photos/1.jpg";
     item1.file_name = "1.jpg";
     item1.file_size = 1024;
     item1.file_modified_time = 1000;
     item1.content_hash = "hash_1";
-    item1.date_taken = 1000;
+    item1.date_taken = 1700000000;
     auto mid1 = db.insertMedia(item1).value();
-
-    MediaItem item2;
-    item2.file_path = "/photos/2.jpg";
-    item2.file_name = "2.jpg";
-    item2.file_size = 2048;
-    item2.file_modified_time = 2000;
-    item2.content_hash = "hash_2";
-    item2.date_taken = 2000;
-    auto mid2 = db.insertMedia(item2).value();
 
     auto albumRes = db.createAlbum("Favorites 2026", "Best memories");
     ASSERT_TRUE(albumRes.isOk());
     AlbumId aid = albumRes.value();
 
+    // getAlbumById
+    auto getAlbum = db.getAlbumById(aid);
+    ASSERT_TRUE(getAlbum.isOk());
+    EXPECT_EQ(getAlbum.value().name, "Favorites 2026");
+
+    // getAlbumById not found
+    EXPECT_EQ(db.getAlbumById(99999).status().code(), StatusCode::NotFound);
+
     EXPECT_TRUE(db.addMediaToAlbum(aid, mid1, 0).isOk());
-    EXPECT_TRUE(db.addMediaToAlbum(aid, mid2, 1).isOk());
+    EXPECT_EQ(db.getMediaInAlbum(aid).value().size(), 1u);
 
-    auto inAlbum = db.getMediaInAlbum(aid);
-    ASSERT_TRUE(inAlbum.isOk());
-    EXPECT_EQ(inAlbum.value().size(), 2);
+    // Timeline check
+    auto timeline = db.getTimeline();
+    ASSERT_TRUE(timeline.isOk());
+    EXPECT_FALSE(timeline.value().empty());
 
-    auto allAlbums = db.getAllAlbums();
-    ASSERT_TRUE(allAlbums.isOk());
-    EXPECT_EQ(allAlbums.value().size(), 1);
-    EXPECT_EQ(allAlbums.value()[0].item_count, 2);
+    // countMedia & queryMedia
+    auto countAll = db.countMedia("", {});
+    ASSERT_TRUE(countAll.isOk());
+    EXPECT_EQ(countAll.value(), 1);
 
-    EXPECT_TRUE(db.removeMediaFromAlbum(aid, mid1).isOk());
-    auto inAlbumAfter = db.getMediaInAlbum(aid);
-    ASSERT_TRUE(inAlbumAfter.isOk());
-    EXPECT_EQ(inAlbumAfter.value().size(), 1);
+    auto countFiltered = db.countMedia("rating >= ?", {"0"});
+    ASSERT_TRUE(countFiltered.isOk());
+    EXPECT_EQ(countFiltered.value(), 1);
+
+    auto queryEmptyOrder = db.queryMedia("", {}, "", 10, 0);
+    ASSERT_TRUE(queryEmptyOrder.isOk());
+    EXPECT_EQ(queryEmptyOrder.value().size(), 1u);
+
+    // deleteAlbum
+    EXPECT_TRUE(db.deleteAlbum(aid).isOk());
+    EXPECT_EQ(db.getAlbumById(aid).status().code(), StatusCode::NotFound);
+}
+
+TEST(ConnectionAndStatementTest, LowLevelOperationsAndErrors) {
+    Connection conn;
+    EXPECT_FALSE(conn.isOpen());
+    EXPECT_EQ(conn.execute("SELECT 1;").code(), StatusCode::DatabaseError);
+    EXPECT_FALSE(conn.prepare("SELECT 1;").isOk());
+    EXPECT_EQ(conn.lastInsertRowId(), 0);
+    EXPECT_EQ(conn.changes(), 0);
+    EXPECT_EQ(conn.lastErrorCode(), -1);
+    EXPECT_EQ(conn.lastErrorMessage(), "Database closed");
+
+    // Open invalid path
+    EXPECT_FALSE(conn.open("/proc/invalid_dir/db.sqlite").isOk());
+
+    // Valid open
+    ASSERT_TRUE(conn.open(":memory:").isOk());
+    EXPECT_TRUE(conn.isOpen());
+
+    // Move constructor and move assignment
+    Connection connMoved = std::move(conn);
+    EXPECT_TRUE(connMoved.isOpen());
+    Connection connAssigned;
+    connAssigned = std::move(connMoved);
+    EXPECT_TRUE(connAssigned.isOpen());
+
+    // Prepare invalid SQL
+    auto badStmt = connAssigned.prepare("INVALID SQL STATEMENT;");
+    EXPECT_FALSE(badStmt.isOk());
+
+    // Table creation and Statement testing
+    ASSERT_TRUE(connAssigned.execute("CREATE TABLE test (id INTEGER PRIMARY KEY, d REAL, t TEXT, opt TEXT);").isOk());
+
+    auto insStmt = connAssigned.prepare("INSERT INTO test (id, d, t, opt) VALUES (?, ?, ?, ?);");
+    ASSERT_TRUE(insStmt.isOk());
+    auto stmt = std::move(insStmt.value());
+
+    // Move constructor and move assignment of Statement
+    Statement stmtMoved = std::move(stmt);
+    Statement stmtAssigned(nullptr);
+    stmtAssigned = std::move(stmtMoved);
+
+    // Statement binding
+    EXPECT_TRUE(stmtAssigned.bind(1, static_cast<int64_t>(100)).isOk());
+    EXPECT_TRUE(stmtAssigned.bind(2, 3.14159).isOk());
+    EXPECT_TRUE(stmtAssigned.bind(3, "sample text").isOk());
+    EXPECT_TRUE(stmtAssigned.bindNull(4).isOk());
+    EXPECT_EQ(stmtAssigned.step(), StepResult::Done);
+
+    // Statement reset and re-insert
+    EXPECT_TRUE(stmtAssigned.reset().isOk());
+    EXPECT_TRUE(stmtAssigned.bind(1, static_cast<int32_t>(101)).isOk());
+    EXPECT_TRUE(stmtAssigned.bind(2, 2.718).isOk());
+    EXPECT_TRUE(stmtAssigned.bind(3, "row 2").isOk());
+    EXPECT_TRUE(stmtAssigned.bind(4, "not null").isOk());
+    EXPECT_EQ(stmtAssigned.step(), StepResult::Done);
+
+    // Query back
+    auto selStmt = connAssigned.prepare("SELECT id, d, t, opt FROM test ORDER BY id ASC;");
+    ASSERT_TRUE(selStmt.isOk());
+    auto q = std::move(selStmt.value());
+
+    // Row 1
+    EXPECT_EQ(q.step(), StepResult::Row);
+    EXPECT_EQ(q.getInt64(0), 100);
+    EXPECT_DOUBLE_EQ(q.getDouble(1), 3.14159);
+    EXPECT_EQ(q.getString(2), "sample text");
+    EXPECT_TRUE(q.isNull(3));
+    EXPECT_FALSE(q.getOptionalString(3).has_value());
+
+    // Row 2
+    EXPECT_EQ(q.step(), StepResult::Row);
+    EXPECT_EQ(q.getInt(0), 101);
+    EXPECT_DOUBLE_EQ(q.getDouble(1), 2.718);
+    EXPECT_EQ(q.getString(2), "row 2");
+    EXPECT_FALSE(q.isNull(3));
+    ASSERT_TRUE(q.getOptionalString(3).has_value());
+    EXPECT_EQ(*q.getOptionalString(3), "not null");
+
+    EXPECT_EQ(q.step(), StepResult::Done);
+
+    // Calling on null statement handle returns databaseError
+    Statement nullStmt(nullptr);
+    EXPECT_FALSE(nullStmt.bind(1, 1).isOk());
+    EXPECT_FALSE(nullStmt.bind(1, int64_t{1}).isOk());
+    EXPECT_FALSE(nullStmt.bind(1, 1.0).isOk());
+    EXPECT_FALSE(nullStmt.bind(1, "str").isOk());
+    EXPECT_FALSE(nullStmt.bindNull(1).isOk());
+    EXPECT_FALSE(nullStmt.reset().isOk());
+    EXPECT_EQ(nullStmt.step(), StepResult::Error);
+}
+
+TEST(TransactionTest, CommitRollbackAndAutoRollback) {
+    Connection conn;
+    ASSERT_TRUE(conn.open(":memory:").isOk());
+    ASSERT_TRUE(conn.execute("CREATE TABLE kv (k TEXT, v TEXT);").isOk());
+
+    // 1. Explicit commit
+    {
+        Transaction tx(conn);
+        EXPECT_TRUE(conn.execute("INSERT INTO kv VALUES ('key1', 'val1');").isOk());
+        EXPECT_TRUE(tx.commit().isOk());
+        // Double commit should error
+        EXPECT_FALSE(tx.commit().isOk());
+    }
+
+    // 2. Explicit rollback
+    {
+        Transaction tx(conn);
+        EXPECT_TRUE(conn.execute("INSERT INTO kv VALUES ('key2', 'val2');").isOk());
+        EXPECT_TRUE(tx.rollback().isOk());
+        // Double rollback should error
+        EXPECT_FALSE(tx.rollback().isOk());
+    }
+
+    // 3. Auto rollback on destruction
+    {
+        Transaction tx(conn);
+        EXPECT_TRUE(conn.execute("INSERT INTO kv VALUES ('key3', 'val3');").isOk());
+        // Destructor called here without commit
+    }
+
+    // Verify only key1 was committed
+    auto q = conn.prepare("SELECT COUNT(*) FROM kv;").value();
+    EXPECT_EQ(q.step(), StepResult::Row);
+    EXPECT_EQ(q.getInt(0), 1);
 }

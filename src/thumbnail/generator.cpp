@@ -175,7 +175,8 @@ Result<ImageBuffer> Generator::resize(const ImageBuffer& src, int maxDimension) 
 Status Generator::saveJpeg(const ImageBuffer& img, const std::string& destPath, int quality) {
     std::filesystem::path p(destPath);
     if (p.has_parent_path()) {
-        std::filesystem::create_directories(p.parent_path());
+        std::error_code ec;
+        std::filesystem::create_directories(p.parent_path(), ec);
     }
 
     int rc = stbi_write_jpg(destPath.c_str(), img.width, img.height, img.channels, img.data.data(), quality);
@@ -188,7 +189,8 @@ Status Generator::saveJpeg(const ImageBuffer& img, const std::string& destPath, 
 Status Generator::savePng(const ImageBuffer& img, const std::string& destPath) {
     std::filesystem::path p(destPath);
     if (p.has_parent_path()) {
-        std::filesystem::create_directories(p.parent_path());
+        std::error_code ec;
+        std::filesystem::create_directories(p.parent_path(), ec);
     }
 
     int stride = img.width * img.channels;

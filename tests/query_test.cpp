@@ -200,3 +200,136 @@ TEST_F(QueryTest, JsonSerialization) {
     EXPECT_EQ(*deserialized.min_rating, 4);
     EXPECT_EQ(deserialized.tag_ids.size(), 3);
 }
+
+TEST_F(QueryTest, FluentBuilderAndExecutionMethods) {
+    QueryBuilder qb;
+    qb.minRating(1)
+      .maxRating(4)
+      .flag(FlagState::Unflagged)
+      .camera("Sony", "A7 IV")
+      .dateRange(1000, 3000)
+      .search("img2")
+      .sort("file_name", true)
+      .paginate(5, 0);
+
+    auto result = qb.execute(db);
+    ASSERT_TRUE(result.isOk());
+    EXPECT_EQ(result.value().total_count, 1);
+    EXPECT_EQ(result.value().items[0].id, id2);
+
+    // executeQuery member
+    auto itemsRes = qb.executeQuery(db);
+    ASSERT_TRUE(itemsRes.isOk());
+    EXPECT_EQ(itemsRes.value().size(), 1u);
+
+    // executeCount member
+    auto countRes = qb.executeCount(db);
+    ASSERT_TRUE(countRes.isOk());
+    EXPECT_EQ(countRes.value(), 1);
+
+    // Static executeQuery and executeCount
+    QueryCriteria c;
+    c.camera_model = "Z8";
+    auto staticItems = QueryBuilder::executeQuery(db, c);
+    ASSERT_TRUE(staticItems.isOk());
+    EXPECT_EQ(staticItems.value().size(), 1u);
+    EXPECT_EQ(staticItems.value()[0].id, id3);
+
+    auto staticCount = QueryBuilder::executeCount(db, c);
+    ASSERT_TRUE(staticCount.isOk());
+    EXPECT_EQ(staticCount.value(), 1);
+
+    // addTag and setTags in builder
+    QueryBuilder qbTags;
+    qbTags.addTag(tagNature);
+    EXPECT_EQ(qbTags.executeCount(db).value(), 2);
+
+    qbTags.setTags({tagNature, tagPortrait});
+    EXPECT_EQ(qbTags.executeCount(db).value(), 1);
+
+    // album filter
+    QueryBuilder qbAlbum;
+    qbAlbum.album(albumVacation);
+    EXPECT_EQ(qbAlbum.executeCount(db).value(), 2);
+
+    // setCriteria
+    QueryCriteria newCrit;
+    newCrit.search_text = "Nikon";
+    qbAlbum.setCriteria(newCrit);
+    EXPECT_EQ(qbAlbum.executeCount(db).value(), 1);
+}
+
+TEST_F(QueryTest, SortVariants) {
+    // Sort by file_name ascending
+    QueryCriteria c1;
+    c1.sort_by = "file_name";
+    c1.sort_descending = false;
+    auto res1 = QueryBuilder::execute(db, c1);
+    ASSERT_TRUE(res1.isOk());
+    EXPECT_EQ(res1.value().items[0].file_name, "img1.jpg");
+    EXPECT_EQ(res1.value().items[2].file_name, "img3.jpg");
+
+    // Sort by file_size descending
+    QueryCriteria c2;
+    c2.sort_by = "file_size";
+    c2.sort_descending = true;
+    auto res2 = QueryBuilder::execute(db, c2);
+    ASSERT_TRUE(res2.isOk());
+    EXPECT_EQ(res2.value().items[0].file_size, 3000);
+    EXPECT_EQ(res2.value().items[2].file_size, 1000);
+}
+
+TEST_F(QueryTest, QueryResultJsonSerialization) {
+    QueryResult qr;
+    qr.total_count = 1;
+    MediaItem item;
+    item.id = 55;
+    item.file_name = "test.jpg";
+    qr.items.push_back(item);
+
+    nlohmann::json j = qr;
+    EXPECT_EQ(j["total_count"], 1);
+
+    QueryResult d = j.get<QueryResult>();
+    EXPECT_EQ(d.total_count, 1);
+    ASSERT_EQ(d.items.size(), 1u);
+    EXPECT_EQ(d.items[0].id, 55);
+
+    nlohmann::json emptyJ = nlohmann::json::object();
+    QueryResult dEmpty = emptyJ.get<QueryResult>();
+    EXPECT_EQ(dEmpty.total_count, 0);
+    EXPECT_TRUE(dEmpty.items.empty());
+}
+
+TEST_F(QueryTest, FullQueryCriteriaJsonSerialization) {
+    QueryCriteria c;
+    c.min_rating = 1;
+    c.max_rating = 4;
+    c.flag = FlagState::Reject;
+    c.album_id = 42;
+    c.camera_make = "Leica";
+    c.camera_model = "M11";
+    c.date_from = 1000;
+    c.date_to = 2000;
+    c.search_text = "Street";
+    c.sort_by = "rating";
+    c.sort_descending = false;
+    c.limit = 25;
+    c.offset = 5;
+    c.tag_ids = {10, 20};
+
+    nlohmann::json j = c;
+    EXPECT_EQ(j["max_rating"], 4);
+    EXPECT_EQ(j["flag"], -1);
+    EXPECT_EQ(j["album_id"], 42);
+
+    QueryCriteria d = j.get<QueryCriteria>();
+    ASSERT_TRUE(d.max_rating.has_value());
+    EXPECT_EQ(*d.max_rating, 4);
+    ASSERT_TRUE(d.flag.has_value());
+    EXPECT_EQ(*d.flag, FlagState::Reject);
+    ASSERT_TRUE(d.album_id.has_value());
+    EXPECT_EQ(*d.album_id, 42);
+    EXPECT_EQ(d.camera_make, "Leica");
+    EXPECT_EQ(d.camera_model, "M11");
+}

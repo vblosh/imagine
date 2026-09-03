@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 #include "imagine/core/catalog.hpp"
 #include "imagine/server/web_server.hpp"
+#include "imagine/server/api_router.hpp"
+#include "imagine/db/catalog_db.hpp"
+#include "imagine/thumbnail/cache.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -9,6 +12,8 @@
 using namespace imagine;
 using namespace imagine::core;
 using namespace imagine::server;
+using namespace imagine::db;
+using namespace imagine::thumbnail;
 
 class ServerTest : public ::testing::Test {
 protected:
@@ -333,4 +338,260 @@ TEST_F(ServerTest, ConcurrentRequestsNoSegfault) {
     }
 
     EXPECT_FALSE(failed.load());
+}
+
+TEST_F(ServerTest, WebServerLifecycleAndStaticMimeTypes) {
+    EXPECT_TRUE(server_->isRunning());
+
+    // Starting already running server returns ok
+    EXPECT_TRUE(server_->start("127.0.0.1", port_).isOk());
+
+    // Access server()
+    EXPECT_NO_THROW(server_->server());
+
+    // Create various asset files to test MIME detection
+    std::vector<std::pair<std::string, std::string>> files = {
+        {"test.js", "application/javascript"},
+        {"test.svg", "image/svg+xml"},
+        {"test.png", "image/png"},
+        {"test.jpg", "image/jpeg"},
+        {"test.webp", "image/webp"},
+        {"test.gif", "image/gif"},
+        {"test.ico", "image/x-icon"},
+        {"test.json", "application/json"},
+        {"test.woff", "font/woff"},
+        {"test.woff2", "font/woff2"},
+        {"test.ttf", "font/ttf"},
+        {"test.bin", "application/octet-stream"}
+    };
+
+    httplib::Client client("127.0.0.1", port_);
+    for (const auto& [name, expectedMime] : files) {
+        {
+            std::ofstream ofs(webDir_ / name);
+            ofs << "dummy content";
+        }
+        auto res = client.Get("/" + name);
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+        EXPECT_NE(res->get_header_value("Content-Type").find(expectedMime), std::string::npos);
+    }
+
+    // Static request to /api/... returns 404 json
+    auto apiNotFound = client.Get("/api/nonexistent_route");
+    ASSERT_TRUE(apiNotFound);
+    EXPECT_EQ(apiNotFound->status, 404);
+
+    // When index.html does not exist, fallback returns 404 text
+    std::filesystem::remove(webDir_ / "index.html");
+    auto noIndex = client.Get("/nonexistent_spa_route");
+    ASSERT_TRUE(noIndex);
+    EXPECT_EQ(noIndex->status, 404);
+
+    // Start with closed catalog returns error
+    Catalog closedCat(1);
+    WebServer closedServer(closedCat, webDir_.string());
+    EXPECT_FALSE(closedServer.start("127.0.0.1", 19999).isOk());
+
+    // Start on invalid port returns error
+    WebServer badServer(*catalog_, webDir_.string());
+    EXPECT_FALSE(badServer.start("127.0.0.1", -1).isOk());
+}
+
+TEST_F(ServerTest, ValidationAndErrorEndpoints) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. GET /api/media/99999 (not found)
+    auto notFound = client.Get("/api/media/99999");
+    ASSERT_TRUE(notFound);
+    EXPECT_EQ(notFound->status, 404);
+
+    // 2. Rating validation
+    EXPECT_EQ(client.Post("/api/media/1/rating", "bad json", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/media/1/rating", "{}", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/media/1/rating", "{\"rating\": -1}", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/media/1/rating", "{\"rating\": 6}", "application/json")->status, 400);
+
+    // 3. Flag validation
+    EXPECT_EQ(client.Post("/api/media/1/flag", "bad json", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/media/1/flag", "{}", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/media/1/flag", "{\"flag\": -2}", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/media/1/flag", "{\"flag\": 2}", "application/json")->status, 400);
+
+    // 4. Tags on media validation
+    EXPECT_EQ(client.Post("/api/media/1/tags", "bad json", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/media/1/tags", "{}", "application/json")->status, 400);
+
+    // 5. POST /api/tags validation
+    EXPECT_EQ(client.Post("/api/tags", "bad json", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/tags", "{}", "application/json")->status, 400);
+
+    // 6. POST /api/albums validation
+    EXPECT_EQ(client.Post("/api/albums", "bad json", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/albums", "{}", "application/json")->status, 400);
+
+    // 7. POST /api/albums/:id/media with media_ids array and validation
+    auto albumPost = client.Post("/api/albums", "{\"name\": \"AlbumMediaTest\"}", "application/json");
+    ASSERT_TRUE(albumPost);
+    auto albumJson = nlohmann::json::parse(albumPost->body);
+    AlbumId aid = albumJson["id"].get<AlbumId>();
+
+    EXPECT_EQ(client.Post("/api/albums/" + std::to_string(aid) + "/media", "bad json", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/albums/" + std::to_string(aid) + "/media", "{}", "application/json")->status, 400);
+
+    // Insert a media item
+    MediaItem m;
+    m.file_path = (testDir_ / "dummy.jpg").string();
+    m.file_name = "dummy.jpg";
+    m.file_size = 100;
+    m.content_hash = "fake_hash_123456";
+    m.date_taken = 1700000000;
+    auto mid = catalog_->db().insertMedia(m).value();
+
+    // POST with array of media_ids
+    nlohmann::json addArray = {{"media_ids", {mid}}};
+    auto addRes = client.Post("/api/albums/" + std::to_string(aid) + "/media", addArray.dump(), "application/json");
+    ASSERT_TRUE(addRes);
+    EXPECT_EQ(addRes->status, 200);
+
+    // DELETE /api/albums/:id
+    auto delAlb = client.Delete("/api/albums/" + std::to_string(aid));
+    ASSERT_TRUE(delAlb);
+    EXPECT_EQ(delAlb->status, 200);
+
+    // 8. POST /api/import validation and execution
+    EXPECT_EQ(client.Post("/api/import", "bad json", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/import", "{}", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/import", "{\"path\": \"/nonexistent_import_dir\"}", "application/json")->status, 404);
+
+    auto photosDir = testDir_ / "photos_import";
+    std::filesystem::create_directories(photosDir);
+    nlohmann::json importBody = {{"path", photosDir.string()}};
+    auto impRes = client.Post("/api/import", importBody.dump(), "application/json");
+    ASSERT_TRUE(impRes);
+    EXPECT_EQ(impRes->status, 200);
+
+    // 9. Query params on /api/media
+    auto qRes = client.Get("/api/media?rating=3&max_rating=5&flag=0&search=dummy&date_from=1000&date_to=2000000000&limit=10&offset=0&sort=rating-asc");
+    ASSERT_TRUE(qRes);
+    EXPECT_EQ(qRes->status, 200);
+
+    auto qSortDesc = client.Get("/api/media?sort=file_name");
+    ASSERT_TRUE(qSortDesc);
+    EXPECT_EQ(qSortDesc->status, 200);
+}
+
+TEST_F(ServerTest, PhotosOriginalAndThumbnailsEndpoints) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. /api/photos/:id/original when item doesn't exist
+    EXPECT_EQ(client.Get("/api/photos/99999/original")->status, 404);
+
+    // Create real image on disk
+    std::string realImgPath = (testDir_ / "real.jpg").string();
+    {
+        std::ofstream ofs(realImgPath);
+        ofs << "JPEG_DATA_SIMULATION";
+    }
+
+    MediaItem item;
+    item.file_path = realImgPath;
+    item.file_name = "real.jpg";
+    item.file_size = 20;
+    item.content_hash = "real_hash_123456";
+    item.date_taken = 1700000000;
+    auto mid = catalog_->db().insertMedia(item).value();
+
+    // 2. /api/photos/:id/original when item exists
+    auto origRes = client.Get("/api/photos/" + std::to_string(mid) + "/original");
+    ASSERT_TRUE(origRes);
+    EXPECT_EQ(origRes->status, 200);
+    EXPECT_EQ(origRes->get_header_value("Content-Type"), "image/jpeg");
+
+    // 3. /api/photos/:id/original when file deleted from disk
+    std::filesystem::remove(realImgPath);
+    EXPECT_EQ(client.Get("/api/photos/" + std::to_string(mid) + "/original")->status, 404);
+
+    // 4. /api/thumbnails/:hash/:size not found
+    EXPECT_EQ(client.Get("/api/thumbnails/nonexistenthash/256")->status, 404);
+}
+
+TEST_F(ServerTest, ApiRouterStandaloneWithDbAndCache) {
+    // Test ApiRouter when initialized with (db, cache) without Catalog
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    Cache cache((testDir_ / "standalone_cache").string());
+
+    ApiRouter router(db, cache);
+    httplib::Server s;
+    router.registerRoutes(s);
+
+    EXPECT_NO_THROW(router.db());
+    EXPECT_NO_THROW(router.cache());
+
+    int port = 19500 + (std::rand() % 4000);
+    ASSERT_TRUE(s.bind_to_port("127.0.0.1", port));
+
+    std::thread th([&s]() { s.listen_after_bind(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    httplib::Client client("127.0.0.1", port);
+
+    // Stats
+    auto statsRes = client.Get("/api/stats");
+    ASSERT_TRUE(statsRes);
+    EXPECT_EQ(statsRes->status, 200);
+
+    // Fallback import progress
+    auto progRes = client.Get("/api/import/progress");
+    ASSERT_TRUE(progRes);
+    EXPECT_EQ(progRes->status, 200);
+
+    // Stop standalone server
+    s.stop();
+    if (th.joinable()) th.join();
+}
+
+TEST_F(ServerTest, WebServerRunAndMoreMimeTypes) {
+    // Test WebServer::run failure
+    WebServer s(*catalog_, webDir_.string());
+    EXPECT_FALSE(s.run("127.0.0.1", -1).isOk());
+    s.wait(); // wait on non-started server is safe
+
+    // Test different image mime types on /api/photos/:id/original
+    std::vector<std::pair<std::string, std::string>> imgTypes = {
+        {"pic.png", "image/png"},
+        {"pic.webp", "image/webp"},
+        {"pic.bmp", "image/bmp"},
+        {"pic.svg", "image/svg+xml"}
+    };
+
+    httplib::Client client("127.0.0.1", port_);
+    for (const auto& [fname, expectedMime] : imgTypes) {
+        std::string p = (testDir_ / fname).string();
+        {
+            std::ofstream ofs(p);
+            ofs << "dummy_content";
+        }
+        MediaItem item;
+        item.file_path = p;
+        item.file_name = fname;
+        item.content_hash = "hash_" + fname;
+        auto mid = catalog_->db().insertMedia(item).value();
+
+        auto res = client.Get("/api/photos/" + std::to_string(mid) + "/original");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+        EXPECT_EQ(res->get_header_value("Content-Type"), expectedMime);
+    }
+
+    // Single media_id in /api/albums/:id/media
+    auto albRes = client.Post("/api/albums", "{\"name\": \"SingleItemAlbum\"}", "application/json");
+    ASSERT_TRUE(albRes);
+    AlbumId aid = nlohmann::json::parse(albRes->body)["id"].get<AlbumId>();
+
+    nlohmann::json singleBody = {{"media_id", 1}};
+    auto singleAdd = client.Post("/api/albums/" + std::to_string(aid) + "/media", singleBody.dump(), "application/json");
+    ASSERT_TRUE(singleAdd);
+    EXPECT_EQ(singleAdd->status, 200);
 }
