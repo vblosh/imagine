@@ -244,3 +244,80 @@ TEST_F(ServerTest, ImportProgressEndpoint) {
     EXPECT_TRUE(j.contains("processed_files"));
     EXPECT_TRUE(j.contains("is_running"));
 }
+
+TEST_F(ServerTest, ConcurrentRequestsNoSegfault) {
+    // Populate media items and tags
+    for (int i = 0; i < 20; ++i) {
+        MediaItem item;
+        item.file_path = (testDir_ / ("photo_" + std::to_string(i) + ".jpg")).string();
+        item.file_name = "photo_" + std::to_string(i) + ".jpg";
+        item.file_size = 1000 + i;
+        item.content_hash = "hash_" + std::to_string(i);
+        item.width = 800;
+        item.height = 600;
+        item.date_taken = 1700000000 + i * 3600;
+        auto insRes = catalog_->db().insertMedia(item);
+        ASSERT_TRUE(insRes.isOk());
+
+        auto tagRes = catalog_->db().createOrGetTag("Tag" + std::to_string(i % 5));
+        ASSERT_TRUE(tagRes.isOk());
+        catalog_->db().addTagToMedia(insRes.value(), tagRes.value());
+    }
+
+    constexpr int kNumThreads = 8;
+    constexpr int kRequestsPerThread = 25;
+    std::vector<std::thread> threads;
+    std::atomic<bool> failed{false};
+
+    for (int t = 0; t < kNumThreads; ++t) {
+        threads.emplace_back([this, &failed, t]() {
+            httplib::Client client("127.0.0.1", port_);
+            client.set_read_timeout(5, 0);
+
+            for (int r = 0; r < kRequestsPerThread; ++r) {
+                if (failed.load()) return;
+
+                int mode = (t + r) % 5;
+                if (mode == 0) {
+                    auto res = client.Get("/api/media");
+                    if (!res || res->status != 200) {
+                        failed.store(true);
+                        return;
+                    }
+                } else if (mode == 1) {
+                    auto res = client.Get("/api/stats");
+                    if (!res || res->status != 200) {
+                        failed.store(true);
+                        return;
+                    }
+                } else if (mode == 2) {
+                    auto res = client.Get("/api/timeline");
+                    if (!res || res->status != 200) {
+                        failed.store(true);
+                        return;
+                    }
+                } else if (mode == 3) {
+                    auto res = client.Get("/api/tags");
+                    if (!res || res->status != 200) {
+                        failed.store(true);
+                        return;
+                    }
+                } else {
+                    auto res = client.Get("/api/media/1");
+                    if (!res || (res->status != 200 && res->status != 404)) {
+                        failed.store(true);
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    for (auto& th : threads) {
+        if (th.joinable()) {
+            th.join();
+        }
+    }
+
+    EXPECT_FALSE(failed.load());
+}

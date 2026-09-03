@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <optional>
 #include <mutex>
 #include <memory>
@@ -35,6 +36,7 @@ public:
     Result<TagId> createOrGetTag(const std::string& name, const std::string& category = "keyword", std::optional<TagId> parent_id = std::nullopt);
     Result<std::vector<Tag>> getAllTags();
     Result<std::vector<Tag>> getTagsForMedia(MediaId id);
+    Result<std::unordered_map<MediaId, std::vector<Tag>>> getTagsForMediaBatch(const std::vector<MediaId>& mediaIds);
     Status addTagToMedia(MediaId mediaId, TagId tagId);
     Status removeTagFromMedia(MediaId mediaId, TagId tagId);
     Status deleteTag(TagId tagId);
@@ -71,7 +73,7 @@ public:
 private:
     MediaItem extractMediaItem(Statement& stmt);
 
-    mutable std::mutex mutex_;
+    mutable std::recursive_mutex mutex_;
     Connection conn_;
 };
 

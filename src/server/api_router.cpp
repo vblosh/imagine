@@ -176,11 +176,24 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
         }
 
         auto& qResult = queryRes.value();
-        // Populate tags for items
-        for (auto& item : qResult.items) {
-            auto tagsRes = db().getTagsForMedia(item.id);
-            if (tagsRes.isOk()) {
-                item.tags = tagsRes.value();
+        // Populate tags for items using a single batched query
+        if (!qResult.items.empty()) {
+            std::vector<MediaId> ids;
+            ids.reserve(qResult.items.size());
+            for (const auto& item : qResult.items) {
+                ids.push_back(item.id);
+            }
+            auto batchRes = catalog_
+                ? catalog_->getTagsForMediaBatch(ids)
+                : db().getTagsForMediaBatch(ids);
+            if (batchRes.isOk()) {
+                auto& tagsMap = batchRes.value();
+                for (auto& item : qResult.items) {
+                    auto it = tagsMap.find(item.id);
+                    if (it != tagsMap.end()) {
+                        item.tags = std::move(it->second);
+                    }
+                }
             }
         }
 
@@ -200,13 +213,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             return;
         }
 
-        auto item = mediaRes.value();
-        auto tagsRes = db().getTagsForMedia(id);
-        if (tagsRes.isOk()) {
-            item.tags = tagsRes.value();
-        }
-
-        sendJson(res, item);
+        sendJson(res, mediaRes.value());
     });
 
     // POST /api/media/:id/rating

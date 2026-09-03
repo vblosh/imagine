@@ -203,6 +203,14 @@ Result<std::vector<Tag>> Catalog::getTagsForMedia(MediaId id) {
     return db_->getTagsForMedia(id);
 }
 
+Result<std::unordered_map<MediaId, std::vector<Tag>>> Catalog::getTagsForMediaBatch(const std::vector<MediaId>& mediaIds) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+    return db_->getTagsForMediaBatch(mediaIds);
+}
+
 Result<AlbumId> Catalog::createAlbum(
     const std::string& name,
     const std::string& description,

@@ -146,7 +146,7 @@ Status Connection::open(const std::string& dbPath) {
         }
     }
 
-    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX;
+    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX;
     int rc = sqlite3_open_v2(dbPath.c_str(), &db_, flags, nullptr);
     if (rc != SQLITE_OK) {
         std::string err = db_ ? sqlite3_errmsg(db_) : "Failed to allocate sqlite handle";

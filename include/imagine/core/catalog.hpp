@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -57,6 +58,7 @@ public:
     Result<TagId> createOrGetTag(const std::string& name, const std::string& category = "keyword");
     Result<std::vector<Tag>> getTags();
     Result<std::vector<Tag>> getTagsForMedia(MediaId id);
+    Result<std::unordered_map<MediaId, std::vector<Tag>>> getTagsForMediaBatch(const std::vector<MediaId>& mediaIds);
 
     // Albums
     Result<AlbumId> createAlbum(const std::string& name, const std::string& description = "", bool is_smart = false, const std::string& query_json = "");

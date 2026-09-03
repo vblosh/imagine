@@ -17,19 +17,19 @@ CatalogDb::~CatalogDb() {
 }
 
 Status CatalogDb::open(const std::string& dbPath) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     Status s = conn_.open(dbPath);
     if (!s.isOk()) return s;
     return Schema::migrate(conn_);
 }
 
 void CatalogDb::close() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     conn_.close();
 }
 
 bool CatalogDb::isOpen() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     return conn_.isOpen();
 }
 
@@ -68,7 +68,7 @@ MediaItem CatalogDb::extractMediaItem(Statement& stmt) {
 }
 
 Result<MediaId> CatalogDb::insertMedia(MediaItem& item) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
         INSERT INTO media_items (
             file_path, file_name, file_size, file_modified_time, content_hash,
@@ -130,7 +130,7 @@ Result<MediaId> CatalogDb::insertMedia(MediaItem& item) {
 }
 
 Status CatalogDb::updateMedia(const MediaItem& item) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
         UPDATE media_items SET
             file_name = ?, file_size = ?, file_modified_time = ?, content_hash = ?,
@@ -181,7 +181,7 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
 }
 
 Result<MediaItem> CatalogDb::getMediaById(MediaId id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("SELECT * FROM media_items WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -200,7 +200,7 @@ Result<MediaItem> CatalogDb::getMediaById(MediaId id) {
 }
 
 Result<MediaItem> CatalogDb::getMediaByPath(const std::string& path) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("SELECT * FROM media_items WHERE file_path = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -213,7 +213,7 @@ Result<MediaItem> CatalogDb::getMediaByPath(const std::string& path) {
 }
 
 Result<MediaItem> CatalogDb::getMediaByHash(const std::string& hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("SELECT * FROM media_items WHERE content_hash = ? LIMIT 1;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -226,7 +226,7 @@ Result<MediaItem> CatalogDb::getMediaByHash(const std::string& hash) {
 }
 
 Status CatalogDb::updateRating(MediaId id, int32_t rating) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("UPDATE media_items SET rating = ?, updated_at = ? WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -241,7 +241,7 @@ Status CatalogDb::updateRating(MediaId id, int32_t rating) {
 }
 
 Status CatalogDb::updateFlag(MediaId id, FlagState flag) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("UPDATE media_items SET flag = ?, updated_at = ? WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -256,7 +256,7 @@ Status CatalogDb::updateFlag(MediaId id, FlagState flag) {
 }
 
 Status CatalogDb::updateThumbnails(MediaId id, const std::string& smallPath, const std::string& largePath) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("UPDATE media_items SET thumb_small = ?, thumb_large = ?, updated_at = ? WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -272,7 +272,7 @@ Status CatalogDb::updateThumbnails(MediaId id, const std::string& smallPath, con
 }
 
 Status CatalogDb::deleteMedia(MediaId id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("DELETE FROM media_items WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -287,7 +287,7 @@ Status CatalogDb::deleteMedia(MediaId id) {
 // --- Tags ---
 
 Result<TagId> CatalogDb::createOrGetTag(const std::string& name, const std::string& category, std::optional<TagId> parent_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto checkRes = conn_.prepare("SELECT id FROM tags WHERE name = ? AND category = ?;");
     if (checkRes.isOk()) {
         auto checkStmt = std::move(checkRes.value());
@@ -312,7 +312,7 @@ Result<TagId> CatalogDb::createOrGetTag(const std::string& name, const std::stri
 }
 
 Result<std::vector<Tag>> CatalogDb::getAllTags() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
         SELECT t.id, t.name, t.category, t.parent_id, COUNT(mt.media_id) AS media_count
         FROM tags t
@@ -341,6 +341,7 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
 }
 
 Result<std::vector<Tag>> CatalogDb::getTagsForMedia(MediaId id) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
         SELECT t.id, t.name, t.category, t.parent_id
         FROM tags t
@@ -368,8 +369,50 @@ Result<std::vector<Tag>> CatalogDb::getTagsForMedia(MediaId id) {
     return tags;
 }
 
+Result<std::unordered_map<MediaId, std::vector<Tag>>> CatalogDb::getTagsForMediaBatch(const std::vector<MediaId>& mediaIds) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::unordered_map<MediaId, std::vector<Tag>> result;
+    if (mediaIds.empty()) {
+        return result;
+    }
+
+    std::string sql = R"SQL(
+        SELECT mt.media_id, t.id, t.name, t.category, t.parent_id
+        FROM tags t
+        JOIN media_tags mt ON t.id = mt.tag_id
+        WHERE mt.media_id IN (
+    )SQL";
+
+    for (size_t i = 0; i < mediaIds.size(); ++i) {
+        if (i > 0) sql += ",";
+        sql += "?";
+    }
+    sql += ") ORDER BY t.name ASC;";
+
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+
+    for (size_t i = 0; i < mediaIds.size(); ++i) {
+        stmt.bind(static_cast<int>(i + 1), mediaIds[i]);
+    }
+
+    while (stmt.step() == StepResult::Row) {
+        MediaId mid = stmt.getInt64(0);
+        Tag t;
+        t.id = stmt.getInt64(1);
+        t.name = stmt.getString(2);
+        t.category = stmt.getString(3);
+        if (!stmt.isNull(4)) {
+            t.parent_id = stmt.getInt64(4);
+        }
+        result[mid].push_back(std::move(t));
+    }
+    return result;
+}
+
 Status CatalogDb::addTagToMedia(MediaId mediaId, TagId tagId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?);");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -383,7 +426,7 @@ Status CatalogDb::addTagToMedia(MediaId mediaId, TagId tagId) {
 }
 
 Status CatalogDb::removeTagFromMedia(MediaId mediaId, TagId tagId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("DELETE FROM media_tags WHERE media_id = ? AND tag_id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -397,7 +440,7 @@ Status CatalogDb::removeTagFromMedia(MediaId mediaId, TagId tagId) {
 }
 
 Status CatalogDb::deleteTag(TagId tagId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("DELETE FROM tags WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -412,7 +455,7 @@ Status CatalogDb::deleteTag(TagId tagId) {
 // --- Albums ---
 
 Result<AlbumId> CatalogDb::createAlbum(const std::string& name, const std::string& description, bool is_smart, const std::string& query_json) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("INSERT INTO albums (name, description, is_smart, query_json, created_at) VALUES (?, ?, ?, ?, ?);");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -429,7 +472,7 @@ Result<AlbumId> CatalogDb::createAlbum(const std::string& name, const std::strin
 }
 
 Result<std::vector<Album>> CatalogDb::getAllAlbums() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
         SELECT a.id, a.name, a.description, a.is_smart, a.query_json, a.cover_media_id,
                a.created_at, COUNT(am.media_id) AS item_count
@@ -462,7 +505,7 @@ Result<std::vector<Album>> CatalogDb::getAllAlbums() {
 }
 
 Result<Album> CatalogDb::getAlbumById(AlbumId id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
         SELECT a.id, a.name, a.description, a.is_smart, a.query_json, a.cover_media_id,
                a.created_at, COUNT(am.media_id) AS item_count
@@ -495,7 +538,7 @@ Result<Album> CatalogDb::getAlbumById(AlbumId id) {
 }
 
 Status CatalogDb::deleteAlbum(AlbumId id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("DELETE FROM albums WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -508,7 +551,7 @@ Status CatalogDb::deleteAlbum(AlbumId id) {
 }
 
 Status CatalogDb::addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("INSERT OR REPLACE INTO album_media (album_id, media_id, position) VALUES (?, ?, ?);");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -523,7 +566,7 @@ Status CatalogDb::addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position
 }
 
 Status CatalogDb::removeMediaFromAlbum(AlbumId albumId, MediaId mediaId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("DELETE FROM album_media WHERE album_id = ? AND media_id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -537,7 +580,7 @@ Status CatalogDb::removeMediaFromAlbum(AlbumId albumId, MediaId mediaId) {
 }
 
 Result<std::vector<MediaItem>> CatalogDb::getMediaInAlbum(AlbumId albumId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
         SELECT m.*
         FROM media_items m
@@ -561,7 +604,7 @@ Result<std::vector<MediaItem>> CatalogDb::getMediaInAlbum(AlbumId albumId) {
 // --- Timeline & Stats ---
 
 Result<std::vector<TimelineEntry>> CatalogDb::getTimeline() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     // Group by strftime year and month from unix timestamp date_taken
     const char* sql = R"SQL(
         SELECT CAST(strftime('%Y', date_taken, 'unixepoch') AS INTEGER) AS y,
@@ -589,7 +632,7 @@ Result<std::vector<TimelineEntry>> CatalogDb::getTimeline() {
 }
 
 Result<CatalogStats> CatalogDb::getStats() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     CatalogStats s;
 
     // media items aggregate
@@ -638,7 +681,7 @@ Result<std::vector<MediaItem>> CatalogDb::queryMedia(
     int limit,
     int offset
 ) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string sql = "SELECT * FROM media_items";
     if (!whereClause.empty()) {
         sql += " WHERE " + whereClause;
@@ -674,7 +717,7 @@ Result<int64_t> CatalogDb::countMedia(
     const std::string& whereClause,
     const std::vector<std::string>& params
 ) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     std::string sql = "SELECT COUNT(*) FROM media_items";
     if (!whereClause.empty()) {
         sql += " WHERE " + whereClause;
