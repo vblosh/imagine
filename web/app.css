@@ -1007,13 +1007,31 @@ body, html {
   color: var(--reject-color);
 }
 
+.tag-badge[data-category="places"] {
+  border-left: 2px solid #4da6ff;
+}
+
+.tag-badge[data-category="people"] {
+  border-left: 2px solid #5cd65c;
+}
+
+.tag-badge[data-category="events"] {
+  border-left: 2px solid #d966ff;
+}
+
+.tag-badge[data-category="keyword"] {
+  border-left: 2px solid #888888;
+}
+
 .add-tag-inline {
   display: flex;
   gap: 6px;
+  align-items: center;
 }
 
 .add-tag-inline input {
   flex: 1;
+  min-width: 0;
   background-color: var(--bg-input);
   border: 1px solid var(--border-color);
   border-radius: 3px;
@@ -1024,6 +1042,24 @@ body, html {
 }
 
 .add-tag-inline input:focus {
+  border-color: var(--accent-color);
+}
+
+.add-tag-inline select,
+.tag-category-select {
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 3px 6px;
+  color: var(--text-primary);
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+  max-width: 80px;
+}
+
+.add-tag-inline select:focus,
+.tag-category-select:focus {
   border-color: var(--accent-color);
 }
 

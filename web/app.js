@@ -132,6 +132,8 @@
     infoGps: document.getElementById('infoGps'),
     inspectorTags: document.getElementById('inspectorTags'),
     addTagInput: document.getElementById('addTagInput'),
+    addTagCategorySelect: document.getElementById('addTagCategorySelect'),
+    tagSuggestions: document.getElementById('tagSuggestions'),
     addTagBtn: document.getElementById('addTagBtn'),
     loupeModal: document.getElementById('loupeModal'),
     loupeBackdrop: document.getElementById('loupeBackdrop'),
@@ -550,6 +552,9 @@
     tags.forEach(tag => {
       const badge = document.createElement('span');
       badge.className = 'tag-badge';
+      const cat = (tag.category || 'keyword').toLowerCase();
+      badge.dataset.category = cat;
+      badge.title = `Category: ${tag.category || 'keyword'}`;
       badge.innerHTML = `
         <span>${tag.name}</span>
         <button class="remove-tag" title="Remove tag">&times;</button>
@@ -594,6 +599,16 @@
     Object.values(categories).forEach(el => {
       if (el) el.innerHTML = '';
     });
+
+    if (dom.tagSuggestions) {
+      dom.tagSuggestions.innerHTML = '';
+      state.tags.forEach(tag => {
+        const opt = document.createElement('option');
+        opt.value = tag.name;
+        opt.label = `${tag.name} (${tag.category || 'keyword'})`;
+        dom.tagSuggestions.appendChild(opt);
+      });
+    }
 
     state.tags.forEach(tag => {
       const cat = (tag.category || 'keyword').toLowerCase();
@@ -1149,9 +1164,10 @@
       const tagName = dom.addTagInput.value.trim();
       if (!tagName || state.selectedIds.size === 0) return;
       const id = Array.from(state.selectedIds)[0];
+      const category = dom.addTagCategorySelect ? dom.addTagCategorySelect.value : 'keyword';
 
       try {
-        await api.post(`/api/media/${id}/tags`, { name: tagName, category: 'keyword' });
+        await api.post(`/api/media/${id}/tags`, { name: tagName, category });
         dom.addTagInput.value = '';
         updateInspector();
         loadMetadata();
@@ -1163,6 +1179,15 @@
     dom.addTagInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') handleAddTagInline();
     });
+    if (dom.addTagCategorySelect) {
+      dom.addTagInput.addEventListener('input', () => {
+        const val = dom.addTagInput.value.trim().toLowerCase();
+        const match = state.tags.find(t => t.name.toLowerCase() === val);
+        if (match && match.category) {
+          dom.addTagCategorySelect.value = match.category.toLowerCase();
+        }
+      });
+    }
 
     // Batch Action Bar handlers
     dom.batchClearBtn.addEventListener('click', () => {
@@ -1193,9 +1218,12 @@
     dom.batchAddTagBtn.addEventListener('click', async () => {
       const name = prompt('Enter tag name to add to all selected photos:');
       if (!name || !name.trim()) return;
+      const trimmed = name.trim();
+      const existing = state.tags.find(t => t.name.toLowerCase() === trimmed.toLowerCase());
+      const cat = existing && existing.category ? existing.category.toLowerCase() : 'keyword';
       for (const id of state.selectedIds) {
         try {
-          await api.post(`/api/media/${id}/tags`, { name: name.trim(), category: 'keyword' });
+          await api.post(`/api/media/${id}/tags`, { name: trimmed, category: cat });
         } catch (e) {
           console.warn(e);
         }

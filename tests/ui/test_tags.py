@@ -211,3 +211,57 @@ def test_delete_tag_removes_from_sidebar_and_photos(server, page: Page):
     expect(page.locator("#tagCategoryPlaces .tag-item", has_text="Beach")).to_have_count(0)
 
 
+def test_add_tag_with_category_to_photo(server, page: Page):
+    """Add a tag to a photo with a specific category (places) and verify inspector badge, sidebar group, filtering, and auto-category selection."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # 1. Select portrait.bmp
+    portrait_card = page.locator(".photo-card", has_text="portrait.bmp")
+    portrait_card.click()
+
+    inspector_tags = page.locator("#inspectorTags")
+    expect(inspector_tags.locator(".tag-badge", has_text="Bob")).to_be_visible()
+
+    # 2. Add tag "Kyoto" with category "places"
+    page.locator("#addTagInput").fill("Kyoto")
+    page.locator("#addTagCategorySelect").select_option("places")
+    page.locator("#addTagBtn").click()
+
+    # 3. Verify Kyoto badge appears in photo's inspector tags with places category
+    kyoto_badge = inspector_tags.locator(".tag-badge", has_text="Kyoto")
+    expect(kyoto_badge).to_be_visible()
+    expect(kyoto_badge).to_have_attribute("data-category", "places")
+
+    # 4. Verify Kyoto is added to the Places category in the left sidebar
+    kyoto_sidebar_item = page.locator("#tagCategoryPlaces .tag-item", has_text="Kyoto")
+    expect(kyoto_sidebar_item).to_be_visible()
+    expect(kyoto_sidebar_item.locator(".count-badge")).to_have_text("1")
+
+    # 5. Click Kyoto in Places to filter the grid
+    kyoto_sidebar_item.click()
+    expect(page.locator("#filterLabel")).to_contain_text("Tag: Kyoto")
+    expect(cards).to_have_count(1)
+    expect(cards.nth(0).locator(".card-filename")).to_have_text("portrait.bmp")
+
+    # 6. Click again to unfilter
+    kyoto_sidebar_item.click()
+    expect(cards).to_have_count(6)
+
+    # 7. Select forest.bmp and type existing tag "Beach" (which is in Places)
+    forest_card = page.locator(".photo-card", has_text="forest.bmp")
+    forest_card.click()
+    page.locator("#addTagInput").fill("Beach")
+    page.locator("#addTagInput").dispatch_event("input")
+    expect(page.locator("#addTagCategorySelect")).to_have_value("places")
+    page.locator("#addTagBtn").click()
+
+    # Verify "Beach" tag is now attached to forest.bmp
+    expect(inspector_tags.locator(".tag-badge", has_text="Beach")).to_be_visible()
+    # Verify count for Beach increased to 2 (beach.bmp + forest.bmp)
+    expect(page.locator("#tagCategoryPlaces .tag-item", has_text="Beach").locator(".count-badge")).to_have_text("2")
+
+
+

@@ -179,9 +179,11 @@ Adopt the professional Lightroom/Elements culling workflow:
 ### Tagging Photos
 1. Select a photo in the grid.
 2. In the right **Inspector** panel, locate the **Tags** section.
-3. Type a tag name into the *"Add tag..."* input box and press **Enter** or click **"Add"**.
-4. To detach a tag from an individual photo, click the `×` button on any tag pill badge in the Inspector.
-5. To delete a tag entirely from the catalog and all photos, click the `×` button next to the tag in the left sidebar under **Keyword Tags**.
+3. Type a tag name into the *"Add tag..."* input box (or select from suggested tags).
+4. Select the tag category from the dropdown (`Keyword`, `Places`, `People`, or `Events`). Existing tags automatically auto-select their registered category.
+5. Press **Enter** or click **"Add"**.
+6. To detach a tag from an individual photo, click the `×` button on any tag pill badge in the Inspector.
+7. To delete a tag entirely from the catalog and all photos, click the `×` button next to the tag in the left sidebar under **Keyword Tags**.
 
 ### Creating Categories & Hierarchies
 Click the `+` button next to **Keyword Tags** in the left sidebar to create a tag with a designated category:

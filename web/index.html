@@ -316,7 +316,14 @@
                 <!-- Tag badges with remove button -->
               </div>
               <div class="add-tag-inline">
-                <input type="text" id="addTagInput" placeholder="Add tag..." autocomplete="off">
+                <input type="text" id="addTagInput" list="tagSuggestions" placeholder="Add tag..." autocomplete="off">
+                <datalist id="tagSuggestions"></datalist>
+                <select id="addTagCategorySelect" class="tag-category-select" title="Tag Category">
+                  <option value="keyword" selected>Keyword</option>
+                  <option value="places">Places</option>
+                  <option value="people">People</option>
+                  <option value="events">Events</option>
+                </select>
                 <button class="btn btn-sm" id="addTagBtn">Add</button>
               </div>
             </div>
