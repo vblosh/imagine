@@ -127,3 +127,68 @@ def test_delete_album(server, page: Page):
     # Filter resets back to all media
     expect(cards).to_have_count(6)
 
+
+def test_add_photos_to_album_batch(server, page: Page):
+    """Test adding selected photos to an album using the batch toolbar and modal."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # 1. Create a new album "My Trip"
+    page.locator("#newAlbumBtn").click()
+    page.locator("#albumNameInput").fill("My Trip")
+    page.locator("#createAlbumSubmitBtn").click()
+    trip_album = page.locator("#albumsList .menu-item", has_text="My Trip")
+    expect(trip_album).to_be_visible()
+    expect(trip_album.locator(".count-badge")).to_have_text("0")
+
+    # 2. Select two photos
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=["Control"])
+    expect(page.locator("#batchActionBar")).to_be_visible()
+
+    # 3. Open Add to Album modal
+    page.locator("#batchAddAlbumBtn").click()
+    modal = page.locator("#addToAlbumModal")
+    expect(modal).to_be_visible()
+    expect(page.locator("#addToAlbumTargetCount")).to_contain_text("2 selected photos")
+
+    # 4. Select "My Trip" and confirm
+    opt = page.locator("#addToAlbumSelect option", has_text="My Trip")
+    val = opt.get_attribute("value")
+    page.locator("#addToAlbumSelect").select_option(val)
+    page.locator("#confirmAddToAlbumBtn").click()
+
+    expect(modal).to_be_hidden()
+
+    # Verify badge count updated
+    expect(trip_album.locator(".count-badge")).to_have_text("2")
+
+    # Click album to filter and verify 2 photos are in it
+    trip_album.click()
+    expect(page.locator("#filterLabel")).to_contain_text("Album: My Trip")
+    expect(cards).to_have_count(2)
+
+
+def test_add_photo_to_album_inspector(server, page: Page):
+    """Test adding single selected photo to an album using the inspector panel."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # 1. Select single card
+    cards.nth(0).click()
+
+    # 2. Click inspector Add to Album button
+    page.locator("#inspectorAddToAlbumBtn").click()
+    modal = page.locator("#addToAlbumModal")
+    expect(modal).to_be_visible()
+    expect(page.locator("#addToAlbumTargetCount")).to_contain_text("1 selected photo")
+
+    # 3. Cancel modal
+    page.locator("#cancelAddToAlbumBtn").click()
+    expect(modal).to_be_hidden()
+
+

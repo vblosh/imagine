@@ -109,6 +109,7 @@
     batchPickBtn: document.getElementById('batchPickBtn'),
     batchRejectBtn: document.getElementById('batchRejectBtn'),
     batchAddTagBtn: document.getElementById('batchAddTagBtn'),
+    batchAddAlbumBtn: document.getElementById('batchAddAlbumBtn'),
     batchClearBtn: document.getElementById('batchClearBtn'),
     timelineContainer: document.getElementById('timelineContainer'),
     resetTimelineBtn: document.getElementById('resetTimelineBtn'),
@@ -119,6 +120,7 @@
     inspectorSelection: document.getElementById('inspectorSelection'),
     inspectorImg: document.getElementById('inspectorImg'),
     openLoupeFromInspector: document.getElementById('openLoupeFromInspector'),
+    inspectorAddToAlbumBtn: document.getElementById('inspectorAddToAlbumBtn'),
     inspectorRating: document.getElementById('inspectorRating'),
     inspectorFlag: document.getElementById('inspectorFlag'),
     infoFileName: document.getElementById('infoFileName'),
@@ -172,6 +174,15 @@
     createAlbumSubmitBtn: document.getElementById('createAlbumSubmitBtn'),
     albumNameInput: document.getElementById('albumNameInput'),
     albumDescInput: document.getElementById('albumDescInput'),
+    addToAlbumModal: document.getElementById('addToAlbumModal'),
+    addToAlbumBackdrop: document.getElementById('addToAlbumBackdrop'),
+    closeAddToAlbumModalBtn: document.getElementById('closeAddToAlbumModalBtn'),
+    cancelAddToAlbumBtn: document.getElementById('cancelAddToAlbumBtn'),
+    confirmAddToAlbumBtn: document.getElementById('confirmAddToAlbumBtn'),
+    addToAlbumSelect: document.getElementById('addToAlbumSelect'),
+    addToAlbumSelectGroup: document.getElementById('addToAlbumSelectGroup'),
+    addToAlbumTargetCount: document.getElementById('addToAlbumTargetCount'),
+    noAlbumsNotice: document.getElementById('noAlbumsNotice'),
     newTagModal: document.getElementById('newTagModal'),
     newTagBackdrop: document.getElementById('newTagBackdrop'),
     closeNewTagModalBtn: document.getElementById('closeNewTagModalBtn'),
@@ -1319,6 +1330,15 @@
       });
     }
 
+    if (dom.inspectorAddToAlbumBtn) {
+      dom.inspectorAddToAlbumBtn.addEventListener('click', () => {
+        const ids = state.selectedIds.size > 0 ? Array.from(state.selectedIds) : [];
+        if (ids.length > 0) {
+          openAddToAlbumModal(ids);
+        }
+      });
+    }
+
     // Batch Action Bar handlers
     dom.batchClearBtn.addEventListener('click', () => {
       state.selectedIds.clear();
@@ -1361,6 +1381,12 @@
       updateInspector();
       loadMetadata();
     });
+
+    if (dom.batchAddAlbumBtn) {
+      dom.batchAddAlbumBtn.addEventListener('click', () => {
+        openAddToAlbumModal(Array.from(state.selectedIds));
+      });
+    }
 
     // Loupe navigation
     dom.loupePrevBtn.addEventListener('click', loupePrev);
@@ -1582,6 +1608,72 @@
         alert(`Failed to create album: ${err.message}`);
       }
     });
+
+    // Add to Album Modal
+    let pendingAddToAlbumIds = [];
+    function openAddToAlbumModal(mediaIds) {
+      if (!mediaIds || mediaIds.length === 0) return;
+      pendingAddToAlbumIds = mediaIds;
+      const count = mediaIds.length;
+      if (dom.addToAlbumTargetCount) {
+        dom.addToAlbumTargetCount.textContent = `Add ${count} selected photo${count > 1 ? 's' : ''} to:`;
+      }
+
+      if (!state.albums || state.albums.length === 0) {
+        if (dom.addToAlbumSelectGroup) dom.addToAlbumSelectGroup.style.display = 'none';
+        if (dom.noAlbumsNotice) dom.noAlbumsNotice.style.display = 'block';
+        if (dom.confirmAddToAlbumBtn) dom.confirmAddToAlbumBtn.disabled = true;
+      } else {
+        if (dom.addToAlbumSelectGroup) dom.addToAlbumSelectGroup.style.display = 'flex';
+        if (dom.noAlbumsNotice) dom.noAlbumsNotice.style.display = 'none';
+        if (dom.confirmAddToAlbumBtn) dom.confirmAddToAlbumBtn.disabled = false;
+
+        if (dom.addToAlbumSelect) {
+          dom.addToAlbumSelect.innerHTML = state.albums.map(album =>
+            `<option value="${album.id}">${album.name} (${album.item_count || 0} photos)</option>`
+          ).join('');
+        }
+      }
+
+      if (dom.addToAlbumModal) {
+        dom.addToAlbumModal.style.display = 'flex';
+      }
+    }
+
+    function closeAddToAlbumModal() {
+      if (dom.addToAlbumModal) {
+        dom.addToAlbumModal.style.display = 'none';
+      }
+      pendingAddToAlbumIds = [];
+    }
+
+    if (dom.closeAddToAlbumModalBtn) dom.closeAddToAlbumModalBtn.addEventListener('click', closeAddToAlbumModal);
+    if (dom.cancelAddToAlbumBtn) dom.cancelAddToAlbumBtn.addEventListener('click', closeAddToAlbumModal);
+    if (dom.addToAlbumBackdrop) dom.addToAlbumBackdrop.addEventListener('click', closeAddToAlbumModal);
+
+    if (dom.confirmAddToAlbumBtn) {
+      dom.confirmAddToAlbumBtn.addEventListener('click', async () => {
+        if (pendingAddToAlbumIds.length === 0) {
+          closeAddToAlbumModal();
+          return;
+        }
+        const albumId = parseInt(dom.addToAlbumSelect.value, 10);
+        if (!albumId) return;
+
+        try {
+          await api.post(`/api/albums/${albumId}/media`, {
+            media_ids: pendingAddToAlbumIds
+          });
+          closeAddToAlbumModal();
+          await loadMetadata();
+          if (state.activeAlbumId === albumId) {
+            await loadMedia();
+          }
+        } catch (err) {
+          alert(`Failed to add photos to album: ${err.message}`);
+        }
+      });
+    }
 
     // New Tag Modal
     dom.newTagBtn.addEventListener('click', () => {

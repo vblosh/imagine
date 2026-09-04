@@ -201,6 +201,7 @@
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Reject
             </button>
             <button class="btn btn-sm" id="batchAddTagBtn">Add Tag</button>
+            <button class="btn btn-sm" id="batchAddAlbumBtn">Add to Album</button>
             <button class="btn btn-sm btn-secondary" id="batchClearBtn">Deselect</button>
           </div>
         </div>
@@ -327,6 +328,12 @@
                 <button class="btn btn-sm" id="addTagBtn">Add</button>
               </div>
             </div>
+
+            <!-- Albums Section -->
+            <div class="inspector-section">
+              <h4 class="section-heading">Albums</h4>
+              <button class="btn btn-sm btn-secondary" id="inspectorAddToAlbumBtn" style="width: 100%;">Add to Album</button>
+            </div>
           </div>
         </div>
       </aside>
@@ -429,6 +436,33 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" id="cancelAlbumBtn">Cancel</button>
           <button class="btn btn-primary" id="createAlbumSubmitBtn">Create Album</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add to Album Modal Dialog -->
+    <div class="modal" id="addToAlbumModal" style="display: none;">
+      <div class="modal-backdrop" id="addToAlbumBackdrop"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Add to Album</h3>
+          <button class="btn-icon-sm" id="closeAddToAlbumModalBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="addToAlbumTargetCount" style="margin-bottom: 12px; font-size: 13px; color: var(--text-secondary);">Select an album for the selected photo(s):</p>
+          <div class="form-group" id="addToAlbumSelectGroup">
+            <label for="addToAlbumSelect">Select Album:</label>
+            <select id="addToAlbumSelect" class="form-control">
+              <!-- Populated dynamically -->
+            </select>
+          </div>
+          <div id="noAlbumsNotice" style="display: none; margin-bottom: 12px; color: var(--text-dim); font-size: 13px;">
+            No albums exist yet. Please create an album first using the "+" button next to Albums in the sidebar.
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelAddToAlbumBtn">Cancel</button>
+          <button class="btn btn-primary" id="confirmAddToAlbumBtn">Add to Album</button>
         </div>
       </div>
     </div>
