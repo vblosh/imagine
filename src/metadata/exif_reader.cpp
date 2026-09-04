@@ -35,8 +35,60 @@ int64_t ExifReader::parseExifDate(const std::string& dateStr) {
 }
 
 Result<ExifData> ExifReader::readFromBuffer(const uint8_t* data, size_t size) {
+    if (!data || size < 4) {
+        return Status::parseError("No EXIF data found or failed to parse");
+    }
+
     easyexif::EXIFInfo info;
-    int code = info.parseFrom(data, static_cast<unsigned int>(size));
+    int code = PARSE_EXIF_ERROR_NO_EXIF;
+
+    // If data starts with JPEG SOI, find and parse the APP1 (0xFF 0xE1) Exif segment directly.
+    // This avoids easyexif's parseFrom() bug when given a buffer slice (e.g. 128KB):
+    // parseFrom() scans backwards from buffer end for 0xFF 0xD9 (JPEG EOI). In images with
+    // an embedded thumbnail, it encounters the thumbnail's 0xFF 0xD9, truncates 'len' to that,
+    // and wrongly rejects the APP1 section as corrupt (code 1985) when padding bytes follow.
+    if (data[0] == 0xFF && data[1] == 0xD8) {
+        size_t offs = 2;
+        while (offs + 4 <= size) {
+            if (data[offs] != 0xFF) {
+                offs++;
+                continue;
+            }
+            uint8_t marker = data[offs + 1];
+            if (marker == 0xFF) {
+                offs++;
+                continue;
+            }
+            if (marker == 0xD8 || marker == 0xD9 || (marker >= 0xD0 && marker <= 0xD7)) {
+                offs += 2;
+                continue;
+            }
+            if (marker == 0xDA) { // SOS (Start of Scan) - compressed image data begins
+                break;
+            }
+            uint16_t sectionLen = (static_cast<uint16_t>(data[offs + 2]) << 8) | data[offs + 3];
+            if (sectionLen < 2) break;
+
+            if (marker == 0xE1) { // APP1
+                size_t payloadOffs = offs + 4;
+                size_t payloadLen = sectionLen - 2;
+                if (payloadOffs + 6 <= size && std::equal(data + payloadOffs, data + payloadOffs + 6, "Exif\0\0")) {
+                    size_t availableLen = std::min(payloadLen, size - payloadOffs);
+                    code = info.parseFromEXIFSegment(data + payloadOffs, static_cast<unsigned int>(availableLen));
+                    if (code == PARSE_EXIF_SUCCESS) {
+                        break;
+                    }
+                }
+            }
+            offs += 2 + sectionLen;
+        }
+    }
+
+    // Fallback to standard easyexif parseFrom
+    if (code != PARSE_EXIF_SUCCESS) {
+        code = info.parseFrom(data, static_cast<unsigned int>(size));
+    }
+
     if (code != PARSE_EXIF_SUCCESS) {
         return Status::parseError("No EXIF data found or failed to parse");
     }

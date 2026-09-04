@@ -101,5 +101,15 @@ TEST(ExifReaderTest, ReadRealExifFileAndBuffer) {
         EXPECT_NEAR(exif.longitude, -122.6225, 0.01);
         EXPECT_NEAR(exif.altitude, 122.0, 1.0);
         EXPECT_GT(exif.date_taken, 0);
+
+        // Test truncated buffer (e.g. only first 13KB of image, containing APP1 but not EOF)
+        std::ifstream file(exifPath, std::ios::binary);
+        std::vector<uint8_t> truncatedBuf(13000);
+        file.read(reinterpret_cast<char*>(truncatedBuf.data()), truncatedBuf.size());
+        size_t bytesRead = file.gcount();
+        auto truncRes = ExifReader::readFromBuffer(truncatedBuf.data(), bytesRead);
+        ASSERT_TRUE(truncRes.isOk());
+        EXPECT_EQ(truncRes.value().camera_make, "Apple");
+        EXPECT_TRUE(truncRes.value().has_gps);
     }
 }
