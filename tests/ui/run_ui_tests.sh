@@ -21,14 +21,18 @@ echo "Using binary: ${IMAGINE_BIN}"
 
 # 2. Locate virtual environment python/pytest
 VENV_DIR="${REPO_ROOT}/build/test_venv"
-if [ -f "${VENV_DIR}/bin/activate" ]; then
+if [ -f "${REPO_ROOT}/.venv/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/.venv/bin/activate"
+    PYTEST_BIN="${REPO_ROOT}/.venv/bin/pytest"
+elif [ -f "${VENV_DIR}/bin/activate" ]; then
     # shellcheck disable=SC1091
     source "${VENV_DIR}/bin/activate"
     PYTEST_BIN="${VENV_DIR}/bin/pytest"
 elif command -v pytest >/dev/null 2>&1; then
     PYTEST_BIN="$(command -v pytest)"
 else
-    echo "Error: pytest could not be found in ${VENV_DIR} or PATH." >&2
+    echo "Error: pytest could not be found in ${REPO_ROOT}/.venv, ${VENV_DIR}, or PATH." >&2
     exit 1
 fi
 

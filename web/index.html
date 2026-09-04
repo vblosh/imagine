@@ -231,6 +231,7 @@
 
       <!-- Right Inspector Panel -->
       <aside class="right-inspector" id="rightInspector">
+        <div class="inspector-resizer-left" id="inspectorResizerLeft" role="separator" aria-orientation="vertical" tabindex="0" title="Drag to resize Inspector panel width (double-click to reset)"></div>
         <div class="inspector-header">
           <span class="inspector-title">Inspector</span>
           <button class="btn-icon-sm" id="closeInspectorBtn" title="Close panel">&times;</button>
@@ -273,41 +274,55 @@
             </div>
 
             <!-- File Properties Section -->
-            <div class="inspector-section">
-              <h4 class="section-heading">File Information</h4>
-              <dl class="prop-list">
-                <dt>Name</dt>
-                <dd id="infoFileName">-</dd>
-                <dt>Dimensions</dt>
-                <dd id="infoDimensions">-</dd>
-                <dt>File Size</dt>
-                <dd id="infoFileSize">-</dd>
-                <dt>Date Taken</dt>
-                <dd id="infoDateTaken">-</dd>
-                <dt>Path</dt>
-                <dd id="infoFilePath" class="break-all">-</dd>
-              </dl>
+            <div class="inspector-section resizable-panel" id="fileInfoSection" data-panel="fileInfo">
+              <div class="section-header-row">
+                <h4 class="section-heading">File Information</h4>
+              </div>
+              <div class="resizable-panel-body" id="fileInfoBody">
+                <dl class="prop-list">
+                  <dt>Name</dt>
+                  <dd id="infoFileName">-</dd>
+                  <dt>Dimensions</dt>
+                  <dd id="infoDimensions">-</dd>
+                  <dt>File Size</dt>
+                  <dd id="infoFileSize">-</dd>
+                  <dt>Date Taken</dt>
+                  <dd id="infoDateTaken">-</dd>
+                  <dt>Path</dt>
+                  <dd id="infoFilePath" class="break-all">-</dd>
+                </dl>
+              </div>
+              <div class="panel-resizer" id="fileInfoResizer" data-target="fileInfoSection" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag to resize File Information panel (double-click to reset)">
+                <div class="resizer-handle-bar"></div>
+              </div>
             </div>
 
             <!-- EXIF Metadata Section -->
-            <div class="inspector-section" id="exifSection">
-              <h4 class="section-heading">Camera & Exposure (EXIF)</h4>
-              <dl class="prop-list">
-                <dt>Camera</dt>
-                <dd id="infoCamera">-</dd>
-                <dt>Lens</dt>
-                <dd id="infoLens">-</dd>
-                <dt>Exposure</dt>
-                <dd id="infoExposure">-</dd>
-                <dt>Aperture</dt>
-                <dd id="infoAperture">-</dd>
-                <dt>ISO</dt>
-                <dd id="infoIso">-</dd>
-                <dt>Focal Length</dt>
-                <dd id="infoFocal">-</dd>
-                <dt>GPS</dt>
-                <dd id="infoGps">-</dd>
-              </dl>
+            <div class="inspector-section resizable-panel" id="exifSection" data-panel="exif">
+              <div class="section-header-row">
+                <h4 class="section-heading">Camera & Exposure (EXIF)</h4>
+              </div>
+              <div class="resizable-panel-body" id="exifBody">
+                <dl class="prop-list">
+                  <dt>Camera</dt>
+                  <dd id="infoCamera">-</dd>
+                  <dt>Lens</dt>
+                  <dd id="infoLens">-</dd>
+                  <dt>Exposure</dt>
+                  <dd id="infoExposure">-</dd>
+                  <dt>Aperture</dt>
+                  <dd id="infoAperture">-</dd>
+                  <dt>ISO</dt>
+                  <dd id="infoIso">-</dd>
+                  <dt>Focal Length</dt>
+                  <dd id="infoFocal">-</dd>
+                  <dt>GPS</dt>
+                  <dd id="infoGps">-</dd>
+                </dl>
+              </div>
+              <div class="panel-resizer" id="exifResizer" data-target="exifSection" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag to resize Camera & Exposure panel (double-click to reset)">
+                <div class="resizer-handle-bar"></div>
+              </div>
             </div>
 
             <!-- Tags Section -->

@@ -105,3 +105,225 @@ def test_inspector_tags_inline_add_and_remove(server, page: Page):
     # Remove "Dolomites" tag badge
     dolomites_badge.locator(".remove-tag").click()
     expect(tags_container.locator(".tag-badge", has_text="Dolomites")).to_have_count(0)
+
+
+def test_file_info_and_camera_exposure_panels_resizable_attributes(server, page: Page):
+    """File Information and Camera & Exposure panels have resizable DOM attributes and CSS."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.click()
+
+    file_info = page.locator("#fileInfoSection")
+    exif_sec = page.locator("#exifSection")
+
+    expect(file_info).to_be_visible()
+    expect(file_info).to_have_class(re.compile(r"\bresizable-panel\b"))
+    expect(file_info.locator("#fileInfoBody")).to_be_visible()
+    expect(file_info.locator("#fileInfoResizer")).to_be_visible()
+
+    expect(exif_sec).to_be_visible()
+    expect(exif_sec).to_have_class(re.compile(r"\bresizable-panel\b"))
+    expect(exif_sec.locator("#exifBody")).to_be_visible()
+    expect(exif_sec.locator("#exifResizer")).to_be_visible()
+
+    # CSS resize property is vertical
+    file_info_resize = page.eval_on_selector("#fileInfoSection", "el => window.getComputedStyle(el).resize")
+    assert file_info_resize == "vertical"
+
+    exif_resize = page.eval_on_selector("#exifSection", "el => window.getComputedStyle(el).resize")
+    assert exif_resize == "vertical"
+
+    # Separator roles
+    expect(page.locator("#fileInfoResizer")).to_have_attribute("role", "separator")
+    expect(page.locator("#exifResizer")).to_have_attribute("role", "separator")
+    expect(page.locator("#inspectorResizerLeft")).to_have_attribute("role", "separator")
+
+
+def test_file_info_panel_resize_drag_and_reset(server, page: Page):
+    """Dragging File Information resizer expands and shrinks height; double-click resets."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.click()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+
+    file_info = page.locator("#fileInfoSection")
+    resizer = page.locator("#fileInfoResizer")
+    expect(file_info).to_be_visible()
+    initial_bb = file_info.bounding_box()
+    assert initial_bb is not None
+    initial_height = initial_bb["height"]
+
+    # Drag down by 60px to expand
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2 + 60)
+    page.mouse.up()
+
+    expanded_bb = file_info.bounding_box()
+    assert expanded_bb is not None
+    assert expanded_bb["height"] > initial_height + 45
+
+    # Drag up by 100px to shrink
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2 - 100)
+    page.mouse.up()
+
+    shrunk_bb = file_info.bounding_box()
+    assert shrunk_bb is not None
+    assert shrunk_bb["height"] < initial_height
+
+    # Content is scrollable when shrunk
+    scrollable = page.eval_on_selector("#fileInfoBody", "el => el.scrollHeight > el.clientHeight")
+    assert scrollable is True
+
+    # Double click resizer to reset
+    resizer.dblclick()
+    reset_bb = file_info.bounding_box()
+    assert reset_bb is not None
+    assert abs(reset_bb["height"] - initial_height) < 2
+
+
+def test_camera_exposure_panel_resize_drag_and_reset(server, page: Page):
+    """Dragging Camera & Exposure resizer expands height; double-click resets."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.click()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+
+    exif_sec = page.locator("#exifSection")
+    resizer = page.locator("#exifResizer")
+    expect(exif_sec).to_be_visible()
+    initial_bb = exif_sec.bounding_box()
+    assert initial_bb is not None
+    initial_height = initial_bb["height"]
+
+    # Drag down by 50px to expand
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2 + 50)
+    page.mouse.up()
+
+    expanded_bb = exif_sec.bounding_box()
+    assert expanded_bb is not None
+    assert expanded_bb["height"] > initial_height + 35
+
+    # Double-click to reset
+    resizer.dblclick()
+    reset_bb = exif_sec.bounding_box()
+    assert reset_bb is not None
+    assert abs(reset_bb["height"] - initial_height) < 2
+
+
+def test_inspector_horizontal_width_resize_drag(server, page: Page):
+    """Dragging the left inspector edge resizes the panel horizontally; double-click resets."""
+    page.goto(server["url"])
+
+    inspector = page.locator("#rightInspector")
+    resizer = page.locator("#inspectorResizerLeft")
+    initial_bb = inspector.bounding_box()
+    assert initial_bb is not None
+    initial_width = initial_bb["width"]
+
+    # Drag left edge 70px to the left (widening)
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2 - 70, r_bb["y"] + r_bb["height"] / 2)
+    page.mouse.up()
+
+    widened_bb = inspector.bounding_box()
+    assert widened_bb is not None
+    assert widened_bb["width"] > initial_width + 50
+
+    # Double-click left resizer to reset
+    resizer.dblclick()
+    reset_bb = inspector.bounding_box()
+    assert reset_bb is not None
+    assert abs(reset_bb["width"] - initial_width) < 2
+
+
+def test_panel_resize_keyboard_controls(server, page: Page):
+    """Keyboard Arrow keys on focused resizer adjust height, and Enter resets."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.click()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+
+    file_info = page.locator("#fileInfoSection")
+    resizer = page.locator("#fileInfoResizer")
+    expect(file_info).to_be_visible()
+    initial_bb = file_info.bounding_box()
+    assert initial_bb is not None
+    initial_height = initial_bb["height"]
+
+    resizer.focus()
+    # Press ArrowDown twice (+20px)
+    resizer.press("ArrowDown")
+    resizer.press("ArrowDown")
+
+    expanded_bb = file_info.bounding_box()
+    assert expanded_bb is not None
+    assert expanded_bb["height"] >= initial_height + 15
+
+    # Press ArrowUp once (-10px)
+    resizer.press("ArrowUp")
+    up_bb = file_info.bounding_box()
+    assert up_bb is not None
+    assert up_bb["height"] < expanded_bb["height"]
+
+    # Press Enter to reset
+    resizer.press("Enter")
+    reset_bb = file_info.bounding_box()
+    assert reset_bb is not None
+    assert abs(reset_bb["height"] - initial_height) < 2
+
+
+def test_panel_resize_persistence_across_page_reloads(server, page: Page):
+    """Resized panel height and inspector width persist in localStorage across reloads."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.click()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+
+    file_info = page.locator("#fileInfoSection")
+    resizer = page.locator("#fileInfoResizer")
+    expect(file_info).to_be_visible()
+    initial_bb = file_info.bounding_box()
+    assert initial_bb is not None
+
+    # Drag down by 70px
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2 + 70)
+    page.mouse.up()
+
+    saved_bb = file_info.bounding_box()
+    assert saved_bb is not None
+    expected_height = saved_bb["height"]
+
+    # Reload page
+    page.reload()
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.click()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+
+    reloaded_file_info = page.locator("#fileInfoSection")
+    reloaded_bb = reloaded_file_info.bounding_box()
+    assert reloaded_bb is not None
+    assert abs(reloaded_bb["height"] - expected_height) < 2
+

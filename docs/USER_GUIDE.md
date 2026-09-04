@@ -270,6 +270,11 @@ The right-hand **Inspector Panel** provides an exhaustive breakdown of the techn
   - Focal Length (e.g., *50 mm*)
   - GPS Coordinates: Formatted Latitude and Longitude with a direct clickable link to **OpenStreetMap**.
 
+### Resizable Panels
+- **Vertical Panel Resizing**: Both the **File Information** and **Camera & Exposure (EXIF)** panels feature draggable splitter handles at their base. Drag up or down to adjust panel height to your preferred size; scrollbars seamlessly engage when space is restricted. Double-click any resize handle (or press `Enter`/`Escape` when focused) to reset to default height.
+- **Horizontal Inspector Resizing**: Drag the left border edge of the Inspector panel to dynamically widen or narrow the entire inspector (between 240px and 800px). Double-click the left resizer edge to restore the default width (300px).
+- **Layout Persistence**: Your customized panel heights and inspector width are automatically preserved in browser `localStorage` across page reloads and sessions.
+
 ---
 
 ## 8. CLI Reference

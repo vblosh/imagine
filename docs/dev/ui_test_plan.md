@@ -189,6 +189,12 @@ Helper utilities for programmatically creating:
     - Renders current tags with remove button (`×`).
     - Removing tag calls DELETE `/api/media/:id/tags/:tagId`.
     - Adding tag inline (`#addTagInput` + `#addTagBtn`) calls POST `/api/media/:id/tags`.
+  - Resizable panels:
+    - Vertical resizing for File Information (`#fileInfoResizer`) and Camera & Exposure (`#exifResizer`).
+    - Draggable splitter handles with clamping, smooth overflow scrolling, and double-click / keyboard reset.
+    - Native CSS `resize: vertical` support.
+    - Horizontal inspector width resizing via left edge handle (`#inspectorResizerLeft`).
+    - Layout persistence across page reloads via `localStorage`.
 
 #### [NEW] `tests/ui/test_batch_actions.py`
 * **Features Covered**:

@@ -114,6 +114,7 @@
     timelineContainer: document.getElementById('timelineContainer'),
     resetTimelineBtn: document.getElementById('resetTimelineBtn'),
     rightInspector: document.getElementById('rightInspector'),
+    inspectorResizerLeft: document.getElementById('inspectorResizerLeft'),
     toggleInspectorBtn: document.getElementById('toggleInspectorBtn'),
     closeInspectorBtn: document.getElementById('closeInspectorBtn'),
     inspectorNoSelection: document.getElementById('inspectorNoSelection'),
@@ -123,11 +124,17 @@
     inspectorAddToAlbumBtn: document.getElementById('inspectorAddToAlbumBtn'),
     inspectorRating: document.getElementById('inspectorRating'),
     inspectorFlag: document.getElementById('inspectorFlag'),
+    fileInfoSection: document.getElementById('fileInfoSection'),
+    fileInfoBody: document.getElementById('fileInfoBody'),
+    fileInfoResizer: document.getElementById('fileInfoResizer'),
     infoFileName: document.getElementById('infoFileName'),
     infoDimensions: document.getElementById('infoDimensions'),
     infoFileSize: document.getElementById('infoFileSize'),
     infoDateTaken: document.getElementById('infoDateTaken'),
     infoFilePath: document.getElementById('infoFilePath'),
+    exifSection: document.getElementById('exifSection'),
+    exifBody: document.getElementById('exifBody'),
+    exifResizer: document.getElementById('exifResizer'),
     infoCamera: document.getElementById('infoCamera'),
     infoLens: document.getElementById('infoLens'),
     infoExposure: document.getElementById('infoExposure'),
@@ -1703,6 +1710,204 @@
         alert(`Failed to create tag: ${err.message}`);
       }
     });
+
+    setupResizablePanels();
+  }
+
+  function setupResizablePanels() {
+    // 1. Vertical resizing for File Information and Camera & Exposure (EXIF) panels
+    const panelResizers = document.querySelectorAll('.panel-resizer');
+    panelResizers.forEach(resizer => {
+      const targetId = resizer.dataset.target;
+      const target = document.getElementById(targetId);
+      if (!target) return;
+
+      // Restore saved height from localStorage
+      try {
+        const savedHeight = localStorage.getItem(`imagine_${targetId}_height`);
+        if (savedHeight) {
+          const h = parseInt(savedHeight, 10);
+          if (h >= 50 && h <= 600) {
+            target.style.height = `${h}px`;
+          }
+        }
+      } catch (_) {}
+
+      // Pointer drag handler
+      resizer.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return; // primary button only
+        e.preventDefault();
+        resizer.setPointerCapture(e.pointerId);
+        resizer.classList.add('dragging');
+        document.body.classList.add('resizing-vertical');
+
+        const startY = e.clientY;
+        const startHeight = target.getBoundingClientRect().height;
+
+        function onPointerMove(moveEvent) {
+          const deltaY = moveEvent.clientY - startY;
+          const minHeight = 50;
+          const maxHeight = 600;
+          const newHeight = Math.max(minHeight, Math.min(maxHeight, Math.round(startHeight + deltaY)));
+          target.style.height = `${newHeight}px`;
+        }
+
+        function onPointerUp(upEvent) {
+          try {
+            resizer.releasePointerCapture(upEvent.pointerId);
+          } catch (_) {}
+          resizer.classList.remove('dragging');
+          document.body.classList.remove('resizing-vertical');
+          resizer.removeEventListener('pointermove', onPointerMove);
+          resizer.removeEventListener('pointerup', onPointerUp);
+          resizer.removeEventListener('pointercancel', onPointerUp);
+
+          const finalHeight = parseInt(target.style.height, 10);
+          if (!isNaN(finalHeight)) {
+            try {
+              localStorage.setItem(`imagine_${targetId}_height`, finalHeight);
+            } catch (_) {}
+          }
+        }
+
+        resizer.addEventListener('pointermove', onPointerMove);
+        resizer.addEventListener('pointerup', onPointerUp);
+        resizer.addEventListener('pointercancel', onPointerUp);
+      });
+
+      // Double-click to reset height to auto
+      resizer.addEventListener('dblclick', () => {
+        target.style.height = '';
+        try {
+          localStorage.removeItem(`imagine_${targetId}_height`);
+        } catch (_) {}
+      });
+
+      // Keyboard support
+      resizer.addEventListener('keydown', (e) => {
+        const step = e.shiftKey ? 25 : 10;
+        const currentHeight = target.getBoundingClientRect().height;
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          const newH = Math.min(600, Math.round(currentHeight + step));
+          target.style.height = `${newH}px`;
+          try { localStorage.setItem(`imagine_${targetId}_height`, newH); } catch (_) {}
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          const newH = Math.max(50, Math.round(currentHeight - step));
+          target.style.height = `${newH}px`;
+          try { localStorage.setItem(`imagine_${targetId}_height`, newH); } catch (_) {}
+        } else if (e.key === 'Enter' || e.key === 'Escape') {
+          e.preventDefault();
+          target.style.height = '';
+          try { localStorage.removeItem(`imagine_${targetId}_height`); } catch (_) {}
+        }
+      });
+
+      // ResizeObserver to detect native CSS resize corner or programmatic resize
+      if (window.ResizeObserver) {
+        let resizeTimer = null;
+        const ro = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            if (target.style.height) {
+              clearTimeout(resizeTimer);
+              resizeTimer = setTimeout(() => {
+                const currentH = Math.round(entry.contentRect.height);
+                if (currentH >= 50 && currentH <= 600) {
+                  try { localStorage.setItem(`imagine_${targetId}_height`, currentH); } catch (_) {}
+                }
+              }, 200);
+            }
+          }
+        });
+        ro.observe(target);
+      }
+    });
+
+    // 2. Horizontal resizing for Right Inspector Panel
+    const inspectorResizer = dom.inspectorResizerLeft;
+    if (inspectorResizer && dom.rightInspector) {
+      // Restore saved width
+      try {
+        const savedWidth = localStorage.getItem('imagine_inspector_width');
+        if (savedWidth) {
+          const w = parseInt(savedWidth, 10);
+          if (w >= 240 && w <= 800) {
+            dom.rightInspector.style.width = `${w}px`;
+          }
+        }
+      } catch (_) {}
+
+      inspectorResizer.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        inspectorResizer.setPointerCapture(e.pointerId);
+        inspectorResizer.classList.add('dragging');
+        document.body.classList.add('resizing-horizontal');
+
+        const startX = e.clientX;
+        const startWidth = dom.rightInspector.getBoundingClientRect().width;
+
+        function onPointerMove(moveEvent) {
+          const deltaX = startX - moveEvent.clientX; // dragging left widens right inspector
+          const minWidth = 240;
+          const maxWidth = Math.min(800, window.innerWidth - 100);
+          const newWidth = Math.max(minWidth, Math.min(maxWidth, Math.round(startWidth + deltaX)));
+          dom.rightInspector.style.width = `${newWidth}px`;
+        }
+
+        function onPointerUp(upEvent) {
+          try {
+            inspectorResizer.releasePointerCapture(upEvent.pointerId);
+          } catch (_) {}
+          inspectorResizer.classList.remove('dragging');
+          document.body.classList.remove('resizing-horizontal');
+          inspectorResizer.removeEventListener('pointermove', onPointerMove);
+          inspectorResizer.removeEventListener('pointerup', onPointerUp);
+          inspectorResizer.removeEventListener('pointercancel', onPointerUp);
+
+          const finalWidth = parseInt(dom.rightInspector.style.width, 10);
+          if (!isNaN(finalWidth)) {
+            try {
+              localStorage.setItem('imagine_inspector_width', finalWidth);
+            } catch (_) {}
+          }
+        }
+
+        inspectorResizer.addEventListener('pointermove', onPointerMove);
+        inspectorResizer.addEventListener('pointerup', onPointerUp);
+        inspectorResizer.addEventListener('pointercancel', onPointerUp);
+      });
+
+      // Double-click resets inspector width
+      inspectorResizer.addEventListener('dblclick', () => {
+        dom.rightInspector.style.width = '';
+        try {
+          localStorage.removeItem('imagine_inspector_width');
+        } catch (_) {}
+      });
+
+      // Keyboard support
+      inspectorResizer.addEventListener('keydown', (e) => {
+        const step = e.shiftKey ? 25 : 10;
+        const currentWidth = dom.rightInspector.getBoundingClientRect().width;
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          const newW = Math.min(800, Math.round(currentWidth + step));
+          dom.rightInspector.style.width = `${newW}px`;
+          try { localStorage.setItem('imagine_inspector_width', newW); } catch (_) {}
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          const newW = Math.max(240, Math.round(currentWidth - step));
+          dom.rightInspector.style.width = `${newW}px`;
+          try { localStorage.setItem('imagine_inspector_width', newW); } catch (_) {}
+        } else if (e.key === 'Enter' || e.key === 'Escape') {
+          e.preventDefault();
+          dom.rightInspector.style.width = '';
+          try { localStorage.removeItem('imagine_inspector_width'); } catch (_) {}
+        }
+      });
+    }
   }
 
   // --- Initializer ---

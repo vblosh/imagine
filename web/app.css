@@ -818,17 +818,39 @@ body, html {
 /* Right Inspector Panel */
 .right-inspector {
   width: 300px;
+  min-width: 240px;
+  max-width: 800px;
   background-color: var(--bg-inspector);
   border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   flex-shrink: 0;
+  position: relative;
   transition: transform 0.2s ease;
 }
 
 .right-inspector.collapsed {
   display: none;
+}
+
+/* Left-Edge Horizontal Resizer for Inspector */
+.inspector-resizer-left {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  z-index: 15;
+  transition: background-color 0.15s ease;
+  outline: none;
+}
+
+.inspector-resizer-left:hover,
+.inspector-resizer-left:focus-visible,
+.inspector-resizer-left.dragging {
+  background-color: var(--accent-color);
 }
 
 .inspector-header {
@@ -838,6 +860,7 @@ body, html {
   height: 38px;
   padding: 0 14px;
   border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
 }
 
 .inspector-title {
@@ -905,12 +928,108 @@ body, html {
   padding-top: 0;
 }
 
+/* Resizable Panels inside Inspector */
+.inspector-section.resizable-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  resize: vertical;
+  overflow: hidden;
+  min-height: 50px;
+  max-height: 550px;
+  box-sizing: border-box;
+}
+
+.section-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  user-select: none;
+}
+
 .section-heading {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   color: var(--text-secondary);
   margin-bottom: 8px;
+}
+
+.resizable-panel-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  box-sizing: border-box;
+  padding-right: 4px;
+}
+
+/* Custom subtle scrollbar for resizable panel body */
+.resizable-panel-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+.resizable-panel-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.resizable-panel-body::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
+.resizable-panel-body::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+/* Panel Resizer Drag Bar */
+.panel-resizer {
+  height: 12px;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  user-select: none;
+  border-radius: 3px;
+  transition: background-color 0.15s ease;
+  outline: none;
+  flex-shrink: 0;
+}
+
+.panel-resizer:hover,
+.panel-resizer:focus-visible,
+.panel-resizer.dragging {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.resizer-handle-bar {
+  width: 32px;
+  height: 3px;
+  background-color: var(--border-light);
+  border-radius: 2px;
+  transition: background-color 0.15s ease, width 0.15s ease;
+}
+
+.panel-resizer:hover .resizer-handle-bar,
+.panel-resizer:focus-visible .resizer-handle-bar,
+.panel-resizer.dragging .resizer-handle-bar {
+  background-color: var(--accent-color);
+  width: 48px;
+}
+
+/* Dragging cursor locks on body */
+body.resizing-vertical,
+body.resizing-vertical * {
+  cursor: ns-resize !important;
+  user-select: none !important;
+}
+
+body.resizing-horizontal,
+body.resizing-horizontal * {
+  cursor: ew-resize !important;
+  user-select: none !important;
 }
 
 .inspector-rating-flag {
