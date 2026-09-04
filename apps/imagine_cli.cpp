@@ -59,6 +59,7 @@ Commands:
   list                List and query photos in the catalog
   stats               Display catalog statistics and metrics
   tag <id> <name>     Attach a keyword tag to a photo
+  delete <id...>      Delete one or more photos from the catalog
   --help, -h          Show this help message
 
 Options for 'import':
@@ -85,6 +86,11 @@ Options for 'list':
 Options for 'tag':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
   --category <cat>    Tag category: keyword, people, places, events (default: keyword)
+
+Options for 'delete':
+  --catalog <db>      Path to SQLite catalog database (default: catalog.db)
+  --yes, -y           Skip confirmation prompt
+  --rejected          Delete all photos marked as Rejected
 
 Options for 'stats':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
@@ -367,6 +373,95 @@ int handleTag(int argc, char** argv) {
     return 0;
 }
 
+int handleDelete(int argc, char** argv) {
+    std::string catalogDb = "catalog.db";
+    bool skipConfirm = false;
+    bool deleteRejected = false;
+    std::vector<imagine::MediaId> targetIds;
+
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--catalog" && i + 1 < argc) {
+            catalogDb = argv[++i];
+        } else if (arg == "--yes" || arg == "-y") {
+            skipConfirm = true;
+        } else if (arg == "--rejected") {
+            deleteRejected = true;
+        } else if (!arg.empty() && arg[0] != '-') {
+            try {
+                targetIds.push_back(std::stoll(arg));
+            } catch (...) {
+                std::cerr << "Error: Invalid media ID: '" << arg << "'. Must be a numeric ID.\n";
+                return 1;
+            }
+        } else {
+            std::cerr << "Unknown option: '" << arg << "'\n";
+            return 1;
+        }
+    }
+
+    if (targetIds.empty() && !deleteRejected) {
+        std::cerr << "Error: 'delete' requires at least one <media_id> or the --rejected flag.\n";
+        std::cerr << "Usage: imagine delete <id...> [--catalog <db>] [--yes] [--rejected]\n";
+        return 1;
+    }
+
+    imagine::core::Catalog catalog;
+    auto status = catalog.open(catalogDb);
+    if (!status.isOk()) {
+        std::cerr << "Error opening catalog database: " << status.message() << "\n";
+        return 1;
+    }
+
+    if (deleteRejected) {
+        imagine::core::QueryCriteria criteria;
+        criteria.flag = imagine::FlagState::Reject;
+        criteria.limit = 100000;
+        auto qRes = catalog.query(criteria);
+        if (!qRes.isOk()) {
+            std::cerr << "Error querying rejected photos: " << qRes.status().message() << "\n";
+            return 1;
+        }
+        for (const auto& item : qRes.value().items) {
+            targetIds.push_back(item.id);
+        }
+        if (targetIds.empty()) {
+            std::cout << "No photos with 'Reject' flag found in catalog.\n";
+            return 0;
+        }
+    }
+
+    if (!skipConfirm) {
+        std::cout << "Are you sure you want to delete " << targetIds.size()
+                  << " photo(s) from catalog database '" << catalogDb << "'? [y/N]: ";
+        std::string ans;
+        if (!std::getline(std::cin, ans) || (ans != "y" && ans != "Y" && ans != "yes" && ans != "YES")) {
+            std::cout << "Operation cancelled.\n";
+            return 0;
+        }
+    }
+
+    int successCount = 0;
+    int failCount = 0;
+    for (auto id : targetIds) {
+        auto delStatus = catalog.deleteMedia(id);
+        if (delStatus.isOk()) {
+            successCount++;
+        } else {
+            failCount++;
+            std::cerr << "Failed to delete photo ID " << id << ": " << delStatus.message() << "\n";
+        }
+    }
+
+    std::cout << "Successfully deleted " << successCount << " photo(s) from catalog.";
+    if (failCount > 0) {
+        std::cout << " (" << failCount << " failed)";
+    }
+    std::cout << "\n";
+
+    return (failCount == 0) ? 0 : 1;
+}
+
 } // anonymous namespace
 
 int main(int argc, char** argv) {
@@ -390,6 +485,8 @@ int main(int argc, char** argv) {
         return handleStats(argc, argv);
     } else if (command == "tag") {
         return handleTag(argc, argv);
+    } else if (command == "delete" || command == "remove") {
+        return handleDelete(argc, argv);
     } else {
         std::cerr << "Unknown command: '" << command << "'\n";
         printHelp();

@@ -320,6 +320,46 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
         sendJson(res, {{"status", "ok"}});
     });
+
+    // DELETE /api/media/:id
+    server.Delete(R"(/api/media/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        MediaId id = std::stoll(req.matches[1]);
+        auto mediaRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
+        if (!mediaRes.isOk()) {
+            sendError(res, "Media item not found", 404);
+            return;
+        }
+
+        Status s = catalog_ ? catalog_->deleteMedia(id) : db().deleteMedia(id);
+        if (!s.isOk()) {
+            sendError(res, s.message(), 500);
+            return;
+        }
+
+        sendJson(res, {{"status", "ok"}, {"id", id}});
+    });
+
+    // POST /api/media/batch-delete
+    server.Post("/api/media/batch-delete", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.contains("ids") || !body["ids"].is_array()) {
+                sendError(res, "Missing or invalid 'ids' array");
+                return;
+            }
+            std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+            int deletedCount = 0;
+            for (MediaId id : ids) {
+                Status s = catalog_ ? catalog_->deleteMedia(id) : db().deleteMedia(id);
+                if (s.isOk()) {
+                    deletedCount++;
+                }
+            }
+            sendJson(res, {{"status", "ok"}, {"deleted_count", deletedCount}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
 }
 
 void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {

@@ -108,6 +108,7 @@
     batchRating: document.getElementById('batchRating'),
     batchPickBtn: document.getElementById('batchPickBtn'),
     batchRejectBtn: document.getElementById('batchRejectBtn'),
+    batchDeleteBtn: document.getElementById('batchDeleteBtn'),
     batchAddTagBtn: document.getElementById('batchAddTagBtn'),
     batchAddAlbumBtn: document.getElementById('batchAddAlbumBtn'),
     batchClearBtn: document.getElementById('batchClearBtn'),
@@ -122,6 +123,7 @@
     inspectorImg: document.getElementById('inspectorImg'),
     openLoupeFromInspector: document.getElementById('openLoupeFromInspector'),
     inspectorAddToAlbumBtn: document.getElementById('inspectorAddToAlbumBtn'),
+    inspectorDeleteBtn: document.getElementById('inspectorDeleteBtn'),
     inspectorRating: document.getElementById('inspectorRating'),
     inspectorFlag: document.getElementById('inspectorFlag'),
     fileInfoSection: document.getElementById('fileInfoSection'),
@@ -163,6 +165,7 @@
     loupePrevBtn: document.getElementById('loupePrevBtn'),
     loupeNextBtn: document.getElementById('loupeNextBtn'),
     loupeCloseBtn: document.getElementById('loupeCloseBtn'),
+    loupeDeleteBtn: document.getElementById('loupeDeleteBtn'),
     importModal: document.getElementById('importModal'),
     importBackdrop: document.getElementById('importBackdrop'),
     closeImportModalBtn: document.getElementById('closeImportModalBtn'),
@@ -196,7 +199,13 @@
     cancelTagBtn: document.getElementById('cancelTagBtn'),
     createTagSubmitBtn: document.getElementById('createTagSubmitBtn'),
     tagNameInput: document.getElementById('tagNameInput'),
-    tagCategorySelect: document.getElementById('tagCategorySelect')
+    tagCategorySelect: document.getElementById('tagCategorySelect'),
+    deleteMediaModal: document.getElementById('deleteMediaModal'),
+    deleteMediaBackdrop: document.getElementById('deleteMediaBackdrop'),
+    closeDeleteMediaModalBtn: document.getElementById('closeDeleteMediaModalBtn'),
+    cancelDeleteMediaBtn: document.getElementById('cancelDeleteMediaBtn'),
+    confirmDeleteMediaBtn: document.getElementById('confirmDeleteMediaBtn'),
+    deleteMediaPromptText: document.getElementById('deleteMediaPromptText')
   };
 
   // --- Utility Functions ---
@@ -1366,6 +1375,12 @@
       }
     });
 
+    if (dom.batchDeleteBtn) {
+      dom.batchDeleteBtn.addEventListener('click', () => {
+        openDeleteMediaModal(Array.from(state.selectedIds));
+      });
+    }
+
     renderStarWidget(dom.batchRating, 0, async (newRating) => {
       for (const id of state.selectedIds) {
         await updateItemRating(id, newRating);
@@ -1392,6 +1407,24 @@
     if (dom.batchAddAlbumBtn) {
       dom.batchAddAlbumBtn.addEventListener('click', () => {
         openAddToAlbumModal(Array.from(state.selectedIds));
+      });
+    }
+
+    if (dom.inspectorDeleteBtn) {
+      dom.inspectorDeleteBtn.addEventListener('click', () => {
+        if (state.selectedIds.size > 0) {
+          openDeleteMediaModal(Array.from(state.selectedIds));
+        } else if (state.loupeIndex >= 0 && state.mediaItems[state.loupeIndex]) {
+          openDeleteMediaModal([state.mediaItems[state.loupeIndex].id]);
+        }
+      });
+    }
+
+    if (dom.loupeDeleteBtn) {
+      dom.loupeDeleteBtn.addEventListener('click', () => {
+        if (state.loupeIndex >= 0 && state.mediaItems[state.loupeIndex]) {
+          openDeleteMediaModal([state.mediaItems[state.loupeIndex].id]);
+        }
       });
     }
 
@@ -1517,10 +1550,19 @@
           loupeZoomOut();
         } else if (e.key === 'z' || e.key === 'Z') {
           resetLoupeZoom();
+        } else if (e.key === 'Escape') {
+          if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
+            closeDeleteMediaModal();
+          } else {
+            closeLoupe();
+          }
         } else if (e.key >= '0' && e.key <= '5') {
           const item = state.mediaItems[state.loupeIndex];
           if (item) updateItemRating(item.id, parseInt(e.key, 10));
-        } else if (e.key === 'Delete' || e.key === 'x' || e.key === 'X') {
+        } else if (e.key === 'Delete' || e.key === 'Backspace') {
+          const item = state.mediaItems[state.loupeIndex];
+          if (item) openDeleteMediaModal([item.id]);
+        } else if (e.key === 'x' || e.key === 'X') {
           const item = state.mediaItems[state.loupeIndex];
           if (item) updateItemFlag(item.id, -1);
         } else if (e.key === 'p' || e.key === 'P') {
@@ -1540,10 +1582,14 @@
           updateBatchBar();
           updateInspector();
         } else if (e.key === 'Escape') {
-          state.selectedIds.clear();
-          document.querySelectorAll('.photo-card.selected').forEach(c => c.classList.remove('selected'));
-          updateBatchBar();
-          updateInspector();
+          if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
+            closeDeleteMediaModal();
+          } else {
+            state.selectedIds.clear();
+            document.querySelectorAll('.photo-card.selected').forEach(c => c.classList.remove('selected'));
+            updateBatchBar();
+            updateInspector();
+          }
         } else if (e.key === ' ' || e.key === 'Enter') {
           if (state.selectedIds.size > 0) {
             e.preventDefault();
@@ -1554,7 +1600,11 @@
           state.selectedIds.forEach(id => updateItemRating(id, rating));
         } else if (e.key === 'p' || e.key === 'P') {
           state.selectedIds.forEach(id => updateItemFlag(id, 1));
-        } else if (e.key === 'x' || e.key === 'X' || e.key === 'Delete') {
+        } else if (e.key === 'Delete' || e.key === 'Backspace') {
+          if (state.selectedIds.size > 0) {
+            openDeleteMediaModal(Array.from(state.selectedIds));
+          }
+        } else if (e.key === 'x' || e.key === 'X') {
           state.selectedIds.forEach(id => updateItemFlag(id, -1));
         } else if (e.key === 'u' || e.key === 'U') {
           state.selectedIds.forEach(id => updateItemFlag(id, 0));
@@ -1710,6 +1760,71 @@
         alert(`Failed to create tag: ${err.message}`);
       }
     });
+
+    // Delete Media Modal
+    let pendingDeleteMediaIds = [];
+    function openDeleteMediaModal(mediaIds) {
+      if (!mediaIds || mediaIds.length === 0) return;
+      pendingDeleteMediaIds = mediaIds;
+      const count = mediaIds.length;
+      if (dom.deleteMediaPromptText) {
+        dom.deleteMediaPromptText.textContent = count === 1
+          ? 'Are you sure you want to delete this photo from the catalog?'
+          : `Are you sure you want to delete ${count} selected photos from the catalog?`;
+      }
+      if (dom.deleteMediaModal) {
+        dom.deleteMediaModal.style.display = 'flex';
+      }
+    }
+
+    function closeDeleteMediaModal() {
+      if (dom.deleteMediaModal) {
+        dom.deleteMediaModal.style.display = 'none';
+      }
+      pendingDeleteMediaIds = [];
+    }
+
+    if (dom.closeDeleteMediaModalBtn) dom.closeDeleteMediaModalBtn.addEventListener('click', closeDeleteMediaModal);
+    if (dom.cancelDeleteMediaBtn) dom.cancelDeleteMediaBtn.addEventListener('click', closeDeleteMediaModal);
+    if (dom.deleteMediaBackdrop) dom.deleteMediaBackdrop.addEventListener('click', closeDeleteMediaModal);
+
+    if (dom.confirmDeleteMediaBtn) {
+      dom.confirmDeleteMediaBtn.addEventListener('click', async () => {
+        if (pendingDeleteMediaIds.length === 0) {
+          closeDeleteMediaModal();
+          return;
+        }
+
+        const idsToDelete = [...pendingDeleteMediaIds];
+        try {
+          await api.post('/api/media/batch-delete', { ids: idsToDelete });
+        } catch (e) {
+          for (const id of idsToDelete) {
+            try {
+              await api.del(`/api/media/${id}`);
+            } catch (err) {
+              console.warn('Failed to delete media', id, err);
+            }
+          }
+        }
+
+        // If loupe was viewing one of the deleted items, close loupe
+        if (state.loupeIndex >= 0) {
+          const loupeItem = state.mediaItems[state.loupeIndex];
+          if (loupeItem && idsToDelete.includes(loupeItem.id)) {
+            closeLoupe();
+          }
+        }
+
+        idsToDelete.forEach(id => state.selectedIds.delete(id));
+        closeDeleteMediaModal();
+
+        await loadMedia();
+        await loadMetadata();
+        updateBatchBar();
+        updateInspector();
+      });
+    }
 
     setupResizablePanels();
   }

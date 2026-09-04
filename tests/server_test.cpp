@@ -225,6 +225,47 @@ TEST_F(ServerTest, MediaItemCrudAndRatings) {
     auto noTagRes = client.Get("/api/media/" + std::to_string(mid));
     auto noTag = nlohmann::json::parse(noTagRes->body);
     EXPECT_EQ(noTag["tags"].size(), 0u);
+
+    // DELETE /api/media/:id
+    auto delMediaRes = client.Delete("/api/media/" + std::to_string(mid));
+    ASSERT_TRUE(delMediaRes);
+    EXPECT_EQ(delMediaRes->status, 200);
+
+    // Verify media is deleted
+    auto getDeletedRes = client.Get("/api/media/" + std::to_string(mid));
+    ASSERT_TRUE(getDeletedRes);
+    EXPECT_EQ(getDeletedRes->status, 404);
+
+    // Deleting again should return 404
+    auto delAgainRes = client.Delete("/api/media/" + std::to_string(mid));
+    ASSERT_TRUE(delAgainRes);
+    EXPECT_EQ(delAgainRes->status, 404);
+
+    // Test batch delete
+    MediaItem batchItem1, batchItem2;
+    batchItem1.file_path = (testDir_ / "batch1.jpg").string();
+    batchItem1.file_name = "batch1.jpg";
+    batchItem1.file_size = 1000;
+    batchItem1.content_hash = "hash_b1";
+    batchItem1.date_taken = 1000;
+    batchItem2.file_path = (testDir_ / "batch2.jpg").string();
+    batchItem2.file_name = "batch2.jpg";
+    batchItem2.file_size = 1000;
+    batchItem2.content_hash = "hash_b2";
+    batchItem2.date_taken = 1000;
+
+    MediaId bId1 = catalog_->db().insertMedia(batchItem1).value();
+    MediaId bId2 = catalog_->db().insertMedia(batchItem2).value();
+
+    nlohmann::json batchDelBody = {{"ids", {bId1, bId2}}};
+    auto batchDelRes = client.Post("/api/media/batch-delete", batchDelBody.dump(), "application/json");
+    ASSERT_TRUE(batchDelRes);
+    EXPECT_EQ(batchDelRes->status, 200);
+    auto batchDelJson = nlohmann::json::parse(batchDelRes->body);
+    EXPECT_EQ(batchDelJson["deleted_count"].get<int>(), 2);
+
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(bId1))->status, 404);
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(bId2))->status, 404);
 }
 
 TEST_F(ServerTest, StaticFilesAndSpaRouting) {

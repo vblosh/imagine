@@ -244,8 +244,9 @@ Double-click any photo card or click the expand icon in the Inspector to enter *
 | `1` – `5` | Assign 1 to 5 star rating |
 | `0` | Clear rating (0 stars) |
 | `P` | Mark as Pick |
-| `X` or `Delete` | Mark as Reject |
+| `X` | Mark as Reject |
 | `U` | Clear flag (Unflag) |
+| `Delete` / `Backspace` | Delete photo from catalog (with confirmation prompt) |
 | `Esc` | Close Loupe viewer |
 
 ---
@@ -348,6 +349,16 @@ Attach a keyword tag to a photo by ID.
 imagine tag <media_id> <tag_name> [--category <people|places|events|keyword>] [--catalog <file>]
 ```
 
+#### `imagine delete`
+Deletes one or more photos from the catalog database by ID, or all photos marked as Rejected.
+```bash
+imagine delete <media_id...> [options]
+```
+**Options:**
+- `--catalog <file>`: Path to SQLite catalog database (default: `catalog.db`).
+- `--yes`, `-y`: Skip confirmation prompt.
+- `--rejected`: Delete all photos marked with the Reject flag.
+
 ---
 
 ## 9. REST API Reference
@@ -358,6 +369,8 @@ The embedded C++ HTTP server provides a full REST API for developers and externa
 |---|---|---|
 | `GET` | `/api/media` | Query photos with filtering, sorting, and pagination |
 | `GET` | `/api/media/:id` | Get single photo details and EXIF |
+| `DELETE` | `/api/media/:id` | Delete photo from catalog database |
+| `POST` | `/api/media/batch-delete` | Batch delete photos (`{"ids": [1, 2, ...]}`) |
 | `POST` | `/api/media/:id/rating` | Set star rating (`{"rating": 0-5}`) |
 | `POST` | `/api/media/:id/flag` | Set flag (`{"flag": -1\|0\|1}`) |
 | `POST` | `/api/media/:id/tags` | Attach tag (`{"name": "...", "category": "..."}`) |

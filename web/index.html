@@ -200,6 +200,9 @@
             <button class="btn btn-sm btn-danger" id="batchRejectBtn" title="Reject selected">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Reject
             </button>
+            <button class="btn btn-sm btn-danger" id="batchDeleteBtn" title="Delete selected photos from catalog">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> Delete
+            </button>
             <button class="btn btn-sm" id="batchAddTagBtn">Add Tag</button>
             <button class="btn btn-sm" id="batchAddAlbumBtn">Add to Album</button>
             <button class="btn btn-sm btn-secondary" id="batchClearBtn">Deselect</button>
@@ -349,6 +352,14 @@
               <h4 class="section-heading">Albums</h4>
               <button class="btn btn-sm btn-secondary" id="inspectorAddToAlbumBtn" style="width: 100%;">Add to Album</button>
             </div>
+
+            <!-- Actions Section -->
+            <div class="inspector-section">
+              <button class="btn btn-sm btn-danger-outline" id="inspectorDeleteBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                Delete from Catalog
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -377,8 +388,11 @@
             </div>
             <div class="flag-toggle" id="loupeFlag">
               <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)">✔</button>
-              <button class="flag-btn flag-reject" data-flag="-1" title="Reject (Del)">✖</button>
+              <button class="flag-btn flag-reject" data-flag="-1" title="Reject (X)">✖</button>
             </div>
+            <button class="flag-btn" id="loupeDeleteBtn" title="Delete from Catalog" style="margin-left: 6px; color: var(--reject-color);">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+            </button>
             <div class="loupe-zoom-controls" id="loupeZoomControls">
               <button class="loupe-zoom-btn" id="loupeZoomOutBtn" title="Zoom Out (-)">−</button>
               <input type="range" class="loupe-zoom-slider" id="loupeZoomSlider" min="100" max="500" value="100" step="5" title="Zoom Slider">
@@ -508,6 +522,27 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" id="cancelTagBtn">Cancel</button>
           <button class="btn btn-primary" id="createTagSubmitBtn">Create Tag</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete Photos Modal Dialog -->
+    <div class="modal" id="deleteMediaModal" style="display: none;">
+      <div class="modal-backdrop" id="deleteMediaBackdrop"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Delete from Catalog</h3>
+          <button class="btn-icon-sm" id="closeDeleteMediaModalBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="deleteMediaPromptText" style="margin-bottom: 8px; font-size: 14px;">Are you sure you want to delete the selected photo(s) from the catalog?</p>
+          <p style="margin-bottom: 0; font-size: 12px; color: var(--text-dim);">
+            This removes photo metadata, ratings, tags, and album associations from the catalog database. The original files on disk will not be deleted.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelDeleteMediaBtn">Cancel</button>
+          <button class="btn btn-danger" id="confirmDeleteMediaBtn">Delete from Catalog</button>
         </div>
       </div>
     </div>

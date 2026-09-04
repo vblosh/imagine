@@ -258,6 +258,17 @@ body, html {
   background-color: #c0392b;
 }
 
+.btn-danger-outline {
+  background-color: transparent;
+  color: var(--reject-color);
+  border: 1px solid var(--reject-color);
+}
+
+.btn-danger-outline:hover {
+  background-color: var(--reject-color);
+  color: #ffffff;
+}
+
 .btn-sm {
   padding: 3px 8px;
   font-size: 11px;
@@ -1428,7 +1439,7 @@ body.resizing-horizontal * {
   left: 0;
   width: 100vw;
   height: 100vh;
-  z-index: 900;
+  z-index: 2000;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1449,7 +1460,7 @@ body.resizing-horizontal * {
   width: 480px;
   max-width: 90vw;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
-  z-index: 901;
+  z-index: 2001;
   display: flex;
   flex-direction: column;
 }
