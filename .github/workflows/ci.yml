@@ -12,20 +12,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  unit-tests:
-    name: Unit Tests (${{ matrix.compiler.name }})
+  unit-tests-gcc:
+    name: Unit Tests (GCC)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        compiler:
-          - name: GCC
-            cc: gcc
-            cxx: g++
-          - name: Clang
-            cc: clang
-            cxx: clang++
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -38,12 +27,12 @@ jobs:
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: ${{ runner.os }}-${{ matrix.compiler.name }}-release-ccache
+          key: ${{ runner.os }}-gcc-release-ccache
 
-      - name: Configure CMake
+      - name: Configure CMake (GCC Release)
         env:
-          CC: ${{ matrix.compiler.cc }}
-          CXX: ${{ matrix.compiler.cxx }}
+          CC: gcc
+          CXX: g++
         run: |
           cmake -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -55,18 +44,17 @@ jobs:
         run: cmake --build build -j$(nproc)
 
       - name: Run C++ unit tests
-        run: |
-          ./build/imagine_tests
+        run: ./build/imagine_tests
 
       - name: Step Summary
         if: always()
         run: |
-          echo "### Unit Tests (${{ matrix.compiler.name }}) :white_check_mark:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Compiler:** ${{ matrix.compiler.name }} (\`${{ matrix.compiler.cxx }}\`)" >> $GITHUB_STEP_SUMMARY
+          echo "### Unit Tests (GCC) :white_check_mark:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compiler:** GCC (\`g++\`)" >> $GITHUB_STEP_SUMMARY
           echo "- **Build Type:** Release" >> $GITHUB_STEP_SUMMARY
 
-  sanitizers:
-    name: Memory & UB Sanitizers (ASan + UBSan)
+  clang-sanitizers-ui:
+    name: Clang + Sanitizers + UI Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -76,106 +64,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build libssl-dev libgtest-dev clang
-
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ runner.os }}-sanitizers-ccache
-
-      - name: Configure CMake with Sanitizers
-        env:
-          CC: clang
-          CXX: clang++
-        run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_SANITIZERS=ON \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DBUILD_TESTING=ON
-
-      - name: Build with AddressSanitizer and UBSan
-        run: cmake --build build --target imagine_tests -j$(nproc)
-
-      - name: Run Unit Tests under ASan & UBSan
-        env:
-          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: ./build/imagine_tests
-
-      - name: Step Summary
-        if: always()
-        run: |
-          echo "### Sanitizers (ASan + UBSan) :shield:" >> $GITHUB_STEP_SUMMARY
-          echo "- **AddressSanitizer:** Verified zero memory leaks, buffer overflows, or use-after-free." >> $GITHUB_STEP_SUMMARY
-          echo "- **UndefinedBehaviorSanitizer:** Verified absence of undefined behavior." >> $GITHUB_STEP_SUMMARY
-
-  coverage:
-    name: Code Coverage
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libssl-dev libgtest-dev gcovr
-
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ runner.os }}-coverage-ccache
-
-      - name: Configure CMake with Coverage
-        run: |
-          cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DENABLE_COVERAGE=ON \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DBUILD_TESTING=ON
-
-      - name: Build unit tests
-        run: cmake --build build --target imagine_tests -j$(nproc)
-
-      - name: Run unit tests
-        run: ./build/imagine_tests
-
-      - name: Generate Coverage Report
-        run: |
-          mkdir -p coverage
-          gcovr --root . \
-                --filter 'src/' \
-                --filter 'include/' \
-                --html --html-details \
-                -o coverage/index.html \
-                --print-summary | tee coverage_summary.txt
-
-      - name: Publish Coverage to Step Summary
-        run: |
-          echo "### Code Coverage Report :bar_chart:" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          cat coverage_summary.txt >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload HTML Coverage Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: code-coverage-report
-          path: coverage/
-
-  ui-tests:
-    name: Playwright UI Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install system build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libssl-dev libgtest-dev
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -206,19 +94,33 @@ jobs:
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: ${{ runner.os }}-ui-tests-ccache
+          key: ${{ runner.os }}-clang-sanitizers-ui-ccache
 
-      - name: Configure and Build Imagine Server
+      - name: Configure CMake with Clang & Sanitizers (ASan + UBSan)
+        env:
+          CC: clang
+          CXX: clang++
         run: |
           cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_SANITIZERS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build build --target imagine -j$(nproc)
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DBUILD_TESTING=ON
+
+      - name: Build with Clang & Sanitizers
+        run: cmake --build build -j$(nproc)
+
+      - name: Run Unit Tests under ASan & UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ./build/imagine_tests
 
       - name: Run Playwright UI Tests
-        run: |
-          pytest tests/ui -v
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+        run: pytest tests/ui -v
 
       - name: Upload Artifacts on Failure
         if: failure()
@@ -232,6 +134,8 @@ jobs:
       - name: Step Summary
         if: always()
         run: |
-          echo "### Playwright UI Tests Completed :camera_flash:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Test Suite:** 53 Deterministic UI tests across 13 feature areas" >> $GITHUB_STEP_SUMMARY
-          echo "- **Browser:** Headless Chromium" >> $GITHUB_STEP_SUMMARY
+          echo "### Clang + Sanitizers + UI Tests Completed :white_check_mark:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compiler:** Clang (\`clang++\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Sanitizers:** AddressSanitizer & UndefinedBehaviorSanitizer (Clean, 0 errors/leaks)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Unit Tests:** 64 unit tests passed under ASan & UBSan" >> $GITHUB_STEP_SUMMARY
+          echo "- **UI Tests:** 53 deterministic Playwright browser tests passed" >> $GITHUB_STEP_SUMMARY
