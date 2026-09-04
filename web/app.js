@@ -228,7 +228,9 @@
   }
 
   // --- Load Media & Catalog Data ---
+  let currentLoadMediaId = 0;
   async function loadMedia() {
+    const fetchId = ++currentLoadMediaId;
     try {
       const params = {
         limit: 500,
@@ -258,6 +260,7 @@
       }
 
       const res = await api.get('/api/media', params);
+      if (fetchId !== currentLoadMediaId) return;
       state.mediaItems = res.items || [];
       state.totalCount = res.total || 0;
 

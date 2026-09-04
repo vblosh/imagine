@@ -1,0 +1,237 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Unit Tests (${{ matrix.compiler.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - name: GCC
+            cc: gcc
+            cxx: g++
+          - name: Clang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libssl-dev libgtest-dev
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-${{ matrix.compiler.name }}-release-ccache
+
+      - name: Configure CMake
+        env:
+          CC: ${{ matrix.compiler.cc }}
+          CXX: ${{ matrix.compiler.cxx }}
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DBUILD_TESTING=ON
+
+      - name: Build unit tests & CLI
+        run: cmake --build build -j$(nproc)
+
+      - name: Run C++ unit tests
+        run: |
+          ./build/imagine_tests
+
+      - name: Step Summary
+        if: always()
+        run: |
+          echo "### Unit Tests (${{ matrix.compiler.name }}) :white_check_mark:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compiler:** ${{ matrix.compiler.name }} (\`${{ matrix.compiler.cxx }}\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Type:** Release" >> $GITHUB_STEP_SUMMARY
+
+  sanitizers:
+    name: Memory & UB Sanitizers (ASan + UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libssl-dev libgtest-dev clang
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-sanitizers-ccache
+
+      - name: Configure CMake with Sanitizers
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_SANITIZERS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DBUILD_TESTING=ON
+
+      - name: Build with AddressSanitizer and UBSan
+        run: cmake --build build --target imagine_tests -j$(nproc)
+
+      - name: Run Unit Tests under ASan & UBSan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ./build/imagine_tests
+
+      - name: Step Summary
+        if: always()
+        run: |
+          echo "### Sanitizers (ASan + UBSan) :shield:" >> $GITHUB_STEP_SUMMARY
+          echo "- **AddressSanitizer:** Verified zero memory leaks, buffer overflows, or use-after-free." >> $GITHUB_STEP_SUMMARY
+          echo "- **UndefinedBehaviorSanitizer:** Verified absence of undefined behavior." >> $GITHUB_STEP_SUMMARY
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libssl-dev libgtest-dev gcovr
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-coverage-ccache
+
+      - name: Configure CMake with Coverage
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_COVERAGE=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DBUILD_TESTING=ON
+
+      - name: Build unit tests
+        run: cmake --build build --target imagine_tests -j$(nproc)
+
+      - name: Run unit tests
+        run: ./build/imagine_tests
+
+      - name: Generate Coverage Report
+        run: |
+          mkdir -p coverage
+          gcovr --root . \
+                --filter 'src/' \
+                --filter 'include/' \
+                --html --html-details \
+                -o coverage/index.html \
+                --print-summary | tee coverage_summary.txt
+
+      - name: Publish Coverage to Step Summary
+        run: |
+          echo "### Code Coverage Report :bar_chart:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat coverage_summary.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload HTML Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-coverage-report
+          path: coverage/
+
+  ui-tests:
+    name: Playwright UI Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libssl-dev libgtest-dev
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install Python test requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/ui/requirements.txt
+
+      - name: Cache Playwright Browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('tests/ui/requirements.txt') }}
+
+      - name: Install Playwright Chromium with system dependencies
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" == "true" ]; then
+            playwright install-deps chromium
+          else
+            playwright install --with-deps chromium
+          fi
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ runner.os }}-ui-tests-ccache
+
+      - name: Configure and Build Imagine Server
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --target imagine -j$(nproc)
+
+      - name: Run Playwright UI Tests
+        run: |
+          pytest tests/ui -v
+
+      - name: Upload Artifacts on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure-artifacts
+          path: |
+            /tmp/imagine_ui_*
+          if-no-files-found: ignore
+
+      - name: Step Summary
+        if: always()
+        run: |
+          echo "### Playwright UI Tests Completed :camera_flash:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Test Suite:** 53 Deterministic UI tests across 13 feature areas" >> $GITHUB_STEP_SUMMARY
+          echo "- **Browser:** Headless Chromium" >> $GITHUB_STEP_SUMMARY

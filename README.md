@@ -1,5 +1,7 @@
 # Imagine — Photo Organizer Engine & UI
 
+[![CI](https://github.com/vblosh/imagine/actions/workflows/ci.yml/badge.svg)](https://github.com/vblosh/imagine/actions/workflows/ci.yml)
+
 **Imagine** is a modern, high-performance C++20 photo catalog and organizer inspired by **Adobe Photoshop Elements Organizer**.
 
 It features a multi-threaded cataloging engine, SQLite metadata store (with WAL mode), SHA-256 deduplication, dual-resolution thumbnail generation, rich search/query APIs, an interactive CLI, and an embedded local Web UI with zero external runtime dependencies.
