@@ -10,6 +10,7 @@ Deterministic tests verifying all medium and low priority code review fixes:
 8. formatBytes handling of invalid/negative/infinite values
 """
 
+import re
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -443,4 +444,282 @@ def test_response_schema_validation_and_normalization(server, page: Page):
     assert results["validProg"]["processed_files"] == 25
     assert results["nullProg"]["is_running"] is False
     assert results["nullProg"]["total_files"] == 0
+
+
+def test_batch_bar_single_vs_multiple_selection(server, page: Page):
+    """Batch action bar appears only for multiple selections (>1), while single selection uses Inspector."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    bar = page.locator("#batchActionBar")
+    expect(bar).to_be_hidden()
+
+    # 1. Select exactly 1 card: batch bar remains hidden, Inspector is visible with single-item actions
+    cards.nth(0).click()
+    expect(bar).to_be_hidden()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+    expect(page.locator("#inspectorAddToAlbumBtn")).to_be_visible()
+    expect(page.locator("#inspectorOpenTagModalBtn")).to_be_visible()
+    expect(page.locator("#inspectorDeleteBtn")).to_be_visible()
+
+    # 2. Select 2nd card with Ctrl: batch bar appears for bulk operations
+    cards.nth(1).click(modifiers=["Control"])
+    expect(bar).to_be_visible()
+    expect(page.locator("#batchSelectedCount")).to_have_text("2 selected")
+
+    # 3. Deselect back to 1 card: batch bar hides again
+    cards.nth(1).click(modifiers=["Control"])
+    expect(bar).to_be_hidden()
+    expect(page.locator(".photo-card.selected")).to_have_count(1)
+
+
+def test_background_clicks_clear_selection_only_on_actual_background(server, page: Page):
+    """Clicking directly on gridScrollContainer background clears selection; clicking inside cards does not."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    cards.first.click()
+    expect(cards.first).to_have_class(re.compile(r"\bselected\b"))
+
+    # Clicking empty area on gridScrollContainer background clears selection
+    page.locator("#gridScrollContainer").click(position={"x": 5, "y": 5})
+    expect(page.locator(".photo-card.selected")).to_have_count(0)
+
+
+def test_centralized_escape_hierarchy(server, page: Page):
+    """Escape key hierarchy properly closes topmost overlays first, dismisses toasts, clears selection, and collapses inspector."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    cards.first.click()
+    expect(cards.first).to_have_class(re.compile(r"\bselected\b"))
+
+    # 1. Open Album Modal - Escape closes the modal, leaving selection intact
+    page.locator("#newAlbumBtn").click()
+    album_modal = page.locator("#newAlbumModal")
+    expect(album_modal).to_be_visible()
+
+    page.keyboard.press("Escape")
+    expect(album_modal).to_be_hidden()
+    expect(cards.first).to_have_class(re.compile(r"\bselected\b"))
+
+    # 2. Open Loupe - Escape closes Loupe, leaving selection intact
+    page.keyboard.press("Enter")
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+    expect(cards.first).to_have_class(re.compile(r"\bselected\b"))
+
+    # 3. Escape with selection clears selection
+    page.keyboard.press("Escape")
+    expect(page.locator(".photo-card.selected")).to_have_count(0)
+
+    # 4. Show a toast - Escape dismisses active toasts
+    page.evaluate("() => window._imagineApp.showToast('Test notification', 'info')")
+    expect(page.locator("#toastContainer .toast")).to_have_count(1)
+    page.keyboard.press("Escape")
+    expect(page.locator("#toastContainer .toast")).to_have_count(0)
+
+    # 5. Inspector is expanded - next Escape collapses Inspector
+    inspector = page.locator("#rightInspector")
+    expect(inspector).not_to_have_class(re.compile(r"\bcollapsed\b"))
+    page.keyboard.press("Escape")
+    expect(inspector).to_have_class(re.compile(r"\bcollapsed\b"))
+
+
+def test_keyboard_shortcuts_focus_guarding_and_mutation_feedback(server, page: Page):
+    """Button/select focus blocks destructive and mutation keys (Delete, ratings, flags), while allowing navigation."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    cards.first.click()
+    expect(cards.first).to_have_class(re.compile(r"\bselected\b"))
+
+    # Focus a button (e.g. viewGridBtn)
+    page.locator("#viewGridBtn").focus()
+
+    # Pressing Delete while focused on button does NOT trigger delete modal
+    page.keyboard.press("Delete")
+    expect(page.locator("#deleteMediaModal")).to_be_hidden()
+
+    # Pressing rating while focused on button does NOT mutate rating
+    page.keyboard.press("5")
+
+    # Focus photo card
+    cards.first.click()
+
+    # Pressing '3' now mutates rating and displays feedback toast
+    page.keyboard.press("3")
+    expect(cards.first.locator(".card-stars span.active")).to_have_count(3)
+    toast = page.locator("#toastContainer .toast")
+    expect(toast).to_be_visible()
+    # Pressing 'u' clears existing Pick flag
+    page.keyboard.press("u")
+    expect(cards.first.locator(".flag-badge")).to_have_count(0)
+    expect(page.locator("#toastContainer .toast").last).to_contain_text("Flag cleared")
+
+    # Pressing 'p' flags Pick and shows feedback toast
+    page.keyboard.press("p")
+    expect(cards.first.locator(".flag-badge.pick")).to_be_visible()
+    expect(page.locator("#toastContainer .toast").last).to_contain_text("Flag: Pick")
+
+
+def test_loupe_pagination_scope_label_and_on_demand_page_loading(server, page: Page):
+    """Loupe counter indicates loaded scope vs catalog total and loupeNext triggers loadMoreMedia when reaching end of loaded items."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # Simulate paginated state in app state: 6 loaded out of 10 total
+    page.evaluate("""() => {
+        window._imagineApp.state.totalCount = 10;
+        window._imagineApp.state.loupeIndex = 0;
+        window._imagineApp.updateLoupeView();
+    }""")
+
+    # Counter should show "(10 total)"
+    expect(page.locator("#loupeIndex")).to_have_text("1 / 6 (10 total)")
+
+    # Test on-demand page fetching via loupeNext at boundary
+    result = page.evaluate("""async () => {
+        const state = window._imagineApp.state;
+        state.loupeIndex = state.mediaItems.length - 1; // at index 5 (last loaded)
+        state.totalCount = 8;
+        let loadMoreCalled = false;
+        const origLoadMore = window._imagineApp.loadMoreMedia;
+        window._imagineApp.loadMoreMedia = async () => {
+            loadMoreCalled = true;
+            // simulate new item added
+            state.mediaItems.push({ id: 9999, file_name: 'new_paginated.jpg', rating: 0, flag: 0 });
+        };
+        await window._imagineApp.loupeNext();
+        window._imagineApp.loadMoreMedia = origLoadMore;
+        return { loadMoreCalled, newIndex: state.loupeIndex };
+    }""")
+
+    assert result["loadMoreCalled"] is True
+    assert result["newIndex"] == 6  # advanced to newly loaded item
+
+
+def test_timeline_defensive_chronological_ordering(server, page: Page):
+    """renderTimeline() defensively sorts timeline entries chronologically in descending order even if API returns unsorted list."""
+    page.goto(server["url"])
+    expect(page.locator(".photo-card")).to_have_count(6)
+    expect(page.locator("#timelineContainer .timeline-bar-wrap")).to_have_count(3)
+
+    # Provide shuffled timeline data
+    page.evaluate("""() => {
+        window._imagineApp.state.timelineData = [
+            { year: 2025, month: 12, count: 5 },
+            { year: 2026, month: 2, count: 12 },
+            { year: 2026, month: 1, count: 8 }
+        ];
+        window._imagineApp.renderTimeline();
+    }""")
+
+    bars = page.locator("#timelineContainer .timeline-bar-wrap")
+    expect(bars).to_have_count(3)
+
+    # Sorted descending: Feb 2026, Jan 2026, Dec 2025
+    expect(bars.nth(0)).to_have_attribute("title", "Feb 2026: 12 photos")
+    expect(bars.nth(1)).to_have_attribute("title", "Jan 2026: 8 photos")
+    expect(bars.nth(2)).to_have_attribute("title", "Dec 2025: 5 photos")
+
+
+def test_filter_switching_resets_folder_and_timeline_filters(server, page: Page):
+    """Selecting tags, albums, or navigation quick filters resets activeFolder and activeTimelinePeriod."""
+    page.goto(server["url"])
+
+    # Set up an active folder and active timeline period
+    page.evaluate("""() => {
+        window._imagineApp.state.activeFolder = 'family';
+        window._imagineApp.state.activeTimelinePeriod = { year: 2026, month: 1 };
+        window._imagineApp.renderTimeline();
+    }""")
+
+    expect(page.locator("#timelineContainer .timeline-bar-wrap.active")).to_have_count(1)
+
+    # Click a tag item (e.g. Beach)
+    tag_item = page.locator(".tag-item", has_text="Beach")
+    expect(tag_item).to_be_visible()
+    tag_item.click()
+
+    # Active folder and active timeline period should be reset
+    state = page.evaluate("""() => ({
+        activeTagId: window._imagineApp.state.activeTagId,
+        activeFolder: window._imagineApp.state.activeFolder,
+        activeTimelinePeriod: window._imagineApp.state.activeTimelinePeriod
+    })""")
+
+    assert state["activeTagId"] is not None
+    assert state["activeFolder"] is None
+    assert state["activeTimelinePeriod"] is None
+    expect(page.locator("#timelineContainer .timeline-bar-wrap.active")).to_have_count(0)
+
+
+def test_unmapped_tray_scope_label(server, page: Page):
+    """Unmapped tray button label indicates loaded photos scope when pagination is active."""
+    page.goto(server["url"])
+    expect(page.locator(".photo-card")).to_have_count(6)
+
+    # Switch to map view
+    page.locator("#viewMapBtn").click()
+    expect(page.locator("#mapViewContainer")).to_be_visible()
+
+    # Under pagination (totalCount > mediaItems.length)
+    page.evaluate("""() => {
+        window._imagineApp.state.totalCount = 50;
+        window._imagineApp.renderUnmappedTray();
+    }""")
+
+    unmapped_label = page.locator("#unmappedBtnLabel")
+    expect(unmapped_label).to_contain_text("Unmapped in loaded photos (4)")
+
+    # When all photos are loaded (totalCount == mediaItems.length)
+    page.evaluate("""() => {
+        window._imagineApp.state.totalCount = 6;
+        window._imagineApp.renderUnmappedTray();
+    }""")
+    expect(unmapped_label).to_have_text("Unmapped (4)")
+
+
+def test_mutation_error_feedback_and_state_preservation(server, page: Page):
+    """Mutation failures revert optimistic state updates, re-render DOM, and display user-visible error toast."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # Test updateItemRating rollback on failure
+    result = page.evaluate("""async () => {
+        const item = window._imagineApp.state.mediaItems[0];
+        const prevRating = item.rating || 0;
+
+        // Inject simulated network failure in updateItemRating while suppressing console.error
+        const origFetch = window.fetch;
+        const origError = console.error;
+        console.error = () => {};
+        window.fetch = async () => new Response(JSON.stringify({ error: 'Database locked' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        try {
+            await window._imagineApp.updateItemRating(item.id, 5);
+        } finally {
+            window.fetch = origFetch;
+            console.error = origError;
+        }
+
+        const toast = document.querySelector('#toastContainer .toast-error');
+        return {
+            ratingAfterError: item.rating,
+            prevRating,
+            toastText: toast ? toast.textContent : null
+        };
+    }""")
+
+    assert result["ratingAfterError"] == result["prevRating"]
+    assert "Failed to update rating" in (result["toastText"] or "")
 

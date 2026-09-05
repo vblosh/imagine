@@ -1168,6 +1168,8 @@
     });
   }
 
+  // Dedicated batch bar for multi-selection operations (count > 1).
+  // Single-item operations are handled through the Inspector panel and direct card controls.
   function updateBatchBar() {
     if (!dom.batchActionBar) return;
     const count = state.selectedIds.size;
@@ -1927,7 +1929,11 @@
     const unmapped = state.mediaItems.filter(item => !hasValidGps(item));
 
     if (dom.unmappedBtnLabel) {
-      dom.unmappedBtnLabel.textContent = `Unmapped (${unmapped.length})`;
+      if (state.mediaItems.length < state.totalCount) {
+        dom.unmappedBtnLabel.textContent = `Unmapped in loaded photos (${unmapped.length})`;
+      } else {
+        dom.unmappedBtnLabel.textContent = `Unmapped (${unmapped.length})`;
+      }
     }
 
     if (dom.unmappedLoadMoreBtn) {
@@ -2030,6 +2036,7 @@
       updateInspector();
     } catch (err) {
       console.error('Failed to batch geotag media:', err);
+      showToast('Failed to geotag photos: ' + (err.message || 'Server error'), 'error');
     }
   }
 
@@ -2054,6 +2061,7 @@
       updateInspector();
     } catch (err) {
       console.error('Failed to clear geotag:', err);
+      showToast('Failed to clear geotag: ' + (err.message || 'Server error'), 'error');
     }
   }
 
@@ -2449,8 +2457,11 @@
           state.activeTagId = tag.id;
           state.activeAlbumId = null;
           state.activeNavFilter = 'all';
+          state.activeFolder = null;
+          state.activeTimelinePeriod = null;
         }
         updateSidebarActive();
+        renderTimeline();
         loadMedia();
       });
 
@@ -2507,8 +2518,11 @@
           state.activeAlbumId = album.id;
           state.activeTagId = null;
           state.activeNavFilter = 'all';
+          state.activeFolder = null;
+          state.activeTimelinePeriod = null;
         }
         updateSidebarActive();
+        renderTimeline();
         loadMedia();
       });
 
@@ -2583,6 +2597,7 @@
           if (dom.searchInput) dom.searchInput.value = '';
         }
         updateSidebarActive();
+        renderTimeline();
         loadMedia();
       });
       dom.foldersTree.appendChild(el);
@@ -2598,9 +2613,10 @@
       return;
     }
 
-    const maxCount = Math.max(...state.timelineData.map(t => t.count), 1);
+    const entries = [...state.timelineData].sort((a, b) => b.year - a.year || b.month - a.month);
+    const maxCount = Math.max(...entries.map(t => t.count), 1);
 
-    state.timelineData.forEach(entry => {
+    entries.forEach(entry => {
       const wrap = document.createElement('div');
       wrap.className = 'timeline-bar-wrap';
       const isAct = state.activeTimelinePeriod &&
@@ -2760,6 +2776,7 @@
   // --- Item Modifications ---
   async function updateItemRating(id, rating) {
     const item = state.mediaItems.find(m => m.id === id);
+    const prevRating = item ? (item.rating || 0) : 0;
     if (item) {
       item.rating = rating;
       patchCardRating(id, rating);
@@ -2771,11 +2788,20 @@
       await api.post(`/api/media/${id}/rating`, { rating });
     } catch (err) {
       console.error('Failed to update rating:', err);
+      if (item) {
+        item.rating = prevRating;
+        patchCardRating(id, prevRating);
+        patchInspectorRatingAndFlag(item);
+        patchOpenMapPopup(id);
+      }
+      if (state.loupeIndex >= 0) updateLoupeControls();
+      showToast('Failed to update rating: ' + (err.message || 'Server error'), 'error');
     }
   }
 
   async function updateItemFlag(id, flag) {
     const item = state.mediaItems.find(m => m.id === id);
+    const prevFlag = item ? (item.flag || 0) : 0;
     if (item) {
       item.flag = flag;
       patchCardFlag(id, flag);
@@ -2787,14 +2813,24 @@
       await api.post(`/api/media/${id}/flag`, { flag });
     } catch (err) {
       console.error('Failed to update flag:', err);
+      if (item) {
+        item.flag = prevFlag;
+        patchCardFlag(id, prevFlag);
+        patchInspectorRatingAndFlag(item);
+        patchOpenMapPopup(id);
+      }
+      if (state.loupeIndex >= 0) updateLoupeControls();
+      showToast('Failed to update flag: ' + (err.message || 'Server error'), 'error');
     }
   }
 
   async function batchUpdateFlags(ids, flag) {
     if (!ids || ids.length === 0) return;
+    const prevFlags = new Map();
     ids.forEach(id => {
       const item = state.mediaItems.find(m => m.id === id);
       if (item) {
+        prevFlags.set(id, item.flag || 0);
         item.flag = flag;
         patchCardFlag(id, flag);
         patchInspectorRatingAndFlag(item);
@@ -2806,14 +2842,27 @@
       await api.post('/api/media/batch-flag', { ids, flag });
     } catch (err) {
       console.error('Failed to batch update flags:', err);
+      prevFlags.forEach((oldFlag, id) => {
+        const item = state.mediaItems.find(m => m.id === id);
+        if (item) {
+          item.flag = oldFlag;
+          patchCardFlag(id, oldFlag);
+          patchInspectorRatingAndFlag(item);
+          patchOpenMapPopup(id);
+        }
+      });
+      if (state.loupeIndex >= 0) updateLoupeControls();
+      showToast('Failed to batch update flags: ' + (err.message || 'Server error'), 'error');
     }
   }
 
   async function batchUpdateRatings(ids, rating) {
     if (!ids || ids.length === 0) return;
+    const prevRatings = new Map();
     ids.forEach(id => {
       const item = state.mediaItems.find(m => m.id === id);
       if (item) {
+        prevRatings.set(id, item.rating || 0);
         item.rating = rating;
         patchCardRating(id, rating);
         patchInspectorRatingAndFlag(item);
@@ -2825,6 +2874,17 @@
       await api.post('/api/media/batch-rating', { ids, rating });
     } catch (err) {
       console.error('Failed to batch update ratings:', err);
+      prevRatings.forEach((oldRating, id) => {
+        const item = state.mediaItems.find(m => m.id === id);
+        if (item) {
+          item.rating = oldRating;
+          patchCardRating(id, oldRating);
+          patchInspectorRatingAndFlag(item);
+          patchOpenMapPopup(id);
+        }
+      });
+      if (state.loupeIndex >= 0) updateLoupeControls();
+      showToast('Failed to batch update ratings: ' + (err.message || 'Server error'), 'error');
     }
   }
 
@@ -2873,7 +2933,13 @@
 
     if (dom.loupeImg) dom.loupeImg.src = `/api/photos/${item.id}/original`;
     if (dom.loupeFileName) dom.loupeFileName.textContent = item.file_name;
-    if (dom.loupeIndex) dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length}`;
+    if (dom.loupeIndex) {
+      if (state.totalCount > state.mediaItems.length) {
+        dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length} (${state.totalCount} total)`;
+      } else {
+        dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length}`;
+      }
+    }
 
     resetLoupeZoomToFit();
     updateLoupeControls();
@@ -3009,8 +3075,17 @@
     }
   }
 
-  function loupeNext() {
+  async function loupeNext() {
     if (state.mediaItems.length === 0) return;
+    if (state.loupeIndex === state.mediaItems.length - 1 && state.mediaItems.length < state.totalCount && !state.isLoadingMore) {
+      const prevLen = state.mediaItems.length;
+      await (window._imagineApp?.loadMoreMedia ? window._imagineApp.loadMoreMedia() : loadMoreMedia());
+      if (state.mediaItems.length > prevLen) {
+        state.loupeIndex = prevLen;
+        updateLoupeView();
+        return;
+      }
+    }
     state.loupeIndex = (state.loupeIndex + 1) % state.mediaItems.length;
     updateLoupeView();
   }
@@ -3099,6 +3174,8 @@
   }
 
   // --- Event Listeners Setup ---
+  let handleEscapeKey = null;
+
   function setupEventListeners() {
     // Deselect on actual background click
     if (dom.gridScrollContainer) {
@@ -3156,6 +3233,17 @@
     // Search with debounce
     let searchTimer = null;
     if (dom.searchInput) {
+      dom.searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          if (dom.searchInput.value) {
+            dom.searchInput.value = '';
+            state.searchText = '';
+            loadMedia();
+          }
+          dom.searchInput.blur();
+          e.stopPropagation();
+        }
+      });
       dom.searchInput.addEventListener('input', (e) => {
         clearTimeout(searchTimer);
         const val = e.target.value.trim();
@@ -3416,7 +3504,11 @@
           btn.classList.add('active');
           state.activeTab = btn.dataset.tab;
           state.activeTagId = null;
+          state.activeAlbumId = null;
+          state.activeFolder = null;
+          state.activeTimelinePeriod = null;
           updateSidebarActive();
+          renderTimeline();
           loadMedia();
         });
       });
@@ -3433,7 +3525,10 @@
         state.activeNavFilter = 'picks';
         state.activeTagId = null;
         state.activeAlbumId = null;
+        state.activeFolder = null;
+        state.activeTimelinePeriod = null;
         updateSidebarActive();
+        renderTimeline();
         loadMedia();
       });
     }
@@ -3442,7 +3537,10 @@
         state.activeNavFilter = 'rejects';
         state.activeTagId = null;
         state.activeAlbumId = null;
+        state.activeFolder = null;
+        state.activeTimelinePeriod = null;
         updateSidebarActive();
+        renderTimeline();
         loadMedia();
       });
     }
@@ -3451,7 +3549,10 @@
         state.activeNavFilter = 'unrated';
         state.activeTagId = null;
         state.activeAlbumId = null;
+        state.activeFolder = null;
+        state.activeTimelinePeriod = null;
         updateSidebarActive();
+        renderTimeline();
         loadMedia();
       });
     }
@@ -3714,10 +3815,112 @@
       }
     }
 
+    // Centralized Modal / Overlay Escape Handler
+    handleEscapeKey = function handleEscapeKey() {
+      // 1. Modals (highest priority)
+      if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
+        if (document.activeElement?.blur) document.activeElement.blur();
+        closeDeleteMediaModal();
+        return true;
+      }
+      if (dom.importModal && dom.importModal.style.display === 'flex') {
+        if (document.activeElement?.blur) document.activeElement.blur();
+        closeImportModal();
+        return true;
+      }
+      if (dom.newAlbumModal && dom.newAlbumModal.style.display === 'flex') {
+        if (document.activeElement?.blur) document.activeElement.blur();
+        closeAlbumModal();
+        return true;
+      }
+      if (dom.newTagModal && dom.newTagModal.style.display === 'flex') {
+        if (document.activeElement?.blur) document.activeElement.blur();
+        closeTagModal();
+        return true;
+      }
+      if (dom.addToAlbumModal && dom.addToAlbumModal.style.display === 'flex') {
+        if (document.activeElement?.blur) document.activeElement.blur();
+        closeAddToAlbumModal();
+        return true;
+      }
+
+      // 2. Fullscreen Loupe Viewer
+      if (state.loupeIndex >= 0 || (dom.loupeModal && dom.loupeModal.style.display === 'flex')) {
+        closeLoupe();
+        return true;
+      }
+
+      // 3. Map search results dropdown list
+      if (dom.mapSearchResults && dom.mapSearchResults.style.display !== 'none') {
+        dom.mapSearchResults.style.display = 'none';
+        return true;
+      }
+
+      // 4. Map active popups
+      if (state.viewMode === 'map' && state.mapInstance && document.querySelector('.leaflet-popup')) {
+        state.mapInstance.closePopup();
+        if (state.searchMarker) clearMapSearch();
+        return true;
+      }
+
+      // 5. Map placement mode
+      if ((state.placementMediaIds && state.placementMediaIds.size > 0) || state.placementMediaId) {
+        exitPlacementMode();
+        return true;
+      }
+
+      // 6. Unmapped tray
+      if (state.unmappedTrayOpen || (dom.unmappedTray && dom.unmappedTray.style.display !== 'none')) {
+        state.unmappedTrayOpen = false;
+        if (dom.unmappedTray) dom.unmappedTray.style.display = 'none';
+        exitPlacementMode();
+        return true;
+      }
+
+      // 7. Active card / photo selections
+      if (state.selectedIds.size > 0) {
+        clearCardSelections();
+        return true;
+      }
+
+      // 8. Toasts
+      const toastContainer = document.getElementById('toastContainer');
+      if (toastContainer && toastContainer.children.length > 0) {
+        toastContainer.innerHTML = '';
+        return true;
+      }
+
+      // 9. Inspector collapse state (collapse if open)
+      if (dom.rightInspector && !dom.rightInspector.classList.contains('collapsed')) {
+        dom.rightInspector.classList.add('collapsed');
+        return true;
+      }
+
+      return false;
+    }
+
     // Global Keyboard Shortcuts
     window.addEventListener('keydown', (e) => {
-      // If typing in input/textarea, ignore shortcuts
-      if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+      // Centralized Escape handler across all modes & overlays
+      if (e.key === 'Escape') {
+        if (handleEscapeKey()) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      const active = document.activeElement;
+      // If typing in input, textarea, or contenteditable, ignore shortcuts
+      if (active?.matches('input, textarea, [contenteditable="true"]')) {
+        return;
+      }
+
+      // Guard buttons and select elements from unintended mutation and activation shortcuts
+      const isButtonOrSelect = active?.matches('button, select');
+      const isMutationKey = ['0', '1', '2', '3', '4', '5', 'p', 'P', 'x', 'X', 'u', 'U', 'Delete', 'Backspace', 'Enter', ' '].includes(e.key);
+      if (isButtonOrSelect && isMutationKey) {
+        return;
+      }
 
       // Loupe mode active
       if (state.loupeIndex >= 0) {
@@ -3740,27 +3943,34 @@
           loupeZoomOut();
         } else if (e.key === 'z' || e.key === 'Z') {
           resetLoupeZoom();
-        } else if (e.key === 'Escape') {
-          if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
-            closeDeleteMediaModal();
-          } else {
-            closeLoupe();
-          }
         } else if (e.key >= '0' && e.key <= '5') {
           const item = state.mediaItems[state.loupeIndex];
-          if (item) updateItemRating(item.id, parseInt(e.key, 10));
+          if (item) {
+            const rating = parseInt(e.key, 10);
+            updateItemRating(item.id, rating);
+            showToast(rating === 0 ? 'Rating cleared' : `Rating: ${rating}★`, 'info');
+          }
         } else if (e.key === 'Delete' || e.key === 'Backspace') {
           const item = state.mediaItems[state.loupeIndex];
           if (item) openDeleteMediaModal([item.id]);
         } else if (e.key === 'x' || e.key === 'X') {
           const item = state.mediaItems[state.loupeIndex];
-          if (item) toggleItemFlag(item.id, -1);
+          if (item) {
+            toggleItemFlag(item.id, -1);
+            showToast(item.flag === -1 ? 'Flag: Reject' : 'Flag cleared', 'info');
+          }
         } else if (e.key === 'p' || e.key === 'P') {
           const item = state.mediaItems[state.loupeIndex];
-          if (item) toggleItemFlag(item.id, 1);
+          if (item) {
+            toggleItemFlag(item.id, 1);
+            showToast(item.flag === 1 ? 'Flag: Pick' : 'Flag cleared', 'info');
+          }
         } else if (e.key === 'u' || e.key === 'U') {
           const item = state.mediaItems[state.loupeIndex];
-          if (item) updateItemFlag(item.id, 0);
+          if (item) {
+            updateItemFlag(item.id, 0);
+            showToast('Flag cleared', 'info');
+          }
         }
       } else {
         // Grid mode shortcuts
@@ -3775,25 +3985,6 @@
           updateBatchBar();
           updateInspector();
           updateMapMarkerSelections();
-        } else if (e.key === 'Escape') {
-          if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
-            closeDeleteMediaModal();
-          } else if (dom.importModal && dom.importModal.style.display === 'flex') {
-            closeImportModal();
-          } else if (dom.newAlbumModal && dom.newAlbumModal.style.display === 'flex') {
-            closeAlbumModal();
-          } else if (dom.newTagModal && dom.newTagModal.style.display === 'flex') {
-            closeTagModal();
-          } else if (dom.addToAlbumModal && dom.addToAlbumModal.style.display === 'flex') {
-            closeAddToAlbumModal();
-          } else if ((state.placementMediaIds && state.placementMediaIds.size > 0) || state.placementMediaId) {
-            exitPlacementMode();
-          } else if (state.viewMode === 'map' && state.mapInstance && document.querySelector('.leaflet-popup')) {
-            state.mapInstance.closePopup();
-            if (state.searchMarker) clearMapSearch();
-          } else {
-            clearCardSelections();
-          }
         } else if (e.key === ' ' || e.key === 'Enter') {
           if (state.selectedIds.size > 0) {
             e.preventDefault();
@@ -3801,18 +3992,28 @@
           }
         } else if (e.key >= '0' && e.key <= '5') {
           const rating = parseInt(e.key, 10);
-          batchUpdateRatings(Array.from(state.selectedIds), rating);
+          if (state.selectedIds.size > 0) {
+            batchUpdateRatings(Array.from(state.selectedIds), rating);
+            showToast(rating === 0 ? 'Rating cleared' : `Rating: ${rating}★`, 'info');
+          }
         } else if (e.key === 'p' || e.key === 'P') {
-          toggleFlagsForIds(Array.from(state.selectedIds), 1);
+          if (state.selectedIds.size > 0) {
+            toggleFlagsForIds(Array.from(state.selectedIds), 1);
+            showToast('Flag: Pick', 'info');
+          }
         } else if (e.key === 'Delete' || e.key === 'Backspace') {
           if (state.selectedIds.size > 0) {
             openDeleteMediaModal(Array.from(state.selectedIds));
           }
         } else if (e.key === 'x' || e.key === 'X') {
-          toggleFlagsForIds(Array.from(state.selectedIds), -1);
+          if (state.selectedIds.size > 0) {
+            toggleFlagsForIds(Array.from(state.selectedIds), -1);
+            showToast('Flag: Reject', 'info');
+          }
         } else if (e.key === 'u' || e.key === 'U') {
           if (state.selectedIds.size > 0) {
             batchUpdateFlags(Array.from(state.selectedIds), 0);
+            showToast('Flag cleared', 'info');
           }
         } else if (e.key === 'm' || e.key === 'M') {
           switchViewMode('map');
@@ -4644,6 +4845,18 @@
     appendMediaToGrid,
     pollImportProgress,
     validateRequiredDom,
-    setupEventListeners
+    setupEventListeners,
+    handleEscapeKey,
+    updateItemRating,
+    updateItemFlag,
+    batchUpdateRatings,
+    batchUpdateFlags,
+    renderTimeline,
+    renderUnmappedTray,
+    updateLoupeView,
+    loupeNext,
+    loupePrev,
+    clearAllFilters,
+    showToast
   };
 })();
