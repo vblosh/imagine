@@ -2617,8 +2617,11 @@
           updateBatchBar();
           updateInspector();
         } else if (e.key === 'Escape') {
-          if (state.placementMediaId) {
+          if ((state.placementMediaIds && state.placementMediaIds.size > 0) || state.placementMediaId) {
             exitPlacementMode();
+          } else if (state.viewMode === 'map' && state.mapInstance && document.querySelector('.leaflet-popup')) {
+            state.mapInstance.closePopup();
+            if (state.searchMarker) clearMapSearch();
           } else if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
             closeDeleteMediaModal();
           } else {
@@ -2626,6 +2629,7 @@
             document.querySelectorAll('.photo-card.selected').forEach(c => c.classList.remove('selected'));
             updateBatchBar();
             updateInspector();
+            updateMapMarkerSelections();
           }
         } else if (e.key === ' ' || e.key === 'Enter') {
           if (state.selectedIds.size > 0) {
