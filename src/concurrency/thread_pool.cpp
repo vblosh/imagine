@@ -3,54 +3,75 @@
 
 namespace imagine::concurrency {
 
-ThreadPool::ThreadPool(size_t threads) {
-    if (threads == 0) {
-        threads = 1;
-    }
-    workers_.reserve(threads);
-    for (size_t i = 0; i < threads; ++i) {
+ThreadPool::ThreadPool(size_t threads)
+    : worker_count_(threads == 0 ? 1 : threads) {
+    workers_.reserve(worker_count_);
+    worker_ids_.reserve(worker_count_);
+    for (size_t i = 0; i < worker_count_; ++i) {
         workers_.emplace_back([this]() {
             workerLoop();
         });
+        worker_ids_.push_back(workers_.back().get_id());
     }
 }
 
 ThreadPool::~ThreadPool() {
-    stop();
+    try {
+        stop();
+    } catch (...) {
+    }
+}
+
+bool ThreadPool::isWorkerThread() const noexcept {
+    const auto current_id = std::this_thread::get_id();
+    for (const auto& id : worker_ids_) {
+        if (id == current_id) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void ThreadPool::stop() {
-    {
-        std::unique_lock<std::mutex> lock(queue_mutex_);
-        if (stop_.load()) {
-            return;
-        }
-        stop_.store(true);
+    if (isWorkerThread()) {
+        throw std::logic_error("stop() cannot be called from a worker thread in the same ThreadPool");
     }
-    cv_.notify_all();
-    wait_cv_.notify_all();
 
-    for (std::thread& worker : workers_) {
-        if (worker.joinable()) {
-            worker.join();
+    std::call_once(stop_flag_, [this]() {
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            stop_.exchange(true);
         }
-    }
-    workers_.clear();
+        cv_.notify_all();
+        wait_cv_.notify_all();
+
+        for (std::thread& worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+        workers_.clear();
+    });
 }
 
 void ThreadPool::waitAll() {
+    if (isWorkerThread()) {
+        throw std::logic_error("waitAll() cannot be called from a worker thread in the same ThreadPool");
+    }
+
     std::unique_lock<std::mutex> lock(queue_mutex_);
     wait_cv_.wait(lock, [this]() {
-        return tasks_.empty() && active_tasks_.load() == 0;
+        return tasks_.empty() && active_tasks_ == 0;
     });
 }
 
 size_t ThreadPool::size() const noexcept {
-    return workers_.size();
+    return worker_count_;
 }
 
-size_t ThreadPool::activeTasks() const noexcept {
-    return active_tasks_.load();
+size_t ThreadPool::activeTasks() const {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    return active_tasks_;
 }
 
 size_t ThreadPool::queueSize() const {
@@ -59,7 +80,7 @@ size_t ThreadPool::queueSize() const {
 }
 
 bool ThreadPool::isStopped() const noexcept {
-    return stop_.load();
+    return stop_.load(std::memory_order_relaxed);
 }
 
 void ThreadPool::workerLoop() {
@@ -68,10 +89,10 @@ void ThreadPool::workerLoop() {
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
             cv_.wait(lock, [this]() {
-                return stop_.load() || !tasks_.empty();
+                return stop_.load(std::memory_order_relaxed) || !tasks_.empty();
             });
 
-            if (stop_.load() && tasks_.empty()) {
+            if (stop_.load(std::memory_order_relaxed) && tasks_.empty()) {
                 return;
             }
 
@@ -89,9 +110,9 @@ void ThreadPool::workerLoop() {
         }
 
         {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
+            std::lock_guard<std::mutex> lock(queue_mutex_);
             --active_tasks_;
-            if (tasks_.empty() && active_tasks_.load() == 0) {
+            if (tasks_.empty() && active_tasks_ == 0) {
                 wait_cv_.notify_all();
             }
         }
