@@ -249,6 +249,16 @@
   };
 
   // --- Utility Functions ---
+  function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   function formatBytes(bytes) {
     if (!bytes || bytes === 0) return '0 B';
     const k = 1024;
@@ -334,14 +344,16 @@
       // Track all discovered folders across loads so filtering doesn't remove folders from sidebar
       state.mediaItems.forEach(item => {
         if (item.file_path) {
-          const lastSlash = item.file_path.lastIndexOf('/');
+          const lastSlash = Math.max(item.file_path.lastIndexOf('/'), item.file_path.lastIndexOf('\\'));
           if (lastSlash > 0) {
             state.allFolders.add(item.file_path.substring(0, lastSlash));
           }
         }
       });
 
-      renderGrid();
+      if (state.viewMode !== 'map') {
+        renderGrid();
+      }
       if (state.viewMode === 'map' || state.mapInstance) {
         renderMapMarkers();
         renderUnmappedTray();
@@ -437,7 +449,7 @@
 
     // Thumbnail URL with fallback
     const thumbUrl = item.content_hash
-      ? `/api/thumbnails/${item.content_hash}/256`
+      ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
       : `/api/photos/${item.id}/original`;
 
     const flagBadge = item.flag === 1
@@ -453,15 +465,16 @@
       starsHtml += `<span class="${activeClass}" data-star="${s}">★</span>`;
     }
 
+    const safeFileName = escapeHtml(item.file_name);
     card.innerHTML = `
       <div class="photo-thumb-wrap">
-        <img src="${thumbUrl}" alt="${item.file_name}" loading="lazy" onerror="this.onerror=null;this.src='/api/photos/${item.id}/original';">
+        <img src="${thumbUrl}" alt="${safeFileName}" loading="lazy" onerror="this.onerror=null;this.src='/api/photos/${item.id}/original';">
         <div class="card-badges">
           ${flagBadge}
         </div>
       </div>
       <div class="card-info">
-        <div class="card-filename" title="${item.file_name}">${item.file_name}</div>
+        <div class="card-filename" title="${safeFileName}">${safeFileName}</div>
         <div class="card-footer">
           <span>${formatDate(item.date_taken)}</span>
           <div class="star-rating card-stars" data-id="${item.id}">
@@ -514,6 +527,10 @@
         for (let i = low; i <= high; i++) {
           state.selectedIds.add(ids[i]);
         }
+      } else {
+        state.selectedIds.clear();
+        state.selectedIds.add(id);
+        state.lastSelectedId = id;
       }
     } else {
       // Single select
@@ -560,6 +577,7 @@
   }
 
   // --- Inspector Panel ---
+  let currentInspectorFetchId = 0;
   async function updateInspector() {
     if (state.selectedIds.size === 0) {
       dom.inspectorNoSelection.style.display = 'block';
@@ -572,21 +590,26 @@
     const selectedId = Array.from(state.selectedIds)[0];
     let item = state.mediaItems.find(m => m.id === selectedId);
 
+    const fetchId = ++currentInspectorFetchId;
     try {
       // Fetch fresh details from API
-      item = await api.get(`/api/media/${selectedId}`);
+      const freshItem = await api.get(`/api/media/${selectedId}`);
+      if (fetchId !== currentInspectorFetchId) return;
+      if (!state.selectedIds.has(selectedId)) return;
+      item = freshItem;
     } catch (err) {
+      if (fetchId !== currentInspectorFetchId) return;
       console.warn('Could not fetch single media details:', err);
     }
 
-    if (!item) return;
+    if (!item || !state.selectedIds.has(selectedId)) return;
 
     dom.inspectorNoSelection.style.display = 'none';
     dom.inspectorSelection.style.display = 'block';
 
     // Inspector Preview
     const previewUrl = item.content_hash
-      ? `/api/thumbnails/${item.content_hash}/1024`
+      ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/1024`
       : `/api/photos/${item.id}/original`;
     dom.inspectorImg.src = previewUrl;
     dom.inspectorImg.onerror = () => {
@@ -656,7 +679,7 @@
       badge.dataset.category = cat;
       badge.title = `Category: ${tag.category || 'keyword'}`;
       badge.innerHTML = `
-        <span>${tag.name}</span>
+        <span>${escapeHtml(tag.name)}</span>
         <button class="remove-tag" title="Remove tag">&times;</button>
       `;
       badge.querySelector('.remove-tag').addEventListener('click', async () => {
@@ -711,6 +734,7 @@
       if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
       if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
       exitPlacementMode();
+      renderGrid();
     }
   }
 
@@ -857,8 +881,9 @@
       const lat = repItem.exif.latitude;
       const lng = repItem.exif.longitude;
       const count = items.length;
+      const safeFileName = escapeHtml(repItem.file_name);
       const thumbUrl = repItem.content_hash
-        ? `/api/thumbnails/${repItem.content_hash}/256`
+        ? `/api/thumbnails/${encodeURIComponent(repItem.content_hash)}/256`
         : `/api/photos/${repItem.id}/original`;
 
       const isSelected = items.some(i => state.selectedIds.has(i.id));
@@ -868,7 +893,7 @@
         className: 'custom-photo-pin',
         html: `
           <div class="photo-pin-inner ${isSelected ? 'selected' : ''}" data-id="${repItem.id}">
-            <img src="${thumbUrl}" alt="${repItem.file_name}" class="photo-pin-thumb" />
+            <img src="${thumbUrl}" alt="${safeFileName}" class="photo-pin-thumb" />
             ${countBadge}
           </div>
           <div class="photo-pin-pointer"></div>
@@ -916,8 +941,9 @@
       const item = items[activeIndex];
       if (!item) return;
       const exif = item.exif || {};
+      const safeFileName = escapeHtml(item.file_name);
       const thumbUrl = item.content_hash
-        ? `/api/thumbnails/${item.content_hash}/256`
+        ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
         : `/api/photos/${item.id}/original`;
 
       // Update marker activeMediaId and pin thumbnail if applicable
@@ -966,7 +992,7 @@
       const thumbWrap = document.createElement('div');
       thumbWrap.className = 'map-popup-thumb-wrap';
       thumbWrap.innerHTML = `
-        <img src="${thumbUrl}" alt="${item.file_name}" class="map-popup-thumb">
+        <img src="${thumbUrl}" alt="${safeFileName}" class="map-popup-thumb">
         <div class="loupe-hint">🔍 View Loupe</div>
       `;
       thumbWrap.onclick = () => {
@@ -986,7 +1012,7 @@
       }
 
       body.innerHTML = `
-        <div class="map-popup-title" title="${item.file_name}">${item.file_name}</div>
+        <div class="map-popup-title" title="${safeFileName}">${safeFileName}</div>
         <div class="map-popup-meta">
           <span>${formatDateTime(item.date_taken)}</span>
           <span class="map-popup-coords">📍 ${lat}, ${lon}</span>
@@ -1079,6 +1105,9 @@
         for (let i = low; i <= high; i++) {
           state.placementMediaIds.add(ids[i]);
         }
+      } else {
+        state.placementMediaIds.add(id);
+        state.lastUnmappedClickedId = id;
       }
     } else if (isMultiKey) {
       if (state.placementMediaIds.has(id)) {
@@ -1124,15 +1153,16 @@
       const chip = document.createElement('div');
       chip.className = 'unmapped-chip' + (isSelected ? ' active' : '');
       chip.dataset.id = item.id;
+      const safeFileName = escapeHtml(item.file_name);
       const thumbUrl = item.content_hash
-        ? `/api/thumbnails/${item.content_hash}/256`
+        ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
         : `/api/photos/${item.id}/original`;
 
       const checkBadge = isSelected ? '<div class="unmapped-chip-check">✓</div>' : '';
       chip.innerHTML = `
-        <img src="${thumbUrl}" alt="${item.file_name}" loading="lazy">
+        <img src="${thumbUrl}" alt="${safeFileName}" loading="lazy">
         ${checkBadge}
-        <div class="chip-name">${item.file_name}</div>
+        <div class="chip-name">${safeFileName}</div>
       `;
 
       chip.onclick = (e) => {
@@ -1245,7 +1275,7 @@
     const pinIcon = L.divIcon({
       className: 'search-location-pin',
       html: `
-        <div class="search-location-inner" title="${title}">
+        <div class="search-location-inner" title="${escapeHtml(title)}">
           <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/></svg>
           <div class="search-location-pointer"></div>
         </div>
@@ -1273,7 +1303,7 @@
       if (selectedCount === 1) {
         const firstId = Array.from(state.placementMediaIds)[0];
         const item = state.mediaItems.find(m => m.id === firstId);
-        label = item ? `Place "${item.file_name}" Here` : 'Place Selected Photo Here';
+        label = item ? `Place "${escapeHtml(item.file_name)}" Here` : 'Place Selected Photo Here';
       }
       placePhotoBtnHtml = `
         <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;">
@@ -1286,17 +1316,19 @@
       if (targetItem) {
         placePhotoBtnHtml = `
           <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;">
-            📍 Place "${targetItem.file_name}" Here
+            📍 Place "${escapeHtml(targetItem.file_name)}" Here
           </button>
         `;
       }
     }
 
+    const safeTitle = escapeHtml(title);
+    const safeSubtitle = escapeHtml(subtitle);
     container.innerHTML = `
       <div class="map-popup-header" style="margin-bottom: 2px;">
-        <span class="map-popup-title">${title}</span>
+        <span class="map-popup-title">${safeTitle}</span>
       </div>
-      ${subtitle ? `<div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${subtitle}</div>` : ''}
+      ${subtitle ? `<div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeSubtitle}</div>` : ''}
       <div class="map-popup-coords">${latStr}, ${lngStr}</div>
       ${placePhotoBtnHtml}
       <button class="btn btn-xs btn-secondary clear-pin-btn" style="width: 100%; margin-top: 6px;">Remove Pin</button>
@@ -1332,6 +1364,7 @@
     return container;
   }
 
+  let currentMapSearchId = 0;
   async function performMapPlaceSearch(rawQuery) {
     const query = rawQuery.trim();
     if (!query) {
@@ -1339,6 +1372,7 @@
       return;
     }
 
+    const searchId = ++currentMapSearchId;
     if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'block';
     if (dom.mapSearchSpinner) dom.mapSearchSpinner.style.display = 'block';
 
@@ -1382,8 +1416,10 @@
     try {
       const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
       const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (searchId !== currentMapSearchId) return;
       if (resp.ok) {
         const data = await resp.json();
+        if (searchId !== currentMapSearchId) return;
         data.forEach(p => {
           const lat = parseFloat(p.lat);
           const lng = parseFloat(p.lon);
@@ -1398,10 +1434,12 @@
         });
       }
     } catch (e) {
+      if (searchId !== currentMapSearchId) return;
       // Offline fallback: coordinates or catalog items already collected
       console.warn('Nominatim geocoding unavailable or offline:', e);
     }
 
+    if (searchId !== currentMapSearchId) return;
     if (dom.mapSearchSpinner) dom.mapSearchSpinner.style.display = 'none';
     state.mapSearchResults = results;
     state.mapSearchActiveIdx = -1;
@@ -1431,13 +1469,16 @@
         iconSvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
       }
 
+      const safeTitle = escapeHtml(r.title);
+      const safeSubtitle = escapeHtml(r.subtitle);
+      const safeBadge = escapeHtml(r.badge);
       itemEl.innerHTML = `
         <div class="item-icon">${iconSvg}</div>
         <div class="item-text">
-          <div class="item-title">${r.title}</div>
-          ${r.subtitle ? `<div class="item-subtitle">${r.subtitle}</div>` : ''}
+          <div class="item-title">${safeTitle}</div>
+          ${r.subtitle ? `<div class="item-subtitle">${safeSubtitle}</div>` : ''}
         </div>
-        ${r.badge ? `<span class="item-badge">${r.badge}</span>` : ''}
+        ${r.badge ? `<span class="item-badge">${safeBadge}</span>` : ''}
       `;
 
       itemEl.addEventListener('click', () => {
@@ -1490,6 +1531,9 @@
           maxZoom: 19
         }).addTo(state.inspectorMiniMapInstance);
         state.inspectorMiniMarker = L.marker([lat, lon]).addTo(state.inspectorMiniMapInstance);
+        setTimeout(() => {
+          if (state.inspectorMiniMapInstance) state.inspectorMiniMapInstance.invalidateSize();
+        }, 50);
       } else {
         state.inspectorMiniMapInstance.setView([lat, lon], 12);
         state.inspectorMiniMarker.setLatLng([lat, lon]);
@@ -1534,8 +1578,9 @@
 
       const li = document.createElement('li');
       li.className = 'tag-item' + (state.activeTagId === tag.id ? ' active' : '');
+      const safeTagName = escapeHtml(tag.name);
       li.innerHTML = `
-        <span class="tag-name">${tag.name}</span>
+        <span class="tag-name">${safeTagName}</span>
         <span class="count-badge">${tag.media_count || 0}</span>
         <button class="delete-tag-btn" title="Delete tag">&times;</button>
       `;
@@ -1585,9 +1630,10 @@
     state.albums.forEach(album => {
       const li = document.createElement('li');
       li.className = 'menu-item' + (state.activeAlbumId === album.id ? ' active' : '');
+      const safeAlbumName = escapeHtml(album.name);
       li.innerHTML = `
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        <span class="album-name">${album.name}</span>
+        <span class="album-name">${safeAlbumName}</span>
         <span class="count-badge">${album.item_count || 0}</span>
         <button class="delete-album-btn" title="Delete album">&times;</button>
       `;
@@ -1632,7 +1678,7 @@
     if (state.allFolders.size === 0) {
       state.mediaItems.forEach(item => {
         if (item.file_path) {
-          const lastSlash = item.file_path.lastIndexOf('/');
+          const lastSlash = Math.max(item.file_path.lastIndexOf('/'), item.file_path.lastIndexOf('\\'));
           if (lastSlash > 0) {
             state.allFolders.add(item.file_path.substring(0, lastSlash));
           }
@@ -1649,12 +1695,12 @@
     sortedFolders.forEach(folder => {
       const el = document.createElement('div');
       el.className = 'folder-item' + (state.activeFolder === folder ? ' active' : '');
-      const parts = folder.split('/');
+      const parts = folder.split(/[/\\]/);
       const shortName = parts[parts.length - 1] || folder;
 
       el.innerHTML = `
         <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        <span title="${folder}">${shortName}</span>
+        <span title="${escapeHtml(folder)}">${escapeHtml(shortName)}</span>
       `;
       el.addEventListener('click', () => {
         if (state.activeFolder === folder) {
@@ -1759,7 +1805,8 @@
     }
 
     if (state.activeFolder) {
-      const folderName = state.activeFolder.split('/').pop() || state.activeFolder;
+      const parts = state.activeFolder.split(/[/\\]/);
+      const folderName = parts[parts.length - 1] || state.activeFolder;
       label = `Folder: ${folderName}`;
       isFiltered = true;
     } else if (state.searchText) {
@@ -1773,7 +1820,7 @@
       isFiltered = true;
     }
 
-    dom.filterLabel.innerHTML = `<strong>${label}</strong> (${state.totalCount} items)`;
+    dom.filterLabel.innerHTML = `<strong>${escapeHtml(label)}</strong> (${state.totalCount} items)`;
     dom.clearFiltersBtn.style.display = isFiltered ? 'inline-block' : 'none';
   }
 
@@ -1815,6 +1862,38 @@
       if (state.loupeIndex >= 0) updateLoupeControls();
     } catch (err) {
       console.error('Failed to update flag:', err);
+    }
+  }
+
+  async function batchUpdateFlags(ids, flag) {
+    if (!ids || ids.length === 0) return;
+    try {
+      await Promise.all(ids.map(id => api.post(`/api/media/${id}/flag`, { flag })));
+      ids.forEach(id => {
+        const item = state.mediaItems.find(m => m.id === id);
+        if (item) item.flag = flag;
+      });
+      renderGrid();
+      updateInspector();
+      if (state.loupeIndex >= 0) updateLoupeControls();
+    } catch (err) {
+      console.error('Failed to batch update flags:', err);
+    }
+  }
+
+  async function batchUpdateRatings(ids, rating) {
+    if (!ids || ids.length === 0) return;
+    try {
+      await Promise.all(ids.map(id => api.post(`/api/media/${id}/rating`, { rating })));
+      ids.forEach(id => {
+        const item = state.mediaItems.find(m => m.id === id);
+        if (item) item.rating = rating;
+      });
+      renderGrid();
+      updateInspector();
+      if (state.loupeIndex >= 0) updateLoupeControls();
+    } catch (err) {
+      console.error('Failed to batch update ratings:', err);
     }
   }
 
@@ -2020,9 +2099,10 @@
             `Processed: ${processed} / ${total} (Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed})`;
           dom.importCurrentFile.textContent = prog.current_file || '';
 
-          if (!prog.is_running && processed >= total) {
+          if (!prog.is_running) {
             clearInterval(state.importPollInterval);
             state.importPollInterval = null;
+            dom.importProgressBar.style.width = '100%';
             dom.importStatusCounts.textContent = `Completed! ${imported} imported, ${skipped} skipped.`;
             dom.startImportBtn.disabled = false;
             setTimeout(() => {
@@ -2399,15 +2479,11 @@
     });
 
     dom.batchPickBtn.addEventListener('click', async () => {
-      for (const id of state.selectedIds) {
-        await updateItemFlag(id, 1);
-      }
+      await batchUpdateFlags(Array.from(state.selectedIds), 1);
     });
 
     dom.batchRejectBtn.addEventListener('click', async () => {
-      for (const id of state.selectedIds) {
-        await updateItemFlag(id, -1);
-      }
+      await batchUpdateFlags(Array.from(state.selectedIds), -1);
     });
 
     if (dom.batchDeleteBtn) {
@@ -2417,9 +2493,7 @@
     }
 
     renderStarWidget(dom.batchRating, 0, async (newRating) => {
-      for (const id of state.selectedIds) {
-        await updateItemRating(id, newRating);
-      }
+      await batchUpdateRatings(Array.from(state.selectedIds), newRating);
     });
 
     dom.batchAddTagBtn.addEventListener('click', async () => {
@@ -2568,8 +2642,6 @@
           loupeNext();
         } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
           loupePrev();
-        } else if (e.key === 'Escape') {
-          closeLoupe();
         } else if ((e.ctrlKey || e.metaKey) && e.key === '0') {
           e.preventDefault();
           setLoupeZoom(1.0);
@@ -2617,13 +2689,21 @@
           updateBatchBar();
           updateInspector();
         } else if (e.key === 'Escape') {
-          if ((state.placementMediaIds && state.placementMediaIds.size > 0) || state.placementMediaId) {
+          if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
+            closeDeleteMediaModal();
+          } else if (dom.importModal && dom.importModal.style.display === 'flex') {
+            closeImportModal();
+          } else if (dom.newAlbumModal && dom.newAlbumModal.style.display === 'flex') {
+            closeAlbumModal();
+          } else if (dom.newTagModal && dom.newTagModal.style.display === 'flex') {
+            closeTagModal();
+          } else if (dom.addToAlbumModal && dom.addToAlbumModal.style.display === 'flex') {
+            closeAddToAlbumModal();
+          } else if ((state.placementMediaIds && state.placementMediaIds.size > 0) || state.placementMediaId) {
             exitPlacementMode();
           } else if (state.viewMode === 'map' && state.mapInstance && document.querySelector('.leaflet-popup')) {
             state.mapInstance.closePopup();
             if (state.searchMarker) clearMapSearch();
-          } else if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
-            closeDeleteMediaModal();
           } else {
             state.selectedIds.clear();
             document.querySelectorAll('.photo-card.selected').forEach(c => c.classList.remove('selected'));
@@ -2638,17 +2718,17 @@
           }
         } else if (e.key >= '0' && e.key <= '5') {
           const rating = parseInt(e.key, 10);
-          state.selectedIds.forEach(id => updateItemRating(id, rating));
+          batchUpdateRatings(Array.from(state.selectedIds), rating);
         } else if (e.key === 'p' || e.key === 'P') {
-          state.selectedIds.forEach(id => updateItemFlag(id, 1));
+          batchUpdateFlags(Array.from(state.selectedIds), 1);
         } else if (e.key === 'Delete' || e.key === 'Backspace') {
           if (state.selectedIds.size > 0) {
             openDeleteMediaModal(Array.from(state.selectedIds));
           }
         } else if (e.key === 'x' || e.key === 'X') {
-          state.selectedIds.forEach(id => updateItemFlag(id, -1));
+          batchUpdateFlags(Array.from(state.selectedIds), -1);
         } else if (e.key === 'u' || e.key === 'U') {
-          state.selectedIds.forEach(id => updateItemFlag(id, 0));
+          batchUpdateFlags(Array.from(state.selectedIds), 0);
         } else if (e.key === 'm' || e.key === 'M') {
           switchViewMode('map');
         } else if (e.key === 'g' || e.key === 'G') {
@@ -2735,7 +2815,7 @@
 
         if (dom.addToAlbumSelect) {
           dom.addToAlbumSelect.innerHTML = state.albums.map(album =>
-            `<option value="${album.id}">${album.name} (${album.item_count || 0} photos)</option>`
+            `<option value="${album.id}">${escapeHtml(album.name)} (${album.item_count || 0} photos)</option>`
           ).join('');
         }
       }
