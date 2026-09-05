@@ -36,6 +36,7 @@
     mapInstance: null,
     mapMarkers: [],
     searchMarker: null,
+    activeMapMarker: null,
     inspectorMiniMapInstance: null,
     inspectorMiniMarker: null,
     placementMediaId: null,
@@ -320,17 +321,26 @@
       .replace(/'/g, '&#039;');
   }
 
+  function numeric(value) {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'string' && value.trim() === '') return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+
   function formatBytes(bytes) {
-    if (!bytes || bytes === 0) return '0 B';
+    const value = Number(bytes);
+    if (!Number.isFinite(value) || value <= 0) return '0 B';
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    const i = Math.min(Math.floor(Math.log(value) / Math.log(k)), sizes.length - 1);
+    return parseFloat((value / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 
   function formatDate(timestamp) {
-    if (!timestamp || timestamp <= 0) return 'Unknown Date';
-    const d = new Date(timestamp * 1000);
+    const ts = numeric(timestamp);
+    if (ts === null || ts <= 0) return 'Unknown Date';
+    const d = new Date(ts * 1000);
     return d.toLocaleDateString(undefined, {
       timeZone: 'UTC',
       year: 'numeric',
@@ -340,8 +350,9 @@
   }
 
   function formatDateTime(timestamp) {
-    if (!timestamp || timestamp <= 0) return 'Unknown Date';
-    const d = new Date(timestamp * 1000);
+    const ts = numeric(timestamp);
+    if (ts === null || ts <= 0) return 'Unknown Date';
+    const d = new Date(ts * 1000);
     return d.toLocaleString(undefined, {
       timeZone: 'UTC',
       year: 'numeric',
@@ -353,15 +364,15 @@
   }
 
   function hasValidGps(item) {
-    return Boolean(
-      item &&
-      item.exif &&
-      item.exif.has_gps &&
-      typeof item.exif.latitude === 'number' &&
-      typeof item.exif.longitude === 'number' &&
-      !isNaN(item.exif.latitude) &&
-      !isNaN(item.exif.longitude)
-    );
+    if (!item || !item.exif || !item.exif.has_gps) return false;
+    const lat = numeric(item.exif.latitude);
+    const lon = numeric(item.exif.longitude);
+    if (lat !== null && lon !== null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
+      item.exif.latitude = lat;
+      item.exif.longitude = lon;
+      return true;
+    }
+    return false;
   }
 
   function showToast(message, type = 'info') {
@@ -385,9 +396,10 @@
   }
 
   function formatExposureTime(sec) {
-    if (!sec || sec <= 0) return '';
-    if (sec >= 1) return sec.toFixed(1) + 's';
-    const fraction = Math.round(1 / sec);
+    const s = numeric(sec);
+    if (s === null || s <= 0) return '';
+    if (s >= 1) return s.toFixed(1) + 's';
+    const fraction = Math.round(1 / s);
     return `1/${fraction}s`;
   }
 
@@ -1022,19 +1034,27 @@
     if (dom.infoCamera) dom.infoCamera.textContent = cameraStr;
     if (dom.infoLens) dom.infoLens.textContent = exif.lens || '-';
     if (dom.infoExposure) dom.infoExposure.textContent = formatExposureTime(exif.exposure_time) || '-';
-    if (dom.infoAperture) dom.infoAperture.textContent = exif.f_number ? `f/${exif.f_number.toFixed(1)}` : '-';
-    if (dom.infoIso) dom.infoIso.textContent = exif.iso ? `ISO ${exif.iso}` : '-';
-    if (dom.infoFocal) dom.infoFocal.textContent = exif.focal_length ? `${exif.focal_length.toFixed(1)} mm` : '-';
+    const aperture = numeric(exif.f_number);
+    if (dom.infoAperture) dom.infoAperture.textContent = aperture !== null ? `f/${aperture.toFixed(1)}` : '-';
+    if (dom.infoIso) dom.infoIso.textContent = (exif.iso !== undefined && exif.iso !== null && exif.iso !== '') ? `ISO ${exif.iso}` : '-';
+    const focal = numeric(exif.focal_length);
+    if (dom.infoFocal) dom.infoFocal.textContent = focal !== null ? `${focal.toFixed(1)} mm` : '-';
 
     if (dom.infoGps) {
       if (hasValidGps(item)) {
-        const lat = exif.latitude.toFixed(5);
-        const lon = exif.longitude.toFixed(5);
-        dom.infoGps.innerHTML = `
-          <a href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}" target="_blank" rel="noopener" class="btn-link">
-            ${lat}, ${lon} ↗
-          </a>
-        `;
+        const latNum = numeric(exif.latitude);
+        const lonNum = numeric(exif.longitude);
+        if (latNum !== null && lonNum !== null) {
+          const lat = latNum.toFixed(5);
+          const lon = lonNum.toFixed(5);
+          dom.infoGps.innerHTML = `
+            <a href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}" target="_blank" rel="noopener" class="btn-link">
+              ${lat}, ${lon} ↗
+            </a>
+          `;
+        } else {
+          dom.infoGps.textContent = '-';
+        }
       } else {
         dom.infoGps.textContent = '-';
       }
@@ -1254,13 +1274,32 @@
 
       if (closestCluster) {
         closestCluster.items.push(item);
+        const n = closestCluster.items.length;
+        closestCluster.lat = (closestCluster.lat * (n - 1) + lat) / n;
+        closestCluster.lng = (closestCluster.lng * (n - 1) + lng) / n;
+        closestCluster.centerPt = map.project([closestCluster.lat, closestCluster.lng], zoom);
+
+        const newCx = Math.floor(closestCluster.centerPt.x / radius);
+        const newCy = Math.floor(closestCluster.centerPt.y / radius);
+        const newKey = `${newCx},${newCy}`;
+        if (newKey !== closestCluster.gridKey) {
+          const oldBucket = grid.get(closestCluster.gridKey);
+          if (oldBucket) {
+            const idx = oldBucket.indexOf(closestCluster);
+            if (idx !== -1) oldBucket.splice(idx, 1);
+          }
+          closestCluster.gridKey = newKey;
+          if (!grid.has(newKey)) grid.set(newKey, []);
+          grid.get(newKey).push(closestCluster);
+        }
       } else {
         const newCluster = {
           items: [item],
           repItem: item,
           centerPt: pt,
           lat: lat,
-          lng: lng
+          lng: lng,
+          gridKey: `${cx},${cy}`
         };
         clusters.push(newCluster);
         const key = `${cx},${cy}`;
@@ -1277,7 +1316,11 @@
 
     // Preserve open popup media ID across re-clustering on zoom changes
     let openMediaId = null;
-    if (state.mapMarkers && state.mapMarkers.length > 0) {
+    if (state.activeMapMarker && state.activeMapMarker.getPopup && state.activeMapMarker.getPopup() && state.activeMapMarker.getPopup().isOpen()) {
+      openMediaId = state.activeMapMarker.activeMediaId ||
+        (state.activeMapMarker.clusterItems && state.activeMapMarker.clusterItems[0] ? state.activeMapMarker.clusterItems[0].id : null);
+    }
+    if (!openMediaId && state.mapMarkers && state.mapMarkers.length > 0) {
       for (const m of state.mapMarkers) {
         if (m.getPopup && m.getPopup() && m.getPopup().isOpen() && m.clusterItems) {
           openMediaId = m.activeMediaId || (m.clusterItems[0] ? m.clusterItems[0].id : null);
@@ -1318,8 +1361,8 @@
       const repItem = (openMediaId && items.find(i => i.id === openMediaId)) ||
                       items.find(i => state.selectedIds.has(i.id)) ||
                       cluster.repItem || items[0];
-      const lat = repItem.exif.latitude;
-      const lng = repItem.exif.longitude;
+      const lat = cluster.lat !== undefined ? cluster.lat : repItem.exif.latitude;
+      const lng = cluster.lng !== undefined ? cluster.lng : repItem.exif.longitude;
       const count = items.length;
       const safeFileName = escapeHtml(repItem.file_name);
       const thumbUrl = repItem.content_hash
@@ -1347,9 +1390,17 @@
       marker.clusterItems = items;
       marker.activeMediaId = repItem.id;
       marker.bindPopup(() => createMapPopupElement(items, marker.activeMediaId), { maxWidth: 280, autoPan: true, autoPanPadding: [80, 80] });
+      marker.on('popupopen', () => {
+        state.activeMapMarker = marker;
+      });
+      marker.on('popupclose', () => {
+        if (state.activeMapMarker === marker) {
+          state.activeMapMarker = null;
+        }
+      });
       marker.on('click', () => {
-        marker.activeMediaId = repItem.id;
-        handleCardSelection(repItem.id, { shiftKey: false, ctrlKey: false, metaKey: false });
+        const id = marker.activeMediaId || repItem.id;
+        handleCardSelection(id, { shiftKey: false, ctrlKey: false, metaKey: false });
       });
       state.mapMarkers.push(marker);
     });
@@ -1358,8 +1409,13 @@
       const targetMarker = state.mapMarkers.find(m => m.clusterItems && m.clusterItems.some(i => i.id === openMediaId));
       if (targetMarker) {
         targetMarker.activeMediaId = openMediaId;
+        state.activeMapMarker = targetMarker;
         targetMarker.openPopup();
+      } else {
+        state.activeMapMarker = null;
       }
+    } else {
+      state.activeMapMarker = null;
     }
   }
 
@@ -1378,8 +1434,26 @@
 
     function renderActive() {
       container.innerHTML = '';
-      const item = items[activeIndex];
-      if (!item) return;
+      if (activeIndex < 0 || activeIndex >= items.length) {
+        activeIndex = 0;
+      }
+      const rawItem = items[activeIndex];
+      if (!rawItem) return;
+
+      const liveItem = state.mediaItems.find(m => m.id === rawItem.id);
+      if (!liveItem) {
+        const nextValidIdx = items.findIndex(i => state.mediaItems.some(m => m.id === i.id));
+        if (nextValidIdx !== -1) {
+          activeIndex = nextValidIdx;
+          renderActive();
+        } else {
+          const marker = state.mapMarkers.find(m => m.clusterItems === items) || state.activeMapMarker;
+          if (marker && marker.closePopup) marker.closePopup();
+        }
+        return;
+      }
+      const item = liveItem;
+
       container.dataset.mediaId = item.id;
       container.renderActive = renderActive;
       const exif = item.exif || {};
@@ -1389,7 +1463,7 @@
         : `/api/photos/${item.id}/original`;
 
       // Update marker activeMediaId and pin thumbnail if applicable
-      const marker = state.mapMarkers.find(m => m.clusterItems === items);
+      const marker = state.mapMarkers.find(m => m.clusterItems === items) || state.activeMapMarker;
       if (marker) {
         marker.activeMediaId = item.id;
         const el = marker.getElement();
@@ -1397,7 +1471,7 @@
           const img = el.querySelector('.photo-pin-thumb');
           if (img) {
             img.src = thumbUrl;
-            img.alt = item.file_name;
+            img.alt = item.file_name || '';
           }
         }
       }
@@ -1413,8 +1487,11 @@
         nav.querySelector('#popPrevBtn').onclick = (e) => {
           e.stopPropagation();
           activeIndex = (activeIndex - 1 + items.length) % items.length;
-          renderActive();
           const curItem = items[activeIndex];
+          if (marker && curItem) {
+            marker.activeMediaId = curItem.id;
+          }
+          renderActive();
           if (curItem) {
             handleCardSelection(curItem.id, { shiftKey: false, ctrlKey: false, metaKey: false });
           }
@@ -1422,8 +1499,11 @@
         nav.querySelector('#popNextBtn').onclick = (e) => {
           e.stopPropagation();
           activeIndex = (activeIndex + 1) % items.length;
-          renderActive();
           const curItem = items[activeIndex];
+          if (marker && curItem) {
+            marker.activeMediaId = curItem.id;
+          }
+          renderActive();
           if (curItem) {
             handleCardSelection(curItem.id, { shiftKey: false, ctrlKey: false, metaKey: false });
           }
@@ -1444,8 +1524,10 @@
 
       const body = document.createElement('div');
       body.className = 'map-popup-body';
-      const lat = exif.latitude.toFixed(5);
-      const lon = exif.longitude.toFixed(5);
+      const latNum = numeric(exif.latitude);
+      const lonNum = numeric(exif.longitude);
+      const lat = latNum !== null ? latNum.toFixed(5) : '-';
+      const lon = lonNum !== null ? lonNum.toFixed(5) : '-';
 
       let starsHtml = '';
       for (let s = 1; s <= 5; s++) {
@@ -1473,10 +1555,12 @@
       body.querySelectorAll('.map-popup-rating span').forEach(starEl => {
         starEl.onclick = (e) => {
           e.stopPropagation();
+          const curItem = state.mediaItems.find(m => m.id === item.id);
+          if (!curItem) return;
           const star = parseInt(starEl.dataset.star, 10);
-          const newRating = item.rating === star ? 0 : star;
-          updateItemRating(item.id, newRating);
-          item.rating = newRating;
+          const newRating = curItem.rating === star ? 0 : star;
+          updateItemRating(curItem.id, newRating);
+          curItem.rating = newRating;
           renderActive();
         };
       });
@@ -1485,9 +1569,11 @@
       if (pickBtn) {
         pickBtn.onclick = (e) => {
           e.stopPropagation();
-          const newFlag = item.flag === 1 ? 0 : 1;
-          updateItemFlag(item.id, newFlag);
-          item.flag = newFlag;
+          const curItem = state.mediaItems.find(m => m.id === item.id);
+          if (!curItem) return;
+          const newFlag = curItem.flag === 1 ? 0 : 1;
+          updateItemFlag(curItem.id, newFlag);
+          curItem.flag = newFlag;
           renderActive();
         };
       }
@@ -1496,9 +1582,11 @@
       if (rejectBtn) {
         rejectBtn.onclick = (e) => {
           e.stopPropagation();
-          const newFlag = item.flag === -1 ? 0 : -1;
-          updateItemFlag(item.id, newFlag);
-          item.flag = newFlag;
+          const curItem = state.mediaItems.find(m => m.id === item.id);
+          if (!curItem) return;
+          const newFlag = curItem.flag === -1 ? 0 : -1;
+          updateItemFlag(curItem.id, newFlag);
+          curItem.flag = newFlag;
           renderActive();
         };
       }
@@ -1757,8 +1845,10 @@
     const container = document.createElement('div');
     container.className = 'map-popup-card search-result-popup';
 
-    const latStr = typeof lat === 'number' ? lat.toFixed(5) : lat;
-    const lngStr = typeof lng === 'number' ? lng.toFixed(5) : lng;
+    const latNum = numeric(lat);
+    const lngNum = numeric(lng);
+    const latStr = latNum !== null ? latNum.toFixed(5) : (lat || '-');
+    const lngStr = lngNum !== null ? lngNum.toFixed(5) : (lng || '-');
 
     let placePhotoBtnHtml = '';
     const selectedCount = state.placementMediaIds.size;
@@ -1846,9 +1936,9 @@
     // 1. Direct coordinates parsing: e.g. "48.8584, 2.2945" or "-33.8688 151.2093"
     const coordMatch = query.match(/^([+-]?\d+(?:\.\d+)?)[,\s]+([+-]?\d+(?:\.\d+)?)$/);
     if (coordMatch) {
-      const lat = parseFloat(coordMatch[1]);
-      const lng = parseFloat(coordMatch[2]);
-      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      const lat = numeric(coordMatch[1]);
+      const lng = numeric(coordMatch[2]);
+      if (lat !== null && lng !== null && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
         results.push({
           title: `Coordinates: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
           subtitle: 'Custom GPS Coordinates',
@@ -1864,12 +1954,15 @@
     const lowerQuery = query.toLowerCase();
     state.mediaItems.forEach(item => {
       if (hasValidGps(item)) {
-        if (item.file_name.toLowerCase().includes(lowerQuery)) {
+        const fileName = String(item.file_name || '');
+        if (fileName.toLowerCase().includes(lowerQuery)) {
+          const lat = numeric(item.exif.latitude);
+          const lng = numeric(item.exif.longitude);
           results.push({
-            title: item.file_name,
-            subtitle: `In Catalog · ${item.exif.latitude.toFixed(4)}, ${item.exif.longitude.toFixed(4)}`,
-            lat: item.exif.latitude,
-            lng: item.exif.longitude,
+            title: fileName,
+            subtitle: `In Catalog · ${lat !== null ? lat.toFixed(4) : '-'}, ${lng !== null ? lng.toFixed(4) : '-'}`,
+            lat: lat !== null ? lat : item.exif.latitude,
+            lng: lng !== null ? lng : item.exif.longitude,
             type: 'catalog',
             badge: 'Photo'
           });
@@ -2357,7 +2450,16 @@
   }
 
   function patchOpenMapPopup(id) {
-    const popupCard = document.querySelector('.map-popup-card');
+    let popupCard = null;
+    if (state.activeMapMarker && state.activeMapMarker.getPopup && state.activeMapMarker.getPopup() && state.activeMapMarker.getPopup().isOpen()) {
+      const popupEl = state.activeMapMarker.getPopup().getElement();
+      if (popupEl) {
+        popupCard = popupEl.querySelector('.map-popup-card:not(.search-result-popup)');
+      }
+    }
+    if (!popupCard) {
+      popupCard = document.querySelector('.map-popup-card:not(.search-result-popup)');
+    }
     if (popupCard && popupCard.dataset.mediaId == id && typeof popupCard.renderActive === 'function') {
       popupCard.renderActive();
     }
@@ -2944,14 +3046,18 @@
         if (!item || !item.exif || !item.exif.has_gps) return;
         switchViewMode('map');
         if (state.mapInstance) {
-          state.mapInstance.flyTo([item.exif.latitude, item.exif.longitude], 14, { duration: 0.5 });
+          const targetLat = numeric(item.exif.latitude);
+          const targetLng = numeric(item.exif.longitude);
+          if (targetLat === null || targetLng === null) return;
+          state.mapInstance.flyTo([targetLat, targetLng], 14, { duration: 0.5 });
           setTimeout(() => {
-            const marker = state.mapMarkers.find(m => {
-              const ll = m.getLatLng();
-              return Math.abs(ll.lat - item.exif.latitude) < 0.0001 &&
-                     Math.abs(ll.lng - item.exif.longitude) < 0.0001;
-            });
-            if (marker) marker.openPopup();
+            const marker = state.mapMarkers.find(marker =>
+              marker.clusterItems?.some(candidate => candidate.id === item.id)
+            );
+            if (marker) {
+              marker.activeMediaId = item.id;
+              marker.openPopup();
+            }
           }, 300);
         }
       });
@@ -3931,6 +4037,7 @@
         }
 
         const idsToDelete = [...pendingDeleteMediaIds];
+        const failedIds = [];
         try {
           await api.post('/api/media/batch-delete', { ids: idsToDelete });
         } catch (e) {
@@ -3939,19 +4046,26 @@
               await api.del(`/api/media/${id}`);
             } catch (err) {
               console.warn('Failed to delete media', id, err);
+              failedIds.push(id);
             }
           }
         }
 
+        if (failedIds.length > 0) {
+          showToast(`${failedIds.length} photos could not be deleted`, 'error');
+        }
+
+        const actuallyDeletedIds = idsToDelete.filter(id => !failedIds.includes(id));
+
         // If loupe was viewing one of the deleted items, close loupe
         if (state.loupeIndex >= 0) {
           const loupeItem = state.mediaItems[state.loupeIndex];
-          if (loupeItem && idsToDelete.includes(loupeItem.id)) {
+          if (loupeItem && actuallyDeletedIds.includes(loupeItem.id)) {
             closeLoupe();
           }
         }
 
-        idsToDelete.forEach(id => state.selectedIds.delete(id));
+        actuallyDeletedIds.forEach(id => state.selectedIds.delete(id));
         closeDeleteMediaModal();
 
         await loadMedia();
@@ -4180,6 +4294,10 @@
   window._imagineApp = {
     state,
     dom,
+    numeric,
+    formatBytes,
+    clusterGpsItems,
+    patchOpenMapPopup,
     buildMediaParams,
     loadMedia,
     loadMoreMedia,
