@@ -23,10 +23,20 @@ public:
     static ImageBuffer rotate(const ImageBuffer& src, int orientation);
 
     static Status saveJpeg(const ImageBuffer& img, const std::string& destPath, int quality = 85);
+    static Status saveJpegFast(const ImageBuffer& img, const std::string& destPath, int quality = 85);
     static Status savePng(const ImageBuffer& img, const std::string& destPath);
 
     static Result<std::pair<int, int>> getImageDimensions(const std::string& filePath);
     static Result<std::pair<int, int>> getImageDimensionsFromMemory(const uint8_t* data, size_t size);
+
+    static bool isJpeg(const uint8_t* data, size_t size);
+    static Result<ImageBuffer> loadImageFromMemoryTurboJpeg(
+        const uint8_t* data,
+        size_t size,
+        int scaleDenom = 1,
+        int* outOrigW = nullptr,
+        int* outOrigH = nullptr
+    );
 };
 
 } // namespace imagine::thumbnail

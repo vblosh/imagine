@@ -116,14 +116,14 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnails(
         largeImg = img;
     }
 
-    Status saveLarge = Generator::saveJpeg(largeImg, largePath);
+    Status saveLarge = Generator::saveJpegFast(largeImg, largePath);
     if (!saveLarge.isOk()) return saveLarge;
 
     // Fast downscale from largeImg to small thumbnail
     auto resSmall = Generator::resize(largeImg, SmallSize);
     if (!resSmall.isOk()) return resSmall.status();
 
-    Status saveSmall = Generator::saveJpeg(resSmall.value(), smallPath);
+    Status saveSmall = Generator::saveJpegFast(resSmall.value(), smallPath);
     if (!saveSmall.isOk()) return saveSmall;
 
     return std::make_pair(smallPath, largePath);
@@ -154,14 +154,31 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemor
         return std::make_pair(smallPath, largePath);
     }
 
-    auto loadRes = Generator::loadImageFromMemory(data, size);
-    if (!loadRes.isOk()) {
-        return loadRes.status();
-    }
+    ImageBuffer img;
+    int origW = 0, origH = 0;
 
-    auto img = std::move(loadRes.value());
-    if (outWidth) *outWidth = img.width;
-    if (outHeight) *outHeight = img.height;
+#if IMAGINE_HAS_TURBOJPEG
+    if (Generator::isJpeg(data, size)) {
+        // scaleDenom = 0 triggers adaptive 1/2 IDCT decode when max(w,h) >= 2048,
+        // while populating authentic origW and origH
+        auto tjRes = Generator::loadImageFromMemoryTurboJpeg(data, size, 0, &origW, &origH);
+        if (tjRes.isOk()) {
+            img = std::move(tjRes.value());
+            if (outWidth) *outWidth = origW;
+            if (outHeight) *outHeight = origH;
+        }
+    }
+#endif
+
+    if (img.data.empty()) {
+        auto loadRes = Generator::loadImageFromMemory(data, size);
+        if (!loadRes.isOk()) {
+            return loadRes.status();
+        }
+        img = std::move(loadRes.value());
+        if (outWidth) *outWidth = img.width;
+        if (outHeight) *outHeight = img.height;
+    }
 
     if (orientation > 1) {
         img = Generator::rotate(img, orientation);
@@ -177,14 +194,14 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemor
         largeImg = img;
     }
 
-    Status saveLarge = Generator::saveJpeg(largeImg, largePath);
+    Status saveLarge = Generator::saveJpegFast(largeImg, largePath);
     if (!saveLarge.isOk()) return saveLarge;
 
     // Fast downscale from largeImg to small thumbnail
     auto resSmall = Generator::resize(largeImg, SmallSize);
     if (!resSmall.isOk()) return resSmall.status();
 
-    Status saveSmall = Generator::saveJpeg(resSmall.value(), smallPath);
+    Status saveSmall = Generator::saveJpegFast(resSmall.value(), smallPath);
     if (!saveSmall.isOk()) return saveSmall;
 
     return std::make_pair(smallPath, largePath);

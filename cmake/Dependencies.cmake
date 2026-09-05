@@ -62,6 +62,27 @@ FetchContent_MakeAvailable(httplib)
 # OpenSSL for cryptographic SHA-256
 find_package(OpenSSL REQUIRED)
 
+# TurboJPEG (libjpeg-turbo) accelerated decoding and compression
+option(ENABLE_TURBOJPEG "Enable libjpeg-turbo hardware-accelerated decoding and thumbnailing" ON)
+if (ENABLE_TURBOJPEG)
+    find_path(TURBOJPEG_INCLUDE_DIR NAMES turbojpeg.h PATHS "$ENV{HOME}/.local/include" /usr/local/include /usr/include)
+    find_library(TURBOJPEG_LIBRARY NAMES turbojpeg PATHS "$ENV{HOME}/.local/lib" /usr/local/lib /usr/lib/x86_64-linux-gnu /usr/lib)
+
+    if (TURBOJPEG_INCLUDE_DIR AND TURBOJPEG_LIBRARY)
+        message(STATUS "Found TurboJPEG: ${TURBOJPEG_LIBRARY} (headers: ${TURBOJPEG_INCLUDE_DIR})")
+        set(TURBOJPEG_FOUND TRUE)
+        add_library(turbojpeg_lib UNKNOWN IMPORTED)
+        set_target_properties(turbojpeg_lib PROPERTIES
+            IMPORTED_LOCATION "${TURBOJPEG_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${TURBOJPEG_INCLUDE_DIR}"
+            INTERFACE_COMPILE_DEFINITIONS "IMAGINE_HAS_TURBOJPEG=1"
+        )
+    else()
+        message(STATUS "TurboJPEG not found. Falling back to STB Image.")
+        set(TURBOJPEG_FOUND FALSE)
+    endif()
+endif()
+
 # GoogleTest
 find_package(GTest QUIET)
 if (NOT GTest_FOUND)

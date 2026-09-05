@@ -283,3 +283,84 @@ TEST_F(ThumbnailTest, GetImageDimensionsFromMemoryAndDualThumbnailsFromMemory) {
     EXPECT_EQ(outH2, 200);
     EXPECT_EQ(dualRes.value().first, dualRes2.value().first);
 }
+
+TEST_F(ThumbnailTest, TurboJpegAccelerationAndIdctScaling) {
+    // 1. Test isJpeg helper
+    std::ifstream ifs(testImgPath, std::ios::binary);
+    ASSERT_TRUE(ifs.is_open());
+    std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+
+    EXPECT_TRUE(Generator::isJpeg(buffer.data(), buffer.size()));
+    uint8_t notJpeg[] = {0x89, 'P', 'N', 'G'};
+    EXPECT_FALSE(Generator::isJpeg(notJpeg, sizeof(notJpeg)));
+    EXPECT_FALSE(Generator::isJpeg(nullptr, 0));
+
+    // 2. Test loadImageFromMemoryTurboJpeg
+    int origW = 0, origH = 0;
+    auto fullRes = Generator::loadImageFromMemoryTurboJpeg(buffer.data(), buffer.size(), 1, &origW, &origH);
+    ASSERT_TRUE(fullRes.isOk());
+    EXPECT_EQ(origW, 400);
+    EXPECT_EQ(origH, 200);
+    EXPECT_EQ(fullRes.value().width, 400);
+    EXPECT_EQ(fullRes.value().height, 200);
+
+    // 1/2 IDCT scale decode
+    int origW2 = 0, origH2 = 0;
+    auto halfRes = Generator::loadImageFromMemoryTurboJpeg(buffer.data(), buffer.size(), 2, &origW2, &origH2);
+    ASSERT_TRUE(halfRes.isOk());
+    EXPECT_EQ(origW2, 400);
+    EXPECT_EQ(origH2, 200);
+#if IMAGINE_HAS_TURBOJPEG
+    EXPECT_EQ(halfRes.value().width, 200);
+    EXPECT_EQ(halfRes.value().height, 100);
+#endif
+
+    // 3. Test saveJpegFast
+    std::string fastJpegPath = (testDir / "fast_saved.jpg").string();
+    Status saveSt = Generator::saveJpegFast(fullRes.value(), fastJpegPath, 90);
+    EXPECT_TRUE(saveSt.isOk());
+    EXPECT_TRUE(std::filesystem::exists(fastJpegPath));
+
+    auto reloadRes = Generator::loadImage(fastJpegPath);
+    ASSERT_TRUE(reloadRes.isOk());
+    EXPECT_EQ(reloadRes.value().width, 400);
+    EXPECT_EQ(reloadRes.value().height, 200);
+
+    // 4. Test 1/2 IDCT adaptive branch with large image (>= 2048px)
+    ImageBuffer largeSource;
+    largeSource.width = 2400;
+    largeSource.height = 1600;
+    largeSource.channels = 3;
+    largeSource.data.resize(2400 * 1600 * 3, 128);
+
+    std::string largeSourcePath = (testDir / "large_source.jpg").string();
+    ASSERT_TRUE(Generator::saveJpegFast(largeSource, largeSourcePath, 80).isOk());
+
+    std::ifstream largeIfs(largeSourcePath, std::ios::binary);
+    std::vector<uint8_t> largeBuf((std::istreambuf_iterator<char>(largeIfs)), std::istreambuf_iterator<char>());
+
+    std::string cacheDir = (testDir / "large_cache").string();
+    Cache cache(cacheDir);
+    std::string largeHash = "large_image_hash_1234567890abcdef";
+    int detectedW = 0, detectedH = 0;
+
+    auto dualRes = cache.ensureDualThumbnailsFromMemory(
+        largeBuf.data(), largeBuf.size(), largeHash, 1, &detectedW, &detectedH
+    );
+    ASSERT_TRUE(dualRes.isOk());
+    EXPECT_EQ(detectedW, 2400);
+    EXPECT_EQ(detectedH, 1600);
+    EXPECT_TRUE(std::filesystem::exists(dualRes.value().first));
+    EXPECT_TRUE(std::filesystem::exists(dualRes.value().second));
+
+    // Verify thumbnail file dimensions
+    auto smallDim = Generator::getImageDimensions(dualRes.value().first);
+    ASSERT_TRUE(smallDim.isOk());
+    EXPECT_LE(smallDim.value().first, 256);
+    EXPECT_LE(smallDim.value().second, 256);
+
+    auto largeDim = Generator::getImageDimensions(dualRes.value().second);
+    ASSERT_TRUE(largeDim.isOk());
+    EXPECT_LE(largeDim.value().first, 1024);
+    EXPECT_LE(largeDim.value().second, 1024);
+}

@@ -72,6 +72,7 @@ target_link_libraries(imagine_lib
         httplib::httplib
         OpenSSL::Crypto
         pthread
+        $<$<BOOL:${TURBOJPEG_FOUND}>:turbojpeg_lib>
 )
 
 # CLI Application
