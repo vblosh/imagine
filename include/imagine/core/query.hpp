@@ -23,6 +23,8 @@ struct QueryCriteria {
     int64_t date_from{0};
     int64_t date_to{0};
     std::string search_text;
+    std::string folder;
+    std::string tag_category;
     std::string sort_by{"date_taken"};
     bool sort_descending{true};
     int32_t limit{100};
@@ -65,6 +67,8 @@ public:
     QueryBuilder& camera(std::string make, std::string model = "");
     QueryBuilder& dateRange(int64_t from, int64_t to);
     QueryBuilder& search(std::string text);
+    QueryBuilder& folder(std::string folder);
+    QueryBuilder& tagCategory(std::string tagCategory);
     QueryBuilder& sort(std::string sortBy, bool descending = true);
     QueryBuilder& paginate(int32_t limit, int32_t offset = 0);
     QueryBuilder& hasGps(bool hasGps = true);

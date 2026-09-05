@@ -10,6 +10,8 @@ void to_json(nlohmann::json& j, const QueryCriteria& c) {
         {"date_from", c.date_from},
         {"date_to", c.date_to},
         {"search_text", c.search_text},
+        {"folder", c.folder},
+        {"tag_category", c.tag_category},
         {"sort_by", c.sort_by},
         {"sort_descending", c.sort_descending},
         {"limit", c.limit},
@@ -60,6 +62,12 @@ void from_json(const nlohmann::json& j, QueryCriteria& c) {
     }
     if (j.contains("search_text") && j["search_text"].is_string()) {
         c.search_text = j["search_text"].get<std::string>();
+    }
+    if (j.contains("folder") && j["folder"].is_string()) {
+        c.folder = j["folder"].get<std::string>();
+    }
+    if (j.contains("tag_category") && j["tag_category"].is_string()) {
+        c.tag_category = j["tag_category"].get<std::string>();
     }
     if (j.contains("sort_by") && j["sort_by"].is_string()) {
         c.sort_by = j["sort_by"].get<std::string>();
@@ -176,6 +184,16 @@ QueryBuilder& QueryBuilder::search(std::string text) {
     return *this;
 }
 
+QueryBuilder& QueryBuilder::folder(std::string folder) {
+    criteria_.folder = std::move(folder);
+    return *this;
+}
+
+QueryBuilder& QueryBuilder::tagCategory(std::string tagCategory) {
+    criteria_.tag_category = std::move(tagCategory);
+    return *this;
+}
+
 QueryBuilder& QueryBuilder::sort(std::string sortBy, bool descending) {
     criteria_.sort_by = std::move(sortBy);
     criteria_.sort_descending = descending;
@@ -276,6 +294,21 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
         params.push_back(pattern);
         params.push_back(pattern);
         params.push_back(pattern);
+    }
+
+    if (!criteria_.folder.empty()) {
+        std::string folder = criteria_.folder;
+        while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\')) {
+            folder.pop_back();
+        }
+        clauses.push_back("(file_path LIKE ? OR file_path LIKE ?)");
+        params.push_back(folder + "/%");
+        params.push_back(folder + "\\%");
+    }
+
+    if (!criteria_.tag_category.empty()) {
+        clauses.push_back("id IN (SELECT media_id FROM media_tags JOIN tags ON media_tags.tag_id = tags.id WHERE LOWER(tags.category) = LOWER(?))");
+        params.push_back(criteria_.tag_category);
     }
 
     std::string whereClause;

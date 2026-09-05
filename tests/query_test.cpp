@@ -366,3 +366,44 @@ TEST_F(QueryTest, QueryByGpsAndBoundingBox) {
     EXPECT_EQ(boxRes.value().total_count, 1);
     EXPECT_EQ(boxRes.value().items[0].id, id1);
 }
+
+TEST_F(QueryTest, QueryByFolder) {
+    MediaItem item4;
+    item4.file_path = "/photos/nature/img4.jpg";
+    item4.file_name = "img4.jpg";
+    item4.file_size = 4000;
+    item4.file_modified_time = 4000;
+    item4.content_hash = "hash4";
+    item4.date_taken = 4000;
+    db.insertMedia(item4);
+
+    QueryCriteria critFolder;
+    critFolder.folder = "/photos/2026";
+    auto res = QueryBuilder::execute(db, critFolder);
+    ASSERT_TRUE(res.isOk());
+    EXPECT_EQ(res.value().total_count, 3);
+
+    critFolder.folder = "/photos/nature";
+    auto res2 = QueryBuilder::execute(db, critFolder);
+    ASSERT_TRUE(res2.isOk());
+    EXPECT_EQ(res2.value().total_count, 1);
+}
+
+TEST_F(QueryTest, QueryByTagCategory) {
+    TagId tagAlice = db.createOrGetTag("Alice", "people").value();
+    ASSERT_TRUE(db.addTagToMedia(id3, tagAlice).isOk());
+
+    QueryCriteria critPeople;
+    critPeople.tag_category = "people";
+    auto resPeople = QueryBuilder::execute(db, critPeople);
+    ASSERT_TRUE(resPeople.isOk());
+    EXPECT_EQ(resPeople.value().total_count, 1);
+    EXPECT_EQ(resPeople.value().items[0].id, id3);
+
+    QueryCriteria critKeyword;
+    critKeyword.tag_category = "keyword";
+    auto resKeyword = QueryBuilder::execute(db, critKeyword);
+    ASSERT_TRUE(resKeyword.isOk());
+    EXPECT_EQ(resKeyword.value().total_count, 2);
+}
+

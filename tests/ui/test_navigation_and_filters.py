@@ -56,17 +56,20 @@ def test_view_tabs_category_filtering(server, page: Page):
     # 1. Switch to People tab
     page.locator('.tab-btn[data-tab="people"]').click()
     expect(page.locator('.tab-btn[data-tab="people"]')).to_have_class(re.compile(r"\bactive\b"))
-    # In app.js, switching to People selects the first tag in People ("Alice")
-    # Alice is tagged on birthday.bmp
-    expect(cards).to_have_count(1)
-    expect(cards.first.locator(".card-filename")).to_have_text("birthday.bmp")
+    # People category contains both birthday.bmp (Alice) and portrait.bmp (Bob)
+    expect(cards).to_have_count(2)
+    people_names = [cards.nth(0).locator(".card-filename").text_content(), cards.nth(1).locator(".card-filename").text_content()]
+    assert "birthday.bmp" in people_names
+    assert "portrait.bmp" in people_names
 
     # 2. Switch to Places tab
     page.locator('.tab-btn[data-tab="places"]').click()
     expect(page.locator('.tab-btn[data-tab="places"]')).to_have_class(re.compile(r"\bactive\b"))
-    # First places tag is "Alps", tagged on mountain.bmp
-    expect(cards).to_have_count(1)
-    expect(cards.first.locator(".card-filename")).to_have_text("mountain.bmp")
+    # Places category contains both mountain.bmp (Alps) and beach.bmp (Beach)
+    expect(cards).to_have_count(2)
+    places_names = [cards.nth(0).locator(".card-filename").text_content(), cards.nth(1).locator(".card-filename").text_content()]
+    assert "mountain.bmp" in places_names
+    assert "beach.bmp" in places_names
 
     # 3. Switch to Events tab
     page.locator('.tab-btn[data-tab="events"]').click()

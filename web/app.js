@@ -44,7 +44,10 @@
     unmappedTrayOpen: false,
     mapSearchResults: [],
     mapSearchActiveIdx: -1,
-    mapSearchDebounceTimer: null
+    mapSearchDebounceTimer: null,
+    mediaLimit: 500,
+    mediaOffset: 0,
+    isLoadingMore: false
   };
 
   // --- API Helpers ---
@@ -290,6 +293,7 @@
     if (!timestamp || timestamp <= 0) return 'Unknown Date';
     const d = new Date(timestamp * 1000);
     return d.toLocaleDateString(undefined, {
+      timeZone: 'UTC',
       year: 'numeric',
       month: 'short',
       day: 'numeric'
@@ -300,12 +304,45 @@
     if (!timestamp || timestamp <= 0) return 'Unknown Date';
     const d = new Date(timestamp * 1000);
     return d.toLocaleString(undefined, {
+      timeZone: 'UTC',
       year: 'numeric',
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     });
+  }
+
+  function hasValidGps(item) {
+    return Boolean(
+      item &&
+      item.exif &&
+      item.exif.has_gps &&
+      typeof item.exif.latitude === 'number' &&
+      typeof item.exif.longitude === 'number' &&
+      !isNaN(item.exif.latitude) &&
+      !isNaN(item.exif.longitude)
+    );
+  }
+
+  function showToast(message, type = 'info') {
+    let container = document.getElementById('toastContainer');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'toastContainer';
+      container.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.style.cssText = 'background:rgba(30,30,30,0.95);color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.3);pointer-events:auto;border-left:4px solid ' + (type === 'error' ? '#e74c3c' : '#3498db');
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+      toast.style.transition = 'opacity 0.3s';
+      toast.style.opacity = '0';
+      setTimeout(() => toast.remove(), 300);
+    }, 4000);
   }
 
   function formatExposureTime(sec) {
@@ -325,17 +362,25 @@
 
   // --- Load Media & Catalog Data ---
   let currentLoadMediaId = 0;
-  async function loadMedia() {
+  async function loadMedia(append = false) {
     const fetchId = ++currentLoadMediaId;
     try {
+      if (!append) {
+        state.mediaOffset = 0;
+      }
       const params = {
-        limit: 500,
-        offset: 0,
+        limit: state.mediaLimit,
+        offset: state.mediaOffset,
         sort: `${state.sortBy}-${state.sortDesc ? 'desc' : 'asc'}`
       };
 
       if (state.searchText) params.search = state.searchText;
-      if (state.activeTagId) params.tag_id = state.activeTagId;
+      if (state.activeFolder) params.folder = state.activeFolder;
+      if (state.activeTagId) {
+        params.tag_id = state.activeTagId;
+      } else if (state.activeTab && state.activeTab !== 'media') {
+        params.tag_category = state.activeTab.toLowerCase();
+      }
       if (state.activeAlbumId) params.album_id = state.activeAlbumId;
 
       // Nav filters (picks, rejects, unrated)
@@ -346,19 +391,24 @@
         params.max_rating = 0;
       }
 
-      // Timeline filter
+      // Timeline filter in UTC
       if (state.activeTimelinePeriod) {
         const { year, month } = state.activeTimelinePeriod;
-        const start = new Date(year, month - 1, 1).getTime() / 1000;
-        const end = new Date(year, month, 0, 23, 59, 59).getTime() / 1000;
+        const start = Date.UTC(year, month - 1, 1, 0, 0, 0) / 1000;
+        const end = Date.UTC(year, month, 1, 0, 0, 0) / 1000 - 1;
         params.date_from = Math.floor(start);
         params.date_to = Math.floor(end);
       }
 
       const res = await api.get('/api/media', params);
       if (fetchId !== currentLoadMediaId) return;
-      state.mediaItems = res.items || [];
+      const items = res.items || [];
       state.totalCount = res.total || 0;
+      if (append) {
+        state.mediaItems = state.mediaItems.concat(items);
+      } else {
+        state.mediaItems = items;
+      }
 
       // Track all discovered folders across loads so filtering doesn't remove folders from sidebar
       state.mediaItems.forEach(item => {
@@ -383,8 +433,20 @@
       updateInspector();
     } catch (err) {
       console.error('Failed to load media:', err);
+      showToast('Failed to load media: ' + (err.message || 'Server error'), 'error');
     }
   }
+
+  async function loadMoreMedia() {
+    if (state.isLoadingMore || state.mediaItems.length >= state.totalCount) return;
+    state.isLoadingMore = true;
+    state.mediaOffset = state.mediaItems.length;
+    await loadMedia(true);
+    state.isLoadingMore = false;
+  }
+
+  let updateModalTagSuggestions = function () {};
+  let renderModalSearchHelp = function () {};
 
   async function loadMetadata() {
     try {
@@ -430,13 +492,13 @@
     }
     dom.emptyState.style.display = 'none';
 
-    // Group items by Month & Year
+    // Group items by Month & Year in UTC
     const groups = {};
     state.mediaItems.forEach(item => {
       let groupKey = 'Undated';
       if (item.date_taken && item.date_taken > 0) {
         const d = new Date(item.date_taken * 1000);
-        groupKey = `${getMonthName(d.getMonth() + 1)} ${d.getFullYear()}`;
+        groupKey = `${getMonthName(d.getUTCMonth() + 1)} ${d.getUTCFullYear()}`;
       }
       if (!groups[groupKey]) groups[groupKey] = [];
       groups[groupKey].push(item);
@@ -465,6 +527,19 @@
       groupEl.appendChild(cardsWrap);
       dom.mediaGrid.appendChild(groupEl);
     });
+
+    if (state.mediaItems.length < state.totalCount) {
+      const moreWrap = document.createElement('div');
+      moreWrap.className = 'grid-load-more-wrap';
+      moreWrap.style.cssText = 'padding:20px;text-align:center;width:100%;grid-column:1/-1;';
+      moreWrap.innerHTML = `
+        <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">Showing ${state.mediaItems.length} of ${state.totalCount} photos</div>
+        <button class="btn btn-secondary btn-sm" id="gridLoadMoreBtn">Load More</button>
+      `;
+      const btn = moreWrap.querySelector('#gridLoadMoreBtn');
+      if (btn) btn.onclick = () => loadMoreMedia();
+      dom.mediaGrid.appendChild(moreWrap);
+    }
   }
 
   function createPhotoCard(item) {
@@ -509,6 +584,14 @@
       </div>
     `;
 
+    // Prevent dblclick on stars from propagating to card
+    const starsEl = card.querySelector('.card-stars');
+    if (starsEl) {
+      starsEl.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+      });
+    }
+
     // Click handler for selection
     card.addEventListener('click', (e) => {
       // If clicking directly on a star
@@ -524,8 +607,9 @@
       handleCardSelection(item.id, e);
     });
 
-    // Double click to open loupe
-    card.addEventListener('dblclick', () => {
+    // Double click to open loupe (ignore if clicked on stars)
+    card.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.card-stars')) return;
       openLoupeForMedia(item.id);
     });
 
@@ -603,10 +687,98 @@
 
   // --- Inspector Panel ---
   let currentInspectorFetchId = 0;
+
+  function patchInspectorRatingAndFlag(item) {
+    if (state.selectedIds.size === 0) return;
+    const selectedId = Array.from(state.selectedIds)[0];
+    if (selectedId !== item.id) return;
+    if (dom.inspectorRating) {
+      dom.inspectorRating.querySelectorAll('span').forEach(span => {
+        const star = parseInt(span.dataset.star, 10);
+        span.classList.toggle('active', star <= (item.rating || 0));
+      });
+    }
+    if (dom.inspectorFlag) {
+      const pickBtn = dom.inspectorFlag.querySelector('.flag-pick');
+      const rejectBtn = dom.inspectorFlag.querySelector('.flag-reject');
+      if (pickBtn) pickBtn.classList.toggle('active', item.flag === 1);
+      if (rejectBtn) rejectBtn.classList.toggle('active', item.flag === -1);
+    }
+  }
+
+  function renderInspectorContent(item) {
+    if (!item) return;
+    if (dom.inspectorNoSelection) dom.inspectorNoSelection.style.display = 'none';
+    if (dom.inspectorSelection) dom.inspectorSelection.style.display = 'block';
+
+    // Inspector Preview
+    const previewUrl = item.content_hash
+      ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/1024`
+      : `/api/photos/${item.id}/original`;
+    if (dom.inspectorImg) {
+      dom.inspectorImg.src = previewUrl;
+      dom.inspectorImg.onerror = () => {
+        dom.inspectorImg.src = `/api/photos/${item.id}/original`;
+      };
+    }
+
+    // Rating
+    if (dom.inspectorRating) {
+      renderStarWidget(dom.inspectorRating, item.rating || 0, (newRating) => {
+        updateItemRating(item.id, newRating);
+      });
+    }
+
+    // Flags
+    if (dom.inspectorFlag) {
+      const pickBtn = dom.inspectorFlag.querySelector('.flag-pick');
+      const rejectBtn = dom.inspectorFlag.querySelector('.flag-reject');
+      if (pickBtn) pickBtn.classList.toggle('active', item.flag === 1);
+      if (rejectBtn) rejectBtn.classList.toggle('active', item.flag === -1);
+    }
+
+    // File Properties
+    if (dom.infoFileName) dom.infoFileName.textContent = item.file_name || '-';
+    if (dom.infoDimensions) dom.infoDimensions.textContent = item.width && item.height ? `${item.width} × ${item.height} px` : '-';
+    if (dom.infoFileSize) dom.infoFileSize.textContent = formatBytes(item.file_size);
+    if (dom.infoDateTaken) dom.infoDateTaken.textContent = formatDateTime(item.date_taken);
+    if (dom.infoFilePath) dom.infoFilePath.textContent = item.file_path || '-';
+
+    // EXIF properties
+    const exif = item.exif || {};
+    const cameraStr = [exif.camera_make, exif.camera_model].filter(Boolean).join(' ') || '-';
+    if (dom.infoCamera) dom.infoCamera.textContent = cameraStr;
+    if (dom.infoLens) dom.infoLens.textContent = exif.lens || '-';
+    if (dom.infoExposure) dom.infoExposure.textContent = formatExposureTime(exif.exposure_time) || '-';
+    if (dom.infoAperture) dom.infoAperture.textContent = exif.f_number ? `f/${exif.f_number.toFixed(1)}` : '-';
+    if (dom.infoIso) dom.infoIso.textContent = exif.iso ? `ISO ${exif.iso}` : '-';
+    if (dom.infoFocal) dom.infoFocal.textContent = exif.focal_length ? `${exif.focal_length.toFixed(1)} mm` : '-';
+
+    if (dom.infoGps) {
+      if (hasValidGps(item)) {
+        const lat = exif.latitude.toFixed(5);
+        const lon = exif.longitude.toFixed(5);
+        dom.infoGps.innerHTML = `
+          <a href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}" target="_blank" rel="noopener" class="btn-link">
+            ${lat}, ${lon} ↗
+          </a>
+        `;
+      } else {
+        dom.infoGps.textContent = '-';
+      }
+    }
+
+    // Tags
+    renderInspectorTags(item);
+
+    // Mini-map
+    updateInspectorMiniMap(item);
+  }
+
   async function updateInspector() {
     if (state.selectedIds.size === 0) {
-      dom.inspectorNoSelection.style.display = 'block';
-      dom.inspectorSelection.style.display = 'none';
+      if (dom.inspectorNoSelection) dom.inspectorNoSelection.style.display = 'block';
+      if (dom.inspectorSelection) dom.inspectorSelection.style.display = 'none';
       updateInspectorMiniMap(null);
       return;
     }
@@ -615,77 +787,26 @@
     const selectedId = Array.from(state.selectedIds)[0];
     let item = state.mediaItems.find(m => m.id === selectedId);
 
+    // Render immediately from memory to eliminate lag
+    if (item) {
+      renderInspectorContent(item);
+    }
+
     const fetchId = ++currentInspectorFetchId;
     try {
       // Fetch fresh details from API
       const freshItem = await api.get(`/api/media/${selectedId}`);
       if (fetchId !== currentInspectorFetchId) return;
       if (!state.selectedIds.has(selectedId)) return;
-      item = freshItem;
+      const idx = state.mediaItems.findIndex(m => m.id === selectedId);
+      if (idx !== -1) {
+        state.mediaItems[idx] = Object.assign({}, state.mediaItems[idx], freshItem);
+      }
+      renderInspectorContent(freshItem);
     } catch (err) {
       if (fetchId !== currentInspectorFetchId) return;
       console.warn('Could not fetch single media details:', err);
     }
-
-    if (!item || !state.selectedIds.has(selectedId)) return;
-
-    dom.inspectorNoSelection.style.display = 'none';
-    dom.inspectorSelection.style.display = 'block';
-
-    // Inspector Preview
-    const previewUrl = item.content_hash
-      ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/1024`
-      : `/api/photos/${item.id}/original`;
-    dom.inspectorImg.src = previewUrl;
-    dom.inspectorImg.onerror = () => {
-      dom.inspectorImg.src = `/api/photos/${item.id}/original`;
-    };
-
-    // Rating
-    renderStarWidget(dom.inspectorRating, item.rating || 0, (newRating) => {
-      updateItemRating(item.id, newRating);
-    });
-
-    // Flags
-    const pickBtn = dom.inspectorFlag.querySelector('.flag-pick');
-    const rejectBtn = dom.inspectorFlag.querySelector('.flag-reject');
-    pickBtn.classList.toggle('active', item.flag === 1);
-    rejectBtn.classList.toggle('active', item.flag === -1);
-
-    // File Properties
-    dom.infoFileName.textContent = item.file_name || '-';
-    dom.infoDimensions.textContent = item.width && item.height ? `${item.width} × ${item.height} px` : '-';
-    dom.infoFileSize.textContent = formatBytes(item.file_size);
-    dom.infoDateTaken.textContent = formatDateTime(item.date_taken);
-    dom.infoFilePath.textContent = item.file_path || '-';
-
-    // EXIF properties
-    const exif = item.exif || {};
-    const cameraStr = [exif.camera_make, exif.camera_model].filter(Boolean).join(' ') || '-';
-    dom.infoCamera.textContent = cameraStr;
-    dom.infoLens.textContent = exif.lens || '-';
-    dom.infoExposure.textContent = formatExposureTime(exif.exposure_time) || '-';
-    dom.infoAperture.textContent = exif.f_number ? `f/${exif.f_number.toFixed(1)}` : '-';
-    dom.infoIso.textContent = exif.iso ? `ISO ${exif.iso}` : '-';
-    dom.infoFocal.textContent = exif.focal_length ? `${exif.focal_length.toFixed(1)} mm` : '-';
-
-    if (exif.has_gps && (exif.latitude !== 0 || exif.longitude !== 0)) {
-      const lat = exif.latitude.toFixed(5);
-      const lon = exif.longitude.toFixed(5);
-      dom.infoGps.innerHTML = `
-        <a href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}" target="_blank" rel="noopener" class="btn-link">
-          ${lat}, ${lon} ↗
-        </a>
-      `;
-    } else {
-      dom.infoGps.textContent = '-';
-    }
-
-    // Tags
-    renderInspectorTags(item);
-
-    // Mini-map
-    updateInspectorMiniMap(item);
   }
 
   function renderInspectorTags(item) {
@@ -801,8 +922,7 @@
 
   function fitMapToBounds() {
     if (!state.mapInstance) return;
-    const gpsItems = state.mediaItems.filter(item => item.exif && item.exif.has_gps &&
-      (item.exif.latitude !== 0 || item.exif.longitude !== 0));
+    const gpsItems = state.mediaItems.filter(hasValidGps);
     if (gpsItems.length === 0) return;
     try {
       const latLngs = gpsItems.map(it => [it.exif.latitude, it.exif.longitude]);
@@ -889,8 +1009,7 @@
     state.mapMarkers.forEach(m => m.remove());
     state.mapMarkers = [];
 
-    const gpsItems = state.mediaItems.filter(item => item.exif && item.exif.has_gps &&
-      (item.exif.latitude !== 0 || item.exif.longitude !== 0));
+    const gpsItems = state.mediaItems.filter(hasValidGps);
 
     if (dom.mapPhotoCount) {
       dom.mapPhotoCount.textContent = gpsItems.length;
@@ -965,6 +1084,8 @@
       container.innerHTML = '';
       const item = items[activeIndex];
       if (!item) return;
+      container.dataset.mediaId = item.id;
+      container.renderActive = renderActive;
       const exif = item.exif || {};
       const safeFileName = escapeHtml(item.file_name);
       const thumbUrl = item.content_hash
@@ -1159,8 +1280,7 @@
   function renderUnmappedTray() {
     if (!dom.unmappedPhotosList) return;
     dom.unmappedPhotosList.innerHTML = '';
-    const unmapped = state.mediaItems.filter(item => !item.exif || !item.exif.has_gps ||
-      (item.exif.latitude === 0 && item.exif.longitude === 0));
+    const unmapped = state.mediaItems.filter(item => !hasValidGps(item));
 
     if (dom.unmappedBtnLabel) {
       dom.unmappedBtnLabel.textContent = `Unmapped (${unmapped.length})`;
@@ -1390,6 +1510,7 @@
   }
 
   let currentMapSearchId = 0;
+  let lastNominatimRequestTime = 0;
   async function performMapPlaceSearch(rawQuery) {
     const query = rawQuery.trim();
     if (!query) {
@@ -1423,7 +1544,7 @@
     // 2. Catalog search: matched photos with GPS
     const lowerQuery = query.toLowerCase();
     state.mediaItems.forEach(item => {
-      if (item.exif && item.exif.has_gps && (item.exif.latitude !== 0 || item.exif.longitude !== 0)) {
+      if (hasValidGps(item)) {
         if (item.file_name.toLowerCase().includes(lowerQuery)) {
           results.push({
             title: item.file_name,
@@ -1437,8 +1558,16 @@
       }
     });
 
-    // 3. Online Geocoding via OpenStreetMap Nominatim
+    // 3. Online Geocoding via OpenStreetMap Nominatim (throttled to 1 req/sec max)
     try {
+      const now = Date.now();
+      const elapsed = now - lastNominatimRequestTime;
+      if (elapsed < 1000) {
+        await new Promise(r => setTimeout(r, 1000 - elapsed));
+      }
+      if (searchId !== currentMapSearchId) return;
+      lastNominatimRequestTime = Date.now();
+
       const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
       const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
       if (searchId !== currentMapSearchId) return;
@@ -1534,7 +1663,7 @@
     }
 
     const exif = item.exif || {};
-    if (exif.has_gps && (exif.latitude !== 0 || exif.longitude !== 0)) {
+    if (hasValidGps(item)) {
       if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'flex';
       if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'none';
       dom.inspectorMiniMap.style.display = 'block';
@@ -1730,15 +1859,14 @@
       el.addEventListener('click', () => {
         if (state.activeFolder === folder) {
           state.activeFolder = null;
-          state.searchText = '';
-          dom.searchInput.value = '';
         } else {
           state.activeFolder = folder;
-          state.searchText = folder;
-          dom.searchInput.value = folder;
           state.activeTagId = null;
           state.activeAlbumId = null;
           state.activeNavFilter = 'all';
+          state.activeTimelinePeriod = null;
+          state.searchText = '';
+          if (dom.searchInput) dom.searchInput.value = '';
         }
         updateSidebarActive();
         loadMedia();
@@ -1791,10 +1919,10 @@
   }
 
   function updateSidebarActive() {
-    dom.navAllMedia.classList.toggle('active', state.activeNavFilter === 'all' && !state.activeTagId && !state.activeAlbumId && !state.activeFolder && !state.searchText);
-    dom.navPicks.classList.toggle('active', state.activeNavFilter === 'picks');
-    dom.navRejects.classList.toggle('active', state.activeNavFilter === 'rejects');
-    dom.navUnrated.classList.toggle('active', state.activeNavFilter === 'unrated');
+    if (dom.navAllMedia) dom.navAllMedia.classList.toggle('active', state.activeNavFilter === 'all' && !state.activeTagId && !state.activeAlbumId && !state.activeFolder && !state.searchText && (!state.activeTab || state.activeTab === 'media'));
+    if (dom.navPicks) dom.navPicks.classList.toggle('active', state.activeNavFilter === 'picks');
+    if (dom.navRejects) dom.navRejects.classList.toggle('active', state.activeNavFilter === 'rejects');
+    if (dom.navUnrated) dom.navUnrated.classList.toggle('active', state.activeNavFilter === 'unrated');
     renderSidebarTags();
     renderSidebarAlbums();
     if (dom.foldersTree) {
@@ -1810,7 +1938,11 @@
     let label = 'All Photos';
     let isFiltered = false;
 
-    if (state.activeNavFilter === 'picks') {
+    if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
+      const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
+      label = `Category: ${tabName}`;
+      isFiltered = true;
+    } else if (state.activeNavFilter === 'picks') {
       label = 'Picks';
       isFiltered = true;
     } else if (state.activeNavFilter === 'rejects') {
@@ -1832,10 +1964,11 @@
     if (state.activeFolder) {
       const parts = state.activeFolder.split(/[/\\]/);
       const folderName = parts[parts.length - 1] || state.activeFolder;
-      label = `Folder: ${folderName}`;
+      label = isFiltered && label !== 'All Photos' ? `${label} • Folder: ${folderName}` : `Folder: ${folderName}`;
       isFiltered = true;
-    } else if (state.searchText) {
-      label += ` • Search: "${state.searchText}"`;
+    }
+    if (state.searchText) {
+      label = isFiltered && label !== 'All Photos' ? `${label} • Search: "${state.searchText}"` : `Search: "${state.searchText}"`;
       isFiltered = true;
     }
 
@@ -1845,8 +1978,12 @@
       isFiltered = true;
     }
 
-    dom.filterLabel.innerHTML = `<strong>${escapeHtml(label)}</strong> (${state.totalCount} items)`;
-    dom.clearFiltersBtn.style.display = isFiltered ? 'inline-block' : 'none';
+    if (dom.filterLabel) {
+      dom.filterLabel.innerHTML = `<strong>${escapeHtml(label)}</strong> (${state.totalCount} items)`;
+    }
+    if (dom.clearFiltersBtn) {
+      dom.clearFiltersBtn.style.display = isFiltered ? 'inline-block' : 'none';
+    }
   }
 
   function clearAllFilters() {
@@ -1855,22 +1992,59 @@
     state.activeAlbumId = null;
     state.activeFolder = null;
     state.activeTimelinePeriod = null;
+    state.activeTab = 'media';
     state.searchText = '';
-    dom.searchInput.value = '';
+    if (dom.searchInput) dom.searchInput.value = '';
+    if (dom.viewTabs) {
+      dom.viewTabs.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'media'));
+    }
     updateSidebarActive();
     renderTimeline();
     loadMedia();
+  }
+
+  function patchCardRating(id, rating) {
+    const card = document.querySelector(`.photo-card[data-id="${id}"]`);
+    if (card) {
+      card.querySelectorAll('.card-stars span').forEach(span => {
+        const star = parseInt(span.dataset.star, 10);
+        span.classList.toggle('active', star <= (rating || 0));
+      });
+    }
+  }
+
+  function patchCardFlag(id, flag) {
+    const card = document.querySelector(`.photo-card[data-id="${id}"]`);
+    if (card) {
+      const badgeWrap = card.querySelector('.card-badges');
+      if (badgeWrap) {
+        badgeWrap.innerHTML = flag === 1
+          ? '<span class="flag-badge pick" title="Pick">✔</span>'
+          : flag === -1
+            ? '<span class="flag-badge reject" title="Reject">✖</span>'
+            : '';
+      }
+    }
+  }
+
+  function patchOpenMapPopup(id) {
+    const popupCard = document.querySelector('.map-popup-card');
+    if (popupCard && popupCard.dataset.mediaId == id && typeof popupCard.renderActive === 'function') {
+      popupCard.renderActive();
+    }
   }
 
   // --- Item Modifications ---
   async function updateItemRating(id, rating) {
     try {
       await api.post(`/api/media/${id}/rating`, { rating });
-      // Update local item
       const item = state.mediaItems.find(m => m.id === id);
-      if (item) item.rating = rating;
-      renderGrid();
-      updateInspector();
+      if (item) {
+        item.rating = rating;
+        patchCardRating(id, rating);
+        patchInspectorRatingAndFlag(item);
+        patchOpenMapPopup(id);
+      }
       if (state.loupeIndex >= 0) updateLoupeControls();
     } catch (err) {
       console.error('Failed to update rating:', err);
@@ -1881,9 +2055,12 @@
     try {
       await api.post(`/api/media/${id}/flag`, { flag });
       const item = state.mediaItems.find(m => m.id === id);
-      if (item) item.flag = flag;
-      renderGrid();
-      updateInspector();
+      if (item) {
+        item.flag = flag;
+        patchCardFlag(id, flag);
+        patchInspectorRatingAndFlag(item);
+        patchOpenMapPopup(id);
+      }
       if (state.loupeIndex >= 0) updateLoupeControls();
     } catch (err) {
       console.error('Failed to update flag:', err);
@@ -1896,10 +2073,13 @@
       await Promise.all(ids.map(id => api.post(`/api/media/${id}/flag`, { flag })));
       ids.forEach(id => {
         const item = state.mediaItems.find(m => m.id === id);
-        if (item) item.flag = flag;
+        if (item) {
+          item.flag = flag;
+          patchCardFlag(id, flag);
+          patchInspectorRatingAndFlag(item);
+          patchOpenMapPopup(id);
+        }
       });
-      renderGrid();
-      updateInspector();
       if (state.loupeIndex >= 0) updateLoupeControls();
     } catch (err) {
       console.error('Failed to batch update flags:', err);
@@ -1912,14 +2092,34 @@
       await Promise.all(ids.map(id => api.post(`/api/media/${id}/rating`, { rating })));
       ids.forEach(id => {
         const item = state.mediaItems.find(m => m.id === id);
-        if (item) item.rating = rating;
+        if (item) {
+          item.rating = rating;
+          patchCardRating(id, rating);
+          patchInspectorRatingAndFlag(item);
+          patchOpenMapPopup(id);
+        }
       });
-      renderGrid();
-      updateInspector();
       if (state.loupeIndex >= 0) updateLoupeControls();
     } catch (err) {
       console.error('Failed to batch update ratings:', err);
     }
+  }
+
+  function toggleFlagValue(currentFlag, targetFlag) {
+    return currentFlag === targetFlag ? 0 : targetFlag;
+  }
+
+  function toggleItemFlag(id, targetFlag) {
+    const item = state.mediaItems.find(m => m.id === id);
+    const current = item ? item.flag : 0;
+    return updateItemFlag(id, toggleFlagValue(current, targetFlag));
+  }
+
+  function toggleFlagsForIds(ids, targetFlag) {
+    if (!ids || ids.length === 0) return;
+    const items = ids.map(id => state.mediaItems.find(m => m.id === id)).filter(Boolean);
+    const allHave = items.length > 0 && items.every(m => m.flag === targetFlag);
+    return batchUpdateFlags(ids, allHave ? 0 : targetFlag);
   }
 
   // --- Fullscreen Loupe Viewer ---
@@ -2170,43 +2370,68 @@
 
     // Search with debounce
     let searchTimer = null;
-    dom.searchInput.addEventListener('input', (e) => {
-      clearTimeout(searchTimer);
-      searchTimer = setTimeout(() => {
-        state.searchText = e.target.value.trim();
-        loadMedia();
-      }, 300);
-    });
+    if (dom.searchInput) {
+      dom.searchInput.addEventListener('input', (e) => {
+        clearTimeout(searchTimer);
+        const val = e.target.value.trim();
+        if (state.activeFolder) {
+          state.activeFolder = null;
+          updateSidebarActive();
+        }
+        searchTimer = setTimeout(() => {
+          state.searchText = val;
+          loadMedia();
+        }, 300);
+      });
+    }
 
-    dom.clearSearchBtn.addEventListener('click', () => {
-      dom.searchInput.value = '';
-      state.searchText = '';
-      state.activeFolder = null;
-      updateSidebarActive();
-      loadMedia();
-    });
+    if (dom.clearSearchBtn) {
+      dom.clearSearchBtn.addEventListener('click', () => {
+        if (dom.searchInput) dom.searchInput.value = '';
+        state.searchText = '';
+        loadMedia();
+      });
+    }
+
+    // Grid scroll pagination
+    if (dom.gridScrollContainer) {
+      dom.gridScrollContainer.addEventListener('scroll', () => {
+        const { scrollTop, scrollHeight, clientHeight } = dom.gridScrollContainer;
+        if (scrollTop + clientHeight >= scrollHeight - 250 && !state.isLoadingMore && state.mediaItems.length < state.totalCount) {
+          loadMoreMedia();
+        }
+      });
+    }
 
     // Refresh button
-    dom.refreshBtn.addEventListener('click', () => {
-      loadMetadata();
-      loadMedia();
-    });
+    if (dom.refreshBtn) {
+      dom.refreshBtn.addEventListener('click', () => {
+        loadMetadata();
+        loadMedia();
+      });
+    }
 
     // Sort selector
-    dom.sortSelect.addEventListener('change', (e) => {
-      const [field, dir] = e.target.value.split('-');
-      state.sortBy = field;
-      state.sortDesc = (dir === 'desc');
-      loadMedia();
-    });
+    if (dom.sortSelect) {
+      dom.sortSelect.addEventListener('change', (e) => {
+        const [field, dir] = e.target.value.split('-');
+        state.sortBy = field;
+        state.sortDesc = (dir === 'desc');
+        loadMedia();
+      });
+    }
 
     // Clear filters button
-    dom.clearFiltersBtn.addEventListener('click', clearAllFilters);
-    dom.resetTimelineBtn.addEventListener('click', () => {
-      state.activeTimelinePeriod = null;
-      renderTimeline();
-      loadMedia();
-    });
+    if (dom.clearFiltersBtn) {
+      dom.clearFiltersBtn.addEventListener('click', clearAllFilters);
+    }
+    if (dom.resetTimelineBtn) {
+      dom.resetTimelineBtn.addEventListener('click', () => {
+        state.activeTimelinePeriod = null;
+        renderTimeline();
+        loadMedia();
+      });
+    }
 
     // View Mode Toggle (Grid vs Map)
     if (dom.viewGridBtn) {
@@ -2221,7 +2446,7 @@
     if (dom.mapToggleUnmappedBtn) {
       dom.mapToggleUnmappedBtn.addEventListener('click', () => {
         state.unmappedTrayOpen = !state.unmappedTrayOpen;
-        dom.unmappedTray.style.display = state.unmappedTrayOpen ? 'flex' : 'none';
+        if (dom.unmappedTray) dom.unmappedTray.style.display = state.unmappedTrayOpen ? 'flex' : 'none';
         if (state.unmappedTrayOpen) renderUnmappedTray();
         else exitPlacementMode();
       });
@@ -2229,14 +2454,13 @@
     if (dom.closeUnmappedTrayBtn) {
       dom.closeUnmappedTrayBtn.addEventListener('click', () => {
         state.unmappedTrayOpen = false;
-        dom.unmappedTray.style.display = 'none';
+        if (dom.unmappedTray) dom.unmappedTray.style.display = 'none';
         exitPlacementMode();
       });
     }
     if (dom.unmappedSelectAllBtn) {
       dom.unmappedSelectAllBtn.addEventListener('click', () => {
-        const unmapped = state.mediaItems.filter(item => !item.exif || !item.exif.has_gps ||
-          (item.exif.latitude === 0 && item.exif.longitude === 0));
+        const unmapped = state.mediaItems.filter(item => !hasValidGps(item));
         unmapped.forEach(item => state.placementMediaIds.add(item.id));
         state.lastUnmappedClickedId = unmapped.length > 0 ? unmapped[unmapped.length - 1].id : null;
         updatePlacementModeState();
@@ -2271,7 +2495,7 @@
         if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'block';
         state.mapSearchDebounceTimer = setTimeout(() => {
           performMapPlaceSearch(q);
-        }, 300);
+        }, 800);
       });
 
       dom.mapSearchInput.addEventListener('keydown', (e) => {
@@ -2368,16 +2592,7 @@
         dom.viewTabs.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         state.activeTab = btn.dataset.tab;
-
-        // Automatically filter by category when switching tabs
-        if (state.activeTab !== 'media') {
-          const catTags = state.tags.filter(t => t.category.toLowerCase() === state.activeTab.toLowerCase());
-          if (catTags.length > 0) {
-            state.activeTagId = catTags[0].id;
-          }
-        } else {
-          state.activeTagId = null;
-        }
+        state.activeTagId = null;
         updateSidebarActive();
         loadMedia();
       });
@@ -2443,17 +2658,11 @@
     const inspectorRejectBtn = dom.inspectorFlag.querySelector('.flag-reject');
     inspectorPickBtn.addEventListener('click', () => {
       if (state.selectedIds.size === 0) return;
-      const id = Array.from(state.selectedIds)[0];
-      const item = state.mediaItems.find(m => m.id === id);
-      const newFlag = item && item.flag === 1 ? 0 : 1;
-      updateItemFlag(id, newFlag);
+      toggleItemFlag(Array.from(state.selectedIds)[0], 1);
     });
     inspectorRejectBtn.addEventListener('click', () => {
       if (state.selectedIds.size === 0) return;
-      const id = Array.from(state.selectedIds)[0];
-      const item = state.mediaItems.find(m => m.id === id);
-      const newFlag = item && item.flag === -1 ? 0 : -1;
-      updateItemFlag(id, newFlag);
+      toggleItemFlag(Array.from(state.selectedIds)[0], -1);
     });
 
     // Inspector add tag inline
@@ -2504,11 +2713,11 @@
     });
 
     dom.batchPickBtn.addEventListener('click', async () => {
-      await batchUpdateFlags(Array.from(state.selectedIds), 1);
+      await toggleFlagsForIds(Array.from(state.selectedIds), 1);
     });
 
     dom.batchRejectBtn.addEventListener('click', async () => {
-      await batchUpdateFlags(Array.from(state.selectedIds), -1);
+      await toggleFlagsForIds(Array.from(state.selectedIds), -1);
     });
 
     if (dom.batchDeleteBtn) {
@@ -2633,14 +2842,12 @@
     loupePickBtn.addEventListener('click', () => {
       if (state.loupeIndex < 0) return;
       const item = state.mediaItems[state.loupeIndex];
-      const newFlag = item.flag === 1 ? 0 : 1;
-      updateItemFlag(item.id, newFlag);
+      if (item) toggleItemFlag(item.id, 1);
     });
     loupeRejectBtn.addEventListener('click', () => {
       if (state.loupeIndex < 0) return;
       const item = state.mediaItems[state.loupeIndex];
-      const newFlag = item.flag === -1 ? 0 : -1;
-      updateItemFlag(item.id, newFlag);
+      if (item) toggleItemFlag(item.id, -1);
     });
 
     // Global Keyboard Shortcuts
@@ -2683,10 +2890,10 @@
           if (item) openDeleteMediaModal([item.id]);
         } else if (e.key === 'x' || e.key === 'X') {
           const item = state.mediaItems[state.loupeIndex];
-          if (item) updateItemFlag(item.id, -1);
+          if (item) toggleItemFlag(item.id, -1);
         } else if (e.key === 'p' || e.key === 'P') {
           const item = state.mediaItems[state.loupeIndex];
-          if (item) updateItemFlag(item.id, 1);
+          if (item) toggleItemFlag(item.id, 1);
         } else if (e.key === 'u' || e.key === 'U') {
           const item = state.mediaItems[state.loupeIndex];
           if (item) updateItemFlag(item.id, 0);
@@ -2700,6 +2907,7 @@
           document.querySelectorAll('.photo-card').forEach(c => c.classList.add('selected'));
           updateBatchBar();
           updateInspector();
+          updateMapMarkerSelections();
         } else if (e.key === 'Escape') {
           if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
             closeDeleteMediaModal();
@@ -2732,15 +2940,17 @@
           const rating = parseInt(e.key, 10);
           batchUpdateRatings(Array.from(state.selectedIds), rating);
         } else if (e.key === 'p' || e.key === 'P') {
-          batchUpdateFlags(Array.from(state.selectedIds), 1);
+          toggleFlagsForIds(Array.from(state.selectedIds), 1);
         } else if (e.key === 'Delete' || e.key === 'Backspace') {
           if (state.selectedIds.size > 0) {
             openDeleteMediaModal(Array.from(state.selectedIds));
           }
         } else if (e.key === 'x' || e.key === 'X') {
-          batchUpdateFlags(Array.from(state.selectedIds), -1);
+          toggleFlagsForIds(Array.from(state.selectedIds), -1);
         } else if (e.key === 'u' || e.key === 'U') {
-          batchUpdateFlags(Array.from(state.selectedIds), 0);
+          if (state.selectedIds.size > 0) {
+            batchUpdateFlags(Array.from(state.selectedIds), 0);
+          }
         } else if (e.key === 'm' || e.key === 'M') {
           switchViewMode('map');
         } else if (e.key === 'g' || e.key === 'G') {
@@ -2758,6 +2968,10 @@
       dom.importPathInput.focus();
     }
     function closeImportModal() {
+      if (state.importPollInterval) {
+        clearInterval(state.importPollInterval);
+        state.importPollInterval = null;
+      }
       dom.importModal.style.display = 'none';
       dom.importProgressBox.style.display = 'none';
     }
@@ -2973,8 +3187,8 @@
 
       // Default category: active category tab if filtered, else 'keyword'
       let initialCat = 'keyword';
-      if (['people', 'places', 'events', 'keyword'].includes(state.categoryFilter)) {
-        initialCat = state.categoryFilter;
+      if (['people', 'places', 'events', 'keyword'].includes(state.activeTab)) {
+        initialCat = state.activeTab;
       }
       setModalCategory(initialCat);
 
@@ -3014,12 +3228,12 @@
       renderModalSearchHelp();
     }
 
-    function updateModalTagSuggestions() {
+    updateModalTagSuggestions = function () {
       if (!dom.tagModalSuggestions) return;
       dom.tagModalSuggestions.innerHTML = state.tags
         .map(t => `<option value="${escapeHtml(t.name)}">`)
         .join('');
-    }
+    };
 
     function getCategoryColor(category) {
       switch ((category || '').toLowerCase()) {
@@ -3039,7 +3253,7 @@
       }
     }
 
-    function renderModalSearchHelp() {
+    renderModalSearchHelp = function () {
       if (!dom.tagSearchHelpChips || !dom.tagNameInput) return;
 
       const query = dom.tagNameInput.value.trim().toLowerCase();
@@ -3065,7 +3279,7 @@
             .map(t => `
               <button type="button" class="tag-badge tag-help-chip" data-category="${escapeHtml((t.category || 'keyword').toLowerCase())}" data-tag-name="${escapeHtml(t.name)}" title="Select ${escapeHtml(t.name)}">
                 ${escapeHtml(t.name)}
-                <span class="chip-count">(${t.count || 0})</span>
+                <span class="chip-count">(${t.media_count || 0})</span>
               </button>
             `).join('');
         }
@@ -3108,7 +3322,7 @@
               <button type="button" class="tag-badge tag-help-chip ${isExact ? 'active-match' : ''}" data-category="${escapeHtml((t.category || 'keyword').toLowerCase())}" data-tag-name="${escapeHtml(t.name)}" title="Select ${escapeHtml(t.name)}">
                 <span class="chip-cat-prefix">${getCategoryDisplayName(t.category)}:</span>
                 <strong>${escapeHtml(t.name)}</strong>
-                <span class="chip-count">(${t.count || 0})</span>
+                <span class="chip-count">(${t.media_count || 0})</span>
               </button>
             `;
           }).join('');
@@ -3137,7 +3351,7 @@
           if (dom.tagNameInput) dom.tagNameInput.focus();
         });
       });
-    }
+    };
 
     // Modal event bindings
     dom.newTagBtn.addEventListener('click', () => openTagModal());
@@ -3227,7 +3441,7 @@
       closeTagModal();
       await loadMetadata();
       updateInspector();
-      if (state.categoryFilter === category) {
+      if (state.activeTab === category) {
         await loadMedia();
       }
     });

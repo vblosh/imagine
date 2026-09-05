@@ -116,6 +116,14 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
         if (req.has_param("search")) {
             criteria.search_text = req.get_param_value("search");
         }
+        if (req.has_param("folder")) {
+            criteria.folder = req.get_param_value("folder");
+        }
+        if (req.has_param("tag_category")) {
+            criteria.tag_category = req.get_param_value("tag_category");
+        } else if (req.has_param("category")) {
+            criteria.tag_category = req.get_param_value("category");
+        }
         if (req.has_param("tag_id")) {
             try {
                 criteria.tag_ids.push_back(std::stoll(req.get_param_value("tag_id")));
