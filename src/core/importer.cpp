@@ -3,6 +3,7 @@
 #include "imagine/metadata/exif_reader.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/logger.hpp"
+#include <fstream>
 #include <filesystem>
 #include <chrono>
 #include <cctype>
@@ -75,7 +76,7 @@ ImportProgress Importer::currentProgress() const {
     return current_progress_;
 }
 
-Importer::ProcessStatus Importer::processFileInternal(const std::string& filePath, MediaItem* outItem) {
+Importer::ProcessStatus Importer::processFileInternal(const std::string& filePath, MediaItem* outItem, bool commitToDb) {
     std::error_code ec;
     if (!std::filesystem::exists(filePath, ec) || !std::filesystem::is_regular_file(filePath, ec)) {
         IMAGINE_LOG_ERROR("File does not exist or is not a regular file: " + filePath);
@@ -110,28 +111,33 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         }
     }
 
-    // Stage 3: Extract SHA-256 hash using Hasher
-    auto hashRes = metadata::Hasher::computeFileSha256(filePath);
-    if (!hashRes.isOk()) {
-        IMAGINE_LOG_ERROR("Failed to compute SHA-256 for " + filePath + ": " + hashRes.status().message());
+    // Read file once into memory buffer
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file.is_open()) {
+        IMAGINE_LOG_ERROR("Unable to open file for import: " + filePath);
         return ProcessStatus::Failed;
     }
-    std::string hash = hashRes.value();
-
-    // Extract EXIF data using ExifReader
-    ExifData exif;
-    auto exifRes = metadata::ExifReader::readFromFile(filePath);
-    if (exifRes.isOk()) {
-        exif = exifRes.value();
+    std::vector<uint8_t> fileBytes(static_cast<size_t>(fsize));
+    if (fsize > 0) {
+        file.read(reinterpret_cast<char*>(fileBytes.data()), static_cast<std::streamsize>(fsize));
+        if (static_cast<size_t>(file.gcount()) != static_cast<size_t>(fsize)) {
+            IMAGINE_LOG_ERROR("Failed to read complete file content: " + filePath);
+            return ProcessStatus::Failed;
+        }
     }
 
-    // Dimensions
-    int32_t width = 0;
-    int32_t height = 0;
-    auto dimRes = thumbnail::Generator::getImageDimensions(filePath);
-    if (dimRes.isOk()) {
-        width = dimRes.value().first;
-        height = dimRes.value().second;
+    // Stage 3: Extract SHA-256 hash using in-memory bytes
+    std::string hash = metadata::Hasher::computeBytesSha256(fileBytes.data(), fileBytes.size());
+    if (hash.empty()) {
+        IMAGINE_LOG_ERROR("Failed to compute SHA-256 for " + filePath);
+        return ProcessStatus::Failed;
+    }
+
+    // Extract EXIF data using in-memory buffer
+    ExifData exif;
+    auto exifRes = metadata::ExifReader::readFromBuffer(fileBytes.data(), fileBytes.size());
+    if (exifRes.isOk()) {
+        exif = exifRes.value();
     }
 
     // Date taken
@@ -140,10 +146,14 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         dateTaken = modifiedTime;
     }
 
-    // Thumbnails small (256) and large (1024) via ThumbnailCache
+    // Thumbnails & dimensions via ensureDualThumbnailsFromMemory
+    int width = 0;
+    int height = 0;
     std::string thumbSmall;
     std::string thumbLarge;
-    auto thumbRes = cache_.ensureDualThumbnails(filePath, hash, exif.orientation);
+    auto thumbRes = cache_.ensureDualThumbnailsFromMemory(
+        fileBytes.data(), fileBytes.size(), hash, exif.orientation, &width, &height
+    );
     if (thumbRes.isOk()) {
         thumbSmall = thumbRes.value().first;
         thumbLarge = thumbRes.value().second;
@@ -174,7 +184,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
             IMAGINE_LOG_ERROR("Failed to update media in DB for " + filePath + ": " + s.message());
             return ProcessStatus::Failed;
         }
-    } else {
+    } else if (commitToDb) {
         auto insRes = db_.insertMedia(item);
         if (!insRes.isOk()) {
             IMAGINE_LOG_ERROR("Failed to insert media into DB for " + filePath + ": " + insRes.status().message());
@@ -251,13 +261,28 @@ Result<ImportProgress> Importer::importDirectory(
         progressCb(current_progress_);
     }
 
+    std::mutex batchMutex;
+    std::vector<MediaItem> pendingInserts;
+    constexpr size_t kBatchSize = 64;
+
+    auto flushBatch = [this, &batchMutex, &pendingInserts]() {
+        std::lock_guard<std::mutex> bLock(batchMutex);
+        if (!pendingInserts.empty()) {
+            auto bRes = db_.insertMediaBatch(pendingInserts);
+            if (!bRes.isOk()) {
+                IMAGINE_LOG_ERROR("Failed to insert batch into DB: " + bRes.status().message());
+            }
+            pendingInserts.clear();
+        }
+    };
+
     if (pool_ != nullptr) {
         for (const auto& file : files) {
             if (cancelled_.load()) {
                 break;
             }
 
-            pool_->enqueue([this, file, progressCb]() {
+            pool_->enqueue([this, file, progressCb, &batchMutex, &pendingInserts, &flushBatch]() {
                 if (cancelled_.load()) {
                     return;
                 }
@@ -267,11 +292,24 @@ Result<ImportProgress> Importer::importDirectory(
                     current_progress_.current_file = file;
                 }
 
-                ProcessStatus st = processFileInternal(file);
+                MediaItem item;
+                ProcessStatus st = processFileInternal(file, &item, false);
                 switch (st) {
-                    case ProcessStatus::Imported:
+                    case ProcessStatus::Imported: {
+                        bool needFlush = false;
+                        {
+                            std::lock_guard<std::mutex> bLock(batchMutex);
+                            pendingInserts.push_back(std::move(item));
+                            if (pendingInserts.size() >= kBatchSize) {
+                                needFlush = true;
+                            }
+                        }
+                        if (needFlush) {
+                            flushBatch();
+                        }
                         ++current_progress_.imported_files;
                         break;
+                    }
                     case ProcessStatus::Skipped:
                         ++current_progress_.skipped_files;
                         break;
@@ -288,6 +326,7 @@ Result<ImportProgress> Importer::importDirectory(
             });
         }
         pool_->waitAll();
+        flushBatch();
     } else {
         for (const auto& file : files) {
             if (cancelled_.load()) {
@@ -299,11 +338,24 @@ Result<ImportProgress> Importer::importDirectory(
                 current_progress_.current_file = file;
             }
 
-            ProcessStatus st = processFileInternal(file);
+            MediaItem item;
+            ProcessStatus st = processFileInternal(file, &item, false);
             switch (st) {
-                case ProcessStatus::Imported:
+                case ProcessStatus::Imported: {
+                    bool needFlush = false;
+                    {
+                        std::lock_guard<std::mutex> bLock(batchMutex);
+                        pendingInserts.push_back(std::move(item));
+                        if (pendingInserts.size() >= kBatchSize) {
+                            needFlush = true;
+                        }
+                    }
+                    if (needFlush) {
+                        flushBatch();
+                    }
                     ++current_progress_.imported_files;
                     break;
+                }
                 case ProcessStatus::Skipped:
                     ++current_progress_.skipped_files;
                     break;
@@ -318,6 +370,7 @@ Result<ImportProgress> Importer::importDirectory(
                 progressCb(current_progress_);
             }
         }
+        flushBatch();
     }
 
     {

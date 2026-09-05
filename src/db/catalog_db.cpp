@@ -129,6 +129,86 @@ Result<MediaId> CatalogDb::insertMedia(MediaItem& item) {
     return item.id;
 }
 
+Result<size_t> CatalogDb::insertMediaBatch(std::vector<MediaItem>& items) {
+    if (items.empty()) {
+        return 0;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    const char* sql = R"SQL(
+        INSERT INTO media_items (
+            file_path, file_name, file_size, file_modified_time, content_hash,
+            width, height, date_taken, date_taken_str, rating, flag,
+            camera_make, camera_model, lens, exposure_time, f_number, iso,
+            focal_length, orientation, has_gps, latitude, longitude, altitude,
+            thumb_small, thumb_large, created_at, updated_at
+        ) VALUES (
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?
+        );
+    )SQL";
+
+    Transaction tx(conn_);
+
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+
+    int64_t now = currentUnixTime();
+    size_t insertedCount = 0;
+
+    for (auto& item : items) {
+        item.created_at = now;
+        item.updated_at = now;
+
+        stmt.bind(1, item.file_path);
+        stmt.bind(2, item.file_name);
+        stmt.bind(3, item.file_size);
+        stmt.bind(4, item.file_modified_time);
+        stmt.bind(5, item.content_hash);
+        stmt.bind(6, item.width);
+        stmt.bind(7, item.height);
+        stmt.bind(8, item.date_taken);
+        stmt.bind(9, item.exif.date_taken_str);
+        stmt.bind(10, item.rating);
+        stmt.bind(11, static_cast<int32_t>(item.flag));
+        stmt.bind(12, item.exif.camera_make);
+        stmt.bind(13, item.exif.camera_model);
+        stmt.bind(14, item.exif.lens);
+        stmt.bind(15, item.exif.exposure_time);
+        stmt.bind(16, item.exif.f_number);
+        stmt.bind(17, item.exif.iso);
+        stmt.bind(18, item.exif.focal_length);
+        stmt.bind(19, item.exif.orientation);
+        stmt.bind(20, item.exif.has_gps ? 1 : 0);
+        stmt.bind(21, item.exif.latitude);
+        stmt.bind(22, item.exif.longitude);
+        stmt.bind(23, item.exif.altitude);
+        stmt.bind(24, item.thumb_small);
+        stmt.bind(25, item.thumb_large);
+        stmt.bind(26, item.created_at);
+        stmt.bind(27, item.updated_at);
+
+        if (stmt.step() != StepResult::Done) {
+            return Status::databaseError("Failed to insert media item in batch: " + conn_.lastErrorMessage());
+        }
+
+        item.id = conn_.lastInsertRowId();
+        insertedCount++;
+        stmt.reset();
+    }
+
+    Status commitStatus = tx.commit();
+    if (!commitStatus.isOk()) {
+        return commitStatus;
+    }
+
+    return insertedCount;
+}
+
 Status CatalogDb::updateMedia(const MediaItem& item) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(

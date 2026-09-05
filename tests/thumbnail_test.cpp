@@ -238,3 +238,48 @@ TEST_F(ThumbnailTest, CacheLargeImageDownscale) {
     ASSERT_TRUE(dualRes2.isOk());
     EXPECT_EQ(dualRes.value().first, dualRes2.value().first);
 }
+
+TEST_F(ThumbnailTest, GetImageDimensionsFromMemoryAndDualThumbnailsFromMemory) {
+    std::string cacheDir = (testDir / "mem_cache").string();
+    Cache cache(cacheDir);
+
+    std::ifstream ifs(testImgPath, std::ios::binary);
+    ASSERT_TRUE(ifs.is_open());
+    std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+
+    auto dimRes = Generator::getImageDimensionsFromMemory(buffer.data(), buffer.size());
+    ASSERT_TRUE(dimRes.isOk());
+    EXPECT_EQ(dimRes.value().first, 400);
+    EXPECT_EQ(dimRes.value().second, 200);
+
+    // Invalid memory
+    std::vector<uint8_t> badBuf = {1, 2, 3};
+    auto badRes = Generator::getImageDimensionsFromMemory(badBuf.data(), badBuf.size());
+    EXPECT_FALSE(badRes.isOk());
+
+    // Empty memory
+    auto emptyRes = Generator::getImageDimensionsFromMemory(nullptr, 0);
+    EXPECT_FALSE(emptyRes.isOk());
+
+    // Dual thumbnails from memory
+    std::string hash = "abcdefabcdefabcdefabcdefabcdefab";
+    int outW = 0, outH = 0;
+    auto dualRes = cache.ensureDualThumbnailsFromMemory(
+        buffer.data(), buffer.size(), hash, 1, &outW, &outH
+    );
+    ASSERT_TRUE(dualRes.isOk());
+    EXPECT_EQ(outW, 400);
+    EXPECT_EQ(outH, 200);
+    EXPECT_TRUE(std::filesystem::exists(dualRes.value().first));
+    EXPECT_TRUE(std::filesystem::exists(dualRes.value().second));
+
+    // Cached branch (hasSmall && hasLarge)
+    int outW2 = 0, outH2 = 0;
+    auto dualRes2 = cache.ensureDualThumbnailsFromMemory(
+        buffer.data(), buffer.size(), hash, 1, &outW2, &outH2
+    );
+    ASSERT_TRUE(dualRes2.isOk());
+    EXPECT_EQ(outW2, 400);
+    EXPECT_EQ(outH2, 200);
+    EXPECT_EQ(dualRes.value().first, dualRes2.value().first);
+}

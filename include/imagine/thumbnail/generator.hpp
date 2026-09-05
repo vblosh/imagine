@@ -26,6 +26,7 @@ public:
     static Status savePng(const ImageBuffer& img, const std::string& destPath);
 
     static Result<std::pair<int, int>> getImageDimensions(const std::string& filePath);
+    static Result<std::pair<int, int>> getImageDimensionsFromMemory(const uint8_t* data, size_t size);
 };
 
 } // namespace imagine::thumbnail

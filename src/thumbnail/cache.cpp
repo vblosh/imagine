@@ -129,4 +129,65 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnails(
     return std::make_pair(smallPath, largePath);
 }
 
+Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemory(
+    const uint8_t* data,
+    size_t size,
+    const std::string& hash,
+    int orientation,
+    int* outWidth,
+    int* outHeight
+) {
+    std::string smallPath = getThumbnailPath(hash, SmallSize);
+    std::string largePath = getThumbnailPath(hash, LargeSize);
+
+    bool hasSmall = hasThumbnail(hash, SmallSize);
+    bool hasLarge = hasThumbnail(hash, LargeSize);
+
+    if (hasSmall && hasLarge) {
+        if (outWidth && outHeight) {
+            auto dimRes = Generator::getImageDimensionsFromMemory(data, size);
+            if (dimRes.isOk()) {
+                *outWidth = dimRes.value().first;
+                *outHeight = dimRes.value().second;
+            }
+        }
+        return std::make_pair(smallPath, largePath);
+    }
+
+    auto loadRes = Generator::loadImageFromMemory(data, size);
+    if (!loadRes.isOk()) {
+        return loadRes.status();
+    }
+
+    auto img = std::move(loadRes.value());
+    if (outWidth) *outWidth = img.width;
+    if (outHeight) *outHeight = img.height;
+
+    if (orientation > 1) {
+        img = Generator::rotate(img, orientation);
+    }
+
+    // Generate large thumbnail first
+    ImageBuffer largeImg;
+    if (img.width > LargeSize || img.height > LargeSize) {
+        auto resLarge = Generator::resize(img, LargeSize);
+        if (!resLarge.isOk()) return resLarge.status();
+        largeImg = std::move(resLarge.value());
+    } else {
+        largeImg = img;
+    }
+
+    Status saveLarge = Generator::saveJpeg(largeImg, largePath);
+    if (!saveLarge.isOk()) return saveLarge;
+
+    // Fast downscale from largeImg to small thumbnail
+    auto resSmall = Generator::resize(largeImg, SmallSize);
+    if (!resSmall.isOk()) return resSmall.status();
+
+    Status saveSmall = Generator::saveJpeg(resSmall.value(), smallPath);
+    if (!saveSmall.isOk()) return saveSmall;
+
+    return std::make_pair(smallPath, largePath);
+}
+
 } // namespace imagine::thumbnail

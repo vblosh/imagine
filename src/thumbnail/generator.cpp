@@ -28,6 +28,17 @@ Result<std::pair<int, int>> Generator::getImageDimensions(const std::string& fil
     return Status::parseError("Failed to read image info: " + filePath);
 }
 
+Result<std::pair<int, int>> Generator::getImageDimensionsFromMemory(const uint8_t* data, size_t size) {
+    if (!data || size == 0) {
+        return Status::invalidArgument("Empty memory buffer for image info");
+    }
+    int w = 0, h = 0, comp = 0;
+    if (stbi_info_from_memory(data, static_cast<int>(size), &w, &h, &comp)) {
+        return std::make_pair(w, h);
+    }
+    return Status::parseError("Failed to read image info from memory");
+}
+
 Result<ImageBuffer> Generator::loadImage(const std::string& filePath) {
     int w = 0, h = 0, channels = 0;
     // Force 3 channels (RGB) for consistent thumbnailing

@@ -87,7 +87,7 @@ public:
     static bool isSupportedExtension(const std::string& path);
 
 private:
-    ProcessStatus processFileInternal(const std::string& filePath, MediaItem* outItem = nullptr);
+    ProcessStatus processFileInternal(const std::string& filePath, MediaItem* outItem = nullptr, bool commitToDb = true);
 
     db::CatalogDb& db_;
     thumbnail::Cache& cache_;

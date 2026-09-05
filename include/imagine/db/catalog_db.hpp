@@ -23,6 +23,7 @@ public:
 
     // Media Items
     Result<MediaId> insertMedia(MediaItem& item);
+    Result<size_t> insertMediaBatch(std::vector<MediaItem>& items);
     Status updateMedia(const MediaItem& item);
     Result<MediaItem> getMediaById(MediaId id);
     Result<MediaItem> getMediaByPath(const std::string& path);

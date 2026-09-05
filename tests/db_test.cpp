@@ -86,6 +86,41 @@ TEST_F(CatalogDbTest, InsertAndRetrieveMedia) {
     EXPECT_EQ(db.getMediaByHash("non_existent_hash").status().code(), StatusCode::NotFound);
 }
 
+TEST_F(CatalogDbTest, InsertMediaBatch) {
+    std::vector<MediaItem> batch;
+    for (int i = 0; i < 5; ++i) {
+        MediaItem item;
+        item.file_path = "/photos/batch_" + std::to_string(i) + ".jpg";
+        item.file_name = "batch_" + std::to_string(i) + ".jpg";
+        item.file_size = 1000 + i;
+        item.file_modified_time = 1750000000 + i;
+        item.content_hash = "batch_hash_" + std::to_string(i);
+        item.width = 1920;
+        item.height = 1080;
+        item.date_taken = 1750000000 + i;
+        item.rating = i;
+        batch.push_back(item);
+    }
+
+    auto batchRes = db.insertMediaBatch(batch);
+    ASSERT_TRUE(batchRes.isOk());
+    EXPECT_EQ(batchRes.value(), 5u);
+
+    // Verify IDs were populated and items exist
+    for (const auto& item : batch) {
+        EXPECT_GT(item.id, 0);
+        auto retrieved = db.getMediaById(item.id);
+        ASSERT_TRUE(retrieved.isOk());
+        EXPECT_EQ(retrieved.value().file_name, item.file_name);
+    }
+
+    // Empty batch returns 0
+    std::vector<MediaItem> empty;
+    auto emptyRes = db.insertMediaBatch(empty);
+    ASSERT_TRUE(emptyRes.isOk());
+    EXPECT_EQ(emptyRes.value(), 0u);
+}
+
 TEST_F(CatalogDbTest, UpdateAndDeleteMedia) {
     MediaItem item;
     item.file_path = "/photos/test.jpg";

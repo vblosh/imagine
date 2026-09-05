@@ -11,6 +11,13 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 endif()
 
+# Native host optimization
+option(ENABLE_NATIVE_OPT "Enable -march=native host optimizations" OFF)
+if (ENABLE_NATIVE_OPT AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    message(STATUS "Enabling -march=native host CPU optimizations")
+    add_compile_options(-march=native)
+endif()
+
 # Sanitizers
 option(ENABLE_SANITIZERS "Build with Address and Undefined sanitizers" OFF)
 if (ENABLE_SANITIZERS)

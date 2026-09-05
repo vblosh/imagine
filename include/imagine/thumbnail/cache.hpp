@@ -33,6 +33,15 @@ public:
         int orientation = 1
     );
 
+    Result<std::pair<std::string, std::string>> ensureDualThumbnailsFromMemory(
+        const uint8_t* data,
+        size_t size,
+        const std::string& hash,
+        int orientation = 1,
+        int* outWidth = nullptr,
+        int* outHeight = nullptr
+    );
+
     static std::string defaultCacheDir();
 
 private:
