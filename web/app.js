@@ -444,6 +444,17 @@
         state.mediaItems = items;
       }
 
+      // Reconcile selection: prune IDs no longer visible
+      const visibleIds = new Set(state.mediaItems.map(item => item.id));
+      state.selectedIds.forEach(id => {
+        if (!visibleIds.has(id)) {
+          state.selectedIds.delete(id);
+        }
+      });
+      if (state.lastSelectedId !== null && !visibleIds.has(state.lastSelectedId)) {
+        state.lastSelectedId = null;
+      }
+
       // Track all discovered folders across loads so filtering doesn't remove folders from sidebar
       state.mediaItems.forEach(item => {
         if (item.file_path) {

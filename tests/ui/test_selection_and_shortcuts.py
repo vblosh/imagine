@@ -188,3 +188,116 @@ def test_multi_selection_batch_keyboard_shortcuts(server, page: Page):
     page.keyboard.press("Escape")
     expect(page.locator(".photo-card.selected")).to_have_count(0)
 
+
+def test_selection_pruned_when_filtered_out(server, page: Page):
+    """Selecting a photo and then switching filter prunes the stale selection."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # Click sunset.bmp (flag = 0, unflagged)
+    sunset_card = page.locator(".photo-card", has_text="sunset.bmp")
+    sunset_card.click()
+    expect(sunset_card).to_have_class(re.compile(r"\bselected\b"))
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+    expect(page.locator("#infoFileName")).to_have_text("sunset.bmp")
+
+    # Filter to Picks (only mountain.bmp and portrait.bmp)
+    page.locator("#navPicks").click()
+    expect(cards).to_have_count(2)
+
+    # Stale selection should be pruned
+    expect(page.locator(".photo-card.selected")).to_have_count(0)
+    expect(page.locator("#batchActionBar")).to_be_hidden()
+    expect(page.locator("#inspectorNoSelection")).to_be_visible()
+    expect(page.locator("#inspectorSelection")).to_be_hidden()
+
+
+def test_selection_partially_pruned_on_filter_change(server, page: Page):
+    """Multi-selection across items only retains currently visible items after reload."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    mountain_card = page.locator(".photo-card", has_text="mountain.bmp")  # Pick
+    beach_card = page.locator(".photo-card", has_text="beach.bmp")        # Reject
+
+    mountain_card.click()
+    beach_card.click(modifiers=["Control"])
+    expect(mountain_card).to_have_class(re.compile(r"\bselected\b"))
+    expect(beach_card).to_have_class(re.compile(r"\bselected\b"))
+    expect(page.locator("#batchActionBar")).to_be_visible()
+    expect(page.locator("#batchSelectedCount")).to_have_text("2 selected")
+
+    # Filter to Picks (contains mountain.bmp, but not beach.bmp)
+    page.locator("#navPicks").click()
+    expect(cards).to_have_count(2)
+
+    # Stale beach.bmp is pruned, mountain.bmp remains selected
+    expect(page.locator(".photo-card.selected")).to_have_count(1)
+    expect(mountain_card).to_have_class(re.compile(r"\bselected\b"))
+    expect(page.locator("#batchActionBar")).to_be_hidden()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+    expect(page.locator("#infoFileName")).to_have_text("mountain.bmp")
+
+
+def test_selection_pruned_on_search(server, page: Page):
+    """Selected photo is pruned when search excludes it, and Ctrl+A acts only on search results."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # Select mountain.bmp
+    mountain_card = page.locator(".photo-card", has_text="mountain.bmp")
+    mountain_card.click()
+    expect(mountain_card).to_have_class(re.compile(r"\bselected\b"))
+
+    # Search for "beach"
+    search_input = page.locator("#searchInput")
+    search_input.fill("beach")
+    expect(cards).to_have_count(1)
+
+    # mountain.bmp should be pruned from selection
+    expect(page.locator(".photo-card.selected")).to_have_count(0)
+    expect(page.locator("#inspectorNoSelection")).to_be_visible()
+    expect(page.locator("#batchActionBar")).to_be_hidden()
+
+    # Blur input so keyboard shortcut is handled by grid
+    search_input.blur()
+
+    # Ctrl+A now selects only beach.bmp
+    page.keyboard.press("Control+a")
+    expect(page.locator(".photo-card.selected")).to_have_count(1)
+    expect(cards.first).to_have_class(re.compile(r"\bselected\b"))
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+    expect(page.locator("#infoFileName")).to_have_text("beach.bmp")
+
+
+def test_shift_range_selection_after_filter_prunes_last_selected(server, page: Page):
+    """When last selected item is pruned by a filter, shift+click does not glitch or use stale range."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # Click sunset.bmp to set lastSelectedId
+    sunset_card = page.locator(".photo-card", has_text="sunset.bmp")
+    sunset_card.click()
+    expect(sunset_card).to_have_class(re.compile(r"\bselected\b"))
+
+    # Switch filter to Picks (mountain.bmp, portrait.bmp) - sunset.bmp is pruned and lastSelectedId cleared
+    page.locator("#navPicks").click()
+    expect(cards).to_have_count(2)
+
+    # Shift-click portrait.bmp (second card)
+    cards.nth(1).click(modifiers=["Shift"])
+
+    # Exactly 1 card selected (portrait.bmp) instead of invalid range from sunset.bmp
+    expect(page.locator(".photo-card.selected")).to_have_count(1)
+    expect(cards.nth(1)).to_have_class(re.compile(r"\bselected\b"))
+    expect(cards.nth(0)).not_to_have_class(re.compile(r"\bselected\b"))
+    expect(page.locator("#batchActionBar")).to_be_hidden()
+
