@@ -103,3 +103,47 @@ def test_batch_add_tag(server, page: Page):
     # Inspect card 2: verify tag is present
     card2.click()
     expect(page.locator("#inspectorTags")).to_contain_text("WeekendTrip")
+
+
+def test_batch_operations_single_http_call(server, page: Page):
+    """Batch rating, flag, and tag actions send a single batch HTTP request rather than N individual calls."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # Select 3 photos
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=["Control"])
+    cards.nth(2).click(modifiers=["Control"])
+    expect(page.locator("#batchActionBar")).to_be_visible()
+
+    api_calls = []
+    page.on("request", lambda r: api_calls.append(r.url) if "/api/" in r.url else None)
+
+    # 1. Batch Flag
+    api_calls.clear()
+    page.locator("#batchPickBtn").click()
+    page.wait_for_timeout(300)
+    flag_calls = [url for url in api_calls if "flag" in url]
+    assert len(flag_calls) == 1
+    assert "/api/media/batch-flag" in flag_calls[0]
+
+    # 2. Batch Rating
+    api_calls.clear()
+    page.locator('#batchRating span[data-star="5"]').click()
+    page.wait_for_timeout(300)
+    rating_calls = [url for url in api_calls if "rating" in url]
+    assert len(rating_calls) == 1
+    assert "/api/media/batch-rating" in rating_calls[0]
+
+    # 3. Batch Tag
+    api_calls.clear()
+    page.locator("#batchAddTagBtn").click()
+    page.locator("#tagNameInput").fill("SingleBatchTag")
+    page.locator("#createTagSubmitBtn").click()
+    page.wait_for_timeout(300)
+    tag_calls = [url for url in api_calls if "batch-tags" in url]
+    assert len(tag_calls) == 1
+    assert "/api/media/batch-tags" in tag_calls[0]
+

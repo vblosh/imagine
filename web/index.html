@@ -260,6 +260,12 @@
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
               <span id="unmappedBtnLabel">Unmapped (0)</span>
             </button>
+            <button class="btn btn-sm btn-secondary" id="mapLoadMoreBtn" style="display: none;" title="Load next page of photos">
+              Load More
+            </button>
+            <button class="btn btn-sm btn-secondary" id="mapLoadAllBtn" style="display: none;" title="Load all photos in catalog for map">
+              Load All
+            </button>
           </div>
           <div id="leafletMap" class="leaflet-map-canvas"></div>
           <div class="unmapped-tray" id="unmappedTray" style="display: none;">
@@ -269,6 +275,7 @@
                 <span class="unmapped-selected-count" id="unmappedSelectedCount" style="display: none;">0 selected</span>
                 <button class="btn btn-xs btn-secondary" id="unmappedSelectAllBtn" title="Select all unmapped photos">Select All</button>
                 <button class="btn btn-xs btn-secondary" id="unmappedDeselectAllBtn" title="Clear selection" style="display: none;">Deselect</button>
+                <button class="btn btn-xs btn-secondary" id="unmappedLoadMoreBtn" style="display: none;" title="Load more photos into tray">Load More</button>
                 <button class="btn-icon-sm" id="closeUnmappedTrayBtn" title="Close unmapped tray">&times;</button>
               </div>
             </div>

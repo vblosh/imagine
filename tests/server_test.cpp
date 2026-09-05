@@ -268,6 +268,91 @@ TEST_F(ServerTest, MediaItemCrudAndRatings) {
     EXPECT_EQ(client.Get("/api/media/" + std::to_string(bId2))->status, 404);
 }
 
+TEST_F(ServerTest, BatchRatingFlagTagsGps) {
+    httplib::Client client("127.0.0.1", port_);
+
+    MediaItem it1, it2;
+    it1.file_path = (testDir_ / "bf1.jpg").string();
+    it1.file_name = "bf1.jpg";
+    it1.file_size = 1000;
+    it1.content_hash = "hash_bf1";
+    it1.date_taken = 1000;
+
+    it2.file_path = (testDir_ / "bf2.jpg").string();
+    it2.file_name = "bf2.jpg";
+    it2.file_size = 1000;
+    it2.content_hash = "hash_bf2";
+    it2.date_taken = 1000;
+
+    MediaId id1 = catalog_->db().insertMedia(it1).value();
+    MediaId id2 = catalog_->db().insertMedia(it2).value();
+
+    // 1. Batch rating
+    nlohmann::json rateBody = {{"ids", {id1, id2}}, {"rating", 5}};
+    auto rateRes = client.Post("/api/media/batch-rating", rateBody.dump(), "application/json");
+    ASSERT_TRUE(rateRes);
+    EXPECT_EQ(rateRes->status, 200);
+    auto rateJson = nlohmann::json::parse(rateRes->body);
+    EXPECT_EQ(rateJson["updated_count"].get<int>(), 2);
+    EXPECT_EQ(rateJson["rating"].get<int>(), 5);
+
+    auto get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
+    auto get2 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id2))->body);
+    EXPECT_EQ(get1["rating"].get<int>(), 5);
+    EXPECT_EQ(get2["rating"].get<int>(), 5);
+
+    // 2. Batch flag
+    nlohmann::json flagBody = {{"ids", {id1, id2}}, {"flag", 1}};
+    auto flagRes = client.Post("/api/media/batch-flag", flagBody.dump(), "application/json");
+    ASSERT_TRUE(flagRes);
+    EXPECT_EQ(flagRes->status, 200);
+    auto flagJson = nlohmann::json::parse(flagRes->body);
+    EXPECT_EQ(flagJson["updated_count"].get<int>(), 2);
+    EXPECT_EQ(flagJson["flag"].get<int>(), 1);
+
+    get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
+    get2 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id2))->body);
+    EXPECT_EQ(get1["flag"].get<int>(), 1);
+    EXPECT_EQ(get2["flag"].get<int>(), 1);
+
+    // 3. Batch tags
+    nlohmann::json tagBody = {{"ids", {id1, id2}}, {"name", "Vacation2026"}, {"category", "events"}};
+    auto tagRes = client.Post("/api/media/batch-tags", tagBody.dump(), "application/json");
+    ASSERT_TRUE(tagRes);
+    EXPECT_EQ(tagRes->status, 200);
+    auto tagJson = nlohmann::json::parse(tagRes->body);
+    EXPECT_EQ(tagJson["tagged_count"].get<int>(), 2);
+    EXPECT_EQ(tagJson["name"].get<std::string>(), "Vacation2026");
+
+    get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
+    EXPECT_EQ(get1["tags"].size(), 1u);
+    EXPECT_EQ(get1["tags"][0]["name"].get<std::string>(), "Vacation2026");
+
+    // 4. Batch GPS
+    nlohmann::json gpsBody = {{"ids", {id1, id2}}, {"has_gps", true}, {"latitude", 48.8566}, {"longitude", 2.3522}};
+    auto gpsRes = client.Post("/api/media/batch-gps", gpsBody.dump(), "application/json");
+    ASSERT_TRUE(gpsRes);
+    EXPECT_EQ(gpsRes->status, 200);
+    auto gpsJson = nlohmann::json::parse(gpsRes->body);
+    EXPECT_EQ(gpsJson["updated_count"].get<int>(), 2);
+
+    get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
+    EXPECT_TRUE(get1["exif"]["has_gps"].get<bool>());
+    EXPECT_NEAR(get1["exif"]["latitude"].get<double>(), 48.8566, 0.0001);
+
+    // 5. Geocode route parameter validation
+    auto geoNoQ = client.Get("/api/geocode");
+    ASSERT_TRUE(geoNoQ);
+    EXPECT_EQ(geoNoQ->status, 400);
+
+    auto geoEmptyQ = client.Get("/api/geocode?q=");
+    ASSERT_TRUE(geoEmptyQ);
+    EXPECT_EQ(geoEmptyQ->status, 200);
+    auto emptyArr = nlohmann::json::parse(geoEmptyQ->body);
+    EXPECT_TRUE(emptyArr.is_array());
+    EXPECT_EQ(emptyArr.size(), 0u);
+}
+
 TEST_F(ServerTest, StaticFilesAndSpaRouting) {
     httplib::Client client("127.0.0.1", port_);
 

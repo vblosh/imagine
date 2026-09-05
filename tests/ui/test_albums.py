@@ -111,7 +111,13 @@ def test_delete_album(server, page: Page):
     album_item = page.locator("#albumsList .menu-item", has_text="ToDelete Album")
     expect(album_item).to_be_visible()
 
-    # Click delete button on the new album
+    # Dismissing confirm cancels deletion
+    page.once("dialog", lambda d: d.dismiss())
+    album_item.locator(".delete-album-btn").click()
+    expect(page.locator("#albumsList .menu-item", has_text="ToDelete Album")).to_be_visible()
+
+    # Accepting confirm deletes the album
+    page.once("dialog", lambda d: d.accept())
     album_item.locator(".delete-album-btn").click()
     expect(page.locator("#albumsList .menu-item", has_text="ToDelete Album")).to_have_count(0)
 
@@ -121,7 +127,8 @@ def test_delete_album(server, page: Page):
     expect(page.locator("#filterLabel")).to_contain_text("Album: Vacation")
     expect(cards).to_have_count(2)
 
-    # Delete the active "Vacation" album
+    # Delete the active "Vacation" album with confirmation
+    page.once("dialog", lambda d: d.accept())
     vacation_album.locator(".delete-album-btn").click()
     expect(page.locator("#albumsList .menu-item", has_text="Vacation")).to_have_count(0)
     # Filter resets back to all media

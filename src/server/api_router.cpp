@@ -78,6 +78,7 @@ void ApiRouter::registerRoutes(httplib::Server& server) {
     registerTimelineRoutes(server);
     registerStatsRoutes(server);
     registerImportRoutes(server);
+    registerGeocodeRoutes(server);
 }
 
 void ApiRouter::registerCorsHandler(httplib::Server& server) {
@@ -440,6 +441,170 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }
     });
+
+    // POST /api/media/batch-rating
+    server.Post("/api/media/batch-rating", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.contains("ids") || !body["ids"].is_array()) {
+                sendError(res, "Missing or invalid 'ids' array");
+                return;
+            }
+            if (!body.contains("rating") || !body["rating"].is_number()) {
+                sendError(res, "Missing or invalid rating field");
+                return;
+            }
+            int32_t rating = body["rating"].get<int32_t>();
+            if (rating < 0 || rating > 5) {
+                sendError(res, "Rating must be between 0 and 5");
+                return;
+            }
+
+            std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+            int updatedCount = 0;
+            for (MediaId id : ids) {
+                Status s = catalog_ ? catalog_->setRating(id, rating) : db().updateRating(id, rating);
+                if (s.isOk()) {
+                    updatedCount++;
+                }
+            }
+            sendJson(res, {{"status", "ok"}, {"updated_count", updatedCount}, {"rating", rating}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
+    // POST /api/media/batch-flag
+    server.Post("/api/media/batch-flag", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.contains("ids") || !body["ids"].is_array()) {
+                sendError(res, "Missing or invalid 'ids' array");
+                return;
+            }
+            if (!body.contains("flag") || !body["flag"].is_number()) {
+                sendError(res, "Missing or invalid flag field");
+                return;
+            }
+            int8_t flagVal = body["flag"].get<int8_t>();
+            if (flagVal < -1 || flagVal > 1) {
+                sendError(res, "Flag must be -1, 0, or 1");
+                return;
+            }
+
+            FlagState flag = static_cast<FlagState>(flagVal);
+            std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+            int updatedCount = 0;
+            for (MediaId id : ids) {
+                Status s = catalog_ ? catalog_->setFlag(id, flag) : db().updateFlag(id, flag);
+                if (s.isOk()) {
+                    updatedCount++;
+                }
+            }
+            sendJson(res, {{"status", "ok"}, {"updated_count", updatedCount}, {"flag", flagVal}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
+    // POST /api/media/batch-tags
+    server.Post("/api/media/batch-tags", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::vector<MediaId> ids;
+            if (body.contains("ids") && body["ids"].is_array()) {
+                ids = body["ids"].get<std::vector<MediaId>>();
+            } else if (body.contains("media_ids") && body["media_ids"].is_array()) {
+                ids = body["media_ids"].get<std::vector<MediaId>>();
+            } else {
+                sendError(res, "Missing or invalid 'ids' or 'media_ids' array");
+                return;
+            }
+
+            if (!body.contains("name") || !body["name"].is_string()) {
+                sendError(res, "Missing or invalid name field");
+                return;
+            }
+            std::string name = body["name"].get<std::string>();
+            std::string category = body.value("category", "keyword");
+
+            auto tagRes = catalog_
+                ? catalog_->createOrGetTag(name, category)
+                : db().createOrGetTag(name, category);
+
+            if (!tagRes.isOk()) {
+                sendError(res, tagRes.status().message(), 500);
+                return;
+            }
+
+            TagId tagId = tagRes.value();
+            int taggedCount = 0;
+            for (MediaId id : ids) {
+                Status s = catalog_ ? catalog_->addTag(id, tagId) : db().addTagToMedia(id, tagId);
+                if (s.isOk()) {
+                    taggedCount++;
+                }
+            }
+            sendJson(res, {
+                {"status", "ok"},
+                {"tag_id", tagId},
+                {"name", name},
+                {"category", category},
+                {"tagged_count", taggedCount}
+            });
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
+    // POST /api/media/batch-gps
+    server.Post("/api/media/batch-gps", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::vector<MediaId> ids;
+            if (body.contains("ids") && body["ids"].is_array()) {
+                ids = body["ids"].get<std::vector<MediaId>>();
+            } else {
+                sendError(res, "Missing or invalid 'ids' array");
+                return;
+            }
+
+            bool hasGps = body.value("has_gps", true);
+            double latitude = body.value("latitude", 0.0);
+            double longitude = body.value("longitude", 0.0);
+            double altitude = body.value("altitude", 0.0);
+
+            if (hasGps) {
+                if (latitude < -90.0 || latitude > 90.0) {
+                    sendError(res, "Latitude must be between -90 and 90");
+                    return;
+                }
+                if (longitude < -180.0 || longitude > 180.0) {
+                    sendError(res, "Longitude must be between -180 and 180");
+                    return;
+                }
+            }
+
+            int updatedCount = 0;
+            for (MediaId id : ids) {
+                Status s = catalog_
+                    ? catalog_->setGps(id, hasGps, latitude, longitude, altitude)
+                    : db().updateGps(id, hasGps, latitude, longitude, altitude);
+                if (s.isOk()) {
+                    updatedCount++;
+                }
+            }
+            sendJson(res, {
+                {"status", "ok"},
+                {"updated_count", updatedCount},
+                {"has_gps", hasGps},
+                {"latitude", latitude},
+                {"longitude", longitude}
+            });
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
 }
 
 void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
@@ -741,6 +906,59 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
         } else {
             std::lock_guard<std::mutex> lock(g_importMutex);
             sendJson(res, g_fallbackProgress);
+        }
+    });
+}
+
+void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
+    // GET /api/geocode?q=...&limit=...
+    server.Get("/api/geocode", [](const httplib::Request& req, httplib::Response& res) {
+        if (!req.has_param("q")) {
+            sendError(res, "Missing required query parameter 'q'", 400);
+            return;
+        }
+        std::string query = req.get_param_value("q");
+        if (query.empty()) {
+            sendJson(res, nlohmann::json::array());
+            return;
+        }
+
+        std::string limit = req.has_param("limit") ? req.get_param_value("limit") : "5";
+
+        try {
+            httplib::SSLClient cli("nominatim.openstreetmap.org");
+            cli.set_connection_timeout(5, 0);
+            cli.set_read_timeout(5, 0);
+            httplib::Headers headers = {
+                {"User-Agent", "ImaginePhotoCatalog/1.0 (https://github.com/vblosh/imagine; contact: imagine-app@github.com)"},
+                {"Accept", "application/json"}
+            };
+
+            // URL-encode query
+            std::string encodedQuery;
+            for (char c : query) {
+                if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.' || c == '~') {
+                    encodedQuery += c;
+                } else if (c == ' ') {
+                    encodedQuery += '+';
+                } else {
+                    char buf[4];
+                    std::snprintf(buf, sizeof(buf), "%%%02X", static_cast<unsigned char>(c));
+                    encodedQuery += buf;
+                }
+            }
+
+            std::string path = "/search?format=json&q=" + encodedQuery + "&limit=" + limit;
+            auto osmRes = cli.Get(path.c_str(), headers);
+            if (osmRes && osmRes->status == 200) {
+                res.status = 200;
+                res.set_content(osmRes->body, "application/json");
+            } else {
+                int status = osmRes ? osmRes->status : 502;
+                sendError(res, "Geocoding upstream service unavailable", status);
+            }
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Geocoding failed: ") + ex.what(), 500);
         }
     });
 }

@@ -137,7 +137,13 @@ def test_delete_tag(server, page: Page):
     tag_item = page.locator("#tagCategoryKeyword .tag-item", has_text="ToDelete Tag")
     expect(tag_item).to_be_visible()
 
-    # Click delete button on the new tag
+    # Dismissing confirm cancels deletion
+    page.once("dialog", lambda d: d.dismiss())
+    tag_item.locator(".delete-tag-btn").click()
+    expect(page.locator("#tagCategoryKeyword .tag-item", has_text="ToDelete Tag")).to_be_visible()
+
+    # Accepting confirm deletes the tag
+    page.once("dialog", lambda d: d.accept())
     tag_item.locator(".delete-tag-btn").click()
     expect(page.locator("#tagCategoryKeyword .tag-item", has_text="ToDelete Tag")).to_have_count(0)
 
@@ -147,7 +153,8 @@ def test_delete_tag(server, page: Page):
     expect(page.locator("#filterLabel")).to_contain_text("Tag: Sunset")
     expect(cards).to_have_count(2)
 
-    # Delete the active "Sunset" tag
+    # Delete the active "Sunset" tag with confirmation
+    page.once("dialog", lambda d: d.accept())
     sunset_tag.locator(".delete-tag-btn").click()
     expect(page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")).to_have_count(0)
     # Filter resets back to all media
@@ -156,6 +163,7 @@ def test_delete_tag(server, page: Page):
 
 def test_delete_tag_removes_from_sidebar_and_photos(server, page: Page):
     """Verify deleting a tag from the left panel removes it from sidebar and from photo metadata in inspector."""
+    page.on("dialog", lambda d: d.accept())
     page.goto(server["url"])
 
     # 1. Select mountain.bmp which is tagged with 'Alps' and 'Sunset'

@@ -66,6 +66,7 @@ def test_view_tabs_category_filtering(server, page: Page):
     page.locator('.tab-btn[data-tab="places"]').click()
     expect(page.locator('.tab-btn[data-tab="places"]')).to_have_class(re.compile(r"\bactive\b"))
     # Places category contains both mountain.bmp (Alps) and beach.bmp (Beach)
+    expect(page.locator(".photo-card", has_text="mountain.bmp")).to_be_visible()
     expect(cards).to_have_count(2)
     places_names = [cards.nth(0).locator(".card-filename").text_content(), cards.nth(1).locator(".card-filename").text_content()]
     assert "mountain.bmp" in places_names

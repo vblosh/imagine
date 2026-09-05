@@ -383,3 +383,96 @@ def test_map_clustering_zoom_combine_and_decombine(server, page: Page):
     expect(popup).to_be_visible()
     expect(popup.locator(".map-popup-nav")).to_be_visible()
     expect(popup.locator(".map-popup-nav")).to_contain_text("1 of 2")
+
+
+def test_map_pagination_controls(server, page: Page):
+    """Verify Map toolbar and Unmapped tray pagination controls when photos exceed loaded page."""
+    page.goto(server["url"])
+    expect(page.locator(".photo-card")).to_have_count(6)
+
+    # Simulate catalog has more photos than loaded page (totalCount = 10, loaded = 6)
+    page.evaluate("() => { window._imagineState.totalCount = 10; }")
+
+    # Switch to Map view
+    page.locator("#viewMapBtn").click()
+    expect(page.locator("#mapViewContainer")).to_be_visible()
+
+    # Open unmapped tray
+    page.locator("#mapToggleUnmappedBtn").click()
+    expect(page.locator("#unmappedTray")).to_be_visible()
+
+    load_more_btn = page.locator("#mapLoadMoreBtn")
+    load_all_btn = page.locator("#mapLoadAllBtn")
+    unmapped_btn = page.locator("#unmappedLoadMoreBtn")
+
+    expect(load_more_btn).to_be_visible()
+    expect(load_more_btn).to_contain_text("Load More (6/10)")
+    expect(load_all_btn).to_be_visible()
+    expect(unmapped_btn).to_be_visible()
+    expect(unmapped_btn).to_contain_text("Load More (6/10)")
+
+    # Intercept pagination requests to return total=10 so controls remain active
+    page.route("**/api/media*offset=*", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"items": [], "total": 10})
+    ))
+
+    # Click Map Load More button and verify pagination request is sent
+    with page.expect_request(lambda r: "/api/media" in r.url and "offset=6" in r.url):
+        load_more_btn.click()
+
+    # Click Unmapped Load More button and verify pagination request is sent
+    with page.expect_request(lambda r: "/api/media" in r.url and "offset=" in r.url):
+        unmapped_btn.click()
+
+
+def test_geocode_backend_proxy_integration(server, page: Page):
+    """Verify that searching for places uses the backend /api/geocode proxy endpoint."""
+    page.goto(server["url"])
+    page.locator("#viewMapBtn").click()
+    expect(page.locator("#mapViewContainer")).to_be_visible()
+
+    # Intercept /api/geocode requests to verify parameters and simulate response
+    geocode_requests = []
+
+    def handle_geocode(route):
+        geocode_requests.append(route.request.url)
+        # Mock Nominatim JSON response returned by proxy
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps([{
+                "place_id": 12345,
+                "lat": "48.8584",
+                "lon": "2.2945",
+                "name": "Eiffel Tower",
+                "display_name": "Eiffel Tower, Paris, France",
+                "type": "monument",
+                "addresstype": "tourism"
+            }])
+        )
+
+    page.route("**/api/geocode*", handle_geocode)
+
+    search_input = page.locator("#mapSearchInput")
+    search_input.fill("Eiffel Tower")
+
+    # Verify search result appears from geocode proxy
+    results = page.locator("#mapSearchResults")
+    expect(results).to_be_visible()
+    eiffel_result = results.locator(".map-search-item", has_text="Eiffel Tower")
+    expect(eiffel_result).to_be_visible()
+    expect(eiffel_result.locator(".item-badge")).to_have_text("tourism")
+
+    # Verify that the backend proxy endpoint /api/geocode was indeed called with ?q=Eiffel%20Tower
+    assert len(geocode_requests) > 0
+    assert "/api/geocode?q=Eiffel" in geocode_requests[0]
+
+    # Clicking the result places the search pin
+    eiffel_result.click()
+    expect(page.locator(".search-location-pin")).to_be_visible()
+    popup = page.locator(".map-popup-card.search-result-popup")
+    expect(popup).to_be_visible()
+    expect(popup.locator(".map-popup-title")).to_contain_text("Eiffel Tower")
+

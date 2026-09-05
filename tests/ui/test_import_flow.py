@@ -105,3 +105,31 @@ def test_import_invalid_directory_path(empty_server, page: Page):
     page.locator("#cancelImportBtn").click()
     expect(page.locator("#importModal")).to_be_hidden()
 
+
+def test_import_modal_close_mid_run_continues_polling(empty_server, page: Page):
+    """Closing import modal mid-run continues background polling, auto-refreshing the catalog on completion."""
+    page.goto(empty_server["url"])
+
+    import_dir = empty_server["env"]["import_dir"]
+
+    # Open import modal
+    page.locator("#importBtn").click()
+    expect(page.locator("#importModal")).to_be_visible()
+
+    # Fill directory path
+    page.locator("#importPathInput").fill(import_dir)
+
+    # Click start import
+    page.locator("#startImportBtn").click()
+    expect(page.locator("#importProgressBox")).to_be_visible()
+
+    # Immediately close the modal while import is running
+    page.locator("#closeImportModalBtn").click()
+    expect(page.locator("#importModal")).to_be_hidden()
+
+    # Background polling should continue and auto-refresh the catalog
+    expect(page.locator(".photo-card")).to_have_count(2, timeout=10000)
+    expect(page.locator("#totalMediaCount")).to_have_text("2")
+    expect(page.locator("#emptyState")).to_be_hidden()
+
+

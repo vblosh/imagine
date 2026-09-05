@@ -40,6 +40,7 @@ private:
     void registerTimelineRoutes(httplib::Server& server);
     void registerStatsRoutes(httplib::Server& server);
     void registerImportRoutes(httplib::Server& server);
+    void registerGeocodeRoutes(httplib::Server& server);
 
     core::Catalog* catalog_{nullptr};
     db::CatalogDb* db_{nullptr};

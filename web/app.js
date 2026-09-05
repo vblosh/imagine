@@ -47,7 +47,8 @@
     mapSearchDebounceTimer: null,
     mediaLimit: 500,
     mediaOffset: 0,
-    isLoadingMore: false
+    isLoadingMore: false,
+    isImporting: false
   };
 
   // --- API Helpers ---
@@ -116,12 +117,15 @@
     mapPhotoCount: document.getElementById('mapPhotoCount'),
     mapFitBoundsBtn: document.getElementById('mapFitBoundsBtn'),
     mapToggleUnmappedBtn: document.getElementById('mapToggleUnmappedBtn'),
+    mapLoadMoreBtn: document.getElementById('mapLoadMoreBtn'),
+    mapLoadAllBtn: document.getElementById('mapLoadAllBtn'),
     unmappedBtnLabel: document.getElementById('unmappedBtnLabel'),
     unmappedTray: document.getElementById('unmappedTray'),
     unmappedTrayTitle: document.getElementById('unmappedTrayTitle'),
     unmappedSelectedCount: document.getElementById('unmappedSelectedCount'),
     unmappedSelectAllBtn: document.getElementById('unmappedSelectAllBtn'),
     unmappedDeselectAllBtn: document.getElementById('unmappedDeselectAllBtn'),
+    unmappedLoadMoreBtn: document.getElementById('unmappedLoadMoreBtn'),
     closeUnmappedTrayBtn: document.getElementById('closeUnmappedTrayBtn'),
     unmappedPhotosList: document.getElementById('unmappedPhotosList'),
     sortSelect: document.getElementById('sortSelect'),
@@ -421,7 +425,11 @@
       });
 
       if (state.viewMode !== 'map') {
-        renderGrid();
+        if (append) {
+          appendMediaToGrid(items);
+        } else {
+          renderGrid();
+        }
       }
       if (state.viewMode === 'map' || state.mapInstance) {
         renderMapMarkers();
@@ -478,6 +486,7 @@
       }
     } catch (err) {
       console.error('Failed to load catalog metadata:', err);
+      showToast('Failed to load catalog metadata: ' + (err.message || 'Server error'), 'error');
     }
   }
 
@@ -507,6 +516,7 @@
     Object.keys(groups).forEach(groupTitle => {
       const groupEl = document.createElement('div');
       groupEl.className = 'date-group';
+      groupEl.dataset.groupKey = groupTitle;
 
       const headerEl = document.createElement('div');
       headerEl.className = 'date-header';
@@ -526,6 +536,71 @@
 
       groupEl.appendChild(cardsWrap);
       dom.mediaGrid.appendChild(groupEl);
+    });
+
+    if (state.mediaItems.length < state.totalCount) {
+      const moreWrap = document.createElement('div');
+      moreWrap.className = 'grid-load-more-wrap';
+      moreWrap.style.cssText = 'padding:20px;text-align:center;width:100%;grid-column:1/-1;';
+      moreWrap.innerHTML = `
+        <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">Showing ${state.mediaItems.length} of ${state.totalCount} photos</div>
+        <button class="btn btn-secondary btn-sm" id="gridLoadMoreBtn">Load More</button>
+      `;
+      const btn = moreWrap.querySelector('#gridLoadMoreBtn');
+      if (btn) btn.onclick = () => loadMoreMedia();
+      dom.mediaGrid.appendChild(moreWrap);
+    }
+  }
+
+  function appendMediaToGrid(newItems) {
+    if (!dom.mediaGrid || !newItems || newItems.length === 0) return;
+
+    // Remove existing load more wrap
+    const existingLoadMore = dom.mediaGrid.querySelector('.grid-load-more-wrap');
+    if (existingLoadMore) existingLoadMore.remove();
+
+    if (state.mediaItems.length > 0 && dom.emptyState) {
+      dom.emptyState.style.display = 'none';
+    }
+
+    newItems.forEach(item => {
+      let groupKey = 'Undated';
+      if (item.date_taken && item.date_taken > 0) {
+        const d = new Date(item.date_taken * 1000);
+        groupKey = `${getMonthName(d.getUTCMonth() + 1)} ${d.getUTCFullYear()}`;
+      }
+
+      let groupEl = dom.mediaGrid.querySelector(`.date-group[data-group-key="${groupKey}"]`);
+      if (!groupEl) {
+        groupEl = document.createElement('div');
+        groupEl.className = 'date-group';
+        groupEl.dataset.groupKey = groupKey;
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'date-header';
+        headerEl.innerHTML = `
+          <span>${groupKey}</span>
+          <span class="group-count">0 items</span>
+        `;
+        groupEl.appendChild(headerEl);
+
+        const cardsWrap = document.createElement('div');
+        cardsWrap.className = 'group-cards';
+        groupEl.appendChild(cardsWrap);
+
+        dom.mediaGrid.appendChild(groupEl);
+      }
+
+      const cardsWrap = groupEl.querySelector('.group-cards');
+      if (cardsWrap) {
+        const card = createPhotoCard(item);
+        cardsWrap.appendChild(card);
+        const count = cardsWrap.children.length;
+        const countEl = groupEl.querySelector('.group-count');
+        if (countEl) {
+          countEl.textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
+        }
+      }
     });
 
     if (state.mediaItems.length < state.totalCount) {
@@ -800,9 +875,16 @@
       if (!state.selectedIds.has(selectedId)) return;
       const idx = state.mediaItems.findIndex(m => m.id === selectedId);
       if (idx !== -1) {
-        state.mediaItems[idx] = Object.assign({}, state.mediaItems[idx], freshItem);
+        const currentItem = state.mediaItems[idx];
+        const merged = Object.assign({}, freshItem, {
+          rating: (currentItem.rating !== undefined && currentItem.rating !== null) ? currentItem.rating : freshItem.rating,
+          flag: (currentItem.flag !== undefined && currentItem.flag !== null) ? currentItem.flag : freshItem.flag
+        });
+        state.mediaItems[idx] = merged;
+        renderInspectorContent(merged);
+      } else {
+        renderInspectorContent(freshItem);
       }
-      renderInspectorContent(freshItem);
     } catch (err) {
       if (fetchId !== currentInspectorFetchId) return;
       console.warn('Could not fetch single media details:', err);
@@ -1013,6 +1095,22 @@
 
     if (dom.mapPhotoCount) {
       dom.mapPhotoCount.textContent = gpsItems.length;
+    }
+
+    if (dom.mapLoadMoreBtn) {
+      if (state.mediaItems.length < state.totalCount) {
+        dom.mapLoadMoreBtn.style.display = 'inline-block';
+        dom.mapLoadMoreBtn.textContent = `Load More (${state.mediaItems.length}/${state.totalCount})`;
+      } else {
+        dom.mapLoadMoreBtn.style.display = 'none';
+      }
+    }
+    if (dom.mapLoadAllBtn) {
+      if (state.mediaItems.length < state.totalCount) {
+        dom.mapLoadAllBtn.style.display = 'inline-block';
+      } else {
+        dom.mapLoadAllBtn.style.display = 'none';
+      }
     }
 
     const clusters = clusterGpsItems(gpsItems, state.mapInstance, 50);
@@ -1286,6 +1384,15 @@
       dom.unmappedBtnLabel.textContent = `Unmapped (${unmapped.length})`;
     }
 
+    if (dom.unmappedLoadMoreBtn) {
+      if (state.mediaItems.length < state.totalCount) {
+        dom.unmappedLoadMoreBtn.style.display = 'inline-block';
+        dom.unmappedLoadMoreBtn.textContent = `Load More (${state.mediaItems.length}/${state.totalCount})`;
+      } else {
+        dom.unmappedLoadMoreBtn.style.display = 'none';
+      }
+    }
+
     // Prune IDs no longer unmapped
     const unmappedIdSet = new Set(unmapped.map(i => i.id));
     Array.from(state.placementMediaIds).forEach(id => {
@@ -1316,6 +1423,19 @@
 
       dom.unmappedPhotosList.appendChild(chip);
     });
+
+    if (state.mediaItems.length < state.totalCount) {
+      const moreChip = document.createElement('div');
+      moreChip.className = 'unmapped-chip unmapped-load-more';
+      moreChip.id = 'unmappedLoadMoreChip';
+      moreChip.title = 'Load more photos into catalog';
+      moreChip.innerHTML = `<div class="chip-name">+ Load More (${state.mediaItems.length}/${state.totalCount})</div>`;
+      moreChip.onclick = (e) => {
+        e.stopPropagation();
+        loadMoreMedia();
+      };
+      dom.unmappedPhotosList.appendChild(moreChip);
+    }
   }
 
   function enterPlacementMode(mediaId) {
@@ -1338,12 +1458,13 @@
   async function applyGeotagBatch(ids, lat, lon, alt = 0.0) {
     if (!ids || ids.length === 0) return;
     try {
-      await Promise.all(ids.map(id => api.post(`/api/media/${id}/gps`, {
+      await api.post('/api/media/batch-gps', {
+        ids,
         has_gps: true,
         latitude: lat,
         longitude: lon,
         altitude: alt
-      })));
+      });
 
       ids.forEach(mediaId => {
         const item = state.mediaItems.find(i => i.id === mediaId);
@@ -1568,7 +1689,7 @@
       if (searchId !== currentMapSearchId) return;
       lastNominatimRequestTime = Date.now();
 
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
+      const url = `/api/geocode?q=${encodeURIComponent(query)}&limit=5`;
       const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
       if (searchId !== currentMapSearchId) return;
       if (resp.ok) {
@@ -1754,6 +1875,9 @@
       if (delBtn) {
         delBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
+          if (!window.confirm(`Are you sure you want to delete tag "${tag.name}"?`)) {
+            return;
+          }
           try {
             await api.del(`/api/tags/${tag.id}`);
             if (state.activeTagId === tag.id) {
@@ -1762,8 +1886,10 @@
             await loadMetadata();
             loadMedia();
             updateInspector();
+            showToast(`Tag "${tag.name}" deleted.`, 'info');
           } catch (err) {
             console.error('Failed to delete tag:', err);
+            showToast('Failed to delete tag: ' + (err.message || 'Server error'), 'error');
           }
         });
       }
@@ -1807,6 +1933,9 @@
       if (delBtn) {
         delBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
+          if (!window.confirm(`Are you sure you want to delete album "${album.name}"?`)) {
+            return;
+          }
           try {
             await api.del(`/api/albums/${album.id}`);
             if (state.activeAlbumId === album.id) {
@@ -1814,8 +1943,10 @@
             }
             await loadMetadata();
             loadMedia();
+            showToast(`Album "${album.name}" deleted.`, 'info');
           } catch (err) {
             console.error('Failed to delete album:', err);
+            showToast('Failed to delete album: ' + (err.message || 'Server error'), 'error');
           }
         });
       }
@@ -2036,32 +2167,32 @@
 
   // --- Item Modifications ---
   async function updateItemRating(id, rating) {
+    const item = state.mediaItems.find(m => m.id === id);
+    if (item) {
+      item.rating = rating;
+      patchCardRating(id, rating);
+      patchInspectorRatingAndFlag(item);
+      patchOpenMapPopup(id);
+    }
+    if (state.loupeIndex >= 0) updateLoupeControls();
     try {
       await api.post(`/api/media/${id}/rating`, { rating });
-      const item = state.mediaItems.find(m => m.id === id);
-      if (item) {
-        item.rating = rating;
-        patchCardRating(id, rating);
-        patchInspectorRatingAndFlag(item);
-        patchOpenMapPopup(id);
-      }
-      if (state.loupeIndex >= 0) updateLoupeControls();
     } catch (err) {
       console.error('Failed to update rating:', err);
     }
   }
 
   async function updateItemFlag(id, flag) {
+    const item = state.mediaItems.find(m => m.id === id);
+    if (item) {
+      item.flag = flag;
+      patchCardFlag(id, flag);
+      patchInspectorRatingAndFlag(item);
+      patchOpenMapPopup(id);
+    }
+    if (state.loupeIndex >= 0) updateLoupeControls();
     try {
       await api.post(`/api/media/${id}/flag`, { flag });
-      const item = state.mediaItems.find(m => m.id === id);
-      if (item) {
-        item.flag = flag;
-        patchCardFlag(id, flag);
-        patchInspectorRatingAndFlag(item);
-        patchOpenMapPopup(id);
-      }
-      if (state.loupeIndex >= 0) updateLoupeControls();
     } catch (err) {
       console.error('Failed to update flag:', err);
     }
@@ -2069,18 +2200,18 @@
 
   async function batchUpdateFlags(ids, flag) {
     if (!ids || ids.length === 0) return;
+    ids.forEach(id => {
+      const item = state.mediaItems.find(m => m.id === id);
+      if (item) {
+        item.flag = flag;
+        patchCardFlag(id, flag);
+        patchInspectorRatingAndFlag(item);
+        patchOpenMapPopup(id);
+      }
+    });
+    if (state.loupeIndex >= 0) updateLoupeControls();
     try {
-      await Promise.all(ids.map(id => api.post(`/api/media/${id}/flag`, { flag })));
-      ids.forEach(id => {
-        const item = state.mediaItems.find(m => m.id === id);
-        if (item) {
-          item.flag = flag;
-          patchCardFlag(id, flag);
-          patchInspectorRatingAndFlag(item);
-          patchOpenMapPopup(id);
-        }
-      });
-      if (state.loupeIndex >= 0) updateLoupeControls();
+      await api.post('/api/media/batch-flag', { ids, flag });
     } catch (err) {
       console.error('Failed to batch update flags:', err);
     }
@@ -2088,18 +2219,18 @@
 
   async function batchUpdateRatings(ids, rating) {
     if (!ids || ids.length === 0) return;
+    ids.forEach(id => {
+      const item = state.mediaItems.find(m => m.id === id);
+      if (item) {
+        item.rating = rating;
+        patchCardRating(id, rating);
+        patchInspectorRatingAndFlag(item);
+        patchOpenMapPopup(id);
+      }
+    });
+    if (state.loupeIndex >= 0) updateLoupeControls();
     try {
-      await Promise.all(ids.map(id => api.post(`/api/media/${id}/rating`, { rating })));
-      ids.forEach(id => {
-        const item = state.mediaItems.find(m => m.id === id);
-        if (item) {
-          item.rating = rating;
-          patchCardRating(id, rating);
-          patchInspectorRatingAndFlag(item);
-          patchOpenMapPopup(id);
-        }
-      });
-      if (state.loupeIndex >= 0) updateLoupeControls();
+      await api.post('/api/media/batch-rating', { ids, rating });
     } catch (err) {
       console.error('Failed to batch update ratings:', err);
     }
@@ -2297,6 +2428,7 @@
   // --- Import Workflow ---
   async function triggerImport(path, recursive) {
     try {
+      state.isImporting = true;
       dom.importProgressBox.style.display = 'flex';
       dom.importProgressBar.style.width = '5%';
       dom.importStatusCounts.textContent = 'Import started...';
@@ -2315,26 +2447,32 @@
           const skipped = prog.skipped_files || 0;
           const failed = prog.failed_files || 0;
 
-          if (total > 0) {
+          if (total > 0 && dom.importProgressBar) {
             const percent = Math.min(100, Math.round((processed / total) * 100));
             dom.importProgressBar.style.width = `${percent}%`;
           }
 
-          dom.importStatusCounts.textContent =
-            `Processed: ${processed} / ${total} (Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed})`;
-          dom.importCurrentFile.textContent = prog.current_file || '';
+          if (dom.importStatusCounts) {
+            dom.importStatusCounts.textContent =
+              `Processed: ${processed} / ${total} (Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed})`;
+          }
+          if (dom.importCurrentFile) {
+            dom.importCurrentFile.textContent = prog.current_file || '';
+          }
 
           if (!prog.is_running) {
             clearInterval(state.importPollInterval);
             state.importPollInterval = null;
-            dom.importProgressBar.style.width = '100%';
-            dom.importStatusCounts.textContent = `Completed! ${imported} imported, ${skipped} skipped.`;
-            dom.startImportBtn.disabled = false;
+            state.isImporting = false;
+            if (dom.importProgressBar) dom.importProgressBar.style.width = '100%';
+            if (dom.importStatusCounts) dom.importStatusCounts.textContent = `Completed! ${imported} imported, ${skipped} skipped.`;
+            if (dom.startImportBtn) dom.startImportBtn.disabled = false;
             setTimeout(() => {
-              dom.importModal.style.display = 'none';
-              dom.importProgressBox.style.display = 'none';
+              if (dom.importModal) dom.importModal.style.display = 'none';
+              if (dom.importProgressBox) dom.importProgressBox.style.display = 'none';
               loadMetadata();
               loadMedia();
+              showToast(`Import completed: ${imported} imported, ${skipped} skipped.`, 'success');
             }, 1200);
           }
         } catch (pollErr) {
@@ -2343,6 +2481,7 @@
       }, 500);
 
     } catch (err) {
+      state.isImporting = false;
       alert(`Import error: ${err.message}`);
       dom.startImportBtn.disabled = false;
       dom.importProgressBox.style.display = 'none';
@@ -2465,6 +2604,38 @@
         state.lastUnmappedClickedId = unmapped.length > 0 ? unmapped[unmapped.length - 1].id : null;
         updatePlacementModeState();
         renderUnmappedTray();
+      });
+    }
+    if (dom.mapLoadMoreBtn) {
+      dom.mapLoadMoreBtn.addEventListener('click', () => {
+        loadMoreMedia();
+      });
+    }
+    if (dom.mapLoadAllBtn) {
+      dom.mapLoadAllBtn.addEventListener('click', async () => {
+        dom.mapLoadAllBtn.disabled = true;
+        try {
+          while (state.mediaItems.length < state.totalCount) {
+            await loadMoreMedia();
+          }
+        } finally {
+          dom.mapLoadAllBtn.disabled = false;
+        }
+      });
+    }
+    if (dom.unmappedLoadMoreBtn) {
+      dom.unmappedLoadMoreBtn.addEventListener('click', () => {
+        loadMoreMedia();
+      });
+    }
+    if (dom.unmappedPhotosList) {
+      dom.unmappedPhotosList.addEventListener('scroll', () => {
+        const { scrollLeft, scrollWidth, clientWidth } = dom.unmappedPhotosList;
+        if (scrollWidth - (scrollLeft + clientWidth) < 100) {
+          if (!state.isLoadingMore && state.mediaItems.length < state.totalCount) {
+            loadMoreMedia();
+          }
+        }
       });
     }
     if (dom.unmappedDeselectAllBtn) {
@@ -2965,15 +3136,21 @@
     // Import modal
     function openImportModal() {
       dom.importModal.style.display = 'flex';
-      dom.importPathInput.focus();
+      if (state.isImporting) {
+        dom.importProgressBox.style.display = 'flex';
+        dom.startImportBtn.disabled = true;
+      } else {
+        dom.startImportBtn.disabled = false;
+        dom.importPathInput.focus();
+      }
     }
     function closeImportModal() {
-      if (state.importPollInterval) {
+      dom.importModal.style.display = 'none';
+      dom.importProgressBox.style.display = 'none';
+      if (!state.isImporting && state.importPollInterval) {
         clearInterval(state.importPollInterval);
         state.importPollInterval = null;
       }
-      dom.importModal.style.display = 'none';
-      dom.importProgressBox.style.display = 'none';
     }
     dom.importBtn.addEventListener('click', openImportModal);
     dom.emptyImportBtn.addEventListener('click', openImportModal);
@@ -3429,12 +3606,10 @@
       }
 
       if (dom.tagModalApplyToPhotoCheckbox && dom.tagModalApplyToPhotoCheckbox.checked && pendingTagTargetMediaIds.length > 0) {
-        for (const id of pendingTagTargetMediaIds) {
-          try {
-            await api.post(`/api/media/${id}/tags`, { name, category });
-          } catch (e) {
-            console.warn(`Failed to attach tag to photo ${id}:`, e);
-          }
+        try {
+          await api.post('/api/media/batch-tags', { ids: pendingTagTargetMediaIds, name, category });
+        } catch (e) {
+          console.warn('Failed to batch attach tag to photos:', e);
         }
       }
 
@@ -3726,4 +3901,5 @@
 
   // Expose state for UI test assertions and debugging
   window._imagineState = state;
+  window._imagineApp = { state, loadMedia, loadMoreMedia, appendMediaToGrid };
 })();

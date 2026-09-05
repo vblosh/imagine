@@ -70,6 +70,7 @@ target_link_libraries(imagine_lib
         easyexif
         nlohmann_json::nlohmann_json
         httplib::httplib
+        OpenSSL::SSL
         OpenSSL::Crypto
         ZLIB::ZLIB
         pthread
