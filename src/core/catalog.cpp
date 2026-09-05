@@ -149,6 +149,14 @@ Status Catalog::setFlag(MediaId id, FlagState flag) {
     return db_->updateFlag(id, flag);
 }
 
+Status Catalog::setGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+    return db_->updateGps(id, hasGps, latitude, longitude, altitude);
+}
+
 Status Catalog::deleteMedia(MediaId id) {
     std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {

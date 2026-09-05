@@ -50,6 +50,7 @@ public:
     Result<MediaItem> getMediaByHash(const std::string& hash);
     Status setRating(MediaId id, int32_t rating);
     Status setFlag(MediaId id, FlagState flag);
+    Status setGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
     Status deleteMedia(MediaId id);
 
     // Tags

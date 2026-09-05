@@ -31,6 +31,7 @@ public:
     Status updateRating(MediaId id, int32_t rating);
     Status updateFlag(MediaId id, FlagState flag);
     Status updateThumbnails(MediaId id, const std::string& smallPath, const std::string& largePath);
+    Status updateGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
     Status deleteMedia(MediaId id);
 
     // Tags

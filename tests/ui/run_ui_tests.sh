@@ -39,5 +39,8 @@ fi
 echo "Using pytest: ${PYTEST_BIN}"
 echo "Running UI test suite..."
 
-cd "${REPO_ROOT}"
-"${PYTEST_BIN}" tests/ui -v "$@"
+if [ "$#" -gt 0 ]; then
+    "${PYTEST_BIN}" -v "$@"
+else
+    "${PYTEST_BIN}" tests/ui -v
+fi

@@ -31,7 +31,20 @@
     loupeZoom: 1.0,
     loupePanX: 0,
     loupePanY: 0,
-    importPollInterval: null
+    importPollInterval: null,
+    viewMode: 'grid',
+    mapInstance: null,
+    mapMarkers: [],
+    searchMarker: null,
+    inspectorMiniMapInstance: null,
+    inspectorMiniMarker: null,
+    placementMediaId: null,
+    placementMediaIds: new Set(),
+    lastUnmappedClickedId: null,
+    unmappedTrayOpen: false,
+    mapSearchResults: [],
+    mapSearchActiveIdx: -1,
+    mapSearchDebounceTimer: null
   };
 
   // --- API Helpers ---
@@ -86,6 +99,28 @@
     refreshBtn: document.getElementById('refreshBtn'),
     importBtn: document.getElementById('importBtn'),
     viewTabs: document.getElementById('viewTabs'),
+    viewGridBtn: document.getElementById('viewGridBtn'),
+    viewMapBtn: document.getElementById('viewMapBtn'),
+    mapViewContainer: document.getElementById('mapViewContainer'),
+    leafletMap: document.getElementById('leafletMap'),
+    mapSearchOverlay: document.getElementById('mapSearchOverlay'),
+    mapSearchBox: document.querySelector('.map-search-box'),
+    mapSearchIcon: document.getElementById('mapSearchIcon'),
+    mapSearchInput: document.getElementById('mapSearchInput'),
+    clearMapSearchBtn: document.getElementById('clearMapSearchBtn'),
+    mapSearchSpinner: document.getElementById('mapSearchSpinner'),
+    mapSearchResults: document.getElementById('mapSearchResults'),
+    mapPhotoCount: document.getElementById('mapPhotoCount'),
+    mapFitBoundsBtn: document.getElementById('mapFitBoundsBtn'),
+    mapToggleUnmappedBtn: document.getElementById('mapToggleUnmappedBtn'),
+    unmappedBtnLabel: document.getElementById('unmappedBtnLabel'),
+    unmappedTray: document.getElementById('unmappedTray'),
+    unmappedTrayTitle: document.getElementById('unmappedTrayTitle'),
+    unmappedSelectedCount: document.getElementById('unmappedSelectedCount'),
+    unmappedSelectAllBtn: document.getElementById('unmappedSelectAllBtn'),
+    unmappedDeselectAllBtn: document.getElementById('unmappedDeselectAllBtn'),
+    closeUnmappedTrayBtn: document.getElementById('closeUnmappedTrayBtn'),
+    unmappedPhotosList: document.getElementById('unmappedPhotosList'),
     sortSelect: document.getElementById('sortSelect'),
     filterIndicator: document.getElementById('filterIndicator'),
     filterLabel: document.getElementById('filterLabel'),
@@ -144,6 +179,11 @@
     infoIso: document.getElementById('infoIso'),
     infoFocal: document.getElementById('infoFocal'),
     infoGps: document.getElementById('infoGps'),
+    inspectorGpsActions: document.getElementById('inspectorGpsActions'),
+    inspectorShowOnMapBtn: document.getElementById('inspectorShowOnMapBtn'),
+    inspectorClearGpsBtn: document.getElementById('inspectorClearGpsBtn'),
+    inspectorPlaceOnMapBtn: document.getElementById('inspectorPlaceOnMapBtn'),
+    inspectorMiniMap: document.getElementById('inspectorMiniMap'),
     inspectorTags: document.getElementById('inspectorTags'),
     addTagInput: document.getElementById('addTagInput'),
     addTagCategorySelect: document.getElementById('addTagCategorySelect'),
@@ -302,6 +342,10 @@
       });
 
       renderGrid();
+      if (state.viewMode === 'map' || state.mapInstance) {
+        renderMapMarkers();
+        renderUnmappedTray();
+      }
       renderSidebarFolders();
       updateFilterLabel();
       updateBatchBar();
@@ -490,6 +534,19 @@
 
     updateBatchBar();
     updateInspector();
+    updateMapMarkerSelections();
+  }
+
+  function updateMapMarkerSelections() {
+    if (!state.mapMarkers) return;
+    state.mapMarkers.forEach(m => {
+      const isSelected = m.clusterItems && m.clusterItems.some(i => state.selectedIds.has(i.id));
+      const el = m.getElement();
+      if (el) {
+        const pinInner = el.querySelector('.photo-pin-inner');
+        if (pinInner) pinInner.classList.toggle('selected', !!isSelected);
+      }
+    });
   }
 
   function updateBatchBar() {
@@ -507,6 +564,7 @@
     if (state.selectedIds.size === 0) {
       dom.inspectorNoSelection.style.display = 'block';
       dom.inspectorSelection.style.display = 'none';
+      updateInspectorMiniMap(null);
       return;
     }
 
@@ -577,6 +635,9 @@
 
     // Tags
     renderInspectorTags(item);
+
+    // Mini-map
+    updateInspectorMiniMap(item);
   }
 
   function renderInspectorTags(item) {
@@ -624,6 +685,823 @@
         onSetRating(newRating);
       };
     });
+  }
+
+  // --- Map View & Geotagging ---
+  function switchViewMode(mode) {
+    state.viewMode = mode;
+    if (mode === 'map') {
+      if (dom.viewGridBtn) dom.viewGridBtn.classList.remove('active');
+      if (dom.viewMapBtn) dom.viewMapBtn.classList.add('active');
+      if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+      if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
+      initMap();
+      if (state.mapInstance) {
+        state.mapInstance.invalidateSize();
+        setTimeout(() => {
+          if (state.mapInstance) state.mapInstance.invalidateSize();
+        }, 50);
+        renderMapMarkers();
+        renderUnmappedTray();
+        fitMapToBounds();
+      }
+    } else {
+      if (dom.viewGridBtn) dom.viewGridBtn.classList.add('active');
+      if (dom.viewMapBtn) dom.viewMapBtn.classList.remove('active');
+      if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+      if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
+      exitPlacementMode();
+    }
+  }
+
+  function initMap() {
+    if (!window.L || state.mapInstance || !dom.leafletMap) return;
+    try {
+      state.mapInstance = L.map(dom.leafletMap, {
+        center: [30, 0],
+        zoom: 2,
+        zoomControl: true,
+        attributionControl: false,
+        keyboard: false
+      });
+      L.control.attribution({ prefix: false }).addTo(state.mapInstance);
+
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(state.mapInstance);
+
+      state.mapInstance.on('zoomend', () => {
+        renderMapMarkers();
+      });
+
+      state.mapInstance.on('click', async (e) => {
+        if (state.placementMediaIds && state.placementMediaIds.size > 0) {
+          const { lat, lng } = e.latlng;
+          const ids = Array.from(state.placementMediaIds);
+          await applyGeotagBatch(ids, lat, lng);
+        } else if (state.placementMediaId) {
+          const { lat, lng } = e.latlng;
+          await applyGeotag(state.placementMediaId, lat, lng);
+        }
+      });
+    } catch (err) {
+      console.error('Failed to initialize Leaflet map:', err);
+    }
+  }
+
+  function fitMapToBounds() {
+    if (!state.mapInstance) return;
+    const gpsItems = state.mediaItems.filter(item => item.exif && item.exif.has_gps &&
+      (item.exif.latitude !== 0 || item.exif.longitude !== 0));
+    if (gpsItems.length === 0) return;
+    try {
+      const latLngs = gpsItems.map(it => [it.exif.latitude, it.exif.longitude]);
+      state.mapInstance.fitBounds(L.latLngBounds(latLngs).pad(0.25), { maxZoom: 14 });
+    } catch (e) {}
+  }
+
+  function clusterGpsItems(gpsItems, map, radius = 50) {
+    if (!map || gpsItems.length === 0) return [];
+    const zoom = map.getZoom();
+
+    // Sort items: selected items first, then newest date / id for stability
+    const sortedItems = [...gpsItems].sort((a, b) => {
+      const aSel = state.selectedIds.has(a.id) ? 1 : 0;
+      const bSel = state.selectedIds.has(b.id) ? 1 : 0;
+      if (aSel !== bSel) return bSel - aSel;
+      if (a.date_taken && b.date_taken) return b.date_taken - a.date_taken;
+      return b.id - a.id;
+    });
+
+    const clusters = [];
+    const grid = new Map();
+
+    for (const item of sortedItems) {
+      const lat = item.exif.latitude;
+      const lng = item.exif.longitude;
+      const pt = map.project([lat, lng], zoom);
+
+      const cx = Math.floor(pt.x / radius);
+      const cy = Math.floor(pt.y / radius);
+
+      let closestCluster = null;
+      let minDist = radius;
+
+      // Search 3x3 neighboring grid cells
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const bucket = grid.get(`${cx + dx},${cy + dy}`);
+          if (!bucket) continue;
+          for (const cl of bucket) {
+            const dist = pt.distanceTo(cl.centerPt);
+            if (dist < minDist) {
+              minDist = dist;
+              closestCluster = cl;
+            }
+          }
+        }
+      }
+
+      if (closestCluster) {
+        closestCluster.items.push(item);
+      } else {
+        const newCluster = {
+          items: [item],
+          repItem: item,
+          centerPt: pt,
+          lat: lat,
+          lng: lng
+        };
+        clusters.push(newCluster);
+        const key = `${cx},${cy}`;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(newCluster);
+      }
+    }
+
+    return clusters;
+  }
+
+  function renderMapMarkers() {
+    if (!state.mapInstance) return;
+
+    // Preserve open popup media ID across re-clustering on zoom changes
+    let openMediaId = null;
+    if (state.mapMarkers && state.mapMarkers.length > 0) {
+      for (const m of state.mapMarkers) {
+        if (m.getPopup && m.getPopup() && m.getPopup().isOpen() && m.clusterItems) {
+          openMediaId = m.activeMediaId || (m.clusterItems[0] ? m.clusterItems[0].id : null);
+          break;
+        }
+      }
+    }
+
+    state.mapMarkers.forEach(m => m.remove());
+    state.mapMarkers = [];
+
+    const gpsItems = state.mediaItems.filter(item => item.exif && item.exif.has_gps &&
+      (item.exif.latitude !== 0 || item.exif.longitude !== 0));
+
+    if (dom.mapPhotoCount) {
+      dom.mapPhotoCount.textContent = gpsItems.length;
+    }
+
+    const clusters = clusterGpsItems(gpsItems, state.mapInstance, 50);
+
+    clusters.forEach((cluster) => {
+      const items = cluster.items;
+      const repItem = (openMediaId && items.find(i => i.id === openMediaId)) ||
+                      items.find(i => state.selectedIds.has(i.id)) ||
+                      cluster.repItem || items[0];
+      const lat = repItem.exif.latitude;
+      const lng = repItem.exif.longitude;
+      const count = items.length;
+      const thumbUrl = repItem.content_hash
+        ? `/api/thumbnails/${repItem.content_hash}/256`
+        : `/api/photos/${repItem.id}/original`;
+
+      const isSelected = items.some(i => state.selectedIds.has(i.id));
+      const countBadge = count > 1 ? `<span class="photo-pin-count">${count}</span>` : '';
+
+      const pinIcon = L.divIcon({
+        className: 'custom-photo-pin',
+        html: `
+          <div class="photo-pin-inner ${isSelected ? 'selected' : ''}" data-id="${repItem.id}">
+            <img src="${thumbUrl}" alt="${repItem.file_name}" class="photo-pin-thumb" />
+            ${countBadge}
+          </div>
+          <div class="photo-pin-pointer"></div>
+        `,
+        iconSize: [44, 50],
+        iconAnchor: [22, 50],
+        popupAnchor: [0, -48]
+      });
+
+      const marker = L.marker([lat, lng], { icon: pinIcon }).addTo(state.mapInstance);
+      marker.clusterItems = items;
+      marker.activeMediaId = repItem.id;
+      marker.bindPopup(() => createMapPopupElement(items, marker.activeMediaId), { maxWidth: 280, autoPan: true, autoPanPadding: [80, 80] });
+      marker.on('click', () => {
+        marker.activeMediaId = repItem.id;
+        handleCardSelection(repItem.id, { shiftKey: false, ctrlKey: false, metaKey: false });
+      });
+      state.mapMarkers.push(marker);
+    });
+
+    if (openMediaId) {
+      const targetMarker = state.mapMarkers.find(m => m.clusterItems && m.clusterItems.some(i => i.id === openMediaId));
+      if (targetMarker) {
+        targetMarker.activeMediaId = openMediaId;
+        targetMarker.openPopup();
+      }
+    }
+  }
+
+  function createMapPopupElement(items, initialItemId) {
+    let activeIndex = 0;
+    if (initialItemId) {
+      const idx = items.findIndex(i => i.id === initialItemId);
+      if (idx !== -1) activeIndex = idx;
+    } else {
+      const selIdx = items.findIndex(i => state.selectedIds.has(i.id));
+      if (selIdx !== -1) activeIndex = selIdx;
+    }
+
+    const container = document.createElement('div');
+    container.className = 'map-popup-card';
+
+    function renderActive() {
+      container.innerHTML = '';
+      const item = items[activeIndex];
+      if (!item) return;
+      const exif = item.exif || {};
+      const thumbUrl = item.content_hash
+        ? `/api/thumbnails/${item.content_hash}/256`
+        : `/api/photos/${item.id}/original`;
+
+      // Update marker activeMediaId and pin thumbnail if applicable
+      const marker = state.mapMarkers.find(m => m.clusterItems === items);
+      if (marker) {
+        marker.activeMediaId = item.id;
+        const el = marker.getElement();
+        if (el) {
+          const img = el.querySelector('.photo-pin-thumb');
+          if (img) {
+            img.src = thumbUrl;
+            img.alt = item.file_name;
+          }
+        }
+      }
+
+      if (items.length > 1) {
+        const nav = document.createElement('div');
+        nav.className = 'map-popup-nav';
+        nav.innerHTML = `
+          <button class="btn-icon-sm" id="popPrevBtn" title="Previous photo">&lt;</button>
+          <span>${activeIndex + 1} of ${items.length}</span>
+          <button class="btn-icon-sm" id="popNextBtn" title="Next photo">&gt;</button>
+        `;
+        nav.querySelector('#popPrevBtn').onclick = (e) => {
+          e.stopPropagation();
+          activeIndex = (activeIndex - 1 + items.length) % items.length;
+          renderActive();
+          const curItem = items[activeIndex];
+          if (curItem) {
+            handleCardSelection(curItem.id, { shiftKey: false, ctrlKey: false, metaKey: false });
+          }
+        };
+        nav.querySelector('#popNextBtn').onclick = (e) => {
+          e.stopPropagation();
+          activeIndex = (activeIndex + 1) % items.length;
+          renderActive();
+          const curItem = items[activeIndex];
+          if (curItem) {
+            handleCardSelection(curItem.id, { shiftKey: false, ctrlKey: false, metaKey: false });
+          }
+        };
+        container.appendChild(nav);
+      }
+
+      const thumbWrap = document.createElement('div');
+      thumbWrap.className = 'map-popup-thumb-wrap';
+      thumbWrap.innerHTML = `
+        <img src="${thumbUrl}" alt="${item.file_name}" class="map-popup-thumb">
+        <div class="loupe-hint">🔍 View Loupe</div>
+      `;
+      thumbWrap.onclick = () => {
+        openLoupeForMedia(item.id);
+      };
+      container.appendChild(thumbWrap);
+
+      const body = document.createElement('div');
+      body.className = 'map-popup-body';
+      const lat = exif.latitude.toFixed(5);
+      const lon = exif.longitude.toFixed(5);
+
+      let starsHtml = '';
+      for (let s = 1; s <= 5; s++) {
+        const activeClass = s <= (item.rating || 0) ? 'active' : '';
+        starsHtml += `<span class="${activeClass}" data-star="${s}">★</span>`;
+      }
+
+      body.innerHTML = `
+        <div class="map-popup-title" title="${item.file_name}">${item.file_name}</div>
+        <div class="map-popup-meta">
+          <span>${formatDateTime(item.date_taken)}</span>
+          <span class="map-popup-coords">📍 ${lat}, ${lon}</span>
+        </div>
+        <div class="map-popup-actions">
+          <div class="map-popup-rating" data-id="${item.id}">
+            ${starsHtml}
+          </div>
+          <div class="map-popup-btns">
+            <button class="btn btn-xs ${item.flag === 1 ? 'btn-primary' : 'btn-secondary'}" id="popPickBtn" title="Pick">✔</button>
+            <button class="btn btn-xs ${item.flag === -1 ? 'btn-danger' : 'btn-secondary'}" id="popRejectBtn" title="Reject">✖</button>
+          </div>
+        </div>
+      `;
+
+      body.querySelectorAll('.map-popup-rating span').forEach(starEl => {
+        starEl.onclick = (e) => {
+          e.stopPropagation();
+          const star = parseInt(starEl.dataset.star, 10);
+          const newRating = item.rating === star ? 0 : star;
+          updateItemRating(item.id, newRating);
+          item.rating = newRating;
+          renderActive();
+        };
+      });
+
+      const pickBtn = body.querySelector('#popPickBtn');
+      if (pickBtn) {
+        pickBtn.onclick = (e) => {
+          e.stopPropagation();
+          const newFlag = item.flag === 1 ? 0 : 1;
+          updateItemFlag(item.id, newFlag);
+          item.flag = newFlag;
+          renderActive();
+        };
+      }
+
+      const rejectBtn = body.querySelector('#popRejectBtn');
+      if (rejectBtn) {
+        rejectBtn.onclick = (e) => {
+          e.stopPropagation();
+          const newFlag = item.flag === -1 ? 0 : -1;
+          updateItemFlag(item.id, newFlag);
+          item.flag = newFlag;
+          renderActive();
+        };
+      }
+
+      container.appendChild(body);
+    }
+
+    renderActive();
+    return container;
+  }
+
+  function updatePlacementModeState() {
+    const count = state.placementMediaIds.size;
+    state.placementMediaId = count > 0 ? Array.from(state.placementMediaIds)[0] : null;
+
+    if (count > 0) {
+      if (dom.mapViewContainer) dom.mapViewContainer.classList.add('placement-mode');
+      if (dom.unmappedSelectedCount) {
+        dom.unmappedSelectedCount.textContent = `${count} selected`;
+        dom.unmappedSelectedCount.style.display = 'inline';
+      }
+      if (dom.unmappedDeselectAllBtn) dom.unmappedDeselectAllBtn.style.display = 'inline-block';
+      if (dom.unmappedTrayTitle) {
+        dom.unmappedTrayTitle.textContent = `${count} photo${count > 1 ? 's' : ''} selected — Click anywhere on the map to place`;
+      }
+    } else {
+      if (dom.mapViewContainer) dom.mapViewContainer.classList.remove('placement-mode');
+      if (dom.unmappedSelectedCount) dom.unmappedSelectedCount.style.display = 'none';
+      if (dom.unmappedDeselectAllBtn) dom.unmappedDeselectAllBtn.style.display = 'none';
+      if (dom.unmappedTrayTitle) {
+        dom.unmappedTrayTitle.textContent = 'Unmapped Photos — Select photos, then click anywhere on the map to place them';
+      }
+    }
+  }
+
+  function handleUnmappedChipClick(id, event, unmappedList) {
+    const isMultiKey = event.ctrlKey || event.metaKey;
+    const isShiftKey = event.shiftKey;
+
+    if (isShiftKey && state.lastUnmappedClickedId !== null) {
+      const ids = unmappedList.map(i => i.id);
+      const startIdx = ids.indexOf(state.lastUnmappedClickedId);
+      const endIdx = ids.indexOf(id);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const [low, high] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
+        for (let i = low; i <= high; i++) {
+          state.placementMediaIds.add(ids[i]);
+        }
+      }
+    } else if (isMultiKey) {
+      if (state.placementMediaIds.has(id)) {
+        state.placementMediaIds.delete(id);
+      } else {
+        state.placementMediaIds.add(id);
+      }
+      state.lastUnmappedClickedId = id;
+    } else {
+      if (state.placementMediaIds.has(id) && state.placementMediaIds.size === 1) {
+        state.placementMediaIds.clear();
+        state.lastUnmappedClickedId = null;
+      } else {
+        state.placementMediaIds.clear();
+        state.placementMediaIds.add(id);
+        state.lastUnmappedClickedId = id;
+      }
+    }
+
+    updatePlacementModeState();
+    renderUnmappedTray();
+  }
+
+  function renderUnmappedTray() {
+    if (!dom.unmappedPhotosList) return;
+    dom.unmappedPhotosList.innerHTML = '';
+    const unmapped = state.mediaItems.filter(item => !item.exif || !item.exif.has_gps ||
+      (item.exif.latitude === 0 && item.exif.longitude === 0));
+
+    if (dom.unmappedBtnLabel) {
+      dom.unmappedBtnLabel.textContent = `Unmapped (${unmapped.length})`;
+    }
+
+    // Prune IDs no longer unmapped
+    const unmappedIdSet = new Set(unmapped.map(i => i.id));
+    Array.from(state.placementMediaIds).forEach(id => {
+      if (!unmappedIdSet.has(id)) state.placementMediaIds.delete(id);
+    });
+    updatePlacementModeState();
+
+    unmapped.forEach(item => {
+      const isSelected = state.placementMediaIds.has(item.id);
+      const chip = document.createElement('div');
+      chip.className = 'unmapped-chip' + (isSelected ? ' active' : '');
+      chip.dataset.id = item.id;
+      const thumbUrl = item.content_hash
+        ? `/api/thumbnails/${item.content_hash}/256`
+        : `/api/photos/${item.id}/original`;
+
+      const checkBadge = isSelected ? '<div class="unmapped-chip-check">✓</div>' : '';
+      chip.innerHTML = `
+        <img src="${thumbUrl}" alt="${item.file_name}" loading="lazy">
+        ${checkBadge}
+        <div class="chip-name">${item.file_name}</div>
+      `;
+
+      chip.onclick = (e) => {
+        handleUnmappedChipClick(item.id, e, unmapped);
+      };
+
+      dom.unmappedPhotosList.appendChild(chip);
+    });
+  }
+
+  function enterPlacementMode(mediaId) {
+    state.placementMediaIds.add(mediaId);
+    state.lastUnmappedClickedId = mediaId;
+    updatePlacementModeState();
+    renderUnmappedTray();
+  }
+
+  function exitPlacementMode() {
+    state.placementMediaIds.clear();
+    state.placementMediaId = null;
+    state.lastUnmappedClickedId = null;
+    updatePlacementModeState();
+    if (dom.unmappedPhotosList) {
+      dom.unmappedPhotosList.querySelectorAll('.unmapped-chip').forEach(c => c.classList.remove('active'));
+    }
+  }
+
+  async function applyGeotagBatch(ids, lat, lon, alt = 0.0) {
+    if (!ids || ids.length === 0) return;
+    try {
+      await Promise.all(ids.map(id => api.post(`/api/media/${id}/gps`, {
+        has_gps: true,
+        latitude: lat,
+        longitude: lon,
+        altitude: alt
+      })));
+
+      ids.forEach(mediaId => {
+        const item = state.mediaItems.find(i => i.id === mediaId);
+        if (item) {
+          item.exif = item.exif || {};
+          item.exif.has_gps = true;
+          item.exif.latitude = lat;
+          item.exif.longitude = lon;
+          item.exif.altitude = alt;
+        }
+      });
+
+      exitPlacementMode();
+      renderMapMarkers();
+      renderUnmappedTray();
+      updateInspector();
+    } catch (err) {
+      console.error('Failed to batch geotag media:', err);
+    }
+  }
+
+  async function applyGeotag(mediaId, lat, lon, alt = 0.0) {
+    await applyGeotagBatch([mediaId], lat, lon, alt);
+  }
+
+  async function clearGeotag(mediaId) {
+    try {
+      await api.post(`/api/media/${mediaId}/gps`, { has_gps: false });
+      const item = state.mediaItems.find(i => i.id === mediaId);
+      if (item) {
+        item.exif = item.exif || {};
+        item.exif.has_gps = false;
+        item.exif.latitude = 0;
+        item.exif.longitude = 0;
+        item.exif.altitude = 0;
+      }
+      renderMapMarkers();
+      renderUnmappedTray();
+      updateInspector();
+    } catch (err) {
+      console.error('Failed to clear geotag:', err);
+    }
+  }
+
+  // --- Map Place Search & Navigation ---
+  function clearMapSearch() {
+    if (dom.mapSearchInput) dom.mapSearchInput.value = '';
+    if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'none';
+    if (dom.mapSearchSpinner) dom.mapSearchSpinner.style.display = 'none';
+    if (dom.mapSearchIcon) dom.mapSearchIcon.style.display = '';
+    if (dom.mapSearchBox) dom.mapSearchBox.classList.remove('has-input');
+    if (dom.mapSearchResults) {
+      dom.mapSearchResults.style.display = 'none';
+      dom.mapSearchResults.innerHTML = '';
+    }
+    state.mapSearchResults = [];
+    state.mapSearchActiveIdx = -1;
+    if (state.searchMarker) {
+      state.searchMarker.remove();
+      state.searchMarker = null;
+    }
+  }
+
+  function navigateToMapPlace(title, subtitle, lat, lng, zoom = 13) {
+    if (!state.mapInstance) return;
+
+    state.mapInstance.flyTo([lat, lng], zoom, { duration: 0.8 });
+
+    if (state.searchMarker) {
+      state.searchMarker.remove();
+      state.searchMarker = null;
+    }
+
+    const pinIcon = L.divIcon({
+      className: 'search-location-pin',
+      html: `
+        <div class="search-location-inner" title="${title}">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/></svg>
+          <div class="search-location-pointer"></div>
+        </div>
+      `,
+      iconSize: [32, 38],
+      iconAnchor: [16, 38],
+      popupAnchor: [0, -36]
+    });
+
+    state.searchMarker = L.marker([lat, lng], { icon: pinIcon }).addTo(state.mapInstance);
+    state.searchMarker.bindPopup(() => createSearchPopupElement(title, subtitle, lat, lng), { maxWidth: 280 }).openPopup();
+  }
+
+  function createSearchPopupElement(title, subtitle, lat, lng) {
+    const container = document.createElement('div');
+    container.className = 'map-popup-card search-result-popup';
+
+    const latStr = typeof lat === 'number' ? lat.toFixed(5) : lat;
+    const lngStr = typeof lng === 'number' ? lng.toFixed(5) : lng;
+
+    let placePhotoBtnHtml = '';
+    const selectedCount = state.placementMediaIds.size;
+    if (selectedCount > 0) {
+      let label = `Place ${selectedCount} Selected Photos Here`;
+      if (selectedCount === 1) {
+        const firstId = Array.from(state.placementMediaIds)[0];
+        const item = state.mediaItems.find(m => m.id === firstId);
+        label = item ? `Place "${item.file_name}" Here` : 'Place Selected Photo Here';
+      }
+      placePhotoBtnHtml = `
+        <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;">
+          📍 ${label}
+        </button>
+      `;
+    } else if (state.selectedIds.size === 1) {
+      const targetId = Array.from(state.selectedIds)[0];
+      const targetItem = state.mediaItems.find(m => m.id === targetId);
+      if (targetItem) {
+        placePhotoBtnHtml = `
+          <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;">
+            📍 Place "${targetItem.file_name}" Here
+          </button>
+        `;
+      }
+    }
+
+    container.innerHTML = `
+      <div class="map-popup-header" style="margin-bottom: 2px;">
+        <span class="map-popup-title">${title}</span>
+      </div>
+      ${subtitle ? `<div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${subtitle}</div>` : ''}
+      <div class="map-popup-coords">${latStr}, ${lngStr}</div>
+      ${placePhotoBtnHtml}
+      <button class="btn btn-xs btn-secondary clear-pin-btn" style="width: 100%; margin-top: 6px;">Remove Pin</button>
+    `;
+
+    const placeBtn = container.querySelector('.place-here-btn');
+    if (placeBtn) {
+      placeBtn.onclick = async () => {
+        if (state.placementMediaIds.size > 0) {
+          const ids = Array.from(state.placementMediaIds);
+          await applyGeotagBatch(ids, parseFloat(lat), parseFloat(lng));
+        } else if (state.selectedIds.size === 1) {
+          const targetId = Array.from(state.selectedIds)[0];
+          await applyGeotag(targetId, parseFloat(lat), parseFloat(lng));
+        }
+        if (state.searchMarker) {
+          state.searchMarker.remove();
+          state.searchMarker = null;
+        }
+      };
+    }
+
+    const clearBtn = container.querySelector('.clear-pin-btn');
+    if (clearBtn) {
+      clearBtn.onclick = () => {
+        if (state.searchMarker) {
+          state.searchMarker.remove();
+          state.searchMarker = null;
+        }
+      };
+    }
+
+    return container;
+  }
+
+  async function performMapPlaceSearch(rawQuery) {
+    const query = rawQuery.trim();
+    if (!query) {
+      clearMapSearch();
+      return;
+    }
+
+    if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'block';
+    if (dom.mapSearchSpinner) dom.mapSearchSpinner.style.display = 'block';
+
+    const results = [];
+
+    // 1. Direct coordinates parsing: e.g. "48.8584, 2.2945" or "-33.8688 151.2093"
+    const coordMatch = query.match(/^([+-]?\d+(?:\.\d+)?)[,\s]+([+-]?\d+(?:\.\d+)?)$/);
+    if (coordMatch) {
+      const lat = parseFloat(coordMatch[1]);
+      const lng = parseFloat(coordMatch[2]);
+      if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+        results.push({
+          title: `Coordinates: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+          subtitle: 'Custom GPS Coordinates',
+          lat: lat,
+          lng: lng,
+          type: 'coords',
+          badge: 'GPS'
+        });
+      }
+    }
+
+    // 2. Catalog search: matched photos with GPS
+    const lowerQuery = query.toLowerCase();
+    state.mediaItems.forEach(item => {
+      if (item.exif && item.exif.has_gps && (item.exif.latitude !== 0 || item.exif.longitude !== 0)) {
+        if (item.file_name.toLowerCase().includes(lowerQuery)) {
+          results.push({
+            title: item.file_name,
+            subtitle: `In Catalog · ${item.exif.latitude.toFixed(4)}, ${item.exif.longitude.toFixed(4)}`,
+            lat: item.exif.latitude,
+            lng: item.exif.longitude,
+            type: 'catalog',
+            badge: 'Photo'
+          });
+        }
+      }
+    });
+
+    // 3. Online Geocoding via OpenStreetMap Nominatim
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`;
+      const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (resp.ok) {
+        const data = await resp.json();
+        data.forEach(p => {
+          const lat = parseFloat(p.lat);
+          const lng = parseFloat(p.lon);
+          results.push({
+            title: p.name || (p.display_name ? p.display_name.split(',')[0] : query),
+            subtitle: p.display_name || '',
+            lat: lat,
+            lng: lng,
+            type: p.type || 'place',
+            badge: p.addresstype || p.type || 'Place'
+          });
+        });
+      }
+    } catch (e) {
+      // Offline fallback: coordinates or catalog items already collected
+      console.warn('Nominatim geocoding unavailable or offline:', e);
+    }
+
+    if (dom.mapSearchSpinner) dom.mapSearchSpinner.style.display = 'none';
+    state.mapSearchResults = results;
+    state.mapSearchActiveIdx = -1;
+    renderMapSearchResults(results);
+  }
+
+  function renderMapSearchResults(results) {
+    if (!dom.mapSearchResults) return;
+    dom.mapSearchResults.innerHTML = '';
+
+    if (results.length === 0) {
+      dom.mapSearchResults.innerHTML = '<div class="map-search-empty">No matching places or coordinates found</div>';
+      dom.mapSearchResults.style.display = 'block';
+      return;
+    }
+
+    dom.mapSearchResults.style.display = 'block';
+    results.forEach((r, idx) => {
+      const itemEl = document.createElement('div');
+      itemEl.className = 'map-search-item';
+      itemEl.dataset.idx = idx;
+
+      let iconSvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
+      if (r.type === 'coords') {
+        iconSvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>';
+      } else if (r.type === 'catalog') {
+        iconSvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+      }
+
+      itemEl.innerHTML = `
+        <div class="item-icon">${iconSvg}</div>
+        <div class="item-text">
+          <div class="item-title">${r.title}</div>
+          ${r.subtitle ? `<div class="item-subtitle">${r.subtitle}</div>` : ''}
+        </div>
+        ${r.badge ? `<span class="item-badge">${r.badge}</span>` : ''}
+      `;
+
+      itemEl.addEventListener('click', () => {
+        selectMapSearchResult(r);
+      });
+
+      dom.mapSearchResults.appendChild(itemEl);
+    });
+  }
+
+  function selectMapSearchResult(r) {
+    if (!r) return;
+    if (dom.mapSearchInput) dom.mapSearchInput.value = r.title;
+    if (dom.mapSearchIcon) dom.mapSearchIcon.style.display = 'none';
+    if (dom.mapSearchBox) dom.mapSearchBox.classList.add('has-input');
+    if (dom.mapSearchResults) dom.mapSearchResults.style.display = 'none';
+    if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'block';
+    navigateToMapPlace(r.title, r.subtitle, r.lat, r.lng, r.type === 'coords' ? 14 : 12);
+  }
+
+  function updateInspectorMiniMap(item) {
+    if (!dom.inspectorMiniMap) return;
+    if (!item || !window.L) {
+      if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'none';
+      if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'none';
+      dom.inspectorMiniMap.style.display = 'none';
+      return;
+    }
+
+    const exif = item.exif || {};
+    if (exif.has_gps && (exif.latitude !== 0 || exif.longitude !== 0)) {
+      if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'flex';
+      if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'none';
+      dom.inspectorMiniMap.style.display = 'block';
+
+      const lat = exif.latitude;
+      const lon = exif.longitude;
+
+      if (!state.inspectorMiniMapInstance) {
+        state.inspectorMiniMapInstance = L.map(dom.inspectorMiniMap, {
+          center: [lat, lon],
+          zoom: 12,
+          zoomControl: false,
+          attributionControl: false,
+          dragging: false,
+          scrollWheelZoom: false,
+          doubleClickZoom: false
+        });
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19
+        }).addTo(state.inspectorMiniMapInstance);
+        state.inspectorMiniMarker = L.marker([lat, lon]).addTo(state.inspectorMiniMapInstance);
+      } else {
+        state.inspectorMiniMapInstance.setView([lat, lon], 12);
+        state.inspectorMiniMarker.setLatLng([lat, lon]);
+        setTimeout(() => {
+          if (state.inspectorMiniMapInstance) state.inspectorMiniMapInstance.invalidateSize();
+        }, 50);
+      }
+    } else {
+      if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'none';
+      if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'block';
+      dom.inspectorMiniMap.style.display = 'none';
+    }
   }
 
   // --- Sidebar Renderers ---
@@ -950,6 +1828,9 @@
     if (idx === -1) return;
     state.loupeIndex = idx;
     dom.loupeModal.style.display = 'flex';
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
     updateLoupeView();
   }
 
@@ -1221,6 +2102,160 @@
       renderTimeline();
       loadMedia();
     });
+
+    // View Mode Toggle (Grid vs Map)
+    if (dom.viewGridBtn) {
+      dom.viewGridBtn.addEventListener('click', () => switchViewMode('grid'));
+    }
+    if (dom.viewMapBtn) {
+      dom.viewMapBtn.addEventListener('click', () => switchViewMode('map'));
+    }
+    if (dom.mapFitBoundsBtn) {
+      dom.mapFitBoundsBtn.addEventListener('click', () => fitMapToBounds());
+    }
+    if (dom.mapToggleUnmappedBtn) {
+      dom.mapToggleUnmappedBtn.addEventListener('click', () => {
+        state.unmappedTrayOpen = !state.unmappedTrayOpen;
+        dom.unmappedTray.style.display = state.unmappedTrayOpen ? 'flex' : 'none';
+        if (state.unmappedTrayOpen) renderUnmappedTray();
+        else exitPlacementMode();
+      });
+    }
+    if (dom.closeUnmappedTrayBtn) {
+      dom.closeUnmappedTrayBtn.addEventListener('click', () => {
+        state.unmappedTrayOpen = false;
+        dom.unmappedTray.style.display = 'none';
+        exitPlacementMode();
+      });
+    }
+    if (dom.unmappedSelectAllBtn) {
+      dom.unmappedSelectAllBtn.addEventListener('click', () => {
+        const unmapped = state.mediaItems.filter(item => !item.exif || !item.exif.has_gps ||
+          (item.exif.latitude === 0 && item.exif.longitude === 0));
+        unmapped.forEach(item => state.placementMediaIds.add(item.id));
+        state.lastUnmappedClickedId = unmapped.length > 0 ? unmapped[unmapped.length - 1].id : null;
+        updatePlacementModeState();
+        renderUnmappedTray();
+      });
+    }
+    if (dom.unmappedDeselectAllBtn) {
+      dom.unmappedDeselectAllBtn.addEventListener('click', () => {
+        exitPlacementMode();
+        renderUnmappedTray();
+      });
+    }
+
+    // Map Place Search Listeners
+    if (dom.mapSearchInput) {
+      dom.mapSearchInput.addEventListener('input', (e) => {
+        clearTimeout(state.mapSearchDebounceTimer);
+        const q = e.target.value;
+        const hasText = q.length > 0;
+        if (dom.mapSearchIcon) dom.mapSearchIcon.style.display = hasText ? 'none' : '';
+        if (dom.mapSearchBox) dom.mapSearchBox.classList.toggle('has-input', hasText);
+        if (!q.trim()) {
+          if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'none';
+          if (dom.mapSearchResults) {
+            dom.mapSearchResults.style.display = 'none';
+            dom.mapSearchResults.innerHTML = '';
+          }
+          state.mapSearchResults = [];
+          state.mapSearchActiveIdx = -1;
+          return;
+        }
+        if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'block';
+        state.mapSearchDebounceTimer = setTimeout(() => {
+          performMapPlaceSearch(q);
+        }, 300);
+      });
+
+      dom.mapSearchInput.addEventListener('keydown', (e) => {
+        const items = dom.mapSearchResults ? dom.mapSearchResults.querySelectorAll('.map-search-item') : [];
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          if (items.length > 0) {
+            state.mapSearchActiveIdx = Math.min(state.mapSearchActiveIdx + 1, items.length - 1);
+            items.forEach((it, i) => it.classList.toggle('highlighted', i === state.mapSearchActiveIdx));
+            items[state.mapSearchActiveIdx].scrollIntoView({ block: 'nearest' });
+          }
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (items.length > 0) {
+            state.mapSearchActiveIdx = Math.max(state.mapSearchActiveIdx - 1, 0);
+            items.forEach((it, i) => it.classList.toggle('highlighted', i === state.mapSearchActiveIdx));
+            items[state.mapSearchActiveIdx].scrollIntoView({ block: 'nearest' });
+          }
+        } else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (state.mapSearchActiveIdx >= 0 && state.mapSearchResults[state.mapSearchActiveIdx]) {
+            selectMapSearchResult(state.mapSearchResults[state.mapSearchActiveIdx]);
+          } else if (state.mapSearchResults.length > 0) {
+            selectMapSearchResult(state.mapSearchResults[0]);
+          } else if (dom.mapSearchInput.value.trim()) {
+            performMapPlaceSearch(dom.mapSearchInput.value.trim()).then(() => {
+              if (state.mapSearchResults.length > 0) {
+                selectMapSearchResult(state.mapSearchResults[0]);
+              }
+            });
+          }
+        } else if (e.key === 'Escape') {
+          if (dom.mapSearchResults) dom.mapSearchResults.style.display = 'none';
+        }
+      });
+    }
+
+    if (dom.clearMapSearchBtn) {
+      dom.clearMapSearchBtn.addEventListener('click', () => {
+        clearMapSearch();
+        if (dom.mapSearchInput) dom.mapSearchInput.focus();
+      });
+    }
+
+    document.addEventListener('click', (e) => {
+      if (dom.mapSearchOverlay && !dom.mapSearchOverlay.contains(e.target)) {
+        if (dom.mapSearchResults) dom.mapSearchResults.style.display = 'none';
+      }
+    });
+
+    // Inspector Map Actions
+    if (dom.inspectorShowOnMapBtn) {
+      dom.inspectorShowOnMapBtn.addEventListener('click', () => {
+        if (state.selectedIds.size === 0) return;
+        const id = Array.from(state.selectedIds)[0];
+        const item = state.mediaItems.find(i => i.id === id);
+        if (!item || !item.exif || !item.exif.has_gps) return;
+        switchViewMode('map');
+        if (state.mapInstance) {
+          state.mapInstance.flyTo([item.exif.latitude, item.exif.longitude], 14, { duration: 0.5 });
+          setTimeout(() => {
+            const marker = state.mapMarkers.find(m => {
+              const ll = m.getLatLng();
+              return Math.abs(ll.lat - item.exif.latitude) < 0.0001 &&
+                     Math.abs(ll.lng - item.exif.longitude) < 0.0001;
+            });
+            if (marker) marker.openPopup();
+          }, 300);
+        }
+      });
+    }
+    if (dom.inspectorClearGpsBtn) {
+      dom.inspectorClearGpsBtn.addEventListener('click', () => {
+        if (state.selectedIds.size === 0) return;
+        const id = Array.from(state.selectedIds)[0];
+        clearGeotag(id);
+      });
+    }
+    if (dom.inspectorPlaceOnMapBtn) {
+      dom.inspectorPlaceOnMapBtn.addEventListener('click', () => {
+        if (state.selectedIds.size === 0) return;
+        const id = Array.from(state.selectedIds)[0];
+        switchViewMode('map');
+        state.unmappedTrayOpen = true;
+        if (dom.unmappedTray) dom.unmappedTray.style.display = 'flex';
+        renderUnmappedTray();
+        enterPlacementMode(id);
+      });
+    }
 
     // Tab Switcher (Media, People, Places, Events)
     dom.viewTabs.querySelectorAll('.tab-btn').forEach(btn => {
@@ -1582,7 +2617,9 @@
           updateBatchBar();
           updateInspector();
         } else if (e.key === 'Escape') {
-          if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
+          if (state.placementMediaId) {
+            exitPlacementMode();
+          } else if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
             closeDeleteMediaModal();
           } else {
             state.selectedIds.clear();
@@ -1608,6 +2645,13 @@
           state.selectedIds.forEach(id => updateItemFlag(id, -1));
         } else if (e.key === 'u' || e.key === 'U') {
           state.selectedIds.forEach(id => updateItemFlag(id, 0));
+        } else if (e.key === 'm' || e.key === 'M') {
+          switchViewMode('map');
+        } else if (e.key === 'g' || e.key === 'G') {
+          switchViewMode('grid');
+        } else if (state.viewMode === 'map' && e.key === '/') {
+          e.preventDefault();
+          if (dom.mapSearchInput) dom.mapSearchInput.focus();
         }
       }
     });
@@ -2038,4 +3082,7 @@
   } else {
     init();
   }
+
+  // Expose state for UI test assertions and debugging
+  window._imagineState = state;
 })();

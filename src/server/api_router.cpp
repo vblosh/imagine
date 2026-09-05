@@ -157,6 +157,36 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 criteria.sort_descending = true;
             }
         }
+        if (req.has_param("has_gps")) {
+            std::string val = req.get_param_value("has_gps");
+            criteria.has_gps = (val == "1" || val == "true");
+        }
+        if (req.has_param("min_lat")) {
+            try { criteria.min_lat = std::stod(req.get_param_value("min_lat")); } catch (...) {}
+        }
+        if (req.has_param("max_lat")) {
+            try { criteria.max_lat = std::stod(req.get_param_value("max_lat")); } catch (...) {}
+        }
+        if (req.has_param("min_lon")) {
+            try { criteria.min_lon = std::stod(req.get_param_value("min_lon")); } catch (...) {}
+        }
+        if (req.has_param("max_lon")) {
+            try { criteria.max_lon = std::stod(req.get_param_value("max_lon")); } catch (...) {}
+        }
+        if (req.has_param("bbox")) {
+            std::string bbox = req.get_param_value("bbox");
+            std::stringstream ss(bbox);
+            std::string sMinLon, sMinLat, sMaxLon, sMaxLat;
+            if (std::getline(ss, sMinLon, ',') && std::getline(ss, sMinLat, ',') &&
+                std::getline(ss, sMaxLon, ',') && std::getline(ss, sMaxLat, ',')) {
+                try {
+                    criteria.min_lon = std::stod(sMinLon);
+                    criteria.min_lat = std::stod(sMinLat);
+                    criteria.max_lon = std::stod(sMaxLon);
+                    criteria.max_lat = std::stod(sMaxLat);
+                } catch (...) {}
+            }
+        }
 
         Result<core::QueryResult> queryRes = catalog_
             ? catalog_->query(criteria)
@@ -258,6 +288,61 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
 
             sendJson(res, {{"status", "ok"}, {"id", id}, {"flag", flagVal}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
+    // POST /api/media/:id/gps
+    server.Post(R"(/api/media/(\d+)/gps)", [this](const httplib::Request& req, httplib::Response& res) {
+        MediaId id = std::stoll(req.matches[1]);
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            bool hasGps = true;
+            if (body.contains("has_gps") && body["has_gps"].is_boolean()) {
+                hasGps = body["has_gps"].get<bool>();
+            }
+
+            double latitude = 0.0;
+            double longitude = 0.0;
+            double altitude = 0.0;
+
+            if (hasGps) {
+                if (!body.contains("latitude") || !body["latitude"].is_number() ||
+                    !body.contains("longitude") || !body["longitude"].is_number()) {
+                    sendError(res, "Missing or invalid latitude or longitude");
+                    return;
+                }
+                latitude = body["latitude"].get<double>();
+                longitude = body["longitude"].get<double>();
+                if (latitude < -90.0 || latitude > 90.0) {
+                    sendError(res, "Latitude must be between -90 and 90");
+                    return;
+                }
+                if (longitude < -180.0 || longitude > 180.0) {
+                    sendError(res, "Longitude must be between -180 and 180");
+                    return;
+                }
+                if (body.contains("altitude") && body["altitude"].is_number()) {
+                    altitude = body["altitude"].get<double>();
+                }
+            }
+
+            Status s = catalog_ ? catalog_->setGps(id, hasGps, latitude, longitude, altitude)
+                                : db().updateGps(id, hasGps, latitude, longitude, altitude);
+            if (!s.isOk()) {
+                sendError(res, s.message(), 500);
+                return;
+            }
+
+            sendJson(res, {
+                {"status", "ok"},
+                {"id", id},
+                {"has_gps", hasGps},
+                {"latitude", latitude},
+                {"longitude", longitude},
+                {"altitude", altitude}
+            });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }

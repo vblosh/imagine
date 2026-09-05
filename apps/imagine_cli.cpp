@@ -59,6 +59,7 @@ Commands:
   list                List and query photos in the catalog
   stats               Display catalog statistics and metrics
   tag <id> <name>     Attach a keyword tag to a photo
+  geotag <id> <lat> <lon> Set GPS coordinates for a photo
   delete <id...>      Delete one or more photos from the catalog
   --help, -h          Show this help message
 
@@ -80,8 +81,14 @@ Options for 'list':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
   --rating <N>        Filter by minimum star rating (0-5)
   --search <text>     Search keyword in filename, camera, lens, or tags
+  --gps               Filter only photos with GPS coordinates
   --limit <N>         Maximum items to display (default: 50)
   --offset <N>        Offset pagination (default: 0)
+
+Options for 'geotag':
+  --catalog <db>      Path to SQLite catalog database (default: catalog.db)
+  --altitude <alt>    Altitude in meters (default: 0.0)
+  --clear             Remove GPS coordinates from photo
 
 Options for 'tag':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
@@ -239,6 +246,8 @@ int handleList(int argc, char** argv) {
             criteria.min_rating = std::stoi(argv[++i]);
         } else if (arg == "--search" && i + 1 < argc) {
             criteria.search_text = argv[++i];
+        } else if (arg == "--gps") {
+            criteria.has_gps = true;
         } else if (arg == "--limit" && i + 1 < argc) {
             criteria.limit = std::stoi(argv[++i]);
         } else if (arg == "--offset" && i + 1 < argc) {
@@ -262,15 +271,19 @@ int handleList(int argc, char** argv) {
     const auto& qr = res.value();
     std::cout << "\nFound " << qr.total_count << " photos (showing " << qr.items.size() << "):\n\n";
 
+    bool showGps = criteria.has_gps.value_or(false);
     std::cout << std::setfill(' ') << std::left
               << std::setw(6)  << "ID"
               << std::setw(30) << "File Name"
               << std::setw(8)  << "Rating"
               << std::setw(8)  << "Flag"
               << std::setw(18) << "Date Taken"
-              << std::setw(12) << "Size"
-              << "Camera\n";
-    std::cout << std::string(100, '-') << "\n";
+              << std::setw(12) << "Size";
+    if (showGps) {
+        std::cout << std::setw(24) << "GPS (Lat, Lon)";
+    }
+    std::cout << "Camera\n";
+    std::cout << std::string(showGps ? 124 : 100, '-') << "\n";
 
     for (const auto& item : qr.items) {
         std::string flagStr = (item.flag == imagine::FlagState::Pick) ? "Pick"
@@ -290,8 +303,17 @@ int handleList(int argc, char** argv) {
                   << std::setw(8)  << stars
                   << std::setw(8)  << flagStr
                   << std::setw(18) << formatUnixTime(item.date_taken)
-                  << std::setw(12) << formatBytes(item.file_size)
-                  << camera << "\n";
+                  << std::setw(12) << formatBytes(item.file_size);
+        if (showGps) {
+            std::string gpsStr = "-";
+            if (item.exif.has_gps) {
+                std::ostringstream ss;
+                ss << std::fixed << std::setprecision(4) << item.exif.latitude << ", " << item.exif.longitude;
+                gpsStr = ss.str();
+            }
+            std::cout << std::setw(24) << gpsStr;
+        }
+        std::cout << camera << "\n";
     }
     std::cout << "\n";
     return 0;
@@ -462,6 +484,82 @@ int handleDelete(int argc, char** argv) {
     return (failCount == 0) ? 0 : 1;
 }
 
+int handleGeotag(int argc, char** argv) {
+    if (argc < 3) {
+        std::cerr << "Error: 'geotag' requires photo ID. Usage: imagine geotag <id> <lat> <lon> [--altitude <alt>] [--catalog <db>] or imagine geotag <id> --clear\n";
+        return 1;
+    }
+
+    imagine::MediaId id = 0;
+    try {
+        id = std::stoll(argv[2]);
+    } catch (...) {
+        std::cerr << "Error: Invalid photo ID: '" << argv[2] << "'. Must be a numeric ID.\n";
+        return 1;
+    }
+
+    std::string catalogDb = "catalog.db";
+    bool clearGps = false;
+    double lat = 0.0;
+    double lon = 0.0;
+    double alt = 0.0;
+    bool hasCoords = false;
+
+    int argIdx = 3;
+    if (argIdx < argc && argv[argIdx][0] != '-') {
+        try {
+            lat = std::stod(argv[argIdx++]);
+            if (argIdx < argc && argv[argIdx][0] != '-') {
+                lon = std::stod(argv[argIdx++]);
+                hasCoords = true;
+            }
+        } catch (...) {
+            std::cerr << "Error: Invalid latitude/longitude values.\n";
+            return 1;
+        }
+    }
+
+    for (int i = argIdx; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--catalog" && i + 1 < argc) {
+            catalogDb = argv[++i];
+        } else if (arg == "--altitude" && i + 1 < argc) {
+            try {
+                alt = std::stod(argv[++i]);
+            } catch (...) {}
+        } else if (arg == "--clear") {
+            clearGps = true;
+        }
+    }
+
+    if (!clearGps && !hasCoords) {
+        std::cerr << "Error: Latitude and longitude must be provided, or specify --clear.\n";
+        std::cerr << "Usage: imagine geotag <id> <lat> <lon> [--altitude <alt>] [--catalog <db>] or imagine geotag <id> --clear\n";
+        return 1;
+    }
+
+    imagine::core::Catalog catalog;
+    auto status = catalog.open(catalogDb);
+    if (!status.isOk()) {
+        std::cerr << "Error opening catalog database: " << status.message() << "\n";
+        return 1;
+    }
+
+    bool hasGps = !clearGps;
+    auto s = catalog.setGps(id, hasGps, lat, lon, alt);
+    if (!s.isOk()) {
+        std::cerr << "Error updating GPS for photo ID " << id << ": " << s.message() << "\n";
+        return 1;
+    }
+
+    if (clearGps) {
+        std::cout << "Cleared GPS coordinates for photo ID " << id << ".\n";
+    } else {
+        std::cout << "Updated GPS for photo ID " << id << ": " << lat << ", " << lon << " (" << alt << " m)\n";
+    }
+    return 0;
+}
+
 } // anonymous namespace
 
 int main(int argc, char** argv) {
@@ -485,6 +583,8 @@ int main(int argc, char** argv) {
         return handleStats(argc, argv);
     } else if (command == "tag") {
         return handleTag(argc, argv);
+    } else if (command == "geotag") {
+        return handleGeotag(argc, argv);
     } else if (command == "delete" || command == "remove") {
         return handleDelete(argc, argv);
     } else {

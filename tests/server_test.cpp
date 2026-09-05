@@ -636,3 +636,57 @@ TEST_F(ServerTest, WebServerRunAndMoreMimeTypes) {
     ASSERT_TRUE(singleAdd);
     EXPECT_EQ(singleAdd->status, 200);
 }
+
+TEST_F(ServerTest, GpsCoordinatesEndpointAndQuery) {
+    MediaItem item;
+    item.file_path = (testDir_ / "gps_photo.jpg").string();
+    item.file_name = "gps_photo.jpg";
+    item.content_hash = "gps_hash_123";
+    auto mid = catalog_->db().insertMedia(item).value();
+
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Initial query: has_gps=1 returns 0 items
+    auto resInitial = client.Get("/api/media?has_gps=1");
+    ASSERT_TRUE(resInitial);
+    EXPECT_EQ(resInitial->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(resInitial->body)["total"], 0);
+
+    // 2. Set GPS via POST /api/media/:id/gps
+    nlohmann::json setGpsBody = {
+        {"has_gps", true},
+        {"latitude", 45.4642},
+        {"longitude", 9.1900},
+        {"altitude", 120.0}
+    };
+    auto postRes = client.Post("/api/media/" + std::to_string(mid) + "/gps", setGpsBody.dump(), "application/json");
+    ASSERT_TRUE(postRes);
+    EXPECT_EQ(postRes->status, 200);
+    auto postJson = nlohmann::json::parse(postRes->body);
+    EXPECT_EQ(postJson["status"], "ok");
+    EXPECT_TRUE(postJson["has_gps"]);
+    EXPECT_DOUBLE_EQ(postJson["latitude"], 45.4642);
+    EXPECT_DOUBLE_EQ(postJson["longitude"], 9.1900);
+
+    // 3. Query has_gps=1 returns 1 item
+    auto resWithGps = client.Get("/api/media?has_gps=1");
+    ASSERT_TRUE(resWithGps);
+    EXPECT_EQ(resWithGps->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(resWithGps->body)["total"], 1);
+
+    // 4. Invalid latitude returns 400
+    nlohmann::json invalidLat = {{"has_gps", true}, {"latitude", 95.0}, {"longitude", 10.0}};
+    auto errRes = client.Post("/api/media/" + std::to_string(mid) + "/gps", invalidLat.dump(), "application/json");
+    ASSERT_TRUE(errRes);
+    EXPECT_EQ(errRes->status, 400);
+
+    // 5. Clear GPS
+    nlohmann::json clearGps = {{"has_gps", false}};
+    auto clearRes = client.Post("/api/media/" + std::to_string(mid) + "/gps", clearGps.dump(), "application/json");
+    ASSERT_TRUE(clearRes);
+    EXPECT_EQ(clearRes->status, 200);
+
+    auto resCleared = client.Get("/api/media?has_gps=1");
+    ASSERT_TRUE(resCleared);
+    EXPECT_EQ(nlohmann::json::parse(resCleared->body)["total"], 0);
+}

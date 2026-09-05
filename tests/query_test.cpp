@@ -333,3 +333,36 @@ TEST_F(QueryTest, FullQueryCriteriaJsonSerialization) {
     EXPECT_EQ(d.camera_make, "Leica");
     EXPECT_EQ(d.camera_model, "M11");
 }
+
+TEST_F(QueryTest, QueryByGpsAndBoundingBox) {
+    // Set GPS on item1 (Rome) and item2 (Tokyo)
+    ASSERT_TRUE(db.updateGps(id1, true, 41.9028, 12.4964, 50.0).isOk());
+    ASSERT_TRUE(db.updateGps(id2, true, 35.6762, 139.6503, 40.0).isOk());
+    // id3 has no GPS
+
+    // 1. Query has_gps = true
+    QueryCriteria gpsOnly;
+    gpsOnly.has_gps = true;
+    auto gpsRes = QueryBuilder::execute(db, gpsOnly);
+    ASSERT_TRUE(gpsRes.isOk());
+    EXPECT_EQ(gpsRes.value().total_count, 2);
+
+    // 2. Query has_gps = false
+    QueryCriteria noGps;
+    noGps.has_gps = false;
+    auto noGpsRes = QueryBuilder::execute(db, noGps);
+    ASSERT_TRUE(noGpsRes.isOk());
+    EXPECT_EQ(noGpsRes.value().total_count, 1);
+    EXPECT_EQ(noGpsRes.value().items[0].id, id3);
+
+    // 3. Query bounding box covering Europe (Rome) but not Tokyo
+    QueryCriteria europeBox;
+    europeBox.min_lat = 35.0;
+    europeBox.max_lat = 60.0;
+    europeBox.min_lon = -10.0;
+    europeBox.max_lon = 30.0;
+    auto boxRes = QueryBuilder::execute(db, europeBox);
+    ASSERT_TRUE(boxRes.isOk());
+    EXPECT_EQ(boxRes.value().total_count, 1);
+    EXPECT_EQ(boxRes.value().items[0].id, id1);
+}

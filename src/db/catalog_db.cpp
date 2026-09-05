@@ -351,6 +351,24 @@ Status CatalogDb::updateThumbnails(MediaId id, const std::string& smallPath, con
     return Status::ok();
 }
 
+Status CatalogDb::updateGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto stmtRes = conn_.prepare("UPDATE media_items SET has_gps = ?, latitude = ?, longitude = ?, altitude = ?, updated_at = ? WHERE id = ?;");
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+    stmt.bind(1, hasGps ? 1 : 0);
+    stmt.bind(2, latitude);
+    stmt.bind(3, longitude);
+    stmt.bind(4, altitude);
+    stmt.bind(5, currentUnixTime());
+    stmt.bind(6, id);
+
+    if (stmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to update GPS coordinates: " + conn_.lastErrorMessage());
+    }
+    return Status::ok();
+}
+
 Status CatalogDb::deleteMedia(MediaId id) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("DELETE FROM media_items WHERE id = ?;");

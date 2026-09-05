@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>IMAGINE Organizer</title>
-  <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="app.css?v=3">
 </head>
 <body>
   <div id="app" class="elements-app">
@@ -170,6 +171,18 @@
             <button class="btn-link" id="clearFiltersBtn" style="display: none;">Clear Filter</button>
           </div>
 
+          <!-- View Mode Switcher: Grid vs Map -->
+          <div class="view-mode-toggle" id="viewModeToggle" role="group" aria-label="View Mode">
+            <button class="btn-toggle active" id="viewGridBtn" data-mode="grid" title="Grid View (G)">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+              <span>Grid</span>
+            </button>
+            <button class="btn-toggle" id="viewMapBtn" data-mode="map" title="Map View (M)">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+              <span>Map</span>
+            </button>
+          </div>
+
           <div class="sort-selector">
             <label for="sortSelect">Sort:</label>
             <select id="sortSelect">
@@ -219,6 +232,47 @@
             <h3>No Photos Found</h3>
             <p>Import photos from a folder on your computer to get started.</p>
             <button class="btn btn-primary" id="emptyImportBtn">Import Folder</button>
+          </div>
+        </div>
+
+        <!-- Map View Container -->
+        <div class="map-view-container" id="mapViewContainer" style="display: none;">
+          <!-- Map Place Search Box (Top Left) -->
+          <div class="map-search-overlay" id="mapSearchOverlay">
+            <div class="map-search-box">
+              <svg class="search-icon" id="mapSearchIcon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="mapSearchInput" placeholder="Search place, city, or coordinates..." autocomplete="off">
+              <button class="clear-search" id="clearMapSearchBtn" title="Clear place search" style="display: none;">&times;</button>
+              <div class="map-search-spinner" id="mapSearchSpinner" style="display: none;"></div>
+            </div>
+            <div class="map-search-results" id="mapSearchResults" style="display: none;"></div>
+          </div>
+
+          <div class="map-toolbar-overlay">
+            <div class="map-badge" id="mapPhotoCountBadge">
+              <span id="mapPhotoCount">0</span> photos on map
+            </div>
+            <button class="btn btn-sm btn-secondary" id="mapFitBoundsBtn" title="Fit all photos in view">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 15 21 21 15 21"/><polyline points="3 9 3 3 9 3"/></svg>
+              Fit All
+            </button>
+            <button class="btn btn-sm btn-secondary" id="mapToggleUnmappedBtn" title="Toggle unmapped photos tray">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <span id="unmappedBtnLabel">Unmapped (0)</span>
+            </button>
+          </div>
+          <div id="leafletMap" class="leaflet-map-canvas"></div>
+          <div class="unmapped-tray" id="unmappedTray" style="display: none;">
+            <div class="unmapped-tray-header">
+              <span class="tray-title" id="unmappedTrayTitle">Unmapped Photos — Select photos, then click anywhere on the map to place them</span>
+              <div class="unmapped-tray-actions">
+                <span class="unmapped-selected-count" id="unmappedSelectedCount" style="display: none;">0 selected</span>
+                <button class="btn btn-xs btn-secondary" id="unmappedSelectAllBtn" title="Select all unmapped photos">Select All</button>
+                <button class="btn btn-xs btn-secondary" id="unmappedDeselectAllBtn" title="Clear selection" style="display: none;">Deselect</button>
+                <button class="btn-icon-sm" id="closeUnmappedTrayBtn" title="Close unmapped tray">&times;</button>
+              </div>
+            </div>
+            <div class="unmapped-photos-list" id="unmappedPhotosList"></div>
           </div>
         </div>
 
@@ -326,6 +380,23 @@
               <div class="panel-resizer" id="exifResizer" data-target="exifSection" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag to resize Camera & Exposure panel (double-click to reset)">
                 <div class="resizer-handle-bar"></div>
               </div>
+            </div>
+
+            <!-- Location Section -->
+            <div class="inspector-section" id="inspectorLocationSection">
+              <h4 class="section-heading">Location</h4>
+              <div class="inspector-gps-actions" id="inspectorGpsActions" style="display: none;">
+                <button class="btn btn-xs btn-primary" id="inspectorShowOnMapBtn" title="Show this photo on the map">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+                  Show on Map
+                </button>
+                <button class="btn btn-xs btn-secondary" id="inspectorClearGpsBtn" title="Remove GPS coordinates">Clear</button>
+              </div>
+              <button class="btn btn-xs btn-secondary" id="inspectorPlaceOnMapBtn" style="display: none; margin-top: 6px; width: 100%;">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                Place on Map
+              </button>
+              <div id="inspectorMiniMap" class="inspector-minimap" style="display: none;"></div>
             </div>
 
             <!-- Tags Section -->
@@ -549,6 +620,7 @@
 
   </div>
 
-  <script src="app.js"></script>
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

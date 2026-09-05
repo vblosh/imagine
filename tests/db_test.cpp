@@ -397,3 +397,36 @@ TEST(TransactionTest, CommitRollbackAndAutoRollback) {
     EXPECT_EQ(q.step(), StepResult::Row);
     EXPECT_EQ(q.getInt(0), 1);
 }
+
+TEST_F(CatalogDbTest, UpdateGpsCoordinates) {
+    MediaItem item;
+    item.file_path = "/photos/gps_test.jpg";
+    item.file_name = "gps_test.jpg";
+    item.file_size = 1024;
+    item.file_modified_time = 1750000000;
+    item.content_hash = "11112222333344445555666677778888";
+    item.date_taken = 1750000000;
+    auto insertRes = db.insertMedia(item);
+    ASSERT_TRUE(insertRes.isOk());
+    MediaId id = insertRes.value();
+
+    auto initial = db.getMediaById(id);
+    ASSERT_TRUE(initial.isOk());
+    EXPECT_FALSE(initial.value().exif.has_gps);
+
+    auto updateRes = db.updateGps(id, true, 48.8584, 2.2945, 35.0);
+    ASSERT_TRUE(updateRes.isOk());
+
+    auto updated = db.getMediaById(id);
+    ASSERT_TRUE(updated.isOk());
+    EXPECT_TRUE(updated.value().exif.has_gps);
+    EXPECT_DOUBLE_EQ(updated.value().exif.latitude, 48.8584);
+    EXPECT_DOUBLE_EQ(updated.value().exif.longitude, 2.2945);
+    EXPECT_DOUBLE_EQ(updated.value().exif.altitude, 35.0);
+
+    auto clearRes = db.updateGps(id, false, 0.0, 0.0, 0.0);
+    ASSERT_TRUE(clearRes.isOk());
+    auto cleared = db.getMediaById(id);
+    ASSERT_TRUE(cleared.isOk());
+    EXPECT_FALSE(cleared.value().exif.has_gps);
+}

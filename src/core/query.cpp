@@ -28,6 +28,21 @@ void to_json(nlohmann::json& j, const QueryCriteria& c) {
     if (c.album_id.has_value()) {
         j["album_id"] = *c.album_id;
     }
+    if (c.has_gps.has_value()) {
+        j["has_gps"] = *c.has_gps;
+    }
+    if (c.min_lat.has_value()) {
+        j["min_lat"] = *c.min_lat;
+    }
+    if (c.max_lat.has_value()) {
+        j["max_lat"] = *c.max_lat;
+    }
+    if (c.min_lon.has_value()) {
+        j["min_lon"] = *c.min_lon;
+    }
+    if (c.max_lon.has_value()) {
+        j["max_lon"] = *c.max_lon;
+    }
 }
 
 void from_json(const nlohmann::json& j, QueryCriteria& c) {
@@ -72,6 +87,21 @@ void from_json(const nlohmann::json& j, QueryCriteria& c) {
     }
     if (j.contains("album_id") && j["album_id"].is_number()) {
         c.album_id = j["album_id"].get<AlbumId>();
+    }
+    if (j.contains("has_gps") && j["has_gps"].is_boolean()) {
+        c.has_gps = j["has_gps"].get<bool>();
+    }
+    if (j.contains("min_lat") && j["min_lat"].is_number()) {
+        c.min_lat = j["min_lat"].get<double>();
+    }
+    if (j.contains("max_lat") && j["max_lat"].is_number()) {
+        c.max_lat = j["max_lat"].get<double>();
+    }
+    if (j.contains("min_lon") && j["min_lon"].is_number()) {
+        c.min_lon = j["min_lon"].get<double>();
+    }
+    if (j.contains("max_lon") && j["max_lon"].is_number()) {
+        c.max_lon = j["max_lon"].get<double>();
     }
 }
 
@@ -158,6 +188,19 @@ QueryBuilder& QueryBuilder::paginate(int32_t limit, int32_t offset) {
     return *this;
 }
 
+QueryBuilder& QueryBuilder::hasGps(bool hasGps) {
+    criteria_.has_gps = hasGps;
+    return *this;
+}
+
+QueryBuilder& QueryBuilder::boundingBox(double minLat, double maxLat, double minLon, double maxLon) {
+    criteria_.min_lat = minLat;
+    criteria_.max_lat = maxLat;
+    criteria_.min_lon = minLon;
+    criteria_.max_lon = maxLon;
+    return *this;
+}
+
 std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() const {
     std::vector<std::string> clauses;
     std::vector<std::string> params;
@@ -205,6 +248,23 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
     if (criteria_.date_to > 0) {
         clauses.push_back("date_taken <= ?");
         params.push_back(std::to_string(criteria_.date_to));
+    }
+
+    if (criteria_.has_gps.has_value()) {
+        clauses.push_back("has_gps = ?");
+        params.push_back(*criteria_.has_gps ? "1" : "0");
+    }
+
+    if (criteria_.min_lat.has_value() && criteria_.max_lat.has_value()) {
+        clauses.push_back("latitude >= ? AND latitude <= ?");
+        params.push_back(std::to_string(*criteria_.min_lat));
+        params.push_back(std::to_string(*criteria_.max_lat));
+    }
+
+    if (criteria_.min_lon.has_value() && criteria_.max_lon.has_value()) {
+        clauses.push_back("longitude >= ? AND longitude <= ?");
+        params.push_back(std::to_string(*criteria_.min_lon));
+        params.push_back(std::to_string(*criteria_.max_lon));
     }
 
     if (!criteria_.search_text.empty()) {

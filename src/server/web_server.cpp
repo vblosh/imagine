@@ -211,12 +211,7 @@ void WebServer::setupStaticFileServing() {
             }
 
             res.set_header("ETag", etag);
-            std::string filename = target.filename().string();
-            if (filename == "index.html" || isSpaFallback) {
-                res.set_header("Cache-Control", "no-cache");
-            } else {
-                res.set_header("Cache-Control", "public, max-age=86400");
-            }
+            res.set_header("Cache-Control", "no-cache");
 
             if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {
                 res.status = 304;
