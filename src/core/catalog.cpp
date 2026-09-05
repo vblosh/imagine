@@ -11,7 +11,7 @@ Catalog::~Catalog() {
 }
 
 Status Catalog::open(const std::string& dbPath, const std::string& cacheDir) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
     if (isOpen_) {
         closeInternal();
     }
@@ -33,7 +33,13 @@ Status Catalog::open(const std::string& dbPath, const std::string& cacheDir) {
 }
 
 void Catalog::close() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    {
+        std::shared_lock<std::shared_mutex> rlock(rwMutex_);
+        if (importer_) {
+            importer_->cancel();
+        }
+    }
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
     closeInternal();
 }
 
@@ -64,7 +70,7 @@ void Catalog::closeInternal() {
 }
 
 bool Catalog::isOpen() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     return isOpen_;
 }
 
@@ -73,7 +79,7 @@ Result<ImportProgress> Catalog::importDirectory(
     bool recursive,
     Importer::ProgressCallback progressCb
 ) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !importer_) {
         return Status::internal("Catalog is not open");
     }
@@ -81,7 +87,7 @@ Result<ImportProgress> Catalog::importDirectory(
 }
 
 Result<MediaItem> Catalog::importFile(const std::string& path) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !importer_) {
         return Status::internal("Catalog is not open");
     }
@@ -89,14 +95,14 @@ Result<MediaItem> Catalog::importFile(const std::string& path) {
 }
 
 void Catalog::cancelImport() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (importer_) {
         importer_->cancel();
     }
 }
 
 Result<QueryResult> Catalog::query(const QueryCriteria& criteria) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -104,7 +110,7 @@ Result<QueryResult> Catalog::query(const QueryCriteria& criteria) {
 }
 
 Result<MediaItem> Catalog::getMedia(MediaId id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -112,7 +118,7 @@ Result<MediaItem> Catalog::getMedia(MediaId id) {
 }
 
 Result<MediaItem> Catalog::getMediaByPath(const std::string& path) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -120,7 +126,7 @@ Result<MediaItem> Catalog::getMediaByPath(const std::string& path) {
 }
 
 Result<MediaItem> Catalog::getMediaByHash(const std::string& hash) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -128,7 +134,7 @@ Result<MediaItem> Catalog::getMediaByHash(const std::string& hash) {
 }
 
 Status Catalog::setRating(MediaId id, int32_t rating) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -136,7 +142,7 @@ Status Catalog::setRating(MediaId id, int32_t rating) {
 }
 
 Status Catalog::setFlag(MediaId id, FlagState flag) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -144,7 +150,7 @@ Status Catalog::setFlag(MediaId id, FlagState flag) {
 }
 
 Status Catalog::deleteMedia(MediaId id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -152,7 +158,7 @@ Status Catalog::deleteMedia(MediaId id) {
 }
 
 Status Catalog::addTag(MediaId id, const std::string& tagName, const std::string& category) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -164,7 +170,7 @@ Status Catalog::addTag(MediaId id, const std::string& tagName, const std::string
 }
 
 Status Catalog::addTag(MediaId id, TagId tagId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -172,7 +178,7 @@ Status Catalog::addTag(MediaId id, TagId tagId) {
 }
 
 Status Catalog::removeTag(MediaId id, TagId tagId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -180,7 +186,7 @@ Status Catalog::removeTag(MediaId id, TagId tagId) {
 }
 
 Status Catalog::deleteTag(TagId tagId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -188,7 +194,7 @@ Status Catalog::deleteTag(TagId tagId) {
 }
 
 Result<TagId> Catalog::createOrGetTag(const std::string& name, const std::string& category) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -196,7 +202,7 @@ Result<TagId> Catalog::createOrGetTag(const std::string& name, const std::string
 }
 
 Result<std::vector<Tag>> Catalog::getTags() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -204,7 +210,7 @@ Result<std::vector<Tag>> Catalog::getTags() {
 }
 
 Result<std::vector<Tag>> Catalog::getTagsForMedia(MediaId id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -212,7 +218,7 @@ Result<std::vector<Tag>> Catalog::getTagsForMedia(MediaId id) {
 }
 
 Result<std::unordered_map<MediaId, std::vector<Tag>>> Catalog::getTagsForMediaBatch(const std::vector<MediaId>& mediaIds) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -225,7 +231,7 @@ Result<AlbumId> Catalog::createAlbum(
     bool is_smart,
     const std::string& query_json
 ) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -233,7 +239,7 @@ Result<AlbumId> Catalog::createAlbum(
 }
 
 Result<std::vector<Album>> Catalog::getAlbums() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -241,7 +247,7 @@ Result<std::vector<Album>> Catalog::getAlbums() {
 }
 
 Result<Album> Catalog::getAlbum(AlbumId id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -249,7 +255,7 @@ Result<Album> Catalog::getAlbum(AlbumId id) {
 }
 
 Status Catalog::deleteAlbum(AlbumId id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -257,7 +263,7 @@ Status Catalog::deleteAlbum(AlbumId id) {
 }
 
 Status Catalog::addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -265,7 +271,7 @@ Status Catalog::addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position) 
 }
 
 Status Catalog::removeMediaFromAlbum(AlbumId albumId, MediaId mediaId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -273,7 +279,7 @@ Status Catalog::removeMediaFromAlbum(AlbumId albumId, MediaId mediaId) {
 }
 
 Result<std::vector<MediaItem>> Catalog::getMediaInAlbum(AlbumId albumId) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -281,7 +287,7 @@ Result<std::vector<MediaItem>> Catalog::getMediaInAlbum(AlbumId albumId) {
 }
 
 Result<std::vector<TimelineEntry>> Catalog::getTimeline() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -289,7 +295,7 @@ Result<std::vector<TimelineEntry>> Catalog::getTimeline() {
 }
 
 Result<CatalogStats> Catalog::getStats() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }

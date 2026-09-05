@@ -41,19 +41,6 @@ std::string getMimeTypeForImage(const std::string& path) {
     return "application/octet-stream";
 }
 
-bool readFileBytes(const std::string& path, std::string& outData) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        return false;
-    }
-    std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    outData.resize(size);
-    if (!file.read(outData.data(), size)) {
-        return false;
-    }
-    return true;
-}
 
 // Fallback progress state if catalog is not used
 static std::mutex g_importMutex;
@@ -368,8 +355,18 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         std::string hash = req.matches[1];
         int size = std::stoi(req.matches[2]);
 
+        std::string etag = "\"" + hash + "_" + std::to_string(size) + "\"";
+        res.set_header("Cache-Control", "public, max-age=31536000, immutable");
+        res.set_header("ETag", etag);
+
+        if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {
+            res.status = 304;
+            return;
+        }
+
         std::string thumbPath = cache().getThumbnailPath(hash, size);
-        if (!std::filesystem::exists(thumbPath)) {
+        std::error_code ec;
+        if (!std::filesystem::exists(thumbPath, ec)) {
             // Attempt on-demand generation
             auto mediaRes = db().getMediaByHash(hash);
             if (mediaRes.isOk()) {
@@ -381,10 +378,8 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
             }
         }
 
-        std::string bytes;
-        if (readFileBytes(thumbPath, bytes)) {
-            res.status = 200;
-            res.set_content(bytes, "image/jpeg");
+        if (std::filesystem::exists(thumbPath, ec) && std::filesystem::is_regular_file(thumbPath, ec)) {
+            res.set_file_content(thumbPath, "image/jpeg");
         } else {
             sendError(res, "Thumbnail not found", 404);
         }
@@ -400,14 +395,28 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         }
 
         const auto& item = mediaRes.value();
-        std::string bytes;
-        if (readFileBytes(item.file_path, bytes)) {
-            std::string mime = getMimeTypeForImage(item.file_path);
-            res.status = 200;
-            res.set_content(bytes, mime);
-        } else {
+        std::error_code ec;
+        if (!std::filesystem::exists(item.file_path, ec) || !std::filesystem::is_regular_file(item.file_path, ec)) {
             sendError(res, "File not found on disk: " + item.file_path, 404);
+            return;
         }
+
+        auto fsize = std::filesystem::file_size(item.file_path, ec);
+        auto mtime = std::filesystem::last_write_time(item.file_path, ec);
+        int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
+        std::string etag = "\"" + std::to_string(id) + "-" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
+
+        res.set_header("Accept-Ranges", "bytes");
+        res.set_header("ETag", etag);
+        res.set_header("Cache-Control", "public, max-age=86400");
+
+        if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {
+            res.status = 304;
+            return;
+        }
+
+        std::string mime = getMimeTypeForImage(item.file_path);
+        res.set_file_content(item.file_path, mime);
     });
 }
 

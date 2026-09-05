@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <optional>
 #include "imagine/common/types.hpp"
 #include "imagine/common/error.hpp"
@@ -91,7 +92,7 @@ private:
     std::unique_ptr<concurrency::ThreadPool> threadPool_;
     std::unique_ptr<Importer> importer_;
     bool isOpen_{false};
-    mutable std::mutex mutex_;
+    mutable std::shared_mutex rwMutex_;
 };
 
 } // namespace imagine::core

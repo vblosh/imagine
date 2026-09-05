@@ -243,11 +243,6 @@ Result<QueryResult> QueryBuilder::execute(db::CatalogDb& db) const {
     auto [whereClause, params] = buildWhere();
     std::string orderBy = buildOrderBy();
 
-    auto countRes = db.countMedia(whereClause, params);
-    if (!countRes.isOk()) {
-        return countRes.status();
-    }
-
     auto itemsRes = db.queryMedia(whereClause, params, orderBy, criteria_.limit, criteria_.offset);
     if (!itemsRes.isOk()) {
         return itemsRes.status();
@@ -255,7 +250,20 @@ Result<QueryResult> QueryBuilder::execute(db::CatalogDb& db) const {
 
     QueryResult result;
     result.items = std::move(itemsRes.value());
-    result.total_count = countRes.value();
+
+    // Optimization: When offset is 0 and returned items count is less than limit,
+    // total_count is known exactly without executing an extra full-table COUNT query.
+    if (criteria_.offset == 0 && criteria_.limit > 0 &&
+        static_cast<int>(result.items.size()) < criteria_.limit) {
+        result.total_count = static_cast<int64_t>(result.items.size());
+    } else {
+        auto countRes = db.countMedia(whereClause, params);
+        if (!countRes.isOk()) {
+            return countRes.status();
+        }
+        result.total_count = countRes.value();
+    }
+
     return result;
 }
 

@@ -71,6 +71,7 @@ target_link_libraries(imagine_lib
         nlohmann_json::nlohmann_json
         httplib::httplib
         OpenSSL::Crypto
+        ZLIB::ZLIB
         pthread
         $<$<BOOL:${TURBOJPEG_FOUND}>:turbojpeg_lib>
 )

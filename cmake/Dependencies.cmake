@@ -50,7 +50,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
-# cpp-httplib
+# cpp-httplib with ZLIB compression support
+find_package(ZLIB REQUIRED)
+set(HTTPLIB_REQUIRE_ZLIB ON CACHE BOOL "" FORCE)
 FetchContent_Declare(
     httplib
     GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
@@ -58,6 +60,8 @@ FetchContent_Declare(
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(httplib)
+target_compile_definitions(httplib INTERFACE CPPHTTPLIB_ZLIB_SUPPORT)
+target_link_libraries(httplib INTERFACE ZLIB::ZLIB)
 
 # OpenSSL for cryptographic SHA-256
 find_package(OpenSSL REQUIRED)
