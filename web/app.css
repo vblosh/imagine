@@ -139,7 +139,7 @@ body, html {
   width: 100%;
 }
 
-.search-icon {
+.search-box .search-icon {
   position: absolute;
   left: 10px;
   color: var(--text-dim);
@@ -1712,9 +1712,11 @@ body.resizing-horizontal * {
 }
 
 .map-search-box .search-icon {
+  position: static;
   color: var(--text-secondary);
   flex-shrink: 0;
   margin-right: 6px;
+  pointer-events: none;
   transition: opacity 0.15s ease;
 }
 
@@ -1727,6 +1729,7 @@ body.resizing-horizontal * {
   flex: 1;
   background: transparent;
   border: none;
+  padding: 0 20px 0 0;
   color: var(--text-primary);
   font-size: 12px;
   outline: none;
