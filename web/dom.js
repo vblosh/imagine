@@ -1,0 +1,235 @@
+/**
+ * IMAGINE Photo Organizer - DOM Elements & Validation
+ * Pure Vanilla JavaScript (Offline-ready, no dependencies)
+ */
+
+export const dom = {
+  mediaGrid: document.getElementById('mediaGrid'),
+  emptyState: document.getElementById('emptyState'),
+  emptyImportBtn: document.getElementById('emptyImportBtn'),
+  gridScrollContainer: document.getElementById('gridScrollContainer'),
+  zoomSlider: document.getElementById('zoomSlider'),
+  searchInput: document.getElementById('searchInput'),
+  clearSearchBtn: document.getElementById('clearSearchBtn'),
+  refreshBtn: document.getElementById('refreshBtn'),
+  importBtn: document.getElementById('importBtn'),
+  viewTabs: document.getElementById('viewTabs'),
+  viewGridBtn: document.getElementById('viewGridBtn'),
+  viewMapBtn: document.getElementById('viewMapBtn'),
+  mapViewContainer: document.getElementById('mapViewContainer'),
+  leafletMap: document.getElementById('leafletMap'),
+  mapSearchOverlay: document.getElementById('mapSearchOverlay'),
+  mapSearchBox: document.querySelector('.map-search-box'),
+  mapSearchIcon: document.getElementById('mapSearchIcon'),
+  mapSearchInput: document.getElementById('mapSearchInput'),
+  clearMapSearchBtn: document.getElementById('clearMapSearchBtn'),
+  mapSearchSpinner: document.getElementById('mapSearchSpinner'),
+  mapSearchResults: document.getElementById('mapSearchResults'),
+  mapPhotoCount: document.getElementById('mapPhotoCount'),
+  mapFitBoundsBtn: document.getElementById('mapFitBoundsBtn'),
+  mapToggleUnmappedBtn: document.getElementById('mapToggleUnmappedBtn'),
+  mapLoadMoreBtn: document.getElementById('mapLoadMoreBtn'),
+  mapLoadAllBtn: document.getElementById('mapLoadAllBtn'),
+  unmappedBtnLabel: document.getElementById('unmappedBtnLabel'),
+  unmappedTray: document.getElementById('unmappedTray'),
+  unmappedTrayTitle: document.getElementById('unmappedTrayTitle'),
+  unmappedSelectedCount: document.getElementById('unmappedSelectedCount'),
+  unmappedSelectAllBtn: document.getElementById('unmappedSelectAllBtn'),
+  unmappedDeselectAllBtn: document.getElementById('unmappedDeselectAllBtn'),
+  unmappedLoadMoreBtn: document.getElementById('unmappedLoadMoreBtn'),
+  closeUnmappedTrayBtn: document.getElementById('closeUnmappedTrayBtn'),
+  unmappedPhotosList: document.getElementById('unmappedPhotosList'),
+  sortSelect: document.getElementById('sortSelect'),
+  filterIndicator: document.getElementById('filterIndicator'),
+  filterLabel: document.getElementById('filterLabel'),
+  clearFiltersBtn: document.getElementById('clearFiltersBtn'),
+  totalMediaCount: document.getElementById('totalMediaCount'),
+  navAllMedia: document.getElementById('navAllMedia'),
+  navPicks: document.getElementById('navPicks'),
+  navRejects: document.getElementById('navRejects'),
+  navUnrated: document.getElementById('navUnrated'),
+  albumsList: document.getElementById('albumsList'),
+  newAlbumBtn: document.getElementById('newAlbumBtn'),
+  newTagBtn: document.getElementById('newTagBtn'),
+  foldersTree: document.getElementById('foldersTree'),
+  tagCategoryPeople: document.getElementById('tagCategoryPeople'),
+  tagCategoryPlaces: document.getElementById('tagCategoryPlaces'),
+  tagCategoryEvents: document.getElementById('tagCategoryEvents'),
+  tagCategoryKeyword: document.getElementById('tagCategoryKeyword'),
+  batchActionBar: document.getElementById('batchActionBar'),
+  batchSelectedCount: document.getElementById('batchSelectedCount'),
+  batchRating: document.getElementById('batchRating'),
+  batchPickBtn: document.getElementById('batchPickBtn'),
+  batchRejectBtn: document.getElementById('batchRejectBtn'),
+  batchDeleteBtn: document.getElementById('batchDeleteBtn'),
+  batchAddTagBtn: document.getElementById('batchAddTagBtn'),
+  batchAddAlbumBtn: document.getElementById('batchAddAlbumBtn'),
+  batchClearBtn: document.getElementById('batchClearBtn'),
+  timelineContainer: document.getElementById('timelineContainer'),
+  resetTimelineBtn: document.getElementById('resetTimelineBtn'),
+  rightInspector: document.getElementById('rightInspector'),
+  inspectorResizerLeft: document.getElementById('inspectorResizerLeft'),
+  toggleInspectorBtn: document.getElementById('toggleInspectorBtn'),
+  closeInspectorBtn: document.getElementById('closeInspectorBtn'),
+  inspectorNoSelection: document.getElementById('inspectorNoSelection'),
+  inspectorSelection: document.getElementById('inspectorSelection'),
+  inspectorImg: document.getElementById('inspectorImg'),
+  openLoupeFromInspector: document.getElementById('openLoupeFromInspector'),
+  inspectorAddToAlbumBtn: document.getElementById('inspectorAddToAlbumBtn'),
+  inspectorDeleteBtn: document.getElementById('inspectorDeleteBtn'),
+  inspectorRating: document.getElementById('inspectorRating'),
+  inspectorFlag: document.getElementById('inspectorFlag'),
+  fileInfoSection: document.getElementById('fileInfoSection'),
+  fileInfoBody: document.getElementById('fileInfoBody'),
+  fileInfoResizer: document.getElementById('fileInfoResizer'),
+  infoFileName: document.getElementById('infoFileName'),
+  infoDimensions: document.getElementById('infoDimensions'),
+  infoFileSize: document.getElementById('infoFileSize'),
+  infoDateTaken: document.getElementById('infoDateTaken'),
+  infoFilePath: document.getElementById('infoFilePath'),
+  exifSection: document.getElementById('exifSection'),
+  exifBody: document.getElementById('exifBody'),
+  exifResizer: document.getElementById('exifResizer'),
+  infoCamera: document.getElementById('infoCamera'),
+  infoLens: document.getElementById('infoLens'),
+  infoExposure: document.getElementById('infoExposure'),
+  infoAperture: document.getElementById('infoAperture'),
+  infoIso: document.getElementById('infoIso'),
+  infoFocal: document.getElementById('infoFocal'),
+  infoGps: document.getElementById('infoGps'),
+  inspectorGpsActions: document.getElementById('inspectorGpsActions'),
+  inspectorShowOnMapBtn: document.getElementById('inspectorShowOnMapBtn'),
+  inspectorClearGpsBtn: document.getElementById('inspectorClearGpsBtn'),
+  inspectorPlaceOnMapBtn: document.getElementById('inspectorPlaceOnMapBtn'),
+  inspectorMiniMap: document.getElementById('inspectorMiniMap'),
+  inspectorTags: document.getElementById('inspectorTags'),
+  addTagInput: document.getElementById('addTagInput'),
+  addTagCategorySelect: document.getElementById('addTagCategorySelect'),
+  tagSuggestions: document.getElementById('tagSuggestions'),
+  addTagBtn: document.getElementById('addTagBtn'),
+  loupeModal: document.getElementById('loupeModal'),
+  loupeBackdrop: document.getElementById('loupeBackdrop'),
+  loupeImageViewport: document.getElementById('loupeImageViewport'),
+  loupeImg: document.getElementById('loupeImg'),
+  loupeFileName: document.getElementById('loupeFileName'),
+  loupeIndex: document.getElementById('loupeIndex'),
+  loupeRating: document.getElementById('loupeRating'),
+  loupeFlag: document.getElementById('loupeFlag'),
+  loupeZoomControls: document.getElementById('loupeZoomControls'),
+  loupeZoomOutBtn: document.getElementById('loupeZoomOutBtn'),
+  loupeZoomInBtn: document.getElementById('loupeZoomInBtn'),
+  loupeZoomResetBtn: document.getElementById('loupeZoomResetBtn'),
+  loupeZoomSlider: document.getElementById('loupeZoomSlider'),
+  loupePrevBtn: document.getElementById('loupePrevBtn'),
+  loupeNextBtn: document.getElementById('loupeNextBtn'),
+  loupeCloseBtn: document.getElementById('loupeCloseBtn'),
+  loupeDeleteBtn: document.getElementById('loupeDeleteBtn'),
+  importModal: document.getElementById('importModal'),
+  importBackdrop: document.getElementById('importBackdrop'),
+  closeImportModalBtn: document.getElementById('closeImportModalBtn'),
+  cancelImportBtn: document.getElementById('cancelImportBtn'),
+  startImportBtn: document.getElementById('startImportBtn'),
+  importPathInput: document.getElementById('importPathInput'),
+  importRecursiveCheck: document.getElementById('importRecursiveCheck'),
+  importProgressBox: document.getElementById('importProgressBox'),
+  importProgressBar: document.getElementById('importProgressBar'),
+  importStatusCounts: document.getElementById('importStatusCounts'),
+  importCurrentFile: document.getElementById('importCurrentFile'),
+  newAlbumModal: document.getElementById('newAlbumModal'),
+  newAlbumBackdrop: document.getElementById('newAlbumBackdrop'),
+  closeNewAlbumModalBtn: document.getElementById('closeNewAlbumModalBtn'),
+  cancelAlbumBtn: document.getElementById('cancelAlbumBtn'),
+  createAlbumSubmitBtn: document.getElementById('createAlbumSubmitBtn'),
+  albumNameInput: document.getElementById('albumNameInput'),
+  albumDescInput: document.getElementById('albumDescInput'),
+  addToAlbumModal: document.getElementById('addToAlbumModal'),
+  addToAlbumBackdrop: document.getElementById('addToAlbumBackdrop'),
+  closeAddToAlbumModalBtn: document.getElementById('closeAddToAlbumModalBtn'),
+  cancelAddToAlbumBtn: document.getElementById('cancelAddToAlbumBtn'),
+  confirmAddToAlbumBtn: document.getElementById('confirmAddToAlbumBtn'),
+  addToAlbumSelect: document.getElementById('addToAlbumSelect'),
+  addToAlbumSelectGroup: document.getElementById('addToAlbumSelectGroup'),
+  addToAlbumTargetCount: document.getElementById('addToAlbumTargetCount'),
+  noAlbumsNotice: document.getElementById('noAlbumsNotice'),
+  newTagModal: document.getElementById('newTagModal'),
+  newTagBackdrop: document.getElementById('newTagBackdrop'),
+  closeNewTagModalBtn: document.getElementById('closeNewTagModalBtn'),
+  cancelTagBtn: document.getElementById('cancelTagBtn'),
+  createTagSubmitBtn: document.getElementById('createTagSubmitBtn'),
+  tagNameInput: document.getElementById('tagNameInput'),
+  tagCategorySelect: document.getElementById('tagCategorySelect'),
+  tagModalHeading: document.getElementById('tagModalHeading'),
+  tagModalPhotoTarget: document.getElementById('tagModalPhotoTarget'),
+  tagModalPhotoThumb: document.getElementById('tagModalPhotoThumb'),
+  tagModalPhotoCountBadge: document.getElementById('tagModalPhotoCountBadge'),
+  tagModalPhotoName: document.getElementById('tagModalPhotoName'),
+  tagModalPhotoMeta: document.getElementById('tagModalPhotoMeta'),
+  tagModalPhotoCurrentTags: document.getElementById('tagModalPhotoCurrentTags'),
+  tagModalApplyGroup: document.getElementById('tagModalApplyGroup'),
+  tagModalApplyToPhotoCheckbox: document.getElementById('tagModalApplyToPhotoCheckbox'),
+  tagModalApplyLabel: document.getElementById('tagModalApplyLabel'),
+  tagDetectedBadge: document.getElementById('tagDetectedBadge'),
+  tagModalSuggestions: document.getElementById('tagModalSuggestions'),
+  tagModalClearInputBtn: document.getElementById('tagModalClearInputBtn'),
+  tagCategoryCards: document.getElementById('tagCategoryCards'),
+  tagSearchHelpTitle: document.getElementById('tagSearchHelpTitle'),
+  tagSearchHelpSub: document.getElementById('tagSearchHelpSub'),
+  tagSearchHelpChips: document.getElementById('tagSearchHelpChips'),
+  inspectorAddTagModalBtn: document.getElementById('inspectorAddTagModalBtn'),
+  inspectorOpenTagModalBtn: document.getElementById('inspectorOpenTagModalBtn'),
+  deleteMediaModal: document.getElementById('deleteMediaModal'),
+  deleteMediaBackdrop: document.getElementById('deleteMediaBackdrop'),
+  closeDeleteMediaModalBtn: document.getElementById('closeDeleteMediaModalBtn'),
+  cancelDeleteMediaBtn: document.getElementById('cancelDeleteMediaBtn'),
+  confirmDeleteMediaBtn: document.getElementById('confirmDeleteMediaBtn'),
+  deleteMediaPromptText: document.getElementById('deleteMediaPromptText')
+};
+
+export function refreshDomReferences() {
+  for (const key in dom) {
+    if (!dom[key]) {
+      dom[key] = document.getElementById(key);
+    }
+  }
+  if (!dom.mapSearchBox) {
+    dom.mapSearchBox = document.querySelector('.map-search-box');
+  }
+}
+
+export function validateRequiredDom() {
+  refreshDomReferences();
+  const requiredDom = [
+    'mediaGrid',
+    'emptyState',
+    'viewTabs',
+    'navAllMedia',
+    'navPicks',
+    'navRejects',
+    'navUnrated'
+  ];
+
+  const missing = requiredDom.filter(name => !dom[name]);
+  if (missing.length > 0) {
+    throw new Error(`Missing required DOM elements: ${missing.join(', ')}`);
+  }
+}
+
+export function showToast(message, type = 'info') {
+  let container = document.getElementById('toastContainer');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toastContainer';
+    container.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.style.cssText = 'background:rgba(30,30,30,0.95);color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.3);pointer-events:auto;border-left:4px solid ' + (type === 'error' ? '#e74c3c' : '#3498db');
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.transition = 'opacity 0.3s';
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
+}

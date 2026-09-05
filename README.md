@@ -91,22 +91,38 @@ imagine/
 ├── CMakeLists.txt              # Root build configuration
 ├── cmake/
 │   └── Dependencies.cmake      # FetchContent for SQLite, STB, EasyEXIF, httplib, JSON, GTest
-├── include/imagine/
+├── docs/
+│   ├── USER_GUIDE.md           # Comprehensive user guide, CLI & REST API reference
+│   └── dev/                    # Developer documentation & UI test plans
+├── include/imagine/            # Public C++20 header architecture
 │   ├── common/                 # Types, Error, Logger
+│   ├── concurrency/            # ThreadPool (std::jthread)
+│   ├── core/                   # Importer, Query Engine, Catalog Facade
 │   ├── db/                     # SQLite RAII Connection, Schema, CatalogDb
 │   ├── metadata/               # SHA-256 Hasher, EXIF Reader
-│   ├── thumbnail/              # Resizer, Rotator, Disk Cache
-│   ├── concurrency/            # ThreadPool
-│   ├── core/                   # Importer, Query Engine, Catalog Facade
-│   └── server/                 # REST API Router, Web Server
-├── src/                        # Implementations for all library modules
+│   ├── server/                 # REST API Router, Web Server, MIME Types
+│   └── thumbnail/              # Resizer, Rotator, Disk Cache
+├── src/                        # Implementations for all C++ library modules
 ├── apps/
 │   └── imagine_cli.cpp         # CLI application (import, serve, list, stats, tag)
-├── web/                        # Photoshop Elements-styled SPA (HTML, CSS, JS)
-│   ├── index.html
-│   ├── app.css
-│   └── app.js
-└── tests/                      # Automated test suites
-    ├── ui/                     # 45 Deterministic Playwright UI tests across all 13 feature areas
-    └── *.cpp                   # 30 Unit tests across 7 C++ test suites
+├── web/                        # Photoshop Elements-styled modular SPA
+│   ├── index.html              # HTML5 application entry point
+│   ├── app.css                 # Dark theme stylesheet & CSS variables
+│   ├── app.js                  # Application bootstrap & lifecycle wiring
+│   ├── api.js                  # REST API client & response schema normalization
+│   ├── state.js                # Central reactive application state & GPS cache
+│   ├── dom.js                  # DOM element caching, validation & toast alerts
+│   ├── media-grid.js           # Media grid rendering, card selection & pagination
+│   ├── inspector.js            # Metadata inspector & resizable side panels
+│   ├── map-view.js             # Leaflet map, spatial clustering & photo pinning
+│   ├── loupe.js                # Fullscreen viewer with pan/zoom & slideshow
+│   ├── modals.js               # Modal dialogs (Import, Album, Tag, Delete)
+│   ├── keyboard.js             # Keyboard shortcuts & priority Escape manager
+│   └── vendor/leaflet/         # Embedded Leaflet mapping assets
+├── tests/                      # Automated test suites
+│   ├── ui/                     # 110 deterministic Playwright UI tests (18 test suites)
+│   ├── fixtures/               # Test image assets (JPEG with EXIF, etc.)
+│   ├── web_server_benchmark.py # Web server concurrency benchmark script
+│   └── *.cpp                   # 81 C++ unit tests across 14 test suites
+└── sample_photos/              # Sample images for testing & quick evaluation
 ```
