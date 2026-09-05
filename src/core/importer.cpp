@@ -78,14 +78,33 @@ ImportProgress Importer::currentProgress() const {
 
 Importer::ProcessStatus Importer::processFileInternal(const std::string& filePath, MediaItem* outItem, bool commitToDb) {
     std::error_code ec;
+    // Symlink restriction: disallow importing symlink files
+    if (std::filesystem::is_symlink(std::filesystem::symlink_status(filePath, ec))) {
+        IMAGINE_LOG_ERROR("Symlink file rejected for security: " + filePath);
+        return ProcessStatus::Failed;
+    }
+
     if (!std::filesystem::exists(filePath, ec) || !std::filesystem::is_regular_file(filePath, ec)) {
         IMAGINE_LOG_ERROR("File does not exist or is not a regular file: " + filePath);
+        return ProcessStatus::Failed;
+    }
+
+    // Supported file extension check
+    if (!isSupportedExtension(filePath)) {
+        IMAGINE_LOG_ERROR("Unsupported file type: " + filePath);
         return ProcessStatus::Failed;
     }
 
     auto fsize = std::filesystem::file_size(filePath, ec);
     if (ec) {
         IMAGINE_LOG_ERROR("Failed to get file size for " + filePath + ": " + ec.message());
+        return ProcessStatus::Failed;
+    }
+
+    // File size limit: reject 0-byte files or files exceeding 500 MB limit
+    constexpr uintmax_t kMaxFileSize = 500ULL * 1024ULL * 1024ULL; // 500 MB
+    if (fsize == 0 || fsize > kMaxFileSize) {
+        IMAGINE_LOG_ERROR("File size invalid or exceeds 500MB limit: " + filePath);
         return ProcessStatus::Failed;
     }
 
@@ -232,14 +251,14 @@ Result<ImportProgress> Importer::importDirectory(
     if (recursive) {
         for (const auto& entry : std::filesystem::recursive_directory_iterator(
                  directoryPath, std::filesystem::directory_options::skip_permission_denied, ec)) {
-            if (entry.is_regular_file(ec) && isSupportedExtension(entry.path().string())) {
+            if (entry.is_regular_file(ec) && !entry.is_symlink(ec) && isSupportedExtension(entry.path().string())) {
                 files.push_back(entry.path().string());
             }
         }
     } else {
         for (const auto& entry : std::filesystem::directory_iterator(
                  directoryPath, std::filesystem::directory_options::skip_permission_denied, ec)) {
-            if (entry.is_regular_file(ec) && isSupportedExtension(entry.path().string())) {
+            if (entry.is_regular_file(ec) && !entry.is_symlink(ec) && isSupportedExtension(entry.path().string())) {
                 files.push_back(entry.path().string());
             }
         }

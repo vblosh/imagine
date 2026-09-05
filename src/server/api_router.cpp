@@ -41,6 +41,58 @@ std::string getMimeTypeForImage(const std::string& path) {
     return "application/octet-stream";
 }
 
+bool isSensitiveSystemPath(const std::filesystem::path& canonicalPath) {
+    std::string s = canonicalPath.lexically_normal().string();
+    if (s.empty()) return true;
+    if (s == "/") return true;
+
+    static const std::vector<std::string> kSensitivePrefixes = {
+        "/etc", "/proc", "/sys", "/dev", "/boot", "/root",
+        "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32",
+        "/usr/bin", "/usr/sbin", "/usr/lib", "/var/run", "/var/lock",
+        "/var/log", "/var/spool"
+    };
+
+    for (const auto& prefix : kSensitivePrefixes) {
+        if (s == prefix || (s.rfind(prefix + "/", 0) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool isWithinAllowedRoots(const std::filesystem::path& canonicalPath, std::string& outError) {
+    if (isSensitiveSystemPath(canonicalPath)) {
+        outError = "Importing sensitive system directory is forbidden: " + canonicalPath.string();
+        return false;
+    }
+
+    const char* envRoots = std::getenv("IMAGINE_ALLOWED_IMPORT_ROOTS");
+    if (envRoots && std::strlen(envRoots) > 0) {
+        std::string envStr(envRoots);
+        std::stringstream ss(envStr);
+        std::string root;
+        bool matched = false;
+        while (std::getline(ss, root, ':')) {
+            if (root.empty()) continue;
+            std::error_code ec;
+            auto cRoot = std::filesystem::canonical(root, ec);
+            if (!ec) {
+                std::string cRootStr = cRoot.lexically_normal().string();
+                std::string cPathStr = canonicalPath.lexically_normal().string();
+                if (cPathStr == cRootStr || (cPathStr.rfind(cRootStr + "/", 0) == 0)) {
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if (!matched) {
+            outError = "Directory is not within allowed import roots: " + canonicalPath.string();
+            return false;
+        }
+    }
+    return true;
+}
 
 // Fallback progress state if catalog is not used
 static std::mutex g_importMutex;
@@ -844,13 +896,53 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
                 sendError(res, "Missing or invalid path");
                 return;
             }
-            std::string path = body["path"].get<std::string>();
+            std::string rawPath = body["path"].get<std::string>();
             bool recursive = body.value("recursive", true);
 
-            if (!std::filesystem::exists(path)) {
-                sendError(res, "Directory does not exist: " + path, 404);
+            std::filesystem::path p(rawPath);
+            std::error_code ec;
+            if (!std::filesystem::exists(p, ec)) {
+                sendError(res, "Directory does not exist: " + rawPath, 404);
                 return;
             }
+
+            // Path canonicalization (resolves '..' traversal and relative paths)
+            auto canonicalPath = std::filesystem::canonical(p, ec);
+            if (ec) {
+                sendError(res, "Failed to resolve directory path: " + ec.message(), 400);
+                return;
+            }
+
+            if (!std::filesystem::is_directory(canonicalPath, ec)) {
+                sendError(res, "Path is not a directory: " + rawPath, 400);
+                return;
+            }
+
+            // Enforce allowed root directories & protect against sensitive system paths
+            std::string reason;
+            if (!isWithinAllowedRoots(canonicalPath, reason)) {
+                sendError(res, reason, 403);
+                return;
+            }
+
+            // Symlink restrictions: disallow importing directory if it points to sensitive paths
+            std::error_code symEc;
+            if (std::filesystem::is_symlink(std::filesystem::symlink_status(p, symEc))) {
+                if (isSensitiveSystemPath(canonicalPath)) {
+                    sendError(res, "Importing symlink pointing to sensitive system directory is forbidden", 403);
+                    return;
+                }
+            }
+
+            // Permission checks: verify directory is readable
+            std::error_code itEc;
+            std::filesystem::directory_iterator it(canonicalPath, std::filesystem::directory_options::skip_permission_denied, itEc);
+            if (itEc) {
+                sendError(res, "Permission denied or directory cannot be read: " + itEc.message(), 403);
+                return;
+            }
+
+            std::string path = canonicalPath.string();
 
             if (catalog_) {
                 if (catalog_->importer().isRunning()) {

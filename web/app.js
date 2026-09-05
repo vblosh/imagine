@@ -34,9 +34,13 @@
     importPollInterval: null,
     viewMode: 'grid',
     mapInstance: null,
+    markerLayerGroup: null,
     mapMarkers: [],
     searchMarker: null,
     activeMapMarker: null,
+    _cachedGpsItems: null,
+    _lastMapZoom: null,
+    _lastMapItemsSig: null,
     inspectorMiniMapInstance: null,
     inspectorMiniMarker: null,
     placementMediaId: null,
@@ -375,6 +379,45 @@
     return false;
   }
 
+  // --- DOM Caching & Query Scoping ---
+  const cardMap = new Map();
+  let previousSelectedIds = new Set();
+
+  function getCardElement(id) {
+    let card = cardMap.get(id);
+    if (card && card.isConnected) return card;
+    if (!dom.mediaGrid) return null;
+    card = dom.mediaGrid.querySelector(`.photo-card[data-id="${CSS.escape(String(id))}"]`);
+    if (card) cardMap.set(id, card);
+    return card;
+  }
+
+  function clearCardSelections() {
+    if (state.selectedIds.size === 0) return;
+    for (const id of state.selectedIds) {
+      const card = getCardElement(id);
+      if (card) card.classList.remove('selected');
+    }
+    state.selectedIds.clear();
+    previousSelectedIds.clear();
+    state.lastSelectedId = null;
+    updateBatchBar();
+    updateInspector();
+    updateMapMarkerSelections();
+  }
+
+  function getGpsMediaItems() {
+    if (!state._cachedGpsItems) {
+      state._cachedGpsItems = state.mediaItems.filter(hasValidGps);
+    }
+    return state._cachedGpsItems;
+  }
+
+  function invalidateGpsCache() {
+    state._cachedGpsItems = null;
+    state._lastMapItemsSig = null;
+  }
+
   function showToast(message, type = 'info') {
     let container = document.getElementById('toastContainer');
     if (!container) {
@@ -518,6 +561,9 @@
         }
       });
 
+      invalidateGpsCache();
+      previousSelectedIds = new Set(state.selectedIds);
+
       if (state.viewMode !== 'map') {
         renderGrid();
       }
@@ -613,6 +659,9 @@
         }
       });
 
+      invalidateGpsCache();
+      previousSelectedIds = new Set(state.selectedIds);
+
       if (state.viewMode !== 'map') {
         appendMediaToGrid(newItems);
       }
@@ -680,10 +729,13 @@
   // --- Render Functions ---
   function renderGrid() {
     if (!dom.mediaGrid) return;
-    dom.mediaGrid.innerHTML = '';
+
+    cardMap.clear();
 
     if (state.mediaItems.length === 0) {
+      dom.mediaGrid.innerHTML = '';
       if (dom.emptyState) dom.emptyState.style.display = 'flex';
+      previousSelectedIds.clear();
       return;
     }
     if (dom.emptyState) dom.emptyState.style.display = 'none';
@@ -699,6 +751,8 @@
       if (!groups[groupKey]) groups[groupKey] = [];
       groups[groupKey].push(item);
     });
+
+    const fragment = document.createDocumentFragment();
 
     Object.keys(groups).forEach(groupTitle => {
       const groupEl = document.createElement('div');
@@ -718,11 +772,12 @@
 
       groups[groupTitle].forEach(item => {
         const card = createPhotoCard(item);
+        cardMap.set(item.id, card);
         cardsWrap.appendChild(card);
       });
 
       groupEl.appendChild(cardsWrap);
-      dom.mediaGrid.appendChild(groupEl);
+      fragment.appendChild(groupEl);
     });
 
     if (state.mediaItems.length < state.totalCount) {
@@ -735,8 +790,12 @@
       `;
       const btn = moreWrap.querySelector('#gridLoadMoreBtn');
       if (btn) btn.onclick = () => loadMoreMedia();
-      dom.mediaGrid.appendChild(moreWrap);
+      fragment.appendChild(moreWrap);
     }
+
+    dom.mediaGrid.innerHTML = '';
+    dom.mediaGrid.appendChild(fragment);
+    previousSelectedIds = new Set(state.selectedIds);
   }
 
   function appendMediaToGrid(newItems) {
@@ -768,7 +827,7 @@
 
     newItems.forEach(item => {
       // Guard against duplicate card already present in DOM
-      if (dom.mediaGrid.querySelector(`.photo-card[data-id="${item.id}"]`)) {
+      if (getCardElement(item.id)) {
         return;
       }
 
@@ -778,6 +837,7 @@
         groupKey = `${getMonthName(d.getUTCMonth() + 1)} ${d.getUTCFullYear()}`;
       }
 
+      const itemIdx = state.mediaItems.indexOf(item);
       let groupEl = dom.mediaGrid.querySelector(`.date-group[data-group-key="${groupKey}"]`);
       if (!groupEl) {
         groupEl = document.createElement('div');
@@ -796,13 +856,50 @@
         cardsWrap.className = 'group-cards';
         groupEl.appendChild(cardsWrap);
 
-        dom.mediaGrid.appendChild(groupEl);
+        // Reconcile group ordering among existing date-group elements
+        const existingGroups = Array.from(dom.mediaGrid.querySelectorAll('.date-group'));
+        let nextGroupEl = null;
+        for (const grp of existingGroups) {
+          const firstCard = grp.querySelector('.photo-card');
+          if (firstCard) {
+            const firstId = parseInt(firstCard.dataset.id, 10);
+            const grpIdx = state.mediaItems.findIndex(m => m.id === firstId);
+            if (grpIdx !== -1 && itemIdx !== -1 && grpIdx > itemIdx) {
+              nextGroupEl = grp;
+              break;
+            }
+          }
+        }
+
+        if (nextGroupEl) {
+          dom.mediaGrid.insertBefore(groupEl, nextGroupEl);
+        } else {
+          dom.mediaGrid.appendChild(groupEl);
+        }
       }
 
       const cardsWrap = groupEl.querySelector('.group-cards');
       if (cardsWrap) {
         const card = createPhotoCard(item);
-        cardsWrap.appendChild(card);
+        cardMap.set(item.id, card);
+
+        // Reconcile card ordering within date group
+        let nextCardEl = null;
+        for (const existingCard of cardsWrap.children) {
+          const existingId = parseInt(existingCard.dataset.id, 10);
+          const existingIdx = state.mediaItems.findIndex(m => m.id === existingId);
+          if (existingIdx !== -1 && itemIdx !== -1 && existingIdx > itemIdx) {
+            nextCardEl = existingCard;
+            break;
+          }
+        }
+
+        if (nextCardEl) {
+          cardsWrap.insertBefore(card, nextCardEl);
+        } else {
+          cardsWrap.appendChild(card);
+        }
+
         const count = cardsWrap.children.length;
         const countEl = groupEl.querySelector('.group-count');
         if (countEl) {
@@ -823,6 +920,7 @@
       if (btn) btn.onclick = () => loadMoreMedia();
       dom.mediaGrid.appendChild(moreWrap);
     }
+    previousSelectedIds = new Set(state.selectedIds);
   }
 
   function createPhotoCard(item) {
@@ -867,35 +965,6 @@
       </div>
     `;
 
-    // Prevent dblclick on stars from propagating to card
-    const starsEl = card.querySelector('.card-stars');
-    if (starsEl) {
-      starsEl.addEventListener('dblclick', (e) => {
-        e.stopPropagation();
-      });
-    }
-
-    // Click handler for selection
-    card.addEventListener('click', (e) => {
-      // If clicking directly on a star
-      const starTarget = e.target.closest('.card-stars span');
-      if (starTarget) {
-        e.stopPropagation();
-        const star = parseInt(starTarget.dataset.star, 10);
-        const newRating = item.rating === star ? 0 : star;
-        updateItemRating(item.id, newRating);
-        return;
-      }
-
-      handleCardSelection(item.id, e);
-    });
-
-    // Double click to open loupe (ignore if clicked on stars)
-    card.addEventListener('dblclick', (e) => {
-      if (e.target.closest('.card-stars')) return;
-      openLoupeForMedia(item.id);
-    });
-
     return card;
   }
 
@@ -931,15 +1000,20 @@
       state.lastSelectedId = id;
     }
 
-    // Update selection classes in DOM
-    document.querySelectorAll('.photo-card').forEach(c => {
-      const cardId = parseInt(c.dataset.id, 10);
-      if (state.selectedIds.has(cardId)) {
-        c.classList.add('selected');
-      } else {
-        c.classList.remove('selected');
+    // Update selection classes in DOM only for changed items
+    for (const oldId of previousSelectedIds) {
+      if (!state.selectedIds.has(oldId)) {
+        const c = getCardElement(oldId);
+        if (c) c.classList.remove('selected');
       }
-    });
+    }
+    for (const newId of state.selectedIds) {
+      if (!previousSelectedIds.has(newId)) {
+        const c = getCardElement(newId);
+        if (c) c.classList.add('selected');
+      }
+    }
+    previousSelectedIds = new Set(state.selectedIds);
 
     updateBatchBar();
     updateInspector();
@@ -1067,13 +1141,25 @@
     updateInspectorMiniMap(item);
   }
 
+  let inspectorAbortController = null;
+
   async function updateInspector() {
     if (state.selectedIds.size === 0) {
+      if (inspectorAbortController) {
+        inspectorAbortController.abort();
+        inspectorAbortController = null;
+      }
       if (dom.inspectorNoSelection) dom.inspectorNoSelection.style.display = 'block';
       if (dom.inspectorSelection) dom.inspectorSelection.style.display = 'none';
       updateInspectorMiniMap(null);
       return;
     }
+
+    if (inspectorAbortController) {
+      inspectorAbortController.abort();
+    }
+    inspectorAbortController = new AbortController();
+    const signal = inspectorAbortController.signal;
 
     // Pick first selected ID
     const selectedId = Array.from(state.selectedIds)[0];
@@ -1087,7 +1173,7 @@
     const fetchId = ++currentInspectorFetchId;
     try {
       // Fetch fresh details from API
-      const freshItem = await api.get(`/api/media/${selectedId}`);
+      const freshItem = await api.get(`/api/media/${selectedId}`, {}, { signal });
       if (fetchId !== currentInspectorFetchId) return;
       if (!state.selectedIds.has(selectedId)) return;
       const idx = state.mediaItems.findIndex(m => m.id === selectedId);
@@ -1103,6 +1189,7 @@
         renderInspectorContent(freshItem);
       }
     } catch (err) {
+      if (err.name === 'AbortError') return;
       if (fetchId !== currentInspectorFetchId) return;
       console.warn('Could not fetch single media details:', err);
     }
@@ -1201,8 +1288,14 @@
         attribution: '&copy; OpenStreetMap contributors'
       }).addTo(state.mapInstance);
 
+      state.markerLayerGroup = L.layerGroup().addTo(state.mapInstance);
+
+      let mapZoomDebounceTimer = null;
       state.mapInstance.on('zoomend', () => {
-        renderMapMarkers();
+        clearTimeout(mapZoomDebounceTimer);
+        mapZoomDebounceTimer = setTimeout(() => {
+          renderMapMarkers();
+        }, 60);
       });
 
       state.mapInstance.on('click', async (e) => {
@@ -1311,7 +1404,7 @@
     return clusters;
   }
 
-  function renderMapMarkers() {
+  function renderMapMarkers(force = false) {
     if (!state.mapInstance) return;
 
     // Preserve open popup media ID across re-clustering on zoom changes
@@ -1329,10 +1422,7 @@
       }
     }
 
-    state.mapMarkers.forEach(m => m.remove());
-    state.mapMarkers = [];
-
-    const gpsItems = state.mediaItems.filter(hasValidGps);
+    const gpsItems = getGpsMediaItems();
 
     if (dom.mapPhotoCount) {
       dom.mapPhotoCount.textContent = gpsItems.length;
@@ -1353,6 +1443,33 @@
         dom.mapLoadAllBtn.style.display = 'none';
       }
     }
+
+    const currentZoom = state.mapInstance.getZoom();
+    const itemsSig = gpsItems.map(i => `${i.id}:${i.exif ? (i.exif.latitude + ',' + i.exif.longitude) : ''}`).join(';');
+
+    // Avoid expensive map marker rebuild if zoom and items haven't changed
+    if (!force && state._lastMapZoom === currentZoom && state._lastMapItemsSig === itemsSig) {
+      updateMapMarkerSelections();
+      if (openMediaId) {
+        const targetMarker = state.mapMarkers.find(m => m.clusterItems && m.clusterItems.some(i => i.id === openMediaId));
+        if (targetMarker && (!state.activeMapMarker || state.activeMapMarker !== targetMarker || !targetMarker.getPopup()?.isOpen())) {
+          targetMarker.activeMediaId = openMediaId;
+          state.activeMapMarker = targetMarker;
+          targetMarker.openPopup();
+        }
+      }
+      return;
+    }
+
+    state._lastMapZoom = currentZoom;
+    state._lastMapItemsSig = itemsSig;
+
+    if (state.markerLayerGroup) {
+      state.markerLayerGroup.clearLayers();
+    } else {
+      state.mapMarkers.forEach(m => m.remove());
+    }
+    state.mapMarkers = [];
 
     const clusters = clusterGpsItems(gpsItems, state.mapInstance, 50);
 
@@ -1386,7 +1503,12 @@
         popupAnchor: [0, -48]
       });
 
-      const marker = L.marker([lat, lng], { icon: pinIcon }).addTo(state.mapInstance);
+      const marker = L.marker([lat, lng], { icon: pinIcon });
+      if (state.markerLayerGroup) {
+        marker.addTo(state.markerLayerGroup);
+      } else {
+        marker.addTo(state.mapInstance);
+      }
       marker.clusterItems = items;
       marker.activeMediaId = repItem.id;
       marker.bindPopup(() => createMapPopupElement(items, marker.activeMediaId), { maxWidth: 280, autoPan: true, autoPanPadding: [80, 80] });
@@ -1764,7 +1886,8 @@
       });
 
       exitPlacementMode();
-      renderMapMarkers();
+      invalidateGpsCache();
+      renderMapMarkers(true);
       renderUnmappedTray();
       updateInspector();
     } catch (err) {
@@ -1787,7 +1910,8 @@
         item.exif.longitude = 0;
         item.exif.altitude = 0;
       }
-      renderMapMarkers();
+      invalidateGpsCache();
+      renderMapMarkers(true);
       renderUnmappedTray();
       updateInspector();
     } catch (err) {
@@ -1796,7 +1920,14 @@
   }
 
   // --- Map Place Search & Navigation ---
+  let mapSearchAbortController = null;
+  const geocodeCache = new Map();
+
   function clearMapSearch() {
+    if (mapSearchAbortController) {
+      mapSearchAbortController.abort();
+      mapSearchAbortController = null;
+    }
     if (dom.mapSearchInput) dom.mapSearchInput.value = '';
     if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'none';
     if (dom.mapSearchSpinner) dom.mapSearchSpinner.style.display = 'none';
@@ -1927,6 +2058,13 @@
       return;
     }
 
+    if (mapSearchAbortController) {
+      mapSearchAbortController.abort();
+      mapSearchAbortController = null;
+    }
+    const abortController = new AbortController();
+    mapSearchAbortController = abortController;
+
     const searchId = ++currentMapSearchId;
     if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'block';
     if (dom.mapSearchSpinner) dom.mapSearchSpinner.style.display = 'block';
@@ -1948,44 +2086,62 @@
           badge: 'GPS'
         });
       }
+      if (dom.mapSearchSpinner) dom.mapSearchSpinner.style.display = 'none';
+      state.mapSearchResults = results;
+      state.mapSearchActiveIdx = -1;
+      renderMapSearchResults(results);
+      return;
     }
 
-    // 2. Catalog search: matched photos with GPS
+    // 2. Catalog search: matched photos with GPS (scan only GPS items)
     const lowerQuery = query.toLowerCase();
-    state.mediaItems.forEach(item => {
-      if (hasValidGps(item)) {
-        const fileName = String(item.file_name || '');
-        if (fileName.toLowerCase().includes(lowerQuery)) {
-          const lat = numeric(item.exif.latitude);
-          const lng = numeric(item.exif.longitude);
-          results.push({
-            title: fileName,
-            subtitle: `In Catalog · ${lat !== null ? lat.toFixed(4) : '-'}, ${lng !== null ? lng.toFixed(4) : '-'}`,
-            lat: lat !== null ? lat : item.exif.latitude,
-            lng: lng !== null ? lng : item.exif.longitude,
-            type: 'catalog',
-            badge: 'Photo'
-          });
-        }
+    getGpsMediaItems().forEach(item => {
+      const fileName = String(item.file_name || '');
+      if (fileName.toLowerCase().includes(lowerQuery)) {
+        const lat = numeric(item.exif.latitude);
+        const lng = numeric(item.exif.longitude);
+        results.push({
+          title: fileName,
+          subtitle: `In Catalog · ${lat !== null ? lat.toFixed(4) : '-'}, ${lng !== null ? lng.toFixed(4) : '-'}`,
+          lat: lat !== null ? lat : item.exif.latitude,
+          lng: lng !== null ? lng : item.exif.longitude,
+          type: 'catalog',
+          badge: 'Photo'
+        });
       }
     });
 
-    // 3. Online Geocoding via OpenStreetMap Nominatim (throttled to 1 req/sec max)
-    try {
-      const now = Date.now();
-      const elapsed = now - lastNominatimRequestTime;
-      if (elapsed < 1000) {
-        await new Promise(r => setTimeout(r, 1000 - elapsed));
-      }
-      if (searchId !== currentMapSearchId) return;
-      lastNominatimRequestTime = Date.now();
+    // 3. Online Geocoding via OpenStreetMap Nominatim (query length >= 3, cached, cancellable)
+    if (query.length >= 3) {
+      const cacheKey = lowerQuery;
+      let data = null;
+      if (geocodeCache.has(cacheKey)) {
+        data = geocodeCache.get(cacheKey);
+      } else {
+        try {
+          const now = Date.now();
+          const elapsed = now - lastNominatimRequestTime;
+          if (elapsed < 1000) {
+            await new Promise(r => setTimeout(r, 1000 - elapsed));
+          }
+          if (searchId !== currentMapSearchId) return;
+          lastNominatimRequestTime = Date.now();
 
-      const url = `/api/geocode?q=${encodeURIComponent(query)}&limit=5`;
-      const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
-      if (searchId !== currentMapSearchId) return;
-      if (resp.ok) {
-        const data = await resp.json();
-        if (searchId !== currentMapSearchId) return;
+          const url = `/api/geocode?q=${encodeURIComponent(query)}&limit=5`;
+          const resp = await fetch(url, { signal: abortController.signal, headers: { 'Accept': 'application/json' } });
+          if (searchId !== currentMapSearchId) return;
+          if (resp.ok) {
+            data = await resp.json();
+            if (searchId !== currentMapSearchId) return;
+            geocodeCache.set(cacheKey, data);
+          }
+        } catch (e) {
+          if (e.name === 'AbortError' || searchId !== currentMapSearchId) return;
+          console.warn('Nominatim geocoding unavailable or offline:', e);
+        }
+      }
+
+      if (data && searchId === currentMapSearchId) {
         data.forEach(p => {
           const lat = parseFloat(p.lat);
           const lng = parseFloat(p.lon);
@@ -1999,10 +2155,6 @@
           });
         });
       }
-    } catch (e) {
-      if (searchId !== currentMapSearchId) return;
-      // Offline fallback: coordinates or catalog items already collected
-      console.warn('Nominatim geocoding unavailable or offline:', e);
     }
 
     if (searchId !== currentMapSearchId) return;
@@ -2426,7 +2578,7 @@
   }
 
   function patchCardRating(id, rating) {
-    const card = document.querySelector(`.photo-card[data-id="${id}"]`);
+    const card = getCardElement(id);
     if (card) {
       card.querySelectorAll('.card-stars span').forEach(span => {
         const star = parseInt(span.dataset.star, 10);
@@ -2436,7 +2588,7 @@
   }
 
   function patchCardFlag(id, flag) {
-    const card = document.querySelector(`.photo-card[data-id="${id}"]`);
+    const card = getCardElement(id);
     if (card) {
       const badgeWrap = card.querySelector('.card-badges');
       if (badgeWrap) {
@@ -2807,14 +2959,48 @@
 
   // --- Event Listeners Setup ---
   function setupEventListeners() {
-    // Deselect on background click
+    // Deselect on actual background click
     if (dom.gridScrollContainer) {
       dom.gridScrollContainer.addEventListener('click', (e) => {
-        if (!e.target.closest('.photo-card')) {
-          state.selectedIds.clear();
-          document.querySelectorAll('.photo-card.selected').forEach(c => c.classList.remove('selected'));
-          updateBatchBar();
-          updateInspector();
+        if (e.target === dom.gridScrollContainer || e.target === dom.mediaGrid) {
+          clearCardSelections();
+        }
+      });
+    }
+
+    // Delegated click and dblclick handlers on mediaGrid
+    if (dom.mediaGrid) {
+      dom.mediaGrid.addEventListener('click', (e) => {
+        const starTarget = e.target.closest('.card-stars span');
+        if (starTarget) {
+          e.stopPropagation();
+          const star = parseInt(starTarget.dataset.star, 10);
+          const card = e.target.closest('.photo-card');
+          if (card) {
+            const cardId = parseInt(card.dataset.id, 10);
+            const item = state.mediaItems.find(m => m.id === cardId);
+            const currentRating = item ? (item.rating || 0) : 0;
+            const newRating = currentRating === star ? 0 : star;
+            updateItemRating(cardId, newRating);
+          }
+          return;
+        }
+
+        const card = e.target.closest('.photo-card');
+        if (!card) return;
+        const cardId = parseInt(card.dataset.id, 10);
+        if (!isNaN(cardId)) {
+          handleCardSelection(cardId, e);
+        }
+      });
+
+      dom.mediaGrid.addEventListener('dblclick', (e) => {
+        if (e.target.closest('.card-stars')) return;
+        const card = e.target.closest('.photo-card');
+        if (!card) return;
+        const cardId = parseInt(card.dataset.id, 10);
+        if (!isNaN(cardId)) {
+          openLoupeForMedia(cardId);
         }
       });
     }
@@ -3231,10 +3417,7 @@
     // Batch Action Bar handlers
     if (dom.batchClearBtn) {
       dom.batchClearBtn.addEventListener('click', () => {
-        state.selectedIds.clear();
-        document.querySelectorAll('.photo-card.selected').forEach(c => c.classList.remove('selected'));
-        updateBatchBar();
-        updateInspector();
+        clearCardSelections();
       });
     }
 
@@ -3444,7 +3627,10 @@
           e.preventDefault();
           state.selectedIds.clear();
           state.mediaItems.forEach(item => state.selectedIds.add(item.id));
-          document.querySelectorAll('.photo-card').forEach(c => c.classList.add('selected'));
+          if (dom.mediaGrid) {
+            dom.mediaGrid.querySelectorAll('.photo-card').forEach(c => c.classList.add('selected'));
+          }
+          previousSelectedIds = new Set(state.selectedIds);
           updateBatchBar();
           updateInspector();
           updateMapMarkerSelections();
@@ -3465,11 +3651,7 @@
             state.mapInstance.closePopup();
             if (state.searchMarker) clearMapSearch();
           } else {
-            state.selectedIds.clear();
-            document.querySelectorAll('.photo-card.selected').forEach(c => c.classList.remove('selected'));
-            updateBatchBar();
-            updateInspector();
-            updateMapMarkerSelections();
+            clearCardSelections();
           }
         } else if (e.key === ' ' || e.key === 'Enter') {
           if (state.selectedIds.size > 0) {
@@ -4078,7 +4260,12 @@
     setupResizablePanels();
   }
 
+  let activeResizeObservers = [];
+
   function setupResizablePanels() {
+    activeResizeObservers.forEach(ro => ro.disconnect());
+    activeResizeObservers = [];
+
     // 1. Vertical resizing for File Information and Camera & Exposure (EXIF) panels
     const panelResizers = document.querySelectorAll('.panel-resizer');
     panelResizers.forEach(resizer => {
@@ -4185,6 +4372,7 @@
           }
         });
         ro.observe(target);
+        activeResizeObservers.push(ro);
       }
     });
 
@@ -4275,7 +4463,11 @@
   }
 
   // --- Initializer ---
+  let initialized = false;
+
   async function init() {
+    if (initialized) return;
+    initialized = true;
     validateRequiredDom();
     setupEventListeners();
     await loadMetadata();
