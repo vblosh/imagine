@@ -775,3 +775,264 @@ TEST_F(ServerTest, GpsCoordinatesEndpointAndQuery) {
     ASSERT_TRUE(resCleared);
     EXPECT_EQ(nlohmann::json::parse(resCleared->body)["total"], 0);
 }
+
+TEST_F(ServerTest, RangeRequestsOnOriginalPhoto) {
+    httplib::Client client("127.0.0.1", port_);
+
+    std::string testContent = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    std::string photoPath = (testDir_ / "range_test.jpg").string();
+    {
+        std::ofstream ofs(photoPath, std::ios::binary);
+        ofs << testContent;
+    }
+
+    MediaItem item;
+    item.file_path = photoPath;
+    item.file_name = "range_test.jpg";
+    item.file_size = testContent.size();
+    item.content_hash = "range_test_hash_123";
+    item.date_taken = 1700000000;
+    auto mid = catalog_->db().insertMedia(item).value();
+
+    // 1. Full request without Range
+    auto fullRes = client.Get("/api/photos/" + std::to_string(mid) + "/original");
+    ASSERT_TRUE(fullRes);
+    EXPECT_EQ(fullRes->status, 200);
+    EXPECT_EQ(fullRes->body, testContent);
+    EXPECT_EQ(fullRes->get_header_value("Accept-Ranges"), "bytes");
+
+    // 2. Range: bytes=0-9 (first 10 bytes)
+    httplib::Headers headers1 = {{"Range", "bytes=0-9"}};
+    auto rangeRes1 = client.Get("/api/photos/" + std::to_string(mid) + "/original", headers1);
+    ASSERT_TRUE(rangeRes1);
+    EXPECT_EQ(rangeRes1->status, 206);
+    EXPECT_EQ(rangeRes1->body, "0123456789");
+    EXPECT_EQ(rangeRes1->get_header_value("Content-Range"), "bytes 0-9/" + std::to_string(testContent.size()));
+    EXPECT_EQ(rangeRes1->get_header_value("Content-Length"), "10");
+
+    // 3. Range: bytes=10- (from 10 to end)
+    httplib::Headers headers2 = {{"Range", "bytes=10-"}};
+    auto rangeRes2 = client.Get("/api/photos/" + std::to_string(mid) + "/original", headers2);
+    ASSERT_TRUE(rangeRes2);
+    EXPECT_EQ(rangeRes2->status, 206);
+    EXPECT_EQ(rangeRes2->body, testContent.substr(10));
+    EXPECT_EQ(rangeRes2->get_header_value("Content-Range"), "bytes 10-" + std::to_string(testContent.size() - 1) + "/" + std::to_string(testContent.size()));
+
+    // 4. Suffix range: bytes=-5 (last 5 bytes)
+    httplib::Headers headers3 = {{"Range", "bytes=-5"}};
+    auto rangeRes3 = client.Get("/api/photos/" + std::to_string(mid) + "/original", headers3);
+    ASSERT_TRUE(rangeRes3);
+    EXPECT_EQ(rangeRes3->status, 206);
+    EXPECT_EQ(rangeRes3->body, testContent.substr(testContent.size() - 5));
+
+    // 5. Out of bounds range: bytes=100-200 -> 416
+    httplib::Headers headers4 = {{"Range", "bytes=100-200"}};
+    auto rangeRes4 = client.Get("/api/photos/" + std::to_string(mid) + "/original", headers4);
+    ASSERT_TRUE(rangeRes4);
+    EXPECT_EQ(rangeRes4->status, 416);
+    EXPECT_EQ(rangeRes4->get_header_value("Content-Range"), "bytes */" + std::to_string(testContent.size()));
+}
+
+TEST_F(ServerTest, StaticFileTraversalAndSymlinkEscapeProtection) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Create a secret file outside webDir_
+    std::filesystem::path secretFile = testDir_ / "secret.txt";
+    {
+        std::ofstream ofs(secretFile);
+        ofs << "SUPER_SECRET_DATA";
+    }
+
+    // Attempt path traversal via /../secret.txt
+    auto travRes = client.Get("/../secret.txt");
+    ASSERT_TRUE(travRes);
+    EXPECT_EQ(travRes->status, 403);
+    EXPECT_EQ(travRes->body.find("SUPER_SECRET_DATA"), std::string::npos);
+
+    // 2. Create a symlink inside webDir pointing to secretFile outside
+    std::filesystem::path symlinkPath = webDir_ / "symlink_escape.txt";
+    std::error_code ec;
+    std::filesystem::create_symlink(secretFile, symlinkPath, ec);
+    if (!ec) {
+        auto symRes = client.Get("/symlink_escape.txt");
+        ASSERT_TRUE(symRes);
+        EXPECT_EQ(symRes->status, 403);
+        EXPECT_EQ(symRes->body.find("SUPER_SECRET_DATA"), std::string::npos);
+    }
+}
+
+TEST_F(ServerTest, BatchLimitsAndFailedIdsTracking) {
+    httplib::Client client("127.0.0.1", port_);
+
+    MediaItem item;
+    item.file_path = (testDir_ / "bitem.jpg").string();
+    item.file_name = "bitem.jpg";
+    item.file_size = 100;
+    item.content_hash = "bitem_hash";
+    item.date_taken = 1000;
+    auto validId = catalog_->db().insertMedia(item).value();
+    MediaId invalidId = 999999;
+
+    // 1. Batch rating with one valid and one invalid ID
+    nlohmann::json rateBody = {{"ids", {validId, invalidId}}, {"rating", 4}};
+    auto rateRes = client.Post("/api/media/batch-rating", rateBody.dump(), "application/json");
+    ASSERT_TRUE(rateRes);
+    EXPECT_EQ(rateRes->status, 200);
+    auto rateJson = nlohmann::json::parse(rateRes->body);
+    EXPECT_EQ(rateJson["status"], "partial");
+    EXPECT_EQ(rateJson["updated_count"], 1);
+    EXPECT_EQ(rateJson["failed_ids"].size(), 1u);
+    EXPECT_EQ(rateJson["failed_ids"][0].get<MediaId>(), invalidId);
+
+    // 2. Batch flag with one valid and one invalid ID
+    nlohmann::json flagBody = {{"ids", {validId, invalidId}}, {"flag", 1}};
+    auto flagRes = client.Post("/api/media/batch-flag", flagBody.dump(), "application/json");
+    ASSERT_TRUE(flagRes);
+    EXPECT_EQ(flagRes->status, 200);
+    auto flagJson = nlohmann::json::parse(flagRes->body);
+    EXPECT_EQ(flagJson["status"], "partial");
+    EXPECT_EQ(flagJson["updated_count"], 1);
+    EXPECT_EQ(flagJson["failed_ids"].size(), 1u);
+    EXPECT_EQ(flagJson["failed_ids"][0].get<MediaId>(), invalidId);
+
+    // 3. Batch delete with invalid ID
+    nlohmann::json delBody = {{"ids", {invalidId}}};
+    auto delRes = client.Post("/api/media/batch-delete", delBody.dump(), "application/json");
+    ASSERT_TRUE(delRes);
+    EXPECT_EQ(delRes->status, 200);
+    auto delJson = nlohmann::json::parse(delRes->body);
+    EXPECT_EQ(delJson["status"], "partial");
+    EXPECT_EQ(delJson["deleted_count"], 0);
+    EXPECT_EQ(delJson["failed_ids"].size(), 1u);
+    EXPECT_EQ(delJson["failed_ids"][0].get<MediaId>(), invalidId);
+
+    // 4. Batch size limit (> 1000 items)
+    std::vector<MediaId> hugeList(1001, validId);
+    nlohmann::json hugeBody = {{"ids", hugeList}, {"rating", 3}};
+    auto hugeRes = client.Post("/api/media/batch-rating", hugeBody.dump(), "application/json");
+    ASSERT_TRUE(hugeRes);
+    EXPECT_EQ(hugeRes->status, 400);
+}
+
+TEST_F(ServerTest, QueryParameterStrictValidation) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // Invalid non-integer limit returns 400
+    EXPECT_EQ(client.Get("/api/media?limit=abc")->status, 400);
+    // Negative limit returns 400
+    EXPECT_EQ(client.Get("/api/media?limit=-1")->status, 400);
+    // Too large limit returns 400
+    EXPECT_EQ(client.Get("/api/media?limit=1001")->status, 400);
+
+    // Invalid offset
+    EXPECT_EQ(client.Get("/api/media?offset=xyz")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?offset=-10")->status, 400);
+
+    // Invalid rating ranges
+    EXPECT_EQ(client.Get("/api/media?rating=6")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?rating=-1")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?max_rating=6")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?rating=4&max_rating=2")->status, 400);
+
+    // Invalid dates
+    EXPECT_EQ(client.Get("/api/media?date_from=bad")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?date_from=5000&date_to=1000")->status, 400);
+
+    // Invalid sort
+    EXPECT_EQ(client.Get("/api/media?sort=not_a_column")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?sort=date_taken-sideways")->status, 400);
+
+    // Invalid coordinates
+    EXPECT_EQ(client.Get("/api/media?min_lat=95")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?max_lat=-95")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?min_lat=20&max_lat=10")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?min_lon=200")->status, 400);
+
+    // Invalid flag query
+    EXPECT_EQ(client.Get("/api/media?flag=5")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?flag=not_a_num")->status, 400);
+}
+
+TEST_F(ServerTest, ApiTokenAuthentication) {
+    server_->setApiToken("secret123");
+
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. GET requests work without token
+    EXPECT_EQ(client.Get("/api/media")->status, 200);
+    EXPECT_EQ(client.Get("/api/stats")->status, 200);
+
+    // 2. POST /api/tags without token returns 401
+    nlohmann::json tagBody = {{"name", "SecretTag"}};
+    auto noAuthRes = client.Post("/api/tags", tagBody.dump(), "application/json");
+    ASSERT_TRUE(noAuthRes);
+    EXPECT_EQ(noAuthRes->status, 401);
+
+    // 3. POST /api/tags with wrong Bearer token returns 401
+    httplib::Headers badHeaders = {{"Authorization", "Bearer wrong_token"}};
+    auto badAuthRes = client.Post("/api/tags", badHeaders, tagBody.dump(), "application/json");
+    ASSERT_TRUE(badAuthRes);
+    EXPECT_EQ(badAuthRes->status, 401);
+
+    // 4. POST /api/tags with valid Bearer token returns 201
+    httplib::Headers goodHeaders = {{"Authorization", "Bearer secret123"}};
+    auto goodAuthRes = client.Post("/api/tags", goodHeaders, tagBody.dump(), "application/json");
+    ASSERT_TRUE(goodAuthRes);
+    EXPECT_EQ(goodAuthRes->status, 201);
+
+    // 5. POST with X-API-Key header returns 201
+    httplib::Headers apiKeyHeaders = {{"X-API-Key", "secret123"}};
+    nlohmann::json tag2 = {{"name", "KeyTag"}};
+    auto keyRes = client.Post("/api/tags", apiKeyHeaders, tag2.dump(), "application/json");
+    ASSERT_TRUE(keyRes);
+    EXPECT_EQ(keyRes->status, 201);
+
+    // Reset token for subsequent tests
+    server_->setApiToken("");
+}
+
+TEST_F(ServerTest, HttpStatusCodesNotFoundAndConflict) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // Deleting non-existent tag returns 404
+    EXPECT_EQ(client.Delete("/api/tags/99999")->status, 404);
+
+    // Deleting non-existent album returns 404
+    EXPECT_EQ(client.Delete("/api/albums/99999")->status, 404);
+
+    // Deleting non-existent media returns 404
+    EXPECT_EQ(client.Delete("/api/media/99999")->status, 404);
+}
+
+TEST_F(ServerTest, ImportThreadManagedLifecycle) {
+    auto photosDir = testDir_ / "managed_import";
+    std::filesystem::create_directories(photosDir);
+    for (int i = 0; i < 5; ++i) {
+        std::ofstream ofs(photosDir / ("img" + std::to_string(i) + ".jpg"));
+        ofs << "dummy_content_" << i;
+    }
+
+    httplib::Client client("127.0.0.1", port_);
+    nlohmann::json importBody = {{"path", photosDir.string()}};
+    auto impRes = client.Post("/api/import", importBody.dump(), "application/json");
+    ASSERT_TRUE(impRes);
+    EXPECT_EQ(impRes->status, 200);
+
+    // Safe stop during / after import
+    server_->stop();
+    EXPECT_FALSE(server_->isRunning());
+}
+
+TEST_F(ServerTest, GeocodeValidationAndCaching) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // Limit out of bounds (< 1)
+    EXPECT_EQ(client.Get("/api/geocode?q=Paris&limit=0")->status, 400);
+
+    // Limit out of bounds (> 10)
+    EXPECT_EQ(client.Get("/api/geocode?q=Paris&limit=15")->status, 400);
+
+    // Limit not a number
+    EXPECT_EQ(client.Get("/api/geocode?q=Paris&limit=abc")->status, 400);
+}
+

@@ -317,6 +317,9 @@ Status CatalogDb::updateRating(MediaId id, int32_t rating) {
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to update rating: " + conn_.lastErrorMessage());
     }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Media item not found: " + std::to_string(id));
+    }
     return Status::ok();
 }
 
@@ -331,6 +334,9 @@ Status CatalogDb::updateFlag(MediaId id, FlagState flag) {
 
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to update flag: " + conn_.lastErrorMessage());
+    }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Media item not found: " + std::to_string(id));
     }
     return Status::ok();
 }
@@ -347,6 +353,9 @@ Status CatalogDb::updateThumbnails(MediaId id, const std::string& smallPath, con
 
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to update thumbnails: " + conn_.lastErrorMessage());
+    }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Media item not found: " + std::to_string(id));
     }
     return Status::ok();
 }
@@ -366,6 +375,9 @@ Status CatalogDb::updateGps(MediaId id, bool hasGps, double latitude, double lon
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to update GPS coordinates: " + conn_.lastErrorMessage());
     }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Media item not found: " + std::to_string(id));
+    }
     return Status::ok();
 }
 
@@ -378,6 +390,9 @@ Status CatalogDb::deleteMedia(MediaId id) {
 
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to delete media item: " + conn_.lastErrorMessage());
+    }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Media item not found: " + std::to_string(id));
     }
     return Status::ok();
 }
@@ -554,6 +569,9 @@ Status CatalogDb::deleteTag(TagId tagId) {
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to delete tag: " + conn_.lastErrorMessage());
     }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Tag not found: " + std::to_string(tagId));
+    }
     return Status::ok();
 }
 
@@ -644,6 +662,13 @@ Result<Album> CatalogDb::getAlbumById(AlbumId id) {
 
 Status CatalogDb::deleteAlbum(AlbumId id) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto s1 = conn_.prepare("DELETE FROM album_media WHERE album_id = ?;");
+    if (s1.isOk()) {
+        auto stmt1 = std::move(s1.value());
+        stmt1.bind(1, id);
+        stmt1.step();
+    }
+
     auto stmtRes = conn_.prepare("DELETE FROM albums WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -651,6 +676,9 @@ Status CatalogDb::deleteAlbum(AlbumId id) {
 
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to delete album: " + conn_.lastErrorMessage());
+    }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Album not found: " + std::to_string(id));
     }
     return Status::ok();
 }

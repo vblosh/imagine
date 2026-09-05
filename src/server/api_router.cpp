@@ -1,4 +1,5 @@
 #include "imagine/server/api_router.hpp"
+#include "imagine/server/mime_types.hpp"
 #include "imagine/core/catalog.hpp"
 #include "imagine/core/query.hpp"
 #include "imagine/core/importer.hpp"
@@ -9,10 +10,22 @@
 #include <filesystem>
 #include <thread>
 #include <mutex>
+#include <chrono>
+#include <unordered_set>
+#include <unordered_map>
+#include <cstdlib>
 
 namespace imagine::server {
 
 namespace {
+
+constexpr size_t kMaxBatchSize = 1000;
+constexpr size_t kMaxSearchLength = 500;
+constexpr size_t kMaxFolderLength = 1000;
+constexpr size_t kMaxNameLength = 100;
+constexpr size_t kMaxCategoryLength = 50;
+constexpr size_t kMaxAlbumNameLength = 200;
+constexpr size_t kMaxAlbumDescLength = 2000;
 
 void sendJson(httplib::Response& res, const nlohmann::json& j, int status = 200) {
     res.status = status;
@@ -25,20 +38,27 @@ void sendError(httplib::Response& res, const std::string& message, int status = 
     res.set_content(err.dump(), "application/json");
 }
 
-std::string getMimeTypeForImage(const std::string& path) {
-    std::string ext;
-    auto dot = path.find_last_of('.');
-    if (dot != std::string::npos) {
-        ext = path.substr(dot);
-        for (char& c : ext) c = static_cast<char>(std::tolower(c));
+int statusToHttpCode(const Status& s) {
+    switch (s.code()) {
+        case StatusCode::Ok:
+            return 200;
+        case StatusCode::NotFound:
+            return 404;
+        case StatusCode::AlreadyExists:
+            return 409;
+        case StatusCode::InvalidArgument:
+        case StatusCode::ParseError:
+            return 400;
+        case StatusCode::IoError:
+        case StatusCode::DatabaseError:
+        case StatusCode::InternalError:
+        default:
+            return 500;
     }
-    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
-    if (ext == ".png") return "image/png";
-    if (ext == ".webp") return "image/webp";
-    if (ext == ".bmp") return "image/bmp";
-    if (ext == ".gif") return "image/gif";
-    if (ext == ".svg") return "image/svg+xml";
-    return "application/octet-stream";
+}
+
+void sendStatusError(httplib::Response& res, const Status& s) {
+    sendError(res, s.message(), statusToHttpCode(s));
 }
 
 bool isSensitiveSystemPath(const std::filesystem::path& canonicalPath) {
@@ -102,12 +122,75 @@ static std::atomic<bool> g_isImporting{false};
 } // anonymous namespace
 
 ApiRouter::ApiRouter(core::Catalog& catalog)
-    : catalog_(&catalog) {}
+    : catalog_(&catalog) {
+    const char* envToken = std::getenv("IMAGINE_API_TOKEN");
+    if (envToken && *envToken) {
+        apiToken_ = envToken;
+    }
+    const char* envOrigin = std::getenv("IMAGINE_ALLOWED_ORIGIN");
+    if (envOrigin && *envOrigin) {
+        allowedOrigin_ = envOrigin;
+    }
+}
 
 ApiRouter::ApiRouter(db::CatalogDb& db, thumbnail::Cache& cache)
-    : db_(&db), cache_(&cache) {}
+    : db_(&db), cache_(&cache) {
+    const char* envToken = std::getenv("IMAGINE_API_TOKEN");
+    if (envToken && *envToken) {
+        apiToken_ = envToken;
+    }
+    const char* envOrigin = std::getenv("IMAGINE_ALLOWED_ORIGIN");
+    if (envOrigin && *envOrigin) {
+        allowedOrigin_ = envOrigin;
+    }
+}
 
-ApiRouter::~ApiRouter() = default;
+ApiRouter::~ApiRouter() {
+    stopImport();
+}
+
+void ApiRouter::setApiToken(std::string token) {
+    apiToken_ = std::move(token);
+}
+
+void ApiRouter::setAllowedOrigin(std::string origin) {
+    allowedOrigin_ = std::move(origin);
+}
+
+void ApiRouter::stopImport() {
+    if (catalog_) {
+        catalog_->cancelImport();
+    }
+    cancelFallbackImport_.store(true);
+    std::lock_guard<std::mutex> lock(importThreadMutex_);
+    if (importThread_.joinable()) {
+        importThread_.request_stop();
+        importThread_.join();
+    }
+}
+
+bool ApiRouter::isImportRunning() const {
+    if (catalog_) {
+        return catalog_->importer().isRunning();
+    }
+    return g_isImporting.load();
+}
+
+bool ApiRouter::checkAuth(const httplib::Request& req, httplib::Response& res) const {
+    if (apiToken_.empty()) {
+        return true;
+    }
+    if (req.has_header("Authorization")) {
+        auto auth = req.get_header_value("Authorization");
+        if (auth == ("Bearer " + apiToken_)) return true;
+    }
+    if (req.has_header("X-API-Key")) {
+        auto key = req.get_header_value("X-API-Key");
+        if (key == apiToken_) return true;
+    }
+    sendError(res, "Unauthorized: valid API token required", 401);
+    return false;
+}
 
 db::CatalogDb& ApiRouter::db() const {
     if (db_) return *db_;
@@ -134,10 +217,29 @@ void ApiRouter::registerRoutes(httplib::Server& server) {
 }
 
 void ApiRouter::registerCorsHandler(httplib::Server& server) {
-    server.set_pre_routing_handler([](const httplib::Request& req, httplib::Response& res) {
-        res.set_header("Access-Control-Allow-Origin", "*");
+    server.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+        std::string requestId;
+        if (req.has_header("X-Request-ID")) {
+            requestId = req.get_header_value("X-Request-ID");
+        } else {
+            requestId = "req-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+        }
+        res.set_header("X-Request-ID", requestId);
+
+        std::string origin = allowedOrigin_;
+        if (origin != "*" && req.has_header("Origin")) {
+            std::string reqOrigin = req.get_header_value("Origin");
+            if (reqOrigin == origin) {
+                res.set_header("Access-Control-Allow-Origin", reqOrigin);
+            }
+        } else {
+            res.set_header("Access-Control-Allow-Origin", origin);
+        }
+
         res.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Origin, X-Requested-With");
+        res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, Accept, Origin, X-Requested-With, X-Request-ID, Range");
+        res.set_header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, ETag, X-Request-ID");
+
         if (req.method == "OPTIONS") {
             res.status = 204;
             return httplib::Server::HandlerResponse::Handled;
@@ -151,88 +253,209 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     server.Get("/api/media", [this](const httplib::Request& req, httplib::Response& res) {
         core::QueryCriteria criteria;
 
-        if (req.has_param("rating")) {
+        auto parseInt = [](const std::string& str, auto& out) -> bool {
             try {
-                criteria.min_rating = std::stoi(req.get_param_value("rating"));
-            } catch (...) {}
+                size_t idx = 0;
+                auto v = std::stoll(str, &idx);
+                if (idx != str.size()) return false;
+                out = static_cast<std::decay_t<decltype(out)>>(v);
+                return true;
+            } catch (...) {
+                return false;
+            }
+        };
+
+        auto parseDouble = [](const std::string& str, double& out) -> bool {
+            try {
+                size_t idx = 0;
+                double v = std::stod(str, &idx);
+                if (idx != str.size()) return false;
+                out = v;
+                return true;
+            } catch (...) {
+                return false;
+            }
+        };
+
+        if (req.has_param("rating")) {
+            int32_t val = 0;
+            if (!parseInt(req.get_param_value("rating"), val) || val < 0 || val > 5) {
+                sendError(res, "Query parameter 'rating' must be an integer between 0 and 5", 400);
+                return;
+            }
+            criteria.min_rating = val;
         }
         if (req.has_param("max_rating")) {
-            try {
-                criteria.max_rating = std::stoi(req.get_param_value("max_rating"));
-            } catch (...) {}
+            int32_t val = 0;
+            if (!parseInt(req.get_param_value("max_rating"), val) || val < 0 || val > 5) {
+                sendError(res, "Query parameter 'max_rating' must be an integer between 0 and 5", 400);
+                return;
+            }
+            criteria.max_rating = val;
+        }
+        if (criteria.min_rating.has_value() && criteria.max_rating.has_value() &&
+            *criteria.min_rating > *criteria.max_rating) {
+            sendError(res, "'rating' cannot be greater than 'max_rating'", 400);
+            return;
         }
         if (req.has_param("flag")) {
-            try {
-                criteria.flag = static_cast<FlagState>(std::stoi(req.get_param_value("flag")));
-            } catch (...) {}
+            int val = 0;
+            if (!parseInt(req.get_param_value("flag"), val) || val < -1 || val > 1) {
+                sendError(res, "Query parameter 'flag' must be -1, 0, or 1", 400);
+                return;
+            }
+            criteria.flag = static_cast<FlagState>(val);
         }
         if (req.has_param("search")) {
-            criteria.search_text = req.get_param_value("search");
+            std::string search = req.get_param_value("search");
+            if (search.size() > kMaxSearchLength) {
+                sendError(res, "Search query exceeds maximum length", 400);
+                return;
+            }
+            criteria.search_text = std::move(search);
         }
         if (req.has_param("folder")) {
-            criteria.folder = req.get_param_value("folder");
+            std::string folder = req.get_param_value("folder");
+            if (folder.size() > kMaxFolderLength) {
+                sendError(res, "Folder path exceeds maximum length", 400);
+                return;
+            }
+            criteria.folder = std::move(folder);
         }
         if (req.has_param("tag_category")) {
-            criteria.tag_category = req.get_param_value("tag_category");
+            std::string tagCat = req.get_param_value("tag_category");
+            if (tagCat.size() > kMaxCategoryLength) {
+                sendError(res, "Tag category exceeds maximum length", 400);
+                return;
+            }
+            criteria.tag_category = std::move(tagCat);
         } else if (req.has_param("category")) {
-            criteria.tag_category = req.get_param_value("category");
+            std::string tagCat = req.get_param_value("category");
+            if (tagCat.size() > kMaxCategoryLength) {
+                sendError(res, "Category exceeds maximum length", 400);
+                return;
+            }
+            criteria.tag_category = std::move(tagCat);
         }
         if (req.has_param("tag_id")) {
-            try {
-                criteria.tag_ids.push_back(std::stoll(req.get_param_value("tag_id")));
-            } catch (...) {}
+            TagId tid = 0;
+            if (!parseInt(req.get_param_value("tag_id"), tid)) {
+                sendError(res, "Query parameter 'tag_id' must be an integer", 400);
+                return;
+            }
+            criteria.tag_ids.push_back(tid);
         }
         if (req.has_param("album_id")) {
-            try {
-                criteria.album_id = std::stoll(req.get_param_value("album_id"));
-            } catch (...) {}
+            AlbumId aid = 0;
+            if (!parseInt(req.get_param_value("album_id"), aid)) {
+                sendError(res, "Query parameter 'album_id' must be an integer", 400);
+                return;
+            }
+            criteria.album_id = aid;
         }
         if (req.has_param("date_from")) {
-            try {
-                criteria.date_from = std::stoll(req.get_param_value("date_from"));
-            } catch (...) {}
+            int64_t df = 0;
+            if (!parseInt(req.get_param_value("date_from"), df)) {
+                sendError(res, "Query parameter 'date_from' must be an integer", 400);
+                return;
+            }
+            criteria.date_from = df;
         }
         if (req.has_param("date_to")) {
-            try {
-                criteria.date_to = std::stoll(req.get_param_value("date_to"));
-            } catch (...) {}
+            int64_t dt = 0;
+            if (!parseInt(req.get_param_value("date_to"), dt)) {
+                sendError(res, "Query parameter 'date_to' must be an integer", 400);
+                return;
+            }
+            criteria.date_to = dt;
+        }
+        if (criteria.date_from > 0 && criteria.date_to > 0 && criteria.date_from > criteria.date_to) {
+            sendError(res, "'date_from' cannot be greater than 'date_to'", 400);
+            return;
         }
         if (req.has_param("limit")) {
-            try {
-                criteria.limit = std::stoi(req.get_param_value("limit"));
-            } catch (...) {}
+            int32_t lim = 0;
+            if (!parseInt(req.get_param_value("limit"), lim) || lim < 0 || lim > 1000) {
+                sendError(res, "Query parameter 'limit' must be an integer between 0 and 1000", 400);
+                return;
+            }
+            criteria.limit = lim;
         }
         if (req.has_param("offset")) {
-            try {
-                criteria.offset = std::stoi(req.get_param_value("offset"));
-            } catch (...) {}
+            int32_t off = 0;
+            if (!parseInt(req.get_param_value("offset"), off) || off < 0) {
+                sendError(res, "Query parameter 'offset' must be a non-negative integer", 400);
+                return;
+            }
+            criteria.offset = off;
         }
         if (req.has_param("sort")) {
             std::string sort = req.get_param_value("sort");
+            std::string col = sort;
+            bool desc = true;
             auto dash = sort.find('-');
             if (dash != std::string::npos) {
-                criteria.sort_by = sort.substr(0, dash);
-                criteria.sort_descending = (sort.substr(dash + 1) != "asc");
-            } else {
-                criteria.sort_by = sort;
-                criteria.sort_descending = true;
+                col = sort.substr(0, dash);
+                std::string dir = sort.substr(dash + 1);
+                if (dir != "asc" && dir != "desc") {
+                    sendError(res, "Invalid sort direction: must be 'asc' or 'desc'", 400);
+                    return;
+                }
+                desc = (dir != "asc");
             }
+            static const std::unordered_set<std::string> allowedSortCols = {
+                "date_taken", "rating", "file_name", "file_size"
+            };
+            if (allowedSortCols.find(col) == allowedSortCols.end()) {
+                sendError(res, "Invalid sort column: " + col, 400);
+                return;
+            }
+            criteria.sort_by = col;
+            criteria.sort_descending = desc;
         }
         if (req.has_param("has_gps")) {
             std::string val = req.get_param_value("has_gps");
             criteria.has_gps = (val == "1" || val == "true");
         }
         if (req.has_param("min_lat")) {
-            try { criteria.min_lat = std::stod(req.get_param_value("min_lat")); } catch (...) {}
+            double v = 0.0;
+            if (!parseDouble(req.get_param_value("min_lat"), v) || v < -90.0 || v > 90.0) {
+                sendError(res, "Query parameter 'min_lat' must be a number between -90 and 90", 400);
+                return;
+            }
+            criteria.min_lat = v;
         }
         if (req.has_param("max_lat")) {
-            try { criteria.max_lat = std::stod(req.get_param_value("max_lat")); } catch (...) {}
+            double v = 0.0;
+            if (!parseDouble(req.get_param_value("max_lat"), v) || v < -90.0 || v > 90.0) {
+                sendError(res, "Query parameter 'max_lat' must be a number between -90 and 90", 400);
+                return;
+            }
+            criteria.max_lat = v;
+        }
+        if (criteria.min_lat.has_value() && criteria.max_lat.has_value() && *criteria.min_lat > *criteria.max_lat) {
+            sendError(res, "'min_lat' cannot be greater than 'max_lat'", 400);
+            return;
         }
         if (req.has_param("min_lon")) {
-            try { criteria.min_lon = std::stod(req.get_param_value("min_lon")); } catch (...) {}
+            double v = 0.0;
+            if (!parseDouble(req.get_param_value("min_lon"), v) || v < -180.0 || v > 180.0) {
+                sendError(res, "Query parameter 'min_lon' must be a number between -180 and 180", 400);
+                return;
+            }
+            criteria.min_lon = v;
         }
         if (req.has_param("max_lon")) {
-            try { criteria.max_lon = std::stod(req.get_param_value("max_lon")); } catch (...) {}
+            double v = 0.0;
+            if (!parseDouble(req.get_param_value("max_lon"), v) || v < -180.0 || v > 180.0) {
+                sendError(res, "Query parameter 'max_lon' must be a number between -180 and 180", 400);
+                return;
+            }
+            criteria.max_lon = v;
+        }
+        if (criteria.min_lon.has_value() && criteria.max_lon.has_value() && *criteria.min_lon > *criteria.max_lon) {
+            sendError(res, "'min_lon' cannot be greater than 'max_lon'", 400);
+            return;
         }
         if (req.has_param("bbox")) {
             std::string bbox = req.get_param_value("bbox");
@@ -240,12 +463,21 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             std::string sMinLon, sMinLat, sMaxLon, sMaxLat;
             if (std::getline(ss, sMinLon, ',') && std::getline(ss, sMinLat, ',') &&
                 std::getline(ss, sMaxLon, ',') && std::getline(ss, sMaxLat, ',')) {
-                try {
-                    criteria.min_lon = std::stod(sMinLon);
-                    criteria.min_lat = std::stod(sMinLat);
-                    criteria.max_lon = std::stod(sMaxLon);
-                    criteria.max_lat = std::stod(sMaxLat);
-                } catch (...) {}
+                double minLon = 0.0, minLat = 0.0, maxLon = 0.0, maxLat = 0.0;
+                if (!parseDouble(sMinLon, minLon) || !parseDouble(sMinLat, minLat) ||
+                    !parseDouble(sMaxLon, maxLon) || !parseDouble(sMaxLat, maxLat) ||
+                    minLat < -90.0 || minLat > 90.0 || maxLat < -90.0 || maxLat > 90.0 || minLat > maxLat ||
+                    minLon < -180.0 || minLon > 180.0 || maxLon < -180.0 || maxLon > 180.0 || minLon > maxLon) {
+                    sendError(res, "Invalid bbox format: must be min_lon,min_lat,max_lon,max_lat within bounds", 400);
+                    return;
+                }
+                criteria.min_lon = minLon;
+                criteria.min_lat = minLat;
+                criteria.max_lon = maxLon;
+                criteria.max_lat = maxLat;
+            } else {
+                sendError(res, "Invalid bbox format: expected min_lon,min_lat,max_lon,max_lat", 400);
+                return;
             }
         }
 
@@ -254,7 +486,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             : core::QueryBuilder::execute(db(), criteria);
 
         if (!queryRes.isOk()) {
-            sendError(res, queryRes.status().message(), 500);
+            sendStatusError(res, queryRes.status());
             return;
         }
 
@@ -292,7 +524,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
         MediaId id = std::stoll(req.matches[1]);
         auto mediaRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
         if (!mediaRes.isOk()) {
-            sendError(res, "Media item not found", 404);
+            sendStatusError(res, mediaRes.status());
             return;
         }
 
@@ -301,11 +533,12 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // POST /api/media/:id/rating
     server.Post(R"(/api/media/(\d+)/rating)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         MediaId id = std::stoll(req.matches[1]);
         try {
             auto body = nlohmann::json::parse(req.body);
-            if (!body.contains("rating") || !body["rating"].is_number()) {
-                sendError(res, "Missing or invalid rating field");
+            if (!body.contains("rating") || !body["rating"].is_number_integer()) {
+                sendError(res, "Missing or invalid rating field: must be an integer");
                 return;
             }
             int32_t rating = body["rating"].get<int32_t>();
@@ -316,7 +549,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
             Status s = catalog_ ? catalog_->setRating(id, rating) : db().updateRating(id, rating);
             if (!s.isOk()) {
-                sendError(res, s.message(), 500);
+                sendStatusError(res, s);
                 return;
             }
 
@@ -328,23 +561,25 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // POST /api/media/:id/flag
     server.Post(R"(/api/media/(\d+)/flag)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         MediaId id = std::stoll(req.matches[1]);
         try {
             auto body = nlohmann::json::parse(req.body);
-            if (!body.contains("flag") || !body["flag"].is_number()) {
-                sendError(res, "Missing or invalid flag field");
+            if (!body.contains("flag") || !body["flag"].is_number_integer()) {
+                sendError(res, "Missing or invalid flag field: must be an integer");
                 return;
             }
-            int8_t flagVal = body["flag"].get<int8_t>();
-            if (flagVal < -1 || flagVal > 1) {
+            int flagInt = body["flag"].get<int>();
+            if (flagInt < -1 || flagInt > 1) {
                 sendError(res, "Flag must be -1, 0, or 1");
                 return;
             }
 
+            int8_t flagVal = static_cast<int8_t>(flagInt);
             FlagState flag = static_cast<FlagState>(flagVal);
             Status s = catalog_ ? catalog_->setFlag(id, flag) : db().updateFlag(id, flag);
             if (!s.isOk()) {
-                sendError(res, s.message(), 500);
+                sendStatusError(res, s);
                 return;
             }
 
@@ -356,6 +591,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // POST /api/media/:id/gps
     server.Post(R"(/api/media/(\d+)/gps)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         MediaId id = std::stoll(req.matches[1]);
         try {
             auto body = nlohmann::json::parse(req.body);
@@ -392,7 +628,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             Status s = catalog_ ? catalog_->setGps(id, hasGps, latitude, longitude, altitude)
                                 : db().updateGps(id, hasGps, latitude, longitude, altitude);
             if (!s.isOk()) {
-                sendError(res, s.message(), 500);
+                sendStatusError(res, s);
                 return;
             }
 
@@ -411,6 +647,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // POST /api/media/:id/tags
     server.Post(R"(/api/media/(\d+)/tags)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         MediaId id = std::stoll(req.matches[1]);
         try {
             auto body = nlohmann::json::parse(req.body);
@@ -419,7 +656,15 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 return;
             }
             std::string name = body["name"].get<std::string>();
+            if (name.empty() || name.size() > kMaxNameLength) {
+                sendError(res, "Tag name must not be empty and must be at most " + std::to_string(kMaxNameLength) + " characters", 400);
+                return;
+            }
             std::string category = body.value("category", "keyword");
+            if (category.size() > kMaxCategoryLength) {
+                sendError(res, "Category must be at most " + std::to_string(kMaxCategoryLength) + " characters", 400);
+                return;
+            }
 
             Status s = catalog_
                 ? catalog_->addTag(id, name, category)
@@ -430,7 +675,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 }();
 
             if (!s.isOk()) {
-                sendError(res, s.message(), 500);
+                sendStatusError(res, s);
                 return;
             }
 
@@ -442,12 +687,13 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // DELETE /api/media/:id/tags/:tag_id
     server.Delete(R"(/api/media/(\d+)/tags/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         MediaId id = std::stoll(req.matches[1]);
         TagId tagId = std::stoll(req.matches[2]);
 
         Status s = catalog_ ? catalog_->removeTag(id, tagId) : db().removeTagFromMedia(id, tagId);
         if (!s.isOk()) {
-            sendError(res, s.message(), 500);
+            sendStatusError(res, s);
             return;
         }
 
@@ -456,16 +702,17 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // DELETE /api/media/:id
     server.Delete(R"(/api/media/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         MediaId id = std::stoll(req.matches[1]);
         auto mediaRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
         if (!mediaRes.isOk()) {
-            sendError(res, "Media item not found", 404);
+            sendStatusError(res, mediaRes.status());
             return;
         }
 
         Status s = catalog_ ? catalog_->deleteMedia(id) : db().deleteMedia(id);
         if (!s.isOk()) {
-            sendError(res, s.message(), 500);
+            sendStatusError(res, s);
             return;
         }
 
@@ -474,6 +721,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // POST /api/media/batch-delete
     server.Post("/api/media/batch-delete", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("ids") || !body["ids"].is_array()) {
@@ -481,14 +729,25 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 return;
             }
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+            if (ids.size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
             int deletedCount = 0;
+            std::vector<MediaId> failedIds;
             for (MediaId id : ids) {
                 Status s = catalog_ ? catalog_->deleteMedia(id) : db().deleteMedia(id);
                 if (s.isOk()) {
                     deletedCount++;
+                } else {
+                    failedIds.push_back(id);
                 }
             }
-            sendJson(res, {{"status", "ok"}, {"deleted_count", deletedCount}});
+            sendJson(res, {
+                {"status", failedIds.empty() ? "ok" : "partial"},
+                {"deleted_count", deletedCount},
+                {"failed_ids", failedIds}
+            });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }
@@ -496,14 +755,15 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // POST /api/media/batch-rating
     server.Post("/api/media/batch-rating", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("ids") || !body["ids"].is_array()) {
                 sendError(res, "Missing or invalid 'ids' array");
                 return;
             }
-            if (!body.contains("rating") || !body["rating"].is_number()) {
-                sendError(res, "Missing or invalid rating field");
+            if (!body.contains("rating") || !body["rating"].is_number_integer()) {
+                sendError(res, "Missing or invalid rating field: must be an integer");
                 return;
             }
             int32_t rating = body["rating"].get<int32_t>();
@@ -513,14 +773,26 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
 
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+            if (ids.size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
             int updatedCount = 0;
+            std::vector<MediaId> failedIds;
             for (MediaId id : ids) {
                 Status s = catalog_ ? catalog_->setRating(id, rating) : db().updateRating(id, rating);
                 if (s.isOk()) {
                     updatedCount++;
+                } else {
+                    failedIds.push_back(id);
                 }
             }
-            sendJson(res, {{"status", "ok"}, {"updated_count", updatedCount}, {"rating", rating}});
+            sendJson(res, {
+                {"status", failedIds.empty() ? "ok" : "partial"},
+                {"updated_count", updatedCount},
+                {"rating", rating},
+                {"failed_ids", failedIds}
+            });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }
@@ -528,32 +800,45 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // POST /api/media/batch-flag
     server.Post("/api/media/batch-flag", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("ids") || !body["ids"].is_array()) {
                 sendError(res, "Missing or invalid 'ids' array");
                 return;
             }
-            if (!body.contains("flag") || !body["flag"].is_number()) {
-                sendError(res, "Missing or invalid flag field");
+            if (!body.contains("flag") || !body["flag"].is_number_integer()) {
+                sendError(res, "Missing or invalid flag field: must be an integer");
                 return;
             }
-            int8_t flagVal = body["flag"].get<int8_t>();
-            if (flagVal < -1 || flagVal > 1) {
+            int flagInt = body["flag"].get<int>();
+            if (flagInt < -1 || flagInt > 1) {
                 sendError(res, "Flag must be -1, 0, or 1");
                 return;
             }
 
-            FlagState flag = static_cast<FlagState>(flagVal);
+            FlagState flag = static_cast<FlagState>(flagInt);
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+            if (ids.size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
             int updatedCount = 0;
+            std::vector<MediaId> failedIds;
             for (MediaId id : ids) {
                 Status s = catalog_ ? catalog_->setFlag(id, flag) : db().updateFlag(id, flag);
                 if (s.isOk()) {
                     updatedCount++;
+                } else {
+                    failedIds.push_back(id);
                 }
             }
-            sendJson(res, {{"status", "ok"}, {"updated_count", updatedCount}, {"flag", flagVal}});
+            sendJson(res, {
+                {"status", failedIds.empty() ? "ok" : "partial"},
+                {"updated_count", updatedCount},
+                {"flag", flagInt},
+                {"failed_ids", failedIds}
+            });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }
@@ -561,6 +846,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // POST /api/media/batch-tags
     server.Post("/api/media/batch-tags", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             std::vector<MediaId> ids;
@@ -573,36 +859,53 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 return;
             }
 
+            if (ids.size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
+
             if (!body.contains("name") || !body["name"].is_string()) {
                 sendError(res, "Missing or invalid name field");
                 return;
             }
             std::string name = body["name"].get<std::string>();
+            if (name.empty() || name.size() > kMaxNameLength) {
+                sendError(res, "Tag name must not be empty and must be at most " + std::to_string(kMaxNameLength) + " characters", 400);
+                return;
+            }
             std::string category = body.value("category", "keyword");
+            if (category.size() > kMaxCategoryLength) {
+                sendError(res, "Category must be at most " + std::to_string(kMaxCategoryLength) + " characters", 400);
+                return;
+            }
 
             auto tagRes = catalog_
                 ? catalog_->createOrGetTag(name, category)
                 : db().createOrGetTag(name, category);
 
             if (!tagRes.isOk()) {
-                sendError(res, tagRes.status().message(), 500);
+                sendStatusError(res, tagRes.status());
                 return;
             }
 
             TagId tagId = tagRes.value();
             int taggedCount = 0;
+            std::vector<MediaId> failedIds;
             for (MediaId id : ids) {
                 Status s = catalog_ ? catalog_->addTag(id, tagId) : db().addTagToMedia(id, tagId);
                 if (s.isOk()) {
                     taggedCount++;
+                } else {
+                    failedIds.push_back(id);
                 }
             }
             sendJson(res, {
-                {"status", "ok"},
+                {"status", failedIds.empty() ? "ok" : "partial"},
                 {"tag_id", tagId},
                 {"name", name},
                 {"category", category},
-                {"tagged_count", taggedCount}
+                {"tagged_count", taggedCount},
+                {"failed_ids", failedIds}
             });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
@@ -611,6 +914,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // POST /api/media/batch-gps
     server.Post("/api/media/batch-gps", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             std::vector<MediaId> ids;
@@ -618,6 +922,11 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 ids = body["ids"].get<std::vector<MediaId>>();
             } else {
                 sendError(res, "Missing or invalid 'ids' array");
+                return;
+            }
+
+            if (ids.size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
                 return;
             }
 
@@ -638,20 +947,24 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
 
             int updatedCount = 0;
+            std::vector<MediaId> failedIds;
             for (MediaId id : ids) {
                 Status s = catalog_
                     ? catalog_->setGps(id, hasGps, latitude, longitude, altitude)
                     : db().updateGps(id, hasGps, latitude, longitude, altitude);
                 if (s.isOk()) {
                     updatedCount++;
+                } else {
+                    failedIds.push_back(id);
                 }
             }
             sendJson(res, {
-                {"status", "ok"},
+                {"status", failedIds.empty() ? "ok" : "partial"},
                 {"updated_count", updatedCount},
                 {"has_gps", hasGps},
                 {"latitude", latitude},
-                {"longitude", longitude}
+                {"longitude", longitude},
+                {"failed_ids", failedIds}
             });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
@@ -663,14 +976,16 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
     // GET /api/thumbnails/:hash/:size
     server.Get(R"(/api/thumbnails/([a-zA-Z0-9_-]+)/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         std::string hash = req.matches[1];
-        int size = std::stoi(req.matches[2]);
+        int size = 0;
+        try {
+            size = std::stoi(req.matches[2]);
+        } catch (...) {
+            sendError(res, "Invalid thumbnail size", 400);
+            return;
+        }
 
-        std::string etag = "\"" + hash + "_" + std::to_string(size) + "\"";
-        res.set_header("Cache-Control", "public, max-age=31536000, immutable");
-        res.set_header("ETag", etag);
-
-        if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {
-            res.status = 304;
+        if (size <= 0 || size > 2048) {
+            sendError(res, "Thumbnail size must be between 1 and 2048", 400);
             return;
         }
 
@@ -689,6 +1004,19 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         }
 
         if (std::filesystem::exists(thumbPath, ec) && std::filesystem::is_regular_file(thumbPath, ec)) {
+            auto fsize = std::filesystem::file_size(thumbPath, ec);
+            auto mtime = std::filesystem::last_write_time(thumbPath, ec);
+            int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
+            std::string etag = "\"thumb-v1-" + hash + "_" + std::to_string(size) + "-" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
+
+            res.set_header("Cache-Control", "public, max-age=31536000, immutable");
+            res.set_header("ETag", etag);
+
+            if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {
+                res.status = 304;
+                return;
+            }
+
             res.set_file_content(thumbPath, "image/jpeg");
         } else {
             sendError(res, "Thumbnail not found", 404);
@@ -725,7 +1053,24 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
             return;
         }
 
-        std::string mime = getMimeTypeForImage(item.file_path);
+        std::string mime = getMimeType(item.file_path);
+
+        if (req.has_header("Range") && !req.ranges.empty()) {
+            bool satisfiable = true;
+            for (const auto& r : req.ranges) {
+                if (r.first >= static_cast<ssize_t>(fsize)) {
+                    satisfiable = false;
+                    break;
+                }
+            }
+            if (!satisfiable) {
+                res.status = 416;
+                res.set_header("Content-Range", "bytes */" + std::to_string(fsize));
+                sendError(res, "Range Not Satisfiable", 416);
+                return;
+            }
+        }
+
         res.set_file_content(item.file_path, mime);
     });
 }
@@ -735,7 +1080,7 @@ void ApiRouter::registerTagRoutes(httplib::Server& server) {
     server.Get("/api/tags", [this](const httplib::Request& req, httplib::Response& res) {
         auto tagsRes = catalog_ ? catalog_->getTags() : db().getAllTags();
         if (!tagsRes.isOk()) {
-            sendError(res, tagsRes.status().message(), 500);
+            sendStatusError(res, tagsRes.status());
             return;
         }
         sendJson(res, tagsRes.value());
@@ -743,6 +1088,7 @@ void ApiRouter::registerTagRoutes(httplib::Server& server) {
 
     // POST /api/tags
     server.Post("/api/tags", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("name") || !body["name"].is_string()) {
@@ -750,14 +1096,22 @@ void ApiRouter::registerTagRoutes(httplib::Server& server) {
                 return;
             }
             std::string name = body["name"].get<std::string>();
+            if (name.empty() || name.size() > kMaxNameLength) {
+                sendError(res, "Tag name must not be empty and must be at most " + std::to_string(kMaxNameLength) + " characters", 400);
+                return;
+            }
             std::string category = body.value("category", "keyword");
+            if (category.size() > kMaxCategoryLength) {
+                sendError(res, "Category must be at most " + std::to_string(kMaxCategoryLength) + " characters", 400);
+                return;
+            }
 
             auto tagRes = catalog_
                 ? catalog_->createOrGetTag(name, category)
                 : db().createOrGetTag(name, category);
 
             if (!tagRes.isOk()) {
-                sendError(res, tagRes.status().message(), 500);
+                sendStatusError(res, tagRes.status());
                 return;
             }
 
@@ -769,10 +1123,11 @@ void ApiRouter::registerTagRoutes(httplib::Server& server) {
 
     // DELETE /api/tags/:id
     server.Delete(R"(/api/tags/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         TagId tagId = std::stoll(req.matches[1]);
         Status s = catalog_ ? catalog_->deleteTag(tagId) : db().deleteTag(tagId);
         if (!s.isOk()) {
-            sendError(res, s.message(), 500);
+            sendStatusError(res, s);
             return;
         }
         sendJson(res, {{"status", "ok"}});
@@ -784,7 +1139,7 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
     server.Get("/api/albums", [this](const httplib::Request& req, httplib::Response& res) {
         auto albumsRes = catalog_ ? catalog_->getAlbums() : db().getAllAlbums();
         if (!albumsRes.isOk()) {
-            sendError(res, albumsRes.status().message(), 500);
+            sendStatusError(res, albumsRes.status());
             return;
         }
         sendJson(res, albumsRes.value());
@@ -792,6 +1147,7 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
 
     // POST /api/albums
     server.Post("/api/albums", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("name") || !body["name"].is_string()) {
@@ -799,7 +1155,15 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
                 return;
             }
             std::string name = body["name"].get<std::string>();
+            if (name.empty() || name.size() > kMaxAlbumNameLength) {
+                sendError(res, "Album name must not be empty and must be at most " + std::to_string(kMaxAlbumNameLength) + " characters", 400);
+                return;
+            }
             std::string desc = body.value("description", "");
+            if (desc.size() > kMaxAlbumDescLength) {
+                sendError(res, "Album description must be at most " + std::to_string(kMaxAlbumDescLength) + " characters", 400);
+                return;
+            }
             bool isSmart = body.value("is_smart", false);
             std::string queryJson = body.value("query_json", "");
 
@@ -808,7 +1172,7 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
                 : db().createAlbum(name, desc, isSmart, queryJson);
 
             if (!albumRes.isOk()) {
-                sendError(res, albumRes.status().message(), 500);
+                sendStatusError(res, albumRes.status());
                 return;
             }
 
@@ -820,6 +1184,7 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
 
     // POST /api/albums/:id/media
     server.Post(R"(/api/albums/(\d+)/media)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         AlbumId albumId = std::stoll(req.matches[1]);
         try {
             auto body = nlohmann::json::parse(req.body);
@@ -837,10 +1202,15 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
                 return;
             }
 
+            if (mediaIds.size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
+
             for (MediaId mid : mediaIds) {
                 Status s = catalog_ ? catalog_->addMediaToAlbum(albumId, mid) : db().addMediaToAlbum(albumId, mid);
                 if (!s.isOk()) {
-                    sendError(res, s.message(), 500);
+                    sendStatusError(res, s);
                     return;
                 }
             }
@@ -853,10 +1223,11 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
 
     // DELETE /api/albums/:id
     server.Delete(R"(/api/albums/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         AlbumId albumId = std::stoll(req.matches[1]);
         Status s = catalog_ ? catalog_->deleteAlbum(albumId) : db().deleteAlbum(albumId);
         if (!s.isOk()) {
-            sendError(res, s.message(), 500);
+            sendStatusError(res, s);
             return;
         }
         sendJson(res, {{"status", "ok"}});
@@ -868,7 +1239,7 @@ void ApiRouter::registerTimelineRoutes(httplib::Server& server) {
     server.Get("/api/timeline", [this](const httplib::Request& req, httplib::Response& res) {
         auto timelineRes = catalog_ ? catalog_->getTimeline() : db().getTimeline();
         if (!timelineRes.isOk()) {
-            sendError(res, timelineRes.status().message(), 500);
+            sendStatusError(res, timelineRes.status());
             return;
         }
         sendJson(res, timelineRes.value());
@@ -880,7 +1251,7 @@ void ApiRouter::registerStatsRoutes(httplib::Server& server) {
     server.Get("/api/stats", [this](const httplib::Request& req, httplib::Response& res) {
         auto statsRes = catalog_ ? catalog_->getStats() : db().getStats();
         if (!statsRes.isOk()) {
-            sendError(res, statsRes.status().message(), 500);
+            sendStatusError(res, statsRes.status());
             return;
         }
         sendJson(res, statsRes.value());
@@ -890,6 +1261,7 @@ void ApiRouter::registerStatsRoutes(httplib::Server& server) {
 void ApiRouter::registerImportRoutes(httplib::Server& server) {
     // POST /api/import
     server.Post("/api/import", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("path") || !body["path"].is_string()) {
@@ -944,33 +1316,45 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
 
             std::string path = canonicalPath.string();
 
+            std::lock_guard<std::mutex> lock(importThreadMutex_);
+            if (importThread_.joinable()) {
+                importThread_.join();
+            }
+
             if (catalog_) {
                 if (catalog_->importer().isRunning()) {
                     sendError(res, "An import is already running", 409);
                     return;
                 }
 
-                // Run import asynchronously in detached thread
-                std::thread([this, path, recursive]() {
+                importThread_ = std::jthread([this, path, recursive](std::stop_token stopToken) {
                     IMAGINE_LOG_INFO("Starting background import of: " + path);
-                    auto res = catalog_->importDirectory(path, recursive);
+                    auto res = catalog_->importDirectory(path, recursive, [stopToken, this](const ImportProgress&) {
+                        if (stopToken.stop_requested()) {
+                            if (catalog_) catalog_->cancelImport();
+                        }
+                    });
                     if (res.isOk()) {
                         IMAGINE_LOG_INFO("Background import complete: " + std::to_string(res.value().imported_files.load()) + " imported");
                     } else {
                         IMAGINE_LOG_ERROR("Background import error: " + res.status().message());
                     }
-                }).detach();
+                });
             } else {
                 if (g_isImporting.load()) {
                     sendError(res, "An import is already running", 409);
                     return;
                 }
                 g_isImporting.store(true);
+                cancelFallbackImport_.store(false);
 
-                std::thread([this, path, recursive]() {
+                importThread_ = std::jthread([this, path, recursive](std::stop_token stopToken) {
                     IMAGINE_LOG_INFO("Starting fallback background import: " + path);
                     core::Importer imp(db(), cache());
-                    auto res = imp.importDirectory(path, recursive, [](const ImportProgress& p) {
+                    auto res = imp.importDirectory(path, recursive, [this, &imp, stopToken](const ImportProgress& p) {
+                        if (stopToken.stop_requested() || cancelFallbackImport_.load()) {
+                            imp.cancel();
+                        }
                         std::lock_guard<std::mutex> lock(g_importMutex);
                         g_fallbackProgress = p;
                     });
@@ -981,7 +1365,7 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
                         }
                         g_isImporting.store(false);
                     }
-                }).detach();
+                });
             }
 
             sendJson(res, {{"status", "started"}, {"path", path}});
@@ -1002,6 +1386,16 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
     });
 }
 
+namespace {
+struct GeocodeCacheEntry {
+    std::chrono::steady_clock::time_point timestamp;
+    std::string responseBody;
+};
+static std::mutex g_geocodeMutex;
+static std::unordered_map<std::string, GeocodeCacheEntry> g_geocodeCache;
+static std::chrono::steady_clock::time_point g_lastGeocodeRequestTime{};
+} // anonymous namespace
+
 void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
     // GET /api/geocode?q=...&limit=...
     server.Get("/api/geocode", [](const httplib::Request& req, httplib::Response& res) {
@@ -1015,9 +1409,49 @@ void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
             return;
         }
 
-        std::string limit = req.has_param("limit") ? req.get_param_value("limit") : "5";
+        int limitVal = 5;
+        if (req.has_param("limit")) {
+            try {
+                size_t idx = 0;
+                std::string lStr = req.get_param_value("limit");
+                int parsed = std::stoi(lStr, &idx);
+                if (idx != lStr.size() || parsed < 1 || parsed > 10) {
+                    sendError(res, "Query parameter 'limit' must be an integer between 1 and 10", 400);
+                    return;
+                }
+                limitVal = parsed;
+            } catch (...) {
+                sendError(res, "Query parameter 'limit' must be an integer between 1 and 10", 400);
+                return;
+            }
+        }
+
+        std::string cacheKey = query + "|" + std::to_string(limitVal);
+        {
+            std::lock_guard<std::mutex> lock(g_geocodeMutex);
+            auto it = g_geocodeCache.find(cacheKey);
+            if (it != g_geocodeCache.end()) {
+                auto age = std::chrono::duration_cast<std::chrono::hours>(std::chrono::steady_clock::now() - it->second.timestamp);
+                if (age < std::chrono::hours(24)) {
+                    res.status = 200;
+                    res.set_content(it->second.responseBody, "application/json");
+                    return;
+                }
+            }
+        }
 
         try {
+            // Respect Nominatim rate limit: max 1 request per second
+            {
+                std::unique_lock<std::mutex> lock(g_geocodeMutex);
+                auto now = std::chrono::steady_clock::now();
+                auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastGeocodeRequestTime).count();
+                if (elapsedMs < 1000) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000 - elapsedMs));
+                }
+                g_lastGeocodeRequestTime = std::chrono::steady_clock::now();
+            }
+
             httplib::SSLClient cli("nominatim.openstreetmap.org");
             cli.set_connection_timeout(5, 0);
             cli.set_read_timeout(5, 0);
@@ -1040,17 +1474,20 @@ void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
                 }
             }
 
-            std::string path = "/search?format=json&q=" + encodedQuery + "&limit=" + limit;
+            std::string path = "/search?format=json&q=" + encodedQuery + "&limit=" + std::to_string(limitVal);
             auto osmRes = cli.Get(path.c_str(), headers);
             if (osmRes && osmRes->status == 200) {
+                {
+                    std::lock_guard<std::mutex> lock(g_geocodeMutex);
+                    g_geocodeCache[cacheKey] = GeocodeCacheEntry{std::chrono::steady_clock::now(), osmRes->body};
+                }
                 res.status = 200;
                 res.set_content(osmRes->body, "application/json");
             } else {
-                int status = osmRes ? osmRes->status : 502;
-                sendError(res, "Geocoding upstream service unavailable", status);
+                sendError(res, "Geocoding upstream service unavailable", 502);
             }
         } catch (const std::exception& ex) {
-            sendError(res, std::string("Geocoding failed: ") + ex.what(), 500);
+            sendError(res, std::string("Geocoding failed: ") + ex.what(), 502);
         }
     });
 }
