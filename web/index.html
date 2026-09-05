@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>IMAGINE Organizer</title>
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
-  <link rel="stylesheet" href="app.css?v=3">
+  <link rel="stylesheet" href="app.css?v=10">
 </head>
 <body>
   <div id="app" class="elements-app">
@@ -401,7 +401,10 @@
 
             <!-- Tags Section -->
             <div class="inspector-section">
-              <h4 class="section-heading">Tags</h4>
+              <div class="inspector-section-heading-row" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                <h4 class="section-heading" style="margin-bottom: 0;">Tags</h4>
+                <button class="section-action-btn" id="inspectorAddTagModalBtn" title="Open Tag Dialog">+</button>
+              </div>
               <div class="tags-container" id="inspectorTags">
                 <!-- Tag badges with remove button -->
               </div>
@@ -416,6 +419,10 @@
                 </select>
                 <button class="btn btn-sm" id="addTagBtn">Add</button>
               </div>
+              <button class="btn btn-xs btn-secondary" id="inspectorOpenTagModalBtn" style="margin-top: 6px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 5px;">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                Choose People / Event / Dialog...
+              </button>
             </div>
 
             <!-- Albums Section -->
@@ -567,27 +574,155 @@
       </div>
     </div>
 
-    <!-- New Tag Modal Dialog -->
+    <!-- Add / Create Tag Modal Dialog -->
     <div class="modal" id="newTagModal" style="display: none;">
       <div class="modal-backdrop" id="newTagBackdrop"></div>
-      <div class="modal-dialog">
+      <div class="modal-dialog tag-modal-dialog">
         <div class="modal-header">
-          <h3>Create Keyword Tag</h3>
-          <button class="btn-icon-sm" id="closeNewTagModalBtn">&times;</button>
-        </div>
-        <div class="modal-body">
-          <div class="form-group">
-            <label for="tagNameInput">Tag Name:</label>
-            <input type="text" id="tagNameInput" placeholder="e.g. Mountain, John, Birthday" class="form-control">
+          <div class="tag-modal-title-wrap">
+            <svg class="tag-modal-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+              <line x1="7" y1="7" x2="7.01" y2="7"></line>
+            </svg>
+            <h3 id="tagModalHeading">Add Tag</h3>
           </div>
+          <button class="btn-icon-sm" id="closeNewTagModalBtn" title="Close">&times;</button>
+        </div>
+        <div class="modal-body tag-modal-body">
+          <!-- Target Photo Banner (shown when a photo or photos are selected) -->
+          <div id="tagModalPhotoTarget" class="tag-modal-target-card" style="display: none;">
+            <div class="tag-target-thumb-box">
+              <img id="tagModalPhotoThumb" src="" alt="Photo preview" class="tag-target-thumb">
+              <span id="tagModalPhotoCountBadge" class="tag-target-count-badge" style="display: none;">+1</span>
+            </div>
+            <div class="tag-target-details">
+              <div class="tag-target-filename" id="tagModalPhotoName">photo.jpg</div>
+              <div class="tag-target-meta" id="tagModalPhotoMeta">2026-09-01 • 3.2 MB</div>
+              <div class="tag-target-tags-row">
+                <span class="tag-target-tags-label">Current tags:</span>
+                <div class="tag-target-tags-list" id="tagModalPhotoCurrentTags">
+                  <span class="tag-target-no-tags">None</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Apply to photo checkbox (when photos are selected) -->
+          <div class="tag-modal-apply-wrap" id="tagModalApplyGroup" style="display: none;">
+            <label class="tag-modal-checkbox-label">
+              <input type="checkbox" id="tagModalApplyToPhotoCheckbox" checked>
+              <span id="tagModalApplyLabel">Attach tag to selected photo</span>
+            </label>
+          </div>
+
+          <!-- Tag Name Input Group with Search Help -->
           <div class="form-group">
-            <label for="tagCategorySelect">Category:</label>
-            <select id="tagCategorySelect" class="form-control">
-              <option value="keyword">General Keyword</option>
-              <option value="people">People</option>
-              <option value="places">Places</option>
-              <option value="events">Events</option>
-            </select>
+            <div class="tag-modal-label-row">
+              <label for="tagNameInput" class="tag-modal-label">Tag Name:</label>
+              <span class="tag-modal-category-badge" id="tagDetectedBadge" style="display: none;"></span>
+            </div>
+            <div class="tag-search-input-wrap">
+              <span class="tag-search-input-icon">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </span>
+              <input type="text" id="tagNameInput" list="tagModalSuggestions" placeholder="e.g. Mountain, John, Birthday" class="form-control tag-name-search-input" autocomplete="off">
+              <datalist id="tagModalSuggestions"></datalist>
+              <button type="button" class="tag-search-clear-btn" id="tagModalClearInputBtn" title="Clear input" style="display: none;">&times;</button>
+            </div>
+          </div>
+
+          <!-- Choose Category: People, Events, Places, Keyword -->
+          <div class="form-group">
+            <div class="tag-modal-label-row">
+              <label for="tagCategorySelect" class="tag-modal-label">Category:</label>
+              <span class="tag-modal-label-hint">Choose People, Events, Places, or Keywords</span>
+            </div>
+            <div class="tag-category-cards" id="tagCategoryCards">
+              <button type="button" class="category-card" data-cat="people" id="catBtnPeople">
+                <div class="category-card-top">
+                  <span class="category-card-icon cat-icon-people">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                      <circle cx="9" cy="7" r="4"></circle>
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                  </span>
+                  <span class="category-card-dot cat-dot-people"></span>
+                </div>
+                <span class="category-card-title">People</span>
+                <span class="category-card-desc">Friends, Family</span>
+              </button>
+
+              <button type="button" class="category-card" data-cat="events" id="catBtnEvents">
+                <div class="category-card-top">
+                  <span class="category-card-icon cat-icon-events">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                      <line x1="16" y1="2" x2="16" y2="6"></line>
+                      <line x1="8" y1="2" x2="8" y2="6"></line>
+                      <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                  </span>
+                  <span class="category-card-dot cat-dot-events"></span>
+                </div>
+                <span class="category-card-title">Events</span>
+                <span class="category-card-desc">Birthdays, Trips</span>
+              </button>
+
+              <button type="button" class="category-card" data-cat="places" id="catBtnPlaces">
+                <div class="category-card-top">
+                  <span class="category-card-icon cat-icon-places">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                      <circle cx="12" cy="10" r="3"></circle>
+                    </svg>
+                  </span>
+                  <span class="category-card-dot cat-dot-places"></span>
+                </div>
+                <span class="category-card-title">Places</span>
+                <span class="category-card-desc">Cities, Nature</span>
+              </button>
+
+              <button type="button" class="category-card active" data-cat="keyword" id="catBtnKeyword">
+                <div class="category-card-top">
+                  <span class="category-card-icon cat-icon-keyword">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+                      <line x1="7" y1="7" x2="7.01" y2="7"></line>
+                    </svg>
+                  </span>
+                  <span class="category-card-dot cat-dot-keyword"></span>
+                </div>
+                <span class="category-card-title">Keyword</span>
+                <span class="category-card-desc">General tags</span>
+              </button>
+            </div>
+
+            <!-- Underlying select kept in DOM for programmatic/test synchronization -->
+            <div class="tag-modal-select-fallback">
+              <span class="tag-modal-select-label">Category select:</span>
+              <select id="tagCategorySelect" class="form-control tag-category-select-control">
+                <option value="keyword">General Keyword</option>
+                <option value="people">People</option>
+                <option value="places">Places</option>
+                <option value="events">Events</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Search Help & Suggestions Section -->
+          <div class="tag-search-help-box">
+            <div class="tag-search-help-header">
+              <span class="tag-search-help-title" id="tagSearchHelpTitle">Search Help & Suggestions</span>
+              <span class="tag-search-help-sub" id="tagSearchHelpSub">Click to select tag</span>
+            </div>
+            <div class="tag-search-help-chips" id="tagSearchHelpChips">
+              <!-- Dynamically populated tags with category styling -->
+            </div>
           </div>
         </div>
         <div class="modal-footer">
@@ -621,6 +756,6 @@
   </div>
 
   <script src="vendor/leaflet/leaflet.js"></script>
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

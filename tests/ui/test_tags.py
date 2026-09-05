@@ -2,6 +2,7 @@
 Deterministic UI tests for Keyword Tags management, categories accordion, and filtering.
 """
 
+import re
 from playwright.sync_api import Page, expect
 
 
@@ -262,6 +263,116 @@ def test_add_tag_with_category_to_photo(server, page: Page):
     expect(inspector_tags.locator(".tag-badge", has_text="Beach")).to_be_visible()
     # Verify count for Beach increased to 2 (beach.bmp + forest.bmp)
     expect(page.locator("#tagCategoryPlaces .tag-item", has_text="Beach").locator(".count-badge")).to_have_text("2")
+
+
+def test_tag_modal_category_cards_and_search_help(server, page: Page):
+    """Test category cards selection (People, Events, Places, Keyword) and search help chips in Add Tag modal."""
+    page.goto(server["url"])
+    expect(page.locator(".photo-card")).to_have_count(6)
+
+    modal = page.locator("#newTagModal")
+    page.locator("#newTagBtn").click()
+    expect(modal).to_be_visible()
+
+    # Default category is Keyword
+    expect(page.locator("#catBtnKeyword")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#tagCategorySelect")).to_have_value("keyword")
+    # Quick pick chips show Sunset in Keywords
+    expect(page.locator("#tagSearchHelpChips")).to_contain_text("Sunset")
+
+    # Click People category card
+    page.locator("#catBtnPeople").click()
+    expect(page.locator("#catBtnPeople")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#tagCategorySelect")).to_have_value("people")
+    # Quick pick chips now show Alice and Bob
+    expect(page.locator("#tagSearchHelpChips")).to_contain_text("Alice")
+    expect(page.locator("#tagSearchHelpChips")).to_contain_text("Bob")
+
+    # Click Events category card
+    page.locator("#catBtnEvents").click()
+    expect(page.locator("#catBtnEvents")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#tagCategorySelect")).to_have_value("events")
+    expect(page.locator("#tagSearchHelpChips")).to_contain_text("Birthday 2026")
+
+    # Click Places category card
+    page.locator("#catBtnPlaces").click()
+    expect(page.locator("#catBtnPlaces")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#tagCategorySelect")).to_have_value("places")
+    expect(page.locator("#tagSearchHelpChips")).to_contain_text("Alps")
+    expect(page.locator("#tagSearchHelpChips")).to_contain_text("Beach")
+
+    # Click a search help chip (e.g. Alps)
+    page.locator('#tagSearchHelpChips .tag-help-chip[data-tag-name="Alps"]').click()
+    expect(page.locator("#tagNameInput")).to_have_value("Alps")
+
+    # Clear button clears input
+    expect(page.locator("#tagModalClearInputBtn")).to_be_visible()
+    page.locator("#tagModalClearInputBtn").click()
+    expect(page.locator("#tagNameInput")).to_have_value("")
+
+    page.locator("#cancelTagBtn").click()
+    expect(modal).to_be_hidden()
+
+
+def test_tag_modal_photo_target_and_tagging_from_inspector(server, page: Page):
+    """Opening Add Tag modal from inspector shows photo preview target and attaches tag to photo."""
+    page.goto(server["url"])
+
+    # 1. Select portrait.bmp
+    portrait_card = page.locator(".photo-card", has_text="portrait.bmp")
+    portrait_card.click()
+
+    # 2. Click inspectorAddTagModalBtn (+) next to Tags header
+    page.locator("#inspectorAddTagModalBtn").click()
+    modal = page.locator("#newTagModal")
+    expect(modal).to_be_visible()
+
+    # 3. Photo target card is visible with photo details
+    target_card = page.locator("#tagModalPhotoTarget")
+    expect(target_card).to_be_visible()
+    expect(page.locator("#tagModalPhotoName")).to_contain_text("portrait.bmp")
+    expect(page.locator("#tagModalHeading")).to_have_text("Add Tag to Photo")
+    expect(page.locator("#tagModalApplyToPhotoCheckbox")).to_be_checked()
+
+    # 4. Fill tag and category
+    page.locator("#tagNameInput").fill("BestFriend")
+    page.locator("#catBtnPeople").click()
+    page.locator("#createTagSubmitBtn").click()
+    expect(modal).to_be_hidden()
+
+    # 5. Verify tag attached to photo in inspector
+    inspector_tags = page.locator("#inspectorTags")
+    expect(inspector_tags.locator('.tag-badge[data-category="people"]', has_text="BestFriend")).to_be_visible()
+
+    # 6. Verify tag added to People category in sidebar with count 1
+    people_item = page.locator("#tagCategoryPeople .tag-item", has_text="BestFriend")
+    expect(people_item).to_be_visible()
+    expect(people_item.locator(".count-badge")).to_have_text("1")
+
+
+def test_tag_modal_auto_detect_category_on_type(server, page: Page):
+    """Typing an existing tag name in Add Tag modal automatically detects and selects its category."""
+    page.goto(server["url"])
+    expect(page.locator(".photo-card")).to_have_count(6)
+
+    page.locator("#newTagBtn").click()
+    modal = page.locator("#newTagModal")
+    expect(modal).to_be_visible()
+
+    # Type "Alice" (pre-seeded People tag)
+    page.locator("#tagNameInput").fill("Alice")
+    expect(page.locator("#catBtnPeople")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#tagCategorySelect")).to_have_value("people")
+    expect(page.locator("#tagDetectedBadge")).to_contain_text("Existing in People")
+
+    # Type "Birthday 2026" (pre-seeded Events tag)
+    page.locator("#tagNameInput").fill("Birthday 2026")
+    expect(page.locator("#catBtnEvents")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#tagCategorySelect")).to_have_value("events")
+    expect(page.locator("#tagDetectedBadge")).to_contain_text("Existing in Events")
+
+    page.locator("#cancelTagBtn").click()
+    expect(modal).to_be_hidden()
 
 
 

@@ -240,6 +240,25 @@
     createTagSubmitBtn: document.getElementById('createTagSubmitBtn'),
     tagNameInput: document.getElementById('tagNameInput'),
     tagCategorySelect: document.getElementById('tagCategorySelect'),
+    tagModalHeading: document.getElementById('tagModalHeading'),
+    tagModalPhotoTarget: document.getElementById('tagModalPhotoTarget'),
+    tagModalPhotoThumb: document.getElementById('tagModalPhotoThumb'),
+    tagModalPhotoCountBadge: document.getElementById('tagModalPhotoCountBadge'),
+    tagModalPhotoName: document.getElementById('tagModalPhotoName'),
+    tagModalPhotoMeta: document.getElementById('tagModalPhotoMeta'),
+    tagModalPhotoCurrentTags: document.getElementById('tagModalPhotoCurrentTags'),
+    tagModalApplyGroup: document.getElementById('tagModalApplyGroup'),
+    tagModalApplyToPhotoCheckbox: document.getElementById('tagModalApplyToPhotoCheckbox'),
+    tagModalApplyLabel: document.getElementById('tagModalApplyLabel'),
+    tagDetectedBadge: document.getElementById('tagDetectedBadge'),
+    tagModalSuggestions: document.getElementById('tagModalSuggestions'),
+    tagModalClearInputBtn: document.getElementById('tagModalClearInputBtn'),
+    tagCategoryCards: document.getElementById('tagCategoryCards'),
+    tagSearchHelpTitle: document.getElementById('tagSearchHelpTitle'),
+    tagSearchHelpSub: document.getElementById('tagSearchHelpSub'),
+    tagSearchHelpChips: document.getElementById('tagSearchHelpChips'),
+    inspectorAddTagModalBtn: document.getElementById('inspectorAddTagModalBtn'),
+    inspectorOpenTagModalBtn: document.getElementById('inspectorOpenTagModalBtn'),
     deleteMediaModal: document.getElementById('deleteMediaModal'),
     deleteMediaBackdrop: document.getElementById('deleteMediaBackdrop'),
     closeDeleteMediaModalBtn: document.getElementById('closeDeleteMediaModalBtn'),
@@ -385,6 +404,12 @@
       renderSidebarAlbums();
       renderSidebarFolders();
       renderTimeline();
+      if (typeof updateModalTagSuggestions === 'function') {
+        updateModalTagSuggestions();
+      }
+      if (typeof renderModalSearchHelp === 'function' && dom.newTagModal && dom.newTagModal.style.display === 'flex') {
+        renderModalSearchHelp();
+      }
 
       if (dom.totalMediaCount) {
         dom.totalMediaCount.textContent = state.stats.total_media || 0;
@@ -2496,21 +2521,8 @@
       await batchUpdateRatings(Array.from(state.selectedIds), newRating);
     });
 
-    dom.batchAddTagBtn.addEventListener('click', async () => {
-      const name = prompt('Enter tag name to add to all selected photos:');
-      if (!name || !name.trim()) return;
-      const trimmed = name.trim();
-      const existing = state.tags.find(t => t.name.toLowerCase() === trimmed.toLowerCase());
-      const cat = existing && existing.category ? existing.category.toLowerCase() : 'keyword';
-      for (const id of state.selectedIds) {
-        try {
-          await api.post(`/api/media/${id}/tags`, { name: trimmed, category: cat });
-        } catch (e) {
-          console.warn(e);
-        }
-      }
-      updateInspector();
-      loadMetadata();
+    dom.batchAddTagBtn.addEventListener('click', () => {
+      openTagModal(Array.from(state.selectedIds));
     });
 
     if (dom.batchAddAlbumBtn) {
@@ -2860,16 +2872,328 @@
       });
     }
 
-    // New Tag Modal
-    dom.newTagBtn.addEventListener('click', () => {
+    // --- Add / Create Tag Modal Dialog ---
+    let pendingTagTargetMediaIds = [];
+
+    function openTagModal(targetMediaIds = null) {
+      if (!dom.newTagModal) return;
+
+      if (targetMediaIds === null) {
+        pendingTagTargetMediaIds = state.selectedIds.size > 0 ? Array.from(state.selectedIds) : [];
+      } else {
+        pendingTagTargetMediaIds = Array.isArray(targetMediaIds) ? [...targetMediaIds] : [];
+      }
+
+      const hasTargets = pendingTagTargetMediaIds.length > 0;
+      if (dom.tagModalPhotoTarget) {
+        dom.tagModalPhotoTarget.style.display = hasTargets ? 'flex' : 'none';
+      }
+      if (dom.tagModalApplyGroup) {
+        dom.tagModalApplyGroup.style.display = hasTargets ? 'block' : 'none';
+      }
+      if (dom.tagModalApplyToPhotoCheckbox) {
+        dom.tagModalApplyToPhotoCheckbox.checked = true;
+      }
+
+      if (hasTargets) {
+        const firstId = pendingTagTargetMediaIds[0];
+        const firstItem = state.mediaItems.find(m => m.id === firstId);
+        const count = pendingTagTargetMediaIds.length;
+
+        if (dom.tagModalHeading) {
+          dom.tagModalHeading.textContent = count === 1 ? 'Add Tag to Photo' : `Add Tag to ${count} Photos`;
+        }
+        if (dom.createTagSubmitBtn) {
+          dom.createTagSubmitBtn.textContent = count === 1 ? 'Add Tag to Photo' : 'Add Tag to Photos';
+        }
+        if (dom.tagModalApplyLabel) {
+          dom.tagModalApplyLabel.textContent = count === 1
+            ? 'Attach tag to selected photo'
+            : `Attach tag to ${count} selected photos`;
+        }
+
+        if (firstItem) {
+          if (dom.tagModalPhotoThumb) {
+            dom.tagModalPhotoThumb.src = firstItem.content_hash
+              ? `/api/thumbnails/${encodeURIComponent(firstItem.content_hash)}/256`
+              : `/api/photos/${firstItem.id}/original`;
+            dom.tagModalPhotoThumb.onerror = () => {
+              dom.tagModalPhotoThumb.src = `/api/photos/${firstItem.id}/original`;
+            };
+          }
+          if (dom.tagModalPhotoName) {
+            dom.tagModalPhotoName.textContent = count === 1 ? (firstItem.file_name || 'Selected Photo') : `${count} photos selected`;
+          }
+          if (dom.tagModalPhotoMeta) {
+            if (count === 1) {
+              const metaParts = [];
+              if (firstItem.date_taken) metaParts.push(formatDate(firstItem.date_taken));
+              if (firstItem.width && firstItem.height) metaParts.push(`${firstItem.width} × ${firstItem.height}`);
+              if (firstItem.file_size) metaParts.push(formatBytes(firstItem.file_size));
+              dom.tagModalPhotoMeta.textContent = metaParts.join(' • ') || 'Photo details';
+            } else {
+              dom.tagModalPhotoMeta.textContent = `${count} items in current selection`;
+            }
+          }
+          if (dom.tagModalPhotoCurrentTags) {
+            if (count === 1 && firstItem.tags && firstItem.tags.length > 0) {
+              dom.tagModalPhotoCurrentTags.innerHTML = firstItem.tags
+                .map(t => `<span class="tag-badge" data-category="${escapeHtml((t.category || 'keyword').toLowerCase())}">${escapeHtml(t.name)}</span>`)
+                .join('');
+            } else if (count === 1) {
+              dom.tagModalPhotoCurrentTags.innerHTML = '<span class="tag-target-no-tags">No tags yet</span>';
+            } else {
+              dom.tagModalPhotoCurrentTags.innerHTML = `<span class="tag-target-no-tags">${count} photos selected</span>`;
+            }
+          }
+        }
+        if (dom.tagModalPhotoCountBadge) {
+          if (count > 1) {
+            dom.tagModalPhotoCountBadge.style.display = 'inline-block';
+            dom.tagModalPhotoCountBadge.textContent = `+${count - 1}`;
+          } else {
+            dom.tagModalPhotoCountBadge.style.display = 'none';
+          }
+        }
+      } else {
+        if (dom.tagModalHeading) dom.tagModalHeading.textContent = 'Create Keyword Tag';
+        if (dom.createTagSubmitBtn) dom.createTagSubmitBtn.textContent = 'Create Tag';
+      }
+
+      // Reset inputs
+      if (dom.tagNameInput) {
+        dom.tagNameInput.value = '';
+      }
+      if (dom.tagModalClearInputBtn) {
+        dom.tagModalClearInputBtn.style.display = 'none';
+      }
+      if (dom.tagDetectedBadge) {
+        dom.tagDetectedBadge.style.display = 'none';
+      }
+
+      // Default category: active category tab if filtered, else 'keyword'
+      let initialCat = 'keyword';
+      if (['people', 'places', 'events', 'keyword'].includes(state.categoryFilter)) {
+        initialCat = state.categoryFilter;
+      }
+      setModalCategory(initialCat);
+
+      // Populate datalist suggestions
+      updateModalTagSuggestions();
+
+      // Render search help chips
+      renderModalSearchHelp();
+
       dom.newTagModal.style.display = 'flex';
-      dom.tagNameInput.value = '';
-      dom.tagNameInput.focus();
-    });
-    function closeTagModal() { dom.newTagModal.style.display = 'none'; }
+      if (dom.tagNameInput) {
+        dom.tagNameInput.focus();
+      }
+    }
+
+    function closeTagModal() {
+      if (dom.newTagModal) {
+        dom.newTagModal.style.display = 'none';
+      }
+      pendingTagTargetMediaIds = [];
+    }
+
+    function setModalCategory(category) {
+      const cat = (category || 'keyword').toLowerCase();
+      if (dom.tagCategorySelect && dom.tagCategorySelect.value !== cat) {
+        dom.tagCategorySelect.value = cat;
+      }
+      if (dom.tagCategoryCards) {
+        dom.tagCategoryCards.querySelectorAll('.category-card').forEach(btn => {
+          if (btn.getAttribute('data-cat') === cat) {
+            btn.classList.add('active');
+          } else {
+            btn.classList.remove('active');
+          }
+        });
+      }
+      renderModalSearchHelp();
+    }
+
+    function updateModalTagSuggestions() {
+      if (!dom.tagModalSuggestions) return;
+      dom.tagModalSuggestions.innerHTML = state.tags
+        .map(t => `<option value="${escapeHtml(t.name)}">`)
+        .join('');
+    }
+
+    function getCategoryColor(category) {
+      switch ((category || '').toLowerCase()) {
+        case 'people': return '#5cd65c';
+        case 'events': return '#d966ff';
+        case 'places': return '#4da6ff';
+        default: return '#aaaaaa';
+      }
+    }
+
+    function getCategoryDisplayName(category) {
+      switch ((category || '').toLowerCase()) {
+        case 'people': return 'People';
+        case 'events': return 'Events';
+        case 'places': return 'Places';
+        default: return 'Keyword';
+      }
+    }
+
+    function renderModalSearchHelp() {
+      if (!dom.tagSearchHelpChips || !dom.tagNameInput) return;
+
+      const query = dom.tagNameInput.value.trim().toLowerCase();
+      const currentCat = dom.tagCategorySelect ? dom.tagCategorySelect.value.toLowerCase() : 'keyword';
+
+      if (!query) {
+        // Mode 1: No query -> Show quick pick tags from the active category
+        const categoryTags = state.tags.filter(t => (t.category || 'keyword').toLowerCase() === currentCat);
+        if (dom.tagSearchHelpTitle) {
+          dom.tagSearchHelpTitle.textContent = `${getCategoryDisplayName(currentCat)} Tags (${categoryTags.length})`;
+        }
+        if (dom.tagSearchHelpSub) {
+          dom.tagSearchHelpSub.textContent = 'Click to select tag';
+        }
+        if (dom.tagDetectedBadge) {
+          dom.tagDetectedBadge.style.display = 'none';
+        }
+
+        if (categoryTags.length === 0) {
+          dom.tagSearchHelpChips.innerHTML = `<div class="tag-help-empty">No tags in ${getCategoryDisplayName(currentCat)} yet. Type above to create one.</div>`;
+        } else {
+          dom.tagSearchHelpChips.innerHTML = categoryTags
+            .map(t => `
+              <button type="button" class="tag-badge tag-help-chip" data-category="${escapeHtml((t.category || 'keyword').toLowerCase())}" data-tag-name="${escapeHtml(t.name)}" title="Select ${escapeHtml(t.name)}">
+                ${escapeHtml(t.name)}
+                <span class="chip-count">(${t.count || 0})</span>
+              </button>
+            `).join('');
+        }
+      } else {
+        // Mode 2: Query present -> Search help across all tags
+        const matchingTags = state.tags.filter(t => t.name.toLowerCase().includes(query));
+        const exactMatch = state.tags.find(t => t.name.toLowerCase() === query);
+
+        if (exactMatch) {
+          if (dom.tagDetectedBadge) {
+            dom.tagDetectedBadge.style.display = 'inline-block';
+            dom.tagDetectedBadge.textContent = `Existing in ${getCategoryDisplayName(exactMatch.category)}`;
+            dom.tagDetectedBadge.style.borderLeft = `2px solid ${getCategoryColor(exactMatch.category)}`;
+          }
+          if (dom.tagCategorySelect && dom.tagCategorySelect.value !== exactMatch.category.toLowerCase()) {
+            setModalCategory(exactMatch.category.toLowerCase());
+          }
+        } else {
+          if (dom.tagDetectedBadge) {
+            dom.tagDetectedBadge.style.display = 'inline-block';
+            dom.tagDetectedBadge.textContent = `New tag in ${getCategoryDisplayName(currentCat)}`;
+            dom.tagDetectedBadge.style.borderLeft = `2px solid ${getCategoryColor(currentCat)}`;
+          }
+        }
+
+        if (dom.tagSearchHelpTitle) {
+          dom.tagSearchHelpTitle.textContent = matchingTags.length > 0
+            ? `Matching Tags (${matchingTags.length})`
+            : 'No Matching Existing Tags';
+        }
+        if (dom.tagSearchHelpSub) {
+          dom.tagSearchHelpSub.textContent = matchingTags.length > 0 ? 'Click to select' : 'Will create new tag';
+        }
+
+        let html = '';
+        if (matchingTags.length > 0) {
+          html = matchingTags.map(t => {
+            const isExact = t.name.toLowerCase() === query;
+            return `
+              <button type="button" class="tag-badge tag-help-chip ${isExact ? 'active-match' : ''}" data-category="${escapeHtml((t.category || 'keyword').toLowerCase())}" data-tag-name="${escapeHtml(t.name)}" title="Select ${escapeHtml(t.name)}">
+                <span class="chip-cat-prefix">${getCategoryDisplayName(t.category)}:</span>
+                <strong>${escapeHtml(t.name)}</strong>
+                <span class="chip-count">(${t.count || 0})</span>
+              </button>
+            `;
+          }).join('');
+        }
+
+        if (!exactMatch) {
+          html += `<div class="tag-help-create-prompt">Press Enter or click <strong>${dom.createTagSubmitBtn ? dom.createTagSubmitBtn.textContent : 'Create Tag'}</strong> to add "<strong>${escapeHtml(dom.tagNameInput.value.trim())}</strong>" to <em>${getCategoryDisplayName(currentCat)}</em></div>`;
+        }
+
+        dom.tagSearchHelpChips.innerHTML = html;
+      }
+
+      // Attach click listeners to chips
+      dom.tagSearchHelpChips.querySelectorAll('.tag-help-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const tagName = chip.getAttribute('data-tag-name');
+          const cat = chip.getAttribute('data-category');
+          if (tagName && dom.tagNameInput) {
+            dom.tagNameInput.value = tagName;
+            if (dom.tagModalClearInputBtn) dom.tagModalClearInputBtn.style.display = 'inline-block';
+          }
+          if (cat) {
+            setModalCategory(cat);
+          }
+          renderModalSearchHelp();
+          if (dom.tagNameInput) dom.tagNameInput.focus();
+        });
+      });
+    }
+
+    // Modal event bindings
+    dom.newTagBtn.addEventListener('click', () => openTagModal());
+    if (dom.inspectorAddTagModalBtn) {
+      dom.inspectorAddTagModalBtn.addEventListener('click', () => {
+        openTagModal(state.selectedIds.size > 0 ? Array.from(state.selectedIds) : []);
+      });
+    }
+    if (dom.inspectorOpenTagModalBtn) {
+      dom.inspectorOpenTagModalBtn.addEventListener('click', () => {
+        openTagModal(state.selectedIds.size > 0 ? Array.from(state.selectedIds) : []);
+      });
+    }
     dom.closeNewTagModalBtn.addEventListener('click', closeTagModal);
     dom.cancelTagBtn.addEventListener('click', closeTagModal);
     dom.newTagBackdrop.addEventListener('click', closeTagModal);
+
+    if (dom.tagModalClearInputBtn) {
+      dom.tagModalClearInputBtn.addEventListener('click', () => {
+        dom.tagNameInput.value = '';
+        dom.tagModalClearInputBtn.style.display = 'none';
+        renderModalSearchHelp();
+        dom.tagNameInput.focus();
+      });
+    }
+
+    if (dom.tagCategoryCards) {
+      dom.tagCategoryCards.querySelectorAll('.category-card').forEach(card => {
+        card.addEventListener('click', () => {
+          const cat = card.getAttribute('data-cat');
+          if (cat) setModalCategory(cat);
+        });
+      });
+    }
+
+    if (dom.tagCategorySelect) {
+      dom.tagCategorySelect.addEventListener('change', () => {
+        setModalCategory(dom.tagCategorySelect.value);
+      });
+    }
+
+    if (dom.tagNameInput) {
+      dom.tagNameInput.addEventListener('input', () => {
+        const val = dom.tagNameInput.value;
+        if (dom.tagModalClearInputBtn) {
+          dom.tagModalClearInputBtn.style.display = val.length > 0 ? 'inline-block' : 'none';
+        }
+        renderModalSearchHelp();
+      });
+      dom.tagNameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          dom.createTagSubmitBtn.click();
+        }
+      });
+    }
 
     dom.createTagSubmitBtn.addEventListener('click', async () => {
       const name = dom.tagNameInput.value.trim();
@@ -2877,15 +3201,34 @@
         alert('Tag name is required');
         return;
       }
+      const category = dom.tagCategorySelect ? dom.tagCategorySelect.value : 'keyword';
+
       try {
         await api.post('/api/tags', {
           name,
-          category: dom.tagCategorySelect.value
+          category
         });
-        closeTagModal();
-        loadMetadata();
       } catch (err) {
-        alert(`Failed to create tag: ${err.message}`);
+        if (!err.message || !err.message.includes('already exists')) {
+          console.warn('Create tag API notice:', err);
+        }
+      }
+
+      if (dom.tagModalApplyToPhotoCheckbox && dom.tagModalApplyToPhotoCheckbox.checked && pendingTagTargetMediaIds.length > 0) {
+        for (const id of pendingTagTargetMediaIds) {
+          try {
+            await api.post(`/api/media/${id}/tags`, { name, category });
+          } catch (e) {
+            console.warn(`Failed to attach tag to photo ${id}:`, e);
+          }
+        }
+      }
+
+      closeTagModal();
+      await loadMetadata();
+      updateInspector();
+      if (state.categoryFilter === category) {
+        await loadMedia();
       }
     });
 

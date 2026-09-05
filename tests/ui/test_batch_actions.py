@@ -76,21 +76,25 @@ def test_batch_rating(server, page: Page):
 
 
 def test_batch_add_tag(server, page: Page):
-    """Batch Add Tag attaches keyword tag to all selected photos via prompt dialog."""
+    """Batch Add Tag attaches keyword tag to all selected photos via Add Tag dialog."""
     page.goto(server["url"])
 
     card1 = page.locator(".photo-card", has_text="sunset.bmp")
     card2 = page.locator(".photo-card", has_text="beach.bmp")
 
-    # Handle the prompt dialog
-    page.on("dialog", lambda dialog: dialog.accept("WeekendTrip"))
-
     card1.click()
     card2.click(modifiers=["Control"])
     expect(page.locator("#batchActionBar")).to_be_visible()
 
-    # Click Batch Add Tag
+    # Click Batch Add Tag -> opens modal
     page.locator("#batchAddTagBtn").click()
+    modal = page.locator("#newTagModal")
+    expect(modal).to_be_visible()
+    expect(page.locator("#tagModalHeading")).to_have_text("Add Tag to 2 Photos")
+
+    page.locator("#tagNameInput").fill("WeekendTrip")
+    page.locator("#createTagSubmitBtn").click()
+    expect(modal).to_be_hidden()
 
     # Inspect card 1: verify tag is present
     card1.click()
