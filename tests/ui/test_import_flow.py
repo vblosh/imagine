@@ -133,3 +133,41 @@ def test_import_modal_close_mid_run_continues_polling(empty_server, page: Page):
     expect(page.locator("#emptyState")).to_be_hidden()
 
 
+def test_import_polling_uses_recursive_timeout(empty_server, page: Page):
+    """Verify that import polling uses setTimeout recursively rather than setInterval to prevent request overlap."""
+    page.goto(empty_server["url"])
+
+    # Track setTimeout and setInterval calls
+    page.evaluate("""() => {
+        window.__timeoutCalls = [];
+        window.__intervalCalls = [];
+        const origTimeout = window.setTimeout;
+        const origInterval = window.setInterval;
+        window.setTimeout = function(fn, delay, ...args) {
+            window.__timeoutCalls.push({ delay, name: fn.name });
+            return origTimeout(fn, delay, ...args);
+        };
+        window.setInterval = function(fn, delay, ...args) {
+            window.__intervalCalls.push({ delay, name: fn.name });
+            return origInterval(fn, delay, ...args);
+        };
+    }""")
+
+    import_dir = empty_server["env"]["import_dir"]
+    page.locator("#importBtn").click()
+    page.locator("#importPathInput").fill(import_dir)
+    page.locator("#startImportBtn").click()
+
+    expect(page.locator("#importModal")).to_be_hidden(timeout=10000)
+
+    # Verify setInterval was never used for polling
+    interval_calls = page.evaluate("() => window.__intervalCalls")
+    assert len(interval_calls) == 0, f"Expected 0 setInterval calls, got: {interval_calls}"
+
+    # Verify setTimeout was used with 500ms delay for polling
+    timeout_calls = page.evaluate("() => window.__timeoutCalls")
+    poll_timeouts = [c for c in timeout_calls if c.get("delay") == 500]
+    assert len(poll_timeouts) >= 1, f"Expected at least 1 setTimeout with 500ms, got: {timeout_calls}"
+
+
+

@@ -47,20 +47,25 @@
     mapSearchDebounceTimer: null,
     mediaLimit: 500,
     mediaOffset: 0,
+    isLoadingMedia: false,
     isLoadingMore: false,
     isImporting: false
   };
 
   // --- API Helpers ---
   const api = {
-    async get(endpoint, params = {}) {
+    async get(endpoint, params = {}, options = {}) {
       const url = new URL(endpoint, window.location.origin);
       Object.keys(params).forEach(k => {
         if (params[k] !== undefined && params[k] !== null && params[k] !== '') {
           url.searchParams.append(k, params[k]);
         }
       });
-      const res = await fetch(url.toString());
+      const fetchOpts = {};
+      if (options && options.signal) {
+        fetchOpts.signal = options.signal;
+      }
+      const res = await fetch(url.toString(), fetchOpts);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         throw new Error(err.error || 'Request failed');
@@ -396,53 +401,89 @@
 
   // --- Load Media & Catalog Data ---
   let currentLoadMediaId = 0;
+  let loadMediaAbortController = null;
+  let loadMoreAbortController = null;
+
+  function buildMediaParams() {
+    const params = {
+      sort: `${state.sortBy}-${state.sortDesc ? 'desc' : 'asc'}`
+    };
+
+    if (state.searchText) params.search = state.searchText;
+    if (state.activeFolder) params.folder = state.activeFolder;
+    if (state.activeTagId) {
+      params.tag_id = state.activeTagId;
+    } else if (state.activeTab && state.activeTab !== 'media') {
+      params.tag_category = state.activeTab.toLowerCase();
+    }
+    if (state.activeAlbumId) params.album_id = state.activeAlbumId;
+
+    // Nav filters (picks, rejects, unrated)
+    if (state.activeNavFilter === 'picks') params.flag = 1;
+    else if (state.activeNavFilter === 'rejects') params.flag = -1;
+    else if (state.activeNavFilter === 'unrated') {
+      params.rating = 0;
+      params.max_rating = 0;
+    }
+
+    // Timeline filter in UTC
+    if (state.activeTimelinePeriod) {
+      const { year, month } = state.activeTimelinePeriod;
+      const start = Date.UTC(year, month - 1, 1, 0, 0, 0) / 1000;
+      const end = Date.UTC(year, month, 1, 0, 0, 0) / 1000 - 1;
+      params.date_from = Math.floor(start);
+      params.date_to = Math.floor(end);
+    }
+
+    return params;
+  }
+
   async function loadMedia(append = false) {
+    if (append) {
+      return loadMoreMedia();
+    }
+
+    // Avoid concurrent non-append and append requests:
+    // Abort pending append requests as well as any prior non-append load
+    if (loadMoreAbortController) {
+      loadMoreAbortController.abort();
+      loadMoreAbortController = null;
+    }
+    if (loadMediaAbortController) {
+      loadMediaAbortController.abort();
+      loadMediaAbortController = null;
+    }
+
+    const abortController = new AbortController();
+    loadMediaAbortController = abortController;
+
     const fetchId = ++currentLoadMediaId;
+    state.isLoadingMedia = true;
+    state.mediaOffset = 0;
+
     try {
-      if (!append) {
-        state.mediaOffset = 0;
-      }
       const params = {
+        ...buildMediaParams(),
         limit: state.mediaLimit,
-        offset: state.mediaOffset,
-        sort: `${state.sortBy}-${state.sortDesc ? 'desc' : 'asc'}`
+        offset: 0
       };
 
-      if (state.searchText) params.search = state.searchText;
-      if (state.activeFolder) params.folder = state.activeFolder;
-      if (state.activeTagId) {
-        params.tag_id = state.activeTagId;
-      } else if (state.activeTab && state.activeTab !== 'media') {
-        params.tag_category = state.activeTab.toLowerCase();
-      }
-      if (state.activeAlbumId) params.album_id = state.activeAlbumId;
-
-      // Nav filters (picks, rejects, unrated)
-      if (state.activeNavFilter === 'picks') params.flag = 1;
-      else if (state.activeNavFilter === 'rejects') params.flag = -1;
-      else if (state.activeNavFilter === 'unrated') {
-        params.rating = 0;
-        params.max_rating = 0;
-      }
-
-      // Timeline filter in UTC
-      if (state.activeTimelinePeriod) {
-        const { year, month } = state.activeTimelinePeriod;
-        const start = Date.UTC(year, month - 1, 1, 0, 0, 0) / 1000;
-        const end = Date.UTC(year, month, 1, 0, 0, 0) / 1000 - 1;
-        params.date_from = Math.floor(start);
-        params.date_to = Math.floor(end);
-      }
-
-      const res = await api.get('/api/media', params);
+      const res = await api.get('/api/media', params, { signal: abortController.signal });
       if (fetchId !== currentLoadMediaId) return;
-      const items = res.items || [];
-      state.totalCount = res.total || 0;
-      if (append) {
-        state.mediaItems = state.mediaItems.concat(items);
-      } else {
-        state.mediaItems = items;
+
+      // Deduplicate initial items by ID
+      const seenIds = new Set();
+      const items = [];
+      for (const item of (res.items || [])) {
+        if (item && item.id != null && !seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          items.push(item);
+        }
       }
+
+      state.totalCount = (res.total !== undefined && res.total !== null) ? res.total : items.length;
+      state.mediaItems = items;
+      state.mediaOffset = items.length;
 
       // Reconcile selection: prune IDs no longer visible
       const visibleIds = new Set(state.mediaItems.map(item => item.id));
@@ -466,11 +507,7 @@
       });
 
       if (state.viewMode !== 'map') {
-        if (append) {
-          appendMediaToGrid(items);
-        } else {
-          renderGrid();
-        }
+        renderGrid();
       }
       if (state.viewMode === 'map' || state.mapInstance) {
         renderMapMarkers();
@@ -481,17 +518,114 @@
       updateBatchBar();
       updateInspector();
     } catch (err) {
-      console.error('Failed to load media:', err);
-      showToast('Failed to load media: ' + (err.message || 'Server error'), 'error');
+      if (err.name === 'AbortError') return;
+      if (fetchId === currentLoadMediaId) {
+        console.error('Failed to load media:', err);
+        showToast('Failed to load media: ' + (err.message || 'Server error'), 'error');
+      }
+    } finally {
+      if (fetchId === currentLoadMediaId) {
+        state.isLoadingMedia = false;
+        if (loadMediaAbortController === abortController) {
+          loadMediaAbortController = null;
+        }
+      }
     }
   }
 
   async function loadMoreMedia() {
-    if (state.isLoadingMore || state.mediaItems.length >= state.totalCount) return;
+    // Avoid concurrent non-append and append requests, or multiple append requests
+    if (state.isLoadingMore || state.isLoadingMedia || state.mediaItems.length >= state.totalCount) {
+      return;
+    }
+
     state.isLoadingMore = true;
-    state.mediaOffset = state.mediaItems.length;
-    await loadMedia(true);
-    state.isLoadingMore = false;
+    const offset = state.mediaItems.length;
+
+    // Capture filter/sort request identity for pagination
+    const requestMediaId = currentLoadMediaId;
+    const requestParams = buildMediaParams();
+    const requestParamsKey = JSON.stringify(requestParams);
+
+    const abortController = new AbortController();
+    loadMoreAbortController = abortController;
+
+    try {
+      const res = await api.get('/api/media', {
+        ...requestParams,
+        limit: state.mediaLimit,
+        offset
+      }, { signal: abortController.signal });
+
+      // If a non-append loadMedia started or filter/sort identity changed while pending, discard
+      if (requestMediaId !== currentLoadMediaId || JSON.stringify(buildMediaParams()) !== requestParamsKey) {
+        return;
+      }
+
+      // Deduplicate by ID against existing items and within the new page
+      const existing = new Set(state.mediaItems.map(item => item.id));
+      const rawItems = res.items || [];
+      const newItems = [];
+      for (const item of rawItems) {
+        if (item && item.id != null && !existing.has(item.id)) {
+          existing.add(item.id);
+          newItems.push(item);
+        }
+      }
+
+      state.mediaItems.push(...newItems);
+      state.mediaOffset = state.mediaItems.length;
+      state.totalCount = (res.total !== undefined && res.total !== null) ? res.total : state.totalCount;
+      if (state.mediaItems.length > state.totalCount) {
+        state.totalCount = state.mediaItems.length;
+      }
+
+      // Reconcile selection: prune IDs no longer visible
+      const visibleIds = new Set(state.mediaItems.map(item => item.id));
+      state.selectedIds.forEach(id => {
+        if (!visibleIds.has(id)) {
+          state.selectedIds.delete(id);
+        }
+      });
+      if (state.lastSelectedId !== null && !visibleIds.has(state.lastSelectedId)) {
+        state.lastSelectedId = null;
+      }
+
+      // Track all discovered folders across loads so filtering doesn't remove folders from sidebar
+      newItems.forEach(item => {
+        if (item.file_path) {
+          const lastSlash = Math.max(item.file_path.lastIndexOf('/'), item.file_path.lastIndexOf('\\'));
+          if (lastSlash > 0) {
+            state.allFolders.add(item.file_path.substring(0, lastSlash));
+          }
+        }
+      });
+
+      if (state.viewMode !== 'map') {
+        appendMediaToGrid(newItems);
+      }
+      if (state.viewMode === 'map' || state.mapInstance) {
+        renderMapMarkers();
+        renderUnmappedTray();
+      }
+      renderSidebarFolders();
+      updateFilterLabel();
+      updateBatchBar();
+      updateInspector();
+
+      return newItems;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      if (requestMediaId === currentLoadMediaId) {
+        console.error('Failed to load more media:', err);
+        showToast('Failed to load more media: ' + (err.message || 'Server error'), 'error');
+      }
+    } finally {
+      state.isLoadingMore = false;
+      if (loadMoreAbortController === abortController) {
+        loadMoreAbortController = null;
+      }
+    }
   }
 
   let updateModalTagSuggestions = function () {};
@@ -594,17 +728,38 @@
   }
 
   function appendMediaToGrid(newItems) {
-    if (!dom.mediaGrid || !newItems || newItems.length === 0) return;
+    if (!dom.mediaGrid) return;
 
     // Remove existing load more wrap
     const existingLoadMore = dom.mediaGrid.querySelector('.grid-load-more-wrap');
     if (existingLoadMore) existingLoadMore.remove();
+
+    if (!newItems || newItems.length === 0) {
+      if (state.mediaItems.length < state.totalCount) {
+        const moreWrap = document.createElement('div');
+        moreWrap.className = 'grid-load-more-wrap';
+        moreWrap.style.cssText = 'padding:20px;text-align:center;width:100%;grid-column:1/-1;';
+        moreWrap.innerHTML = `
+          <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">Showing ${state.mediaItems.length} of ${state.totalCount} photos</div>
+          <button class="btn btn-secondary btn-sm" id="gridLoadMoreBtn">Load More</button>
+        `;
+        const btn = moreWrap.querySelector('#gridLoadMoreBtn');
+        if (btn) btn.onclick = () => loadMoreMedia();
+        dom.mediaGrid.appendChild(moreWrap);
+      }
+      return;
+    }
 
     if (state.mediaItems.length > 0 && dom.emptyState) {
       dom.emptyState.style.display = 'none';
     }
 
     newItems.forEach(item => {
+      // Guard against duplicate card already present in DOM
+      if (dom.mediaGrid.querySelector(`.photo-card[data-id="${item.id}"]`)) {
+        return;
+      }
+
       let groupKey = 'Undated';
       if (item.date_taken && item.date_taken > 0) {
         const d = new Date(item.date_taken * 1000);
@@ -2473,6 +2628,56 @@
   }
 
   // --- Import Workflow ---
+  async function pollImportProgress() {
+    if (!state.isImporting) return;
+
+    try {
+      const prog = await api.get('/api/import/progress');
+      if (!state.isImporting) return;
+
+      const total = prog.total_files || 0;
+      const processed = prog.processed_files || 0;
+      const imported = prog.imported_files || 0;
+      const skipped = prog.skipped_files || 0;
+      const failed = prog.failed_files || 0;
+
+      if (total > 0 && dom.importProgressBar) {
+        const percent = Math.min(100, Math.round((processed / total) * 100));
+        dom.importProgressBar.style.width = `${percent}%`;
+      }
+
+      if (dom.importStatusCounts) {
+        dom.importStatusCounts.textContent =
+          `Processed: ${processed} / ${total} (Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed})`;
+      }
+      if (dom.importCurrentFile) {
+        dom.importCurrentFile.textContent = prog.current_file || '';
+      }
+
+      if (prog.is_running) {
+        state.importPollInterval = setTimeout(pollImportProgress, 500);
+      } else {
+        state.importPollInterval = null;
+        state.isImporting = false;
+        if (dom.importProgressBar) dom.importProgressBar.style.width = '100%';
+        if (dom.importStatusCounts) dom.importStatusCounts.textContent = `Completed! ${imported} imported, ${skipped} skipped.`;
+        if (dom.startImportBtn) dom.startImportBtn.disabled = false;
+        setTimeout(() => {
+          if (dom.importModal) dom.importModal.style.display = 'none';
+          if (dom.importProgressBox) dom.importProgressBox.style.display = 'none';
+          loadMetadata();
+          loadMedia();
+          showToast(`Import completed: ${imported} imported, ${skipped} skipped.`, 'success');
+        }, 1200);
+      }
+    } catch (pollErr) {
+      console.warn('Progress poll error:', pollErr);
+      if (state.isImporting) {
+        state.importPollInterval = setTimeout(pollImportProgress, 1000);
+      }
+    }
+  }
+
   async function triggerImport(path, recursive) {
     try {
       state.isImporting = true;
@@ -2483,49 +2688,12 @@
 
       await api.post('/api/import', { path, recursive });
 
-      // Poll progress
-      if (state.importPollInterval) clearInterval(state.importPollInterval);
-      state.importPollInterval = setInterval(async () => {
-        try {
-          const prog = await api.get('/api/import/progress');
-          const total = prog.total_files || 0;
-          const processed = prog.processed_files || 0;
-          const imported = prog.imported_files || 0;
-          const skipped = prog.skipped_files || 0;
-          const failed = prog.failed_files || 0;
-
-          if (total > 0 && dom.importProgressBar) {
-            const percent = Math.min(100, Math.round((processed / total) * 100));
-            dom.importProgressBar.style.width = `${percent}%`;
-          }
-
-          if (dom.importStatusCounts) {
-            dom.importStatusCounts.textContent =
-              `Processed: ${processed} / ${total} (Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed})`;
-          }
-          if (dom.importCurrentFile) {
-            dom.importCurrentFile.textContent = prog.current_file || '';
-          }
-
-          if (!prog.is_running) {
-            clearInterval(state.importPollInterval);
-            state.importPollInterval = null;
-            state.isImporting = false;
-            if (dom.importProgressBar) dom.importProgressBar.style.width = '100%';
-            if (dom.importStatusCounts) dom.importStatusCounts.textContent = `Completed! ${imported} imported, ${skipped} skipped.`;
-            if (dom.startImportBtn) dom.startImportBtn.disabled = false;
-            setTimeout(() => {
-              if (dom.importModal) dom.importModal.style.display = 'none';
-              if (dom.importProgressBox) dom.importProgressBox.style.display = 'none';
-              loadMetadata();
-              loadMedia();
-              showToast(`Import completed: ${imported} imported, ${skipped} skipped.`, 'success');
-            }, 1200);
-          }
-        } catch (pollErr) {
-          console.warn('Progress poll error:', pollErr);
-        }
-      }, 500);
+      // Poll progress via recursive setTimeout
+      if (state.importPollInterval) {
+        clearTimeout(state.importPollInterval);
+        state.importPollInterval = null;
+      }
+      state.importPollInterval = setTimeout(pollImportProgress, 500);
 
     } catch (err) {
       state.isImporting = false;
@@ -2585,7 +2753,7 @@
     if (dom.gridScrollContainer) {
       dom.gridScrollContainer.addEventListener('scroll', () => {
         const { scrollTop, scrollHeight, clientHeight } = dom.gridScrollContainer;
-        if (scrollTop + clientHeight >= scrollHeight - 250 && !state.isLoadingMore && state.mediaItems.length < state.totalCount) {
+        if (scrollTop + clientHeight >= scrollHeight - 250 && !state.isLoadingMore && !state.isLoadingMedia && state.mediaItems.length < state.totalCount) {
           loadMoreMedia();
         }
       });
@@ -2665,7 +2833,8 @@
         dom.mapLoadAllBtn.disabled = true;
         try {
           while (state.mediaItems.length < state.totalCount) {
-            await loadMoreMedia();
+            const added = await loadMoreMedia();
+            if (!added || added.length === 0) break;
           }
         } finally {
           dom.mapLoadAllBtn.disabled = false;
@@ -2681,7 +2850,7 @@
       dom.unmappedPhotosList.addEventListener('scroll', () => {
         const { scrollLeft, scrollWidth, clientWidth } = dom.unmappedPhotosList;
         if (scrollWidth - (scrollLeft + clientWidth) < 100) {
-          if (!state.isLoadingMore && state.mediaItems.length < state.totalCount) {
+          if (!state.isLoadingMore && !state.isLoadingMedia && state.mediaItems.length < state.totalCount) {
             loadMoreMedia();
           }
         }
@@ -3242,7 +3411,7 @@
       if (dom.importModal) dom.importModal.style.display = 'none';
       if (dom.importProgressBox) dom.importProgressBox.style.display = 'none';
       if (!state.isImporting && state.importPollInterval) {
-        clearInterval(state.importPollInterval);
+        clearTimeout(state.importPollInterval);
         state.importPollInterval = null;
       }
     }
@@ -4011,9 +4180,11 @@
   window._imagineApp = {
     state,
     dom,
+    buildMediaParams,
     loadMedia,
     loadMoreMedia,
     appendMediaToGrid,
+    pollImportProgress,
     validateRequiredDom,
     setupEventListeners
   };
