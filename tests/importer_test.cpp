@@ -254,3 +254,171 @@ TEST_F(ImporterTest, SynchronousAndNonRecursiveAndCorrupted) {
     importer.cancel();
     EXPECT_TRUE(importer.isCancelled());
 }
+
+TEST_F(ImporterTest, MoveSemantics) {
+    static_assert(std::is_move_constructible_v<ImportProgress>, "ImportProgress must be move constructible");
+    static_assert(std::is_move_assignable_v<ImportProgress>, "ImportProgress must be move assignable");
+
+    ImportProgress orig;
+    orig.total_files = 100;
+    orig.processed_files = 80;
+    orig.imported_files = 70;
+    orig.skipped_files = 5;
+    orig.failed_files = 3;
+    orig.cancelled_files = 2;
+    orig.current_file = "/photos/test.jpg";
+    orig.is_running = true;
+
+    // Move construct
+    ImportProgress moved(std::move(orig));
+    EXPECT_EQ(moved.total_files.load(), 100);
+    EXPECT_EQ(moved.processed_files.load(), 80);
+    EXPECT_EQ(moved.imported_files.load(), 70);
+    EXPECT_EQ(moved.skipped_files.load(), 5);
+    EXPECT_EQ(moved.failed_files.load(), 3);
+    EXPECT_EQ(moved.cancelled_files.load(), 2);
+    EXPECT_EQ(moved.current_file, "/photos/test.jpg");
+    EXPECT_TRUE(moved.is_running);
+
+    // Move assign
+    ImportProgress assigned;
+    assigned = std::move(moved);
+    EXPECT_EQ(assigned.total_files.load(), 100);
+    EXPECT_EQ(assigned.imported_files.load(), 70);
+}
+
+TEST_F(ImporterTest, CallbackNoDeadlockOnCurrentProgress) {
+    CatalogDb db;
+    ASSERT_TRUE(db.open(dbPath).isOk());
+    Cache cache(thumbsDir.string());
+    ThreadPool pool(2);
+    Importer importer(db, cache, &pool);
+
+    std::atomic<int> callbackInvocations{0};
+    // The callback calls importer.currentProgress() inside, which would deadlock
+    // if progress_mutex_ were held during callback execution.
+    auto progressCb = [&importer, &callbackInvocations](const ImportProgress& prog) {
+        callbackInvocations++;
+        auto cur = importer.currentProgress();
+        EXPECT_GE(cur.total_files.load(), 0);
+    };
+
+    auto res = importer.importDirectory(photosDir.string(), true, progressCb);
+    ASSERT_TRUE(res.isOk());
+    EXPECT_GT(callbackInvocations.load(), 0);
+    EXPECT_EQ(res.value().imported_files.load(), 2);
+    db.close();
+}
+
+TEST_F(ImporterTest, CancellationAccounting) {
+    CatalogDb db;
+    ASSERT_TRUE(db.open(dbPath).isOk());
+    Cache cache(thumbsDir.string());
+    Importer importer(db, cache, nullptr);
+
+    // Create 10 dummy photos to test cancellation accounting
+    for (int i = 3; i <= 10; ++i) {
+        ImageBuffer buf;
+        buf.width = 50;
+        buf.height = 50;
+        buf.channels = 3;
+        buf.data.resize(50 * 50 * 3, static_cast<uint8_t>(i * 10));
+        ASSERT_TRUE(Generator::saveJpeg(buf, (photosDir / ("img" + std::to_string(i) + ".jpg")).string()).isOk());
+    }
+
+    // Cancel during initial progress callback
+    std::atomic<bool> cancelledOnce{false};
+    auto progressCb = [&importer, &cancelledOnce](const ImportProgress& prog) {
+        if (!cancelledOnce.exchange(true)) {
+            importer.cancel();
+        }
+    };
+
+    auto res = importer.importDirectory(photosDir.string(), true, progressCb);
+    ASSERT_TRUE(res.isOk());
+    auto prog = res.value();
+    EXPECT_EQ(prog.total_files.load(), 10);
+    EXPECT_EQ(prog.cancelled_files.load(), 10);
+    EXPECT_EQ(prog.processed_files.load(), 10);
+    EXPECT_EQ(prog.imported_files.load(), 0);
+    EXPECT_EQ(prog.imported_files.load() + prog.skipped_files.load() +
+              prog.failed_files.load() + prog.cancelled_files.load(),
+              prog.total_files.load());
+    db.close();
+}
+
+TEST_F(ImporterTest, PathNormalization) {
+    std::string relPath = (photosDir / "." / "img1.jpg").string();
+    std::string norm = Importer::normalizePath(relPath);
+    EXPECT_NE(norm.find("img1.jpg"), std::string::npos);
+    EXPECT_EQ(norm.find("/./"), std::string::npos);
+}
+
+TEST_F(ImporterTest, ThreadedCancellationMidwayAccounting) {
+    CatalogDb db;
+    ASSERT_TRUE(db.open(dbPath).isOk());
+    Cache cache(thumbsDir.string());
+    ThreadPool pool(2);
+    Importer importer(db, cache, &pool);
+
+    // Create 20 photos
+    for (int i = 3; i <= 20; ++i) {
+        ImageBuffer buf;
+        buf.width = 50;
+        buf.height = 50;
+        buf.channels = 3;
+        buf.data.resize(50 * 50 * 3, static_cast<uint8_t>(i * 5));
+        ASSERT_TRUE(Generator::saveJpeg(buf, (photosDir / ("img" + std::to_string(i) + ".jpg")).string()).isOk());
+    }
+
+    // Deterministically trigger cancellation as soon as 2 tasks finish
+    std::atomic<int> processedCount{0};
+    importer.setFileHook([&importer, &processedCount](const std::string&) {
+        if (++processedCount == 2) {
+            importer.cancel();
+        }
+    });
+
+    auto res = importer.importDirectory(photosDir.string(), true, nullptr);
+
+    ASSERT_TRUE(res.isOk());
+    auto prog = res.value();
+    EXPECT_EQ(prog.total_files.load(), 20);
+    EXPECT_EQ(prog.processed_files.load(), 20);
+    EXPECT_GT(prog.cancelled_files.load(), 0);
+    EXPECT_EQ(prog.imported_files.load() + prog.skipped_files.load() +
+              prog.failed_files.load() + prog.cancelled_files.load(),
+              prog.total_files.load());
+    db.close();
+}
+
+TEST_F(ImporterTest, CommitToDbFalseAndBatchPersistence) {
+    CatalogDb db;
+    ASSERT_TRUE(db.open(dbPath).isOk());
+    Cache cache(thumbsDir.string());
+    Importer importer(db, cache, nullptr);
+
+    // Import initial file
+    auto res1 = importer.importFile(img1Path);
+    ASSERT_TRUE(res1.isOk());
+    MediaId origId = res1.value().id;
+
+    // Modify img1 on disk
+    {
+        std::ofstream ofs(img1Path, std::ios::binary | std::ios::app);
+        ofs << "modified_bytes_appended";
+    }
+
+    auto mediaBefore = db.getMediaById(origId).value();
+    int64_t origSize = mediaBefore.file_size;
+
+    // Import directory - verifies updates are batched and persisted properly
+    auto impRes = importer.importDirectory(photosDir.string(), true, nullptr);
+    ASSERT_TRUE(impRes.isOk());
+
+    auto mediaAfter = db.getMediaById(origId).value();
+    EXPECT_GT(mediaAfter.file_size, origSize);
+    EXPECT_EQ(mediaAfter.id, origId);
+
+    db.close();
+}

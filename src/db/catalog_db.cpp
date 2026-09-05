@@ -260,6 +260,76 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
     return Status::ok();
 }
 
+Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) {
+    if (items.empty()) {
+        return 0;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    const char* sql = R"SQL(
+        UPDATE media_items SET
+            file_name = ?, file_size = ?, file_modified_time = ?, content_hash = ?,
+            width = ?, height = ?, date_taken = ?, date_taken_str = ?,
+            rating = ?, flag = ?, camera_make = ?, camera_model = ?, lens = ?,
+            exposure_time = ?, f_number = ?, iso = ?, focal_length = ?,
+            orientation = ?, has_gps = ?, latitude = ?, longitude = ?, altitude = ?,
+            thumb_small = ?, thumb_large = ?, updated_at = ?
+        WHERE id = ?;
+    )SQL";
+
+    Transaction tx(conn_);
+
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+
+    int64_t now = currentUnixTime();
+    size_t updatedCount = 0;
+
+    for (const auto& item : items) {
+        stmt.bind(1, item.file_name);
+        stmt.bind(2, item.file_size);
+        stmt.bind(3, item.file_modified_time);
+        stmt.bind(4, item.content_hash);
+        stmt.bind(5, item.width);
+        stmt.bind(6, item.height);
+        stmt.bind(7, item.date_taken);
+        stmt.bind(8, item.exif.date_taken_str);
+        stmt.bind(9, item.rating);
+        stmt.bind(10, static_cast<int32_t>(item.flag));
+        stmt.bind(11, item.exif.camera_make);
+        stmt.bind(12, item.exif.camera_model);
+        stmt.bind(13, item.exif.lens);
+        stmt.bind(14, item.exif.exposure_time);
+        stmt.bind(15, item.exif.f_number);
+        stmt.bind(16, item.exif.iso);
+        stmt.bind(17, item.exif.focal_length);
+        stmt.bind(18, item.exif.orientation);
+        stmt.bind(19, item.exif.has_gps ? 1 : 0);
+        stmt.bind(20, item.exif.latitude);
+        stmt.bind(21, item.exif.longitude);
+        stmt.bind(22, item.exif.altitude);
+        stmt.bind(23, item.thumb_small);
+        stmt.bind(24, item.thumb_large);
+        stmt.bind(25, now);
+        stmt.bind(26, item.id);
+
+        if (stmt.step() != StepResult::Done) {
+            return Status::databaseError("Failed to update media item in batch: " + conn_.lastErrorMessage());
+        }
+        updatedCount++;
+        stmt.reset();
+    }
+
+    Status commitStatus = tx.commit();
+    if (!commitStatus.isOk()) {
+        return commitStatus;
+    }
+
+    return updatedCount;
+}
+
+
 Result<MediaItem> CatalogDb::getMediaById(MediaId id) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("SELECT * FROM media_items WHERE id = ?;");

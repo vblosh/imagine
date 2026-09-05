@@ -17,6 +17,7 @@ void to_json(nlohmann::json& j, const ImportProgress& p) {
         {"imported_files", p.imported_files.load()},
         {"skipped_files", p.skipped_files.load()},
         {"failed_files", p.failed_files.load()},
+        {"cancelled_files", p.cancelled_files.load()},
         {"current_file", p.current_file},
         {"is_running", p.is_running}
     };
@@ -37,6 +38,9 @@ void from_json(const nlohmann::json& j, ImportProgress& p) {
     }
     if (j.contains("failed_files") && j["failed_files"].is_number()) {
         p.failed_files.store(j["failed_files"].get<int64_t>());
+    }
+    if (j.contains("cancelled_files") && j["cancelled_files"].is_number()) {
+        p.cancelled_files.store(j["cancelled_files"].get<int64_t>());
     }
     if (j.contains("current_file") && j["current_file"].is_string()) {
         p.current_file = j["current_file"].get<std::string>();
@@ -59,8 +63,22 @@ bool Importer::isSupportedExtension(const std::string& path) {
            ext == ".bmp" || ext == ".webp" || ext == ".tiff" || ext == ".tif";
 }
 
+std::string Importer::normalizePath(const std::string& path) {
+    std::error_code ec;
+    // Preserve symlink rejection: do not follow or normalize symlink paths
+    if (std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec))) {
+        return path;
+    }
+    auto weakly = std::filesystem::weakly_canonical(path, ec);
+    if (!ec) {
+        return weakly.string();
+    }
+    return std::filesystem::path(path).lexically_normal().string();
+}
+
 void Importer::cancel() noexcept {
     cancelled_.store(true);
+    memory_cv_.notify_all();
 }
 
 bool Importer::isCancelled() const noexcept {
@@ -95,6 +113,9 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         return ProcessStatus::Failed;
     }
 
+    // Path normalization for deduplication and consistent DB querying
+    std::string normalizedPath = normalizePath(filePath);
+
     auto fsize = std::filesystem::file_size(filePath, ec);
     if (ec) {
         IMAGINE_LOG_ERROR("Failed to get file size for " + filePath + ": " + ec.message());
@@ -117,8 +138,8 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     auto sctp = std::chrono::file_clock::to_sys(lwt);
     int64_t modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
 
-    // Stage 2: Check existing file by path and modified time in DB. If unchanged, mark skipped.
-    auto existingRes = db_.getMediaByPath(filePath);
+    // Check existing file by normalized path and modified time in DB. If unchanged, mark skipped.
+    auto existingRes = db_.getMediaByPath(normalizedPath);
     bool isUpdate = existingRes.isOk();
     if (isUpdate) {
         const auto& existing = existingRes.value();
@@ -130,22 +151,72 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         }
     }
 
+    // Memory throttling: limit aggregate in-flight memory allocation across workers.
+    // Files larger than kMaxInFlightBytes are allowed to proceed as a single exclusive
+    // allocation when in_flight_bytes_ == 0.
+    const size_t requiredBudget = std::min<size_t>(static_cast<size_t>(fsize), kMaxInFlightBytes);
+    {
+        std::unique_lock<std::mutex> memLock(memory_mutex_);
+        memory_cv_.wait(memLock, [&]() {
+            return cancelled_.load() || in_flight_bytes_ == 0 || (in_flight_bytes_ + requiredBudget <= kMaxInFlightBytes);
+        });
+        if (cancelled_.load()) {
+            return ProcessStatus::Failed;
+        }
+        in_flight_bytes_ += requiredBudget;
+    }
+
+    // RAII guard to guarantee memory permits are released
+    struct MemoryGuard {
+        std::mutex& mtx;
+        std::condition_variable& cv;
+        size_t& tracker;
+        size_t bytes;
+        bool released{false};
+
+        void release() {
+            if (!released && bytes > 0) {
+                std::lock_guard<std::mutex> lock(mtx);
+                tracker -= bytes;
+                released = true;
+                cv.notify_all();
+            }
+        }
+
+        ~MemoryGuard() {
+            release();
+        }
+    } memGuard{memory_mutex_, memory_cv_, in_flight_bytes_, requiredBudget};
+
     // Read file once into memory buffer
     std::ifstream file(filePath, std::ios::binary);
     if (!file.is_open()) {
         IMAGINE_LOG_ERROR("Unable to open file for import: " + filePath);
         return ProcessStatus::Failed;
     }
+
     std::vector<uint8_t> fileBytes(static_cast<size_t>(fsize));
-    if (fsize > 0) {
-        file.read(reinterpret_cast<char*>(fileBytes.data()), static_cast<std::streamsize>(fsize));
-        if (static_cast<size_t>(file.gcount()) != static_cast<size_t>(fsize)) {
-            IMAGINE_LOG_ERROR("Failed to read complete file content: " + filePath);
-            return ProcessStatus::Failed;
-        }
+    file.read(reinterpret_cast<char*>(fileBytes.data()), static_cast<std::streamsize>(fsize));
+    size_t bytesRead = static_cast<size_t>(file.gcount());
+    if (bytesRead == 0) {
+        IMAGINE_LOG_ERROR("Failed to read file content (0 bytes read): " + filePath);
+        return ProcessStatus::Failed;
+    }
+    if (bytesRead != static_cast<size_t>(fsize)) {
+        IMAGINE_LOG_WARN("File size changed during read for " + filePath + ": expected " +
+                         std::to_string(fsize) + ", read " + std::to_string(bytesRead));
+        fileBytes.resize(bytesRead);
+        fsize = bytesRead;
     }
 
-    // Stage 3: Extract SHA-256 hash using in-memory bytes
+    // TOCTOU verification: re-fetch modification time after reading
+    auto lwtPost = std::filesystem::last_write_time(filePath, ec);
+    if (!ec) {
+        auto sctpPost = std::chrono::file_clock::to_sys(lwtPost);
+        modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctpPost.time_since_epoch()).count();
+    }
+
+    // Extract SHA-256 hash using in-memory bytes
     std::string hash = metadata::Hasher::computeBytesSha256(fileBytes.data(), fileBytes.size());
     if (hash.empty()) {
         IMAGINE_LOG_ERROR("Failed to compute SHA-256 for " + filePath);
@@ -159,13 +230,13 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         exif = exifRes.value();
     }
 
-    // Date taken
+    // Date taken fallback
     int64_t dateTaken = exif.date_taken;
     if (dateTaken <= 0) {
         dateTaken = modifiedTime;
     }
 
-    // Thumbnails & dimensions via ensureDualThumbnailsFromMemory
+    // Thumbnails & dimensions via cache
     int width = 0;
     int height = 0;
     std::string thumbSmall;
@@ -180,13 +251,17 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         IMAGINE_LOG_WARN("Failed to generate thumbnails for " + filePath + ": " + thumbRes.status().message());
     }
 
-    // Stage 4: Insert/Update media item in CatalogDb
+    // Deallocate in-memory image buffer immediately and release memory permit
+    std::vector<uint8_t>().swap(fileBytes);
+    memGuard.release();
+
+    // Populate media item
     MediaItem item;
     if (isUpdate) {
         item = existingRes.value();
     }
-    item.file_path = filePath;
-    item.file_name = std::filesystem::path(filePath).filename().string();
+    item.file_path = normalizedPath;
+    item.file_name = std::filesystem::path(normalizedPath).filename().string();
     item.file_size = static_cast<int64_t>(fsize);
     item.file_modified_time = modifiedTime;
     item.content_hash = hash;
@@ -197,23 +272,29 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     item.thumb_small = thumbSmall;
     item.thumb_large = thumbLarge;
 
-    if (isUpdate) {
-        Status s = db_.updateMedia(item);
-        if (!s.isOk()) {
-            IMAGINE_LOG_ERROR("Failed to update media in DB for " + filePath + ": " + s.message());
-            return ProcessStatus::Failed;
+    // Database persistence: if commitToDb is true, persist immediately.
+    // Otherwise, persistence is deferred to batch persistence in importDirectory.
+    if (commitToDb) {
+        if (isUpdate) {
+            Status s = db_.updateMedia(item);
+            if (!s.isOk()) {
+                IMAGINE_LOG_ERROR("Failed to update media in DB for " + normalizedPath + ": " + s.message());
+                return ProcessStatus::Failed;
+            }
+        } else {
+            auto insRes = db_.insertMedia(item);
+            if (!insRes.isOk()) {
+                IMAGINE_LOG_ERROR("Failed to insert media into DB for " + normalizedPath + ": " + insRes.status().message());
+                return ProcessStatus::Failed;
+            }
+            item.id = insRes.value();
         }
-    } else if (commitToDb) {
-        auto insRes = db_.insertMedia(item);
-        if (!insRes.isOk()) {
-            IMAGINE_LOG_ERROR("Failed to insert media into DB for " + filePath + ": " + insRes.status().message());
-            return ProcessStatus::Failed;
-        }
-        item.id = insRes.value();
+    } else {
+        item.id = isUpdate ? existingRes.value().id : 0;
     }
 
     if (outItem) {
-        *outItem = item;
+        *outItem = std::move(item);
     }
     return ProcessStatus::Imported;
 }
@@ -223,7 +304,7 @@ Result<MediaItem> Importer::importFile(const std::string& filePath) {
         return Status::invalidArgument("Unsupported image extension: " + filePath);
     }
     MediaItem item;
-    ProcessStatus st = processFileInternal(filePath, &item);
+    ProcessStatus st = processFileInternal(filePath, &item, true);
     if (st == ProcessStatus::Failed) {
         return Status::internal("Failed to import image: " + filePath);
     }
@@ -241,155 +322,352 @@ Result<ImportProgress> Importer::importDirectory(
     }
     cancelled_.store(false);
 
+    // RAII guard ensuring running_ is always reset on exit or exceptions
+    struct RunningGuard {
+        std::atomic<bool>& flag;
+        ~RunningGuard() { flag.store(false); }
+    } runningGuard{running_};
+
     std::error_code ec;
     if (!std::filesystem::exists(directoryPath, ec) || !std::filesystem::is_directory(directoryPath, ec)) {
-        running_.store(false);
         return Status::notFound("Directory does not exist: " + directoryPath);
     }
 
     std::vector<std::string> files;
     if (recursive) {
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(
-                 directoryPath, std::filesystem::directory_options::skip_permission_denied, ec)) {
-            if (entry.is_regular_file(ec) && !entry.is_symlink(ec) && isSupportedExtension(entry.path().string())) {
+        std::filesystem::recursive_directory_iterator it(
+            directoryPath,
+            std::filesystem::directory_options::skip_permission_denied,
+            ec
+        );
+        if (ec) {
+            IMAGINE_LOG_ERROR("Failed to open directory for recursive scan: " + directoryPath + " (" + ec.message() + ")");
+            return Status::ioError("Directory iteration failed: " + ec.message());
+        }
+        std::filesystem::recursive_directory_iterator end;
+        while (it != end && !ec) {
+            const auto& entry = *it;
+            std::error_code entryEc;
+            if (entry.is_regular_file(entryEc) && !entry.is_symlink(entryEc) && isSupportedExtension(entry.path().string())) {
                 files.push_back(entry.path().string());
             }
+            it.increment(ec);
         }
     } else {
-        for (const auto& entry : std::filesystem::directory_iterator(
-                 directoryPath, std::filesystem::directory_options::skip_permission_denied, ec)) {
-            if (entry.is_regular_file(ec) && !entry.is_symlink(ec) && isSupportedExtension(entry.path().string())) {
+        std::filesystem::directory_iterator it(
+            directoryPath,
+            std::filesystem::directory_options::skip_permission_denied,
+            ec
+        );
+        if (ec) {
+            IMAGINE_LOG_ERROR("Failed to open directory for scan: " + directoryPath + " (" + ec.message() + ")");
+            return Status::ioError("Directory iteration failed: " + ec.message());
+        }
+        std::filesystem::directory_iterator end;
+        while (it != end && !ec) {
+            const auto& entry = *it;
+            std::error_code entryEc;
+            if (entry.is_regular_file(entryEc) && !entry.is_symlink(entryEc) && isSupportedExtension(entry.path().string())) {
                 files.push_back(entry.path().string());
             }
+            it.increment(ec);
         }
     }
 
+    // Check directory iteration errors
+    if (ec) {
+        IMAGINE_LOG_ERROR("Directory iteration error in " + directoryPath + ": " + ec.message());
+        return Status::ioError("Directory iteration failed: " + ec.message());
+    }
+
+    files.shrink_to_fit();
+
     {
         std::lock_guard<std::mutex> lock(progress_mutex_);
-        current_progress_.total_files.store(static_cast<int64_t>(files.size()));
-        current_progress_.processed_files.store(0);
-        current_progress_.imported_files.store(0);
-        current_progress_.skipped_files.store(0);
-        current_progress_.failed_files.store(0);
+        current_progress_.total_files = static_cast<int64_t>(files.size());
+        current_progress_.processed_files = 0;
+        current_progress_.imported_files = 0;
+        current_progress_.skipped_files = 0;
+        current_progress_.failed_files = 0;
+        current_progress_.cancelled_files = 0;
         current_progress_.current_file.clear();
         current_progress_.is_running = true;
     }
 
-    if (progressCb) {
-        std::lock_guard<std::mutex> lock(progress_mutex_);
-        progressCb(current_progress_);
-    }
+    // Progress callback serialization and throttling
+    std::mutex callbackMutex;
+    auto lastCallbackTime = std::chrono::steady_clock::time_point::min();
+    constexpr auto kProgressThrottleInterval = std::chrono::milliseconds(100);
 
-    std::mutex batchMutex;
-    std::vector<MediaItem> pendingInserts;
-    constexpr size_t kBatchSize = 64;
+    auto emitProgress = [&](bool force = false) {
+        if (!progressCb) return;
 
-    auto flushBatch = [this, &batchMutex, &pendingInserts]() {
-        std::lock_guard<std::mutex> bLock(batchMutex);
-        if (!pendingInserts.empty()) {
-            auto bRes = db_.insertMediaBatch(pendingInserts);
-            if (!bRes.isOk()) {
-                IMAGINE_LOG_ERROR("Failed to insert batch into DB: " + bRes.status().message());
-            }
-            pendingInserts.clear();
+        auto now = std::chrono::steady_clock::now();
+        if (!force && (now - lastCallbackTime < kProgressThrottleInterval)) {
+            return;
         }
+
+        std::unique_lock<std::mutex> cbLock(callbackMutex, std::defer_lock);
+        if (force) {
+            cbLock.lock();
+        } else {
+            if (!cbLock.try_lock()) {
+                return;
+            }
+            if (now - lastCallbackTime < kProgressThrottleInterval) {
+                return;
+            }
+        }
+
+        ImportProgress snapshot;
+        {
+            std::lock_guard<std::mutex> pLock(progress_mutex_);
+            snapshot = current_progress_;
+        }
+
+        lastCallbackTime = std::chrono::steady_clock::now();
+        progressCb(snapshot);
     };
 
-    if (pool_ != nullptr) {
-        for (const auto& file : files) {
-            if (cancelled_.load()) {
-                break;
+    emitProgress(true); // Emit initial state
+
+    // Batch persistence structures
+    std::mutex batchMutex;
+    std::vector<MediaItem> pendingInserts;
+    std::vector<MediaItem> pendingUpdates;
+    constexpr size_t kBatchSize = 64;
+    pendingInserts.reserve(kBatchSize);
+    pendingUpdates.reserve(kBatchSize);
+
+    auto flushBatch = [&]() -> BatchFlushResult {
+        std::lock_guard<std::mutex> bLock(batchMutex);
+        BatchFlushResult result;
+
+        // 1. Flush pending updates transactionally
+        if (!pendingUpdates.empty()) {
+            auto uRes = db_.updateMediaBatch(pendingUpdates);
+            if (uRes.isOk()) {
+                size_t count = uRes.value();
+                result.persisted_count += count;
+                std::lock_guard<std::mutex> pLock(progress_mutex_);
+                current_progress_.imported_files += static_cast<int64_t>(count);
+                current_progress_.processed_files += static_cast<int64_t>(count);
+            } else {
+                result.batch_transaction_failed = true;
+                IMAGINE_LOG_WARN("Batch update failed (" + uRes.status().message() + "), falling back to individual updates");
+                for (const auto& item : pendingUpdates) {
+                    Status s = db_.updateMedia(item);
+                    std::lock_guard<std::mutex> pLock(progress_mutex_);
+                    if (s.isOk()) {
+                        ++result.persisted_count;
+                        ++current_progress_.imported_files;
+                        ++current_progress_.processed_files;
+                    } else {
+                        ++result.failed_count;
+                        IMAGINE_LOG_ERROR("Failed to update media in DB for " + item.file_path + ": " + s.message());
+                        ++current_progress_.failed_files;
+                        ++current_progress_.processed_files;
+                    }
+                }
             }
+            pendingUpdates.clear();
+            pendingUpdates.reserve(kBatchSize);
+        }
 
-            pool_->enqueue([this, file, progressCb, &batchMutex, &pendingInserts, &flushBatch]() {
-                if (cancelled_.load()) {
-                    return;
-                }
-
-                {
-                    std::lock_guard<std::mutex> lock(progress_mutex_);
-                    current_progress_.current_file = file;
-                }
-
-                MediaItem item;
-                ProcessStatus st = processFileInternal(file, &item, false);
-                switch (st) {
-                    case ProcessStatus::Imported: {
-                        bool needFlush = false;
-                        {
-                            std::lock_guard<std::mutex> bLock(batchMutex);
-                            pendingInserts.push_back(std::move(item));
-                            if (pendingInserts.size() >= kBatchSize) {
-                                needFlush = true;
+        // 2. Flush pending inserts transactionally
+        if (!pendingInserts.empty()) {
+            auto bRes = db_.insertMediaBatch(pendingInserts);
+            if (bRes.isOk()) {
+                size_t count = bRes.value();
+                result.persisted_count += count;
+                std::lock_guard<std::mutex> pLock(progress_mutex_);
+                current_progress_.imported_files += static_cast<int64_t>(count);
+                current_progress_.processed_files += static_cast<int64_t>(count);
+            } else {
+                result.batch_transaction_failed = true;
+                IMAGINE_LOG_WARN("Batch insert failed (" + bRes.status().message() + "), falling back to individual inserts");
+                for (auto& item : pendingInserts) {
+                    auto insRes = db_.insertMedia(item);
+                    if (insRes.isOk()) {
+                        ++result.persisted_count;
+                        std::lock_guard<std::mutex> pLock(progress_mutex_);
+                        ++current_progress_.imported_files;
+                        ++current_progress_.processed_files;
+                    } else {
+                        // Atomic upsert fallback for path uniqueness conflict races
+                        auto existing = db_.getMediaByPath(item.file_path);
+                        if (existing.isOk()) {
+                            item.id = existing.value().id;
+                            auto updRes = db_.updateMedia(item);
+                            if (updRes.isOk()) {
+                                ++result.persisted_count;
+                                std::lock_guard<std::mutex> pLock(progress_mutex_);
+                                ++current_progress_.imported_files;
+                                ++current_progress_.processed_files;
+                                continue;
                             }
                         }
-                        if (needFlush) {
-                            flushBatch();
-                        }
-                        ++current_progress_.imported_files;
-                        break;
-                    }
-                    case ProcessStatus::Skipped:
-                        ++current_progress_.skipped_files;
-                        break;
-                    case ProcessStatus::Failed:
+                        ++result.failed_count;
+                        IMAGINE_LOG_ERROR("Failed to insert media into DB for " + item.file_path + ": " + insRes.status().message());
+                        std::lock_guard<std::mutex> pLock(progress_mutex_);
                         ++current_progress_.failed_files;
-                        break;
+                        ++current_progress_.processed_files;
+                    }
                 }
-                ++current_progress_.processed_files;
-
-                if (progressCb) {
-                    std::lock_guard<std::mutex> lock(progress_mutex_);
-                    progressCb(current_progress_);
-                }
-            });
-        }
-        pool_->waitAll();
-        flushBatch();
-    } else {
-        for (const auto& file : files) {
-            if (cancelled_.load()) {
-                break;
             }
+            pendingInserts.clear();
+            pendingInserts.reserve(kBatchSize);
+        }
 
+        return result;
+    };
+
+    auto processOne = [&](const std::string& file) {
+        if (cancelled_.load()) {
             {
                 std::lock_guard<std::mutex> lock(progress_mutex_);
-                current_progress_.current_file = file;
+                ++current_progress_.cancelled_files;
+                ++current_progress_.processed_files;
             }
+            emitProgress();
+            return;
+        }
 
-            MediaItem item;
-            ProcessStatus st = processFileInternal(file, &item, false);
-            switch (st) {
-                case ProcessStatus::Imported: {
-                    bool needFlush = false;
-                    {
-                        std::lock_guard<std::mutex> bLock(batchMutex);
+        {
+            std::lock_guard<std::mutex> lock(progress_mutex_);
+            current_progress_.current_file = file;
+        }
+
+        MediaItem item;
+        ProcessStatus st = processFileInternal(file, &item, false);
+        switch (st) {
+            case ProcessStatus::Imported: {
+                bool needFlush = false;
+                {
+                    std::lock_guard<std::mutex> bLock(batchMutex);
+                    if (item.id > 0) {
+                        pendingUpdates.push_back(std::move(item));
+                        if (pendingUpdates.size() >= kBatchSize) {
+                            needFlush = true;
+                        }
+                    } else {
                         pendingInserts.push_back(std::move(item));
                         if (pendingInserts.size() >= kBatchSize) {
                             needFlush = true;
                         }
                     }
-                    if (needFlush) {
-                        flushBatch();
-                    }
-                    ++current_progress_.imported_files;
-                    break;
                 }
-                case ProcessStatus::Skipped:
-                    ++current_progress_.skipped_files;
-                    break;
-                case ProcessStatus::Failed:
-                    ++current_progress_.failed_files;
-                    break;
+                if (needFlush) {
+                    auto fRes = flushBatch();
+                    if (fRes.failed_count > 0 || fRes.batch_transaction_failed) {
+                        IMAGINE_LOG_WARN("Batch flush completed with " + std::to_string(fRes.failed_count) + " failures");
+                    }
+                    emitProgress();
+                }
+                break;
             }
-            ++current_progress_.processed_files;
-
-            if (progressCb) {
+            case ProcessStatus::Skipped: {
                 std::lock_guard<std::mutex> lock(progress_mutex_);
-                progressCb(current_progress_);
+                ++current_progress_.skipped_files;
+                ++current_progress_.processed_files;
+                break;
+            }
+            case ProcessStatus::Failed: {
+                std::lock_guard<std::mutex> lock(progress_mutex_);
+                ++current_progress_.failed_files;
+                ++current_progress_.processed_files;
+                break;
             }
         }
-        flushBatch();
+
+        if (file_hook_) {
+            file_hook_(file);
+        }
+
+        emitProgress();
+    };
+
+    if (pool_ != nullptr) {
+        std::atomic<size_t> remainingTasks{0};
+        std::mutex taskMutex;
+        std::condition_variable taskCv;
+
+        const size_t maxInFlight = std::max<size_t>(16, pool_->size() * 4);
+
+        for (size_t i = 0; i < files.size(); ++i) {
+            if (cancelled_.load()) {
+                size_t remaining = files.size() - i;
+                std::lock_guard<std::mutex> lock(progress_mutex_);
+                current_progress_.cancelled_files += static_cast<int64_t>(remaining);
+                current_progress_.processed_files += static_cast<int64_t>(remaining);
+                break;
+            }
+
+            // Task queue backpressure
+            {
+                std::unique_lock<std::mutex> lock(taskMutex);
+                taskCv.wait(lock, [&]() {
+                    return cancelled_.load() || remainingTasks.load() < maxInFlight;
+                });
+            }
+
+            if (cancelled_.load()) {
+                size_t remaining = files.size() - i;
+                std::lock_guard<std::mutex> lock(progress_mutex_);
+                current_progress_.cancelled_files += static_cast<int64_t>(remaining);
+                current_progress_.processed_files += static_cast<int64_t>(remaining);
+                break;
+            }
+
+            ++remainingTasks;
+            try {
+                pool_->enqueue([&, file = files[i]]() {
+                    struct TaskCompletionGuard {
+                        std::atomic<size_t>& rem;
+                        std::mutex& mtx;
+                        std::condition_variable& cv;
+                        ~TaskCompletionGuard() {
+                            --rem;
+                            std::lock_guard<std::mutex> lock(mtx);
+                            cv.notify_all();
+                        }
+                    } tGuard{remainingTasks, taskMutex, taskCv};
+
+                    processOne(file);
+                });
+            } catch (const std::exception& ex) {
+                --remainingTasks;
+                IMAGINE_LOG_ERROR("Failed to enqueue import task: " + std::string(ex.what()));
+                std::lock_guard<std::mutex> lock(progress_mutex_);
+                ++current_progress_.failed_files;
+                ++current_progress_.processed_files;
+            }
+        }
+
+        // Wait for all submitted tasks to complete
+        {
+            std::unique_lock<std::mutex> lock(taskMutex);
+            taskCv.wait(lock, [&]() {
+                return remainingTasks.load() == 0;
+            });
+        }
+    } else {
+        for (size_t i = 0; i < files.size(); ++i) {
+            if (cancelled_.load()) {
+                size_t remaining = files.size() - i;
+                std::lock_guard<std::mutex> lock(progress_mutex_);
+                current_progress_.cancelled_files += static_cast<int64_t>(remaining);
+                current_progress_.processed_files += static_cast<int64_t>(remaining);
+                break;
+            }
+            processOne(files[i]);
+        }
+    }
+
+    // Flush any remaining items in the batch
+    auto finalFlushRes = flushBatch();
+    if (finalFlushRes.failed_count > 0 || finalFlushRes.batch_transaction_failed) {
+        IMAGINE_LOG_WARN("Final batch flush completed with " + std::to_string(finalFlushRes.failed_count) + " failures");
     }
 
     {
@@ -397,12 +675,8 @@ Result<ImportProgress> Importer::importDirectory(
         current_progress_.is_running = false;
         current_progress_.current_file.clear();
     }
-    running_.store(false);
 
-    if (progressCb) {
-        std::lock_guard<std::mutex> lock(progress_mutex_);
-        progressCb(current_progress_);
-    }
+    emitProgress(true); // Final progress callback
 
     ImportProgress finalProgress;
     {
