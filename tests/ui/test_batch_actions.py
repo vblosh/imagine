@@ -142,6 +142,7 @@ def test_batch_operations_single_http_call(server, page: Page):
     page.locator("#batchAddTagBtn").click()
     page.locator("#tagNameInput").fill("SingleBatchTag")
     page.locator("#createTagSubmitBtn").click()
+    expect(page.locator("#newTagModal")).to_be_hidden()
     page.wait_for_timeout(300)
     tag_calls = [url for url in api_calls if "batch-tags" in url]
     assert len(tag_calls) == 1

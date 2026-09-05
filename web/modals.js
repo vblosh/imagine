@@ -482,22 +482,22 @@ export async function submitCreateTag() {
   }
   const category = dom.tagCategorySelect ? dom.tagCategorySelect.value : 'keyword';
 
-  try {
-    await api.post('/api/tags', {
-      name,
-      category
-    });
-  } catch (err) {
-    if (!err.message || !err.message.includes('already exists')) {
-      console.warn('Create tag API notice:', err);
-    }
-  }
-
   if (dom.tagModalApplyToPhotoCheckbox && dom.tagModalApplyToPhotoCheckbox.checked && pendingTagTargetMediaIds.length > 0) {
     try {
       await api.post('/api/media/batch-tags', { ids: pendingTagTargetMediaIds, name, category });
     } catch (e) {
       console.warn('Failed to batch attach tag to photos:', e);
+    }
+  } else {
+    try {
+      await api.post('/api/tags', {
+        name,
+        category
+      });
+    } catch (err) {
+      if (!err.message || !err.message.includes('already exists')) {
+        console.warn('Create tag API notice:', err);
+      }
     }
   }
 

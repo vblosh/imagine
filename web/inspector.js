@@ -368,7 +368,11 @@ export function setupResizablePanels() {
           if (target.style.height) {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
-              const currentH = Math.round(entry.contentRect.height);
+              const currentH = Math.round(
+                (entry.borderBoxSize && entry.borderBoxSize[0])
+                  ? entry.borderBoxSize[0].blockSize
+                  : target.getBoundingClientRect().height
+              );
               if (currentH >= 50 && currentH <= 600) {
                 try { localStorage.setItem(`imagine_${targetId}_height`, currentH); } catch (_) {}
               }
