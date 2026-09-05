@@ -315,3 +315,132 @@ def test_batch_delete_failure_tracking(server, page: Page):
 
     assert toast_text["failedCount"] == 1
     assert toast_text["toastMsg"] == "1 photos could not be deleted"
+
+
+def test_response_schema_validation_and_normalization(server, page: Page):
+    """Verify response schema validation and normalization functions handle malformed and edge-case inputs."""
+    page.goto(server["url"])
+    expect(page.locator("#mediaGrid")).to_be_visible()
+
+    results = page.evaluate("""() => {
+        const {
+            normalizeMediaItem,
+            normalizeExif,
+            normalizeTag,
+            normalizeAlbum,
+            normalizeCatalogStats,
+            normalizeTimelineEntry,
+            normalizeImportProgress
+        } = window._imagineApp;
+
+        // 1. normalizeMediaItem
+        const validItem = normalizeMediaItem({
+            id: 42,
+            file_name: 'test.jpg',
+            rating: 3,
+            flag: 1,
+            exif: { camera_model: 'ModelX', has_gps: true }
+        });
+
+        const malformedItem = normalizeMediaItem({
+            id: '100',
+            file_name: null,
+            rating: 99,       // out of range -> should reset to 0
+            flag: 'invalid',  // invalid flag -> should reset to 0
+            exif: 'not-an-object', // invalid exif -> should reset to {}
+            tags: 'not-an-array'   // invalid tags -> should reset to []
+        });
+
+        const nullItem = normalizeMediaItem(null);
+        const nonIdItem = normalizeMediaItem({ file_name: 'missing_id.jpg' });
+
+        // 2. normalizeTag
+        const validTag = normalizeTag({ id: 5, name: 'vacation', category: 'events' });
+        const invalidTag = normalizeTag({ name: 'broken' });
+
+        // 3. normalizeAlbum
+        const validAlbum = normalizeAlbum({ id: 2, name: 'Trip 2026', is_smart: 1 });
+        const invalidAlbum = normalizeAlbum(null);
+
+        // 4. normalizeCatalogStats
+        const validStats = normalizeCatalogStats({ total_media: '15', total_albums: 2 });
+        const nullStats = normalizeCatalogStats(null);
+
+        // 5. normalizeTimelineEntry
+        const validTimeline = normalizeTimelineEntry({ year: 2026, month: 5, count: 12 });
+        const invalidTimeline = normalizeTimelineEntry({ year: 'bad', month: null });
+
+        // 6. normalizeImportProgress
+        const validProg = normalizeImportProgress({
+            is_running: 1,
+            total_files: 50,
+            processed_files: '25'
+        });
+        const nullProg = normalizeImportProgress(null);
+
+        return {
+            validItem,
+            malformedItem,
+            nullItem,
+            nonIdItem,
+            validTag,
+            invalidTag,
+            validAlbum,
+            invalidAlbum,
+            validStats,
+            nullStats,
+            validTimeline,
+            invalidTimeline,
+            validProg,
+            nullProg
+        };
+    }""")
+
+    # Assertions for normalizeMediaItem
+    assert results["validItem"]["id"] == 42
+    assert results["validItem"]["file_name"] == "test.jpg"
+    assert results["validItem"]["rating"] == 3
+    assert results["validItem"]["flag"] == 1
+    assert results["validItem"]["exif"]["camera_model"] == "ModelX"
+    assert results["validItem"]["exif"]["has_gps"] is True
+
+    assert results["malformedItem"]["id"] == 100
+    assert results["malformedItem"]["file_name"] == ""
+    assert results["malformedItem"]["rating"] == 0
+    assert results["malformedItem"]["flag"] == 0
+    assert results["malformedItem"]["exif"] == {}
+    assert results["malformedItem"]["tags"] == []
+
+    assert results["nullItem"] is None
+    assert results["nonIdItem"] is None
+
+    # Assertions for normalizeTag
+    assert results["validTag"]["id"] == 5
+    assert results["validTag"]["name"] == "vacation"
+    assert results["validTag"]["category"] == "events"
+    assert results["invalidTag"] is None
+
+    # Assertions for normalizeAlbum
+    assert results["validAlbum"]["id"] == 2
+    assert results["validAlbum"]["name"] == "Trip 2026"
+    assert results["validAlbum"]["is_smart"] is True
+    assert results["invalidAlbum"] is None
+
+    # Assertions for normalizeCatalogStats
+    assert results["validStats"]["total_media"] == 15
+    assert results["validStats"]["total_albums"] == 2
+    assert results["nullStats"]["total_media"] == 0
+
+    # Assertions for normalizeTimelineEntry
+    assert results["validTimeline"]["year"] == 2026
+    assert results["validTimeline"]["month"] == 5
+    assert results["validTimeline"]["count"] == 12
+    assert results["invalidTimeline"] is None
+
+    # Assertions for normalizeImportProgress
+    assert results["validProg"]["is_running"] is True
+    assert results["validProg"]["total_files"] == 50
+    assert results["validProg"]["processed_files"] == 25
+    assert results["nullProg"]["is_running"] is False
+    assert results["nullProg"]["total_files"] == 0
+

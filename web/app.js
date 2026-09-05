@@ -379,6 +379,136 @@
     return false;
   }
 
+  // --- Response Schema Validation & Normalization ---
+  function normalizeExif(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return {};
+    }
+    return {
+      ...raw,
+      has_gps: Boolean(raw.has_gps)
+    };
+  }
+
+  function normalizeTag(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = Number(raw.id);
+    if (!Number.isFinite(id)) return null;
+    return {
+      ...raw,
+      id,
+      name: String(raw.name || ''),
+      category: typeof raw.category === 'string' ? raw.category : 'keyword',
+      parent_id: raw.parent_id != null ? Number(raw.parent_id) : null,
+      media_count: Number.isFinite(Number(raw.media_count)) ? Number(raw.media_count) : 0
+    };
+  }
+
+  function normalizeAlbum(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = Number(raw.id);
+    if (!Number.isFinite(id)) return null;
+    return {
+      ...raw,
+      id,
+      name: String(raw.name || ''),
+      description: String(raw.description || ''),
+      is_smart: Boolean(raw.is_smart),
+      query_json: typeof raw.query_json === 'string' ? raw.query_json : '',
+      cover_media_id: raw.cover_media_id != null ? Number(raw.cover_media_id) : null,
+      item_count: Number.isFinite(Number(raw.item_count)) ? Number(raw.item_count) : 0,
+      created_at: Number.isFinite(Number(raw.created_at)) ? Number(raw.created_at) : 0
+    };
+  }
+
+  function normalizeTimelineEntry(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const year = Number(raw.year);
+    const month = Number(raw.month);
+    if (!Number.isFinite(year) || !Number.isFinite(month)) return null;
+    return {
+      ...raw,
+      year,
+      month,
+      count: Number.isFinite(Number(raw.count)) ? Number(raw.count) : 0
+    };
+  }
+
+  function normalizeCatalogStats(raw) {
+    if (!raw || typeof raw !== 'object') {
+      return {
+        total_media: 0,
+        total_size_bytes: 0,
+        total_tags: 0,
+        total_albums: 0,
+        earliest_date: 0,
+        latest_date: 0
+      };
+    }
+    return {
+      ...raw,
+      total_media: Number.isFinite(Number(raw.total_media)) ? Number(raw.total_media) : 0,
+      total_size_bytes: Number.isFinite(Number(raw.total_size_bytes)) ? Number(raw.total_size_bytes) : 0,
+      total_tags: Number.isFinite(Number(raw.total_tags)) ? Number(raw.total_tags) : 0,
+      total_albums: Number.isFinite(Number(raw.total_albums)) ? Number(raw.total_albums) : 0,
+      earliest_date: Number.isFinite(Number(raw.earliest_date)) ? Number(raw.earliest_date) : 0,
+      latest_date: Number.isFinite(Number(raw.latest_date)) ? Number(raw.latest_date) : 0
+    };
+  }
+
+  function normalizeImportProgress(raw) {
+    if (!raw || typeof raw !== 'object') {
+      return {
+        is_running: false,
+        total_files: 0,
+        processed_files: 0,
+        imported_files: 0,
+        skipped_files: 0,
+        failed_files: 0,
+        current_file: ''
+      };
+    }
+    return {
+      ...raw,
+      is_running: Boolean(raw.is_running),
+      total_files: Number.isFinite(Number(raw.total_files)) ? Number(raw.total_files) : 0,
+      processed_files: Number.isFinite(Number(raw.processed_files)) ? Number(raw.processed_files) : 0,
+      imported_files: Number.isFinite(Number(raw.imported_files)) ? Number(raw.imported_files) : 0,
+      skipped_files: Number.isFinite(Number(raw.skipped_files)) ? Number(raw.skipped_files) : 0,
+      failed_files: Number.isFinite(Number(raw.failed_files)) ? Number(raw.failed_files) : 0,
+      current_file: String(raw.current_file || '')
+    };
+  }
+
+  function normalizeMediaItem(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const id = Number(raw.id);
+    if (!Number.isFinite(id)) return null;
+
+    const rating = Number.isInteger(raw.rating) ? (raw.rating >= 0 && raw.rating <= 5 ? raw.rating : 0) : 0;
+    const flag = [-1, 0, 1].includes(raw.flag) ? raw.flag : 0;
+    const exif = raw.exif && typeof raw.exif === 'object' && !Array.isArray(raw.exif) ? normalizeExif(raw.exif) : {};
+
+    return {
+      ...raw,
+      id,
+      file_name: typeof raw.file_name === 'string' ? raw.file_name : String(raw.file_name || ''),
+      file_path: typeof raw.file_path === 'string' ? raw.file_path : '',
+      file_size: Number.isFinite(Number(raw.file_size)) ? Number(raw.file_size) : 0,
+      file_modified_time: Number.isFinite(Number(raw.file_modified_time)) ? Number(raw.file_modified_time) : 0,
+      content_hash: typeof raw.content_hash === 'string' ? raw.content_hash : '',
+      width: Number.isFinite(Number(raw.width)) ? Number(raw.width) : 0,
+      height: Number.isFinite(Number(raw.height)) ? Number(raw.height) : 0,
+      date_taken: Number.isFinite(Number(raw.date_taken)) ? Number(raw.date_taken) : 0,
+      rating,
+      flag,
+      exif,
+      thumb_small: typeof raw.thumb_small === 'string' ? raw.thumb_small : '',
+      thumb_large: typeof raw.thumb_large === 'string' ? raw.thumb_large : '',
+      tags: Array.isArray(raw.tags) ? raw.tags.map(normalizeTag).filter(Boolean) : []
+    };
+  }
+
   // --- DOM Caching & Query Scoping ---
   const cardMap = new Map();
   let previousSelectedIds = new Set();
@@ -526,17 +656,19 @@
       const res = await api.get('/api/media', params, { signal: abortController.signal });
       if (fetchId !== currentLoadMediaId) return;
 
-      // Deduplicate initial items by ID
+      // Deduplicate initial items by ID and normalize schema
       const seenIds = new Set();
       const items = [];
-      for (const item of (res.items || [])) {
-        if (item && item.id != null && !seenIds.has(item.id)) {
+      const rawList = (res && Array.isArray(res.items)) ? res.items : [];
+      for (const raw of rawList) {
+        const item = normalizeMediaItem(raw);
+        if (item && !seenIds.has(item.id)) {
           seenIds.add(item.id);
           items.push(item);
         }
       }
 
-      state.totalCount = (res.total !== undefined && res.total !== null) ? res.total : items.length;
+      state.totalCount = (res && Number.isFinite(Number(res.total))) ? Number(res.total) : items.length;
       state.mediaItems = items;
       state.mediaOffset = items.length;
 
@@ -620,12 +752,13 @@
         return;
       }
 
-      // Deduplicate by ID against existing items and within the new page
+      // Deduplicate by ID against existing items and within the new page (with schema normalization)
       const existing = new Set(state.mediaItems.map(item => item.id));
-      const rawItems = res.items || [];
+      const rawItems = (res && Array.isArray(res.items)) ? res.items : [];
       const newItems = [];
-      for (const item of rawItems) {
-        if (item && item.id != null && !existing.has(item.id)) {
+      for (const raw of rawItems) {
+        const item = normalizeMediaItem(raw);
+        if (item && !existing.has(item.id)) {
           existing.add(item.id);
           newItems.push(item);
         }
@@ -633,7 +766,7 @@
 
       state.mediaItems.push(...newItems);
       state.mediaOffset = state.mediaItems.length;
-      state.totalCount = (res.total !== undefined && res.total !== null) ? res.total : state.totalCount;
+      state.totalCount = (res && Number.isFinite(Number(res.total))) ? Number(res.total) : state.totalCount;
       if (state.mediaItems.length > state.totalCount) {
         state.totalCount = state.mediaItems.length;
       }
@@ -701,10 +834,10 @@
         api.get('/api/stats')
       ]);
 
-      state.tags = tags || [];
-      state.albums = albums || [];
-      state.timelineData = timeline || [];
-      state.stats = stats || {};
+      state.tags = Array.isArray(tags) ? tags.map(normalizeTag).filter(Boolean) : [];
+      state.albums = Array.isArray(albums) ? albums.map(normalizeAlbum).filter(Boolean) : [];
+      state.timelineData = Array.isArray(timeline) ? timeline.map(normalizeTimelineEntry).filter(Boolean) : [];
+      state.stats = normalizeCatalogStats(stats);
 
       renderSidebarTags();
       renderSidebarAlbums();
@@ -825,7 +958,10 @@
       dom.emptyState.style.display = 'none';
     }
 
-    newItems.forEach(item => {
+    (newItems || []).forEach(rawItem => {
+      const item = normalizeMediaItem(rawItem) || rawItem;
+      if (!item || item.id == null) return;
+
       // Guard against duplicate card already present in DOM
       if (getCardElement(item.id)) {
         return;
@@ -837,7 +973,7 @@
         groupKey = `${getMonthName(d.getUTCMonth() + 1)} ${d.getUTCFullYear()}`;
       }
 
-      const itemIdx = state.mediaItems.indexOf(item);
+      const itemIdx = state.mediaItems.findIndex(m => m.id === item.id);
       let groupEl = dom.mediaGrid.querySelector(`.date-group[data-group-key="${groupKey}"]`);
       if (!groupEl) {
         groupEl = document.createElement('div');
@@ -1173,9 +1309,11 @@
     const fetchId = ++currentInspectorFetchId;
     try {
       // Fetch fresh details from API
-      const freshItem = await api.get(`/api/media/${selectedId}`, {}, { signal });
+      const freshRaw = await api.get(`/api/media/${selectedId}`, {}, { signal });
       if (fetchId !== currentInspectorFetchId) return;
       if (!state.selectedIds.has(selectedId)) return;
+      const freshItem = normalizeMediaItem(freshRaw);
+      if (!freshItem) return;
       const idx = state.mediaItems.findIndex(m => m.id === selectedId);
       if (idx !== -1) {
         const currentItem = state.mediaItems[idx];
@@ -1198,7 +1336,7 @@
   function renderInspectorTags(item) {
     if (!dom.inspectorTags) return;
     dom.inspectorTags.innerHTML = '';
-    const tags = item.tags || [];
+    const tags = Array.isArray(item && item.tags) ? item.tags : [];
 
     if (tags.length === 0) {
       dom.inspectorTags.innerHTML = '<span style="color:var(--text-dim);font-size:11px;">No tags</span>';
@@ -2131,8 +2269,9 @@
           const resp = await fetch(url, { signal: abortController.signal, headers: { 'Accept': 'application/json' } });
           if (searchId !== currentMapSearchId) return;
           if (resp.ok) {
-            data = await resp.json();
+            const rawJson = await resp.json();
             if (searchId !== currentMapSearchId) return;
+            data = Array.isArray(rawJson) ? rawJson : [];
             geocodeCache.set(cacheKey, data);
           }
         } catch (e) {
@@ -2141,8 +2280,9 @@
         }
       }
 
-      if (data && searchId === currentMapSearchId) {
+      if (Array.isArray(data) && searchId === currentMapSearchId) {
         data.forEach(p => {
+          if (!p || typeof p !== 'object') return;
           const lat = parseFloat(p.lat);
           const lng = parseFloat(p.lon);
           results.push({
@@ -2886,8 +3026,9 @@
     if (!state.isImporting) return;
 
     try {
-      const prog = await api.get('/api/import/progress');
+      const rawProg = await api.get('/api/import/progress');
       if (!state.isImporting) return;
+      const prog = normalizeImportProgress(rawProg);
 
       const total = prog.total_files || 0;
       const processed = prog.processed_files || 0;
@@ -4488,6 +4629,13 @@
     dom,
     numeric,
     formatBytes,
+    normalizeMediaItem,
+    normalizeExif,
+    normalizeTag,
+    normalizeAlbum,
+    normalizeCatalogStats,
+    normalizeTimelineEntry,
+    normalizeImportProgress,
     clusterGpsItems,
     patchOpenMapPopup,
     buildMediaParams,
