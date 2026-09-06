@@ -18,6 +18,7 @@ def test_sidebar_quick_filters(server, page: Page):
     expect(page.locator("#totalPicksCount")).to_have_text("2")
     expect(page.locator("#totalRejectsCount")).to_have_text("2")
     expect(page.locator("#totalNotRejectsCount")).to_have_text("4")
+    expect(page.locator("#totalUnratedCount")).to_have_text("2")
 
     # 1. Picks filter (flag = 1: mountain.bmp, portrait.bmp)
     page.locator("#navPicks").click()
@@ -210,3 +211,96 @@ def test_folders_and_tags_visible_for_all_images_without_scroll(server, page: Pa
     # Both folders remain visible
     expect(folders).to_have_count(2)
     expect(page.locator("#foldersTree .folder-item", has_text="nature")).to_be_visible()
+
+
+def test_combine_navigation_filters_albums_and_tags(server, page: Page):
+    """Test combining first NAVIGATION filter (Photos/media type) AND another (Picks/flag), albums, and tags with AND logic."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # 1. Apply first NAVIGATION filter: Photos
+    page.locator("#navPhotos").click()
+    expect(page.locator("#navPhotos")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#filterLabel")).to_contain_text("Photos")
+    expect(cards).to_have_count(6)
+
+    # 2. Combine with another NAVIGATION filter: Picks (flag = 1)
+    # Both navPhotos and navPicks must now be active simultaneously
+    page.locator("#navPicks").click()
+    expect(page.locator("#navPhotos")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPicks")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#filterLabel")).to_contain_text("Photos • Picks")
+    expect(cards).to_have_count(2)
+    names = [cards.nth(0).locator(".card-filename").text_content(), cards.nth(1).locator(".card-filename").text_content()]
+    assert "mountain.bmp" in names
+    assert "portrait.bmp" in names
+
+    # 3. Combine with Album: Best of 2026 (contains mountain.bmp and sunset.bmp)
+    best_album = page.locator("#albumsList .menu-item", has_text="Best of 2026")
+    best_album.click()
+    expect(page.locator("#navPhotos")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPicks")).to_have_class(re.compile(r"\bactive\b"))
+    expect(best_album).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#filterLabel")).to_contain_text("Photos • Picks • Album: Best of 2026")
+    # Only mountain.bmp is a Photo, Pick, AND in Best of 2026
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("mountain.bmp")
+
+    # 4. Combine with Tag: Sunset (tagged on mountain.bmp and sunset.bmp)
+    sunset_tag = page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")
+    sunset_tag.click()
+    expect(page.locator("#navPhotos")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPicks")).to_have_class(re.compile(r"\bactive\b"))
+    expect(best_album).to_have_class(re.compile(r"\bactive\b"))
+    expect(sunset_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#filterLabel")).to_contain_text("Photos • Picks • Album: Best of 2026 • Tag: Sunset")
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("mountain.bmp")
+
+    # 5. Independent toggle-off: toggle Tag off
+    sunset_tag.click()
+    expect(sunset_tag).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPhotos")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPicks")).to_have_class(re.compile(r"\bactive\b"))
+    expect(best_album).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(1)
+
+    # Toggle Album off
+    best_album.click()
+    expect(best_album).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPhotos")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPicks")).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(2)
+
+    # Toggle Picks off
+    page.locator("#navPicks").click()
+    expect(page.locator("#navPicks")).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPhotos")).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(6)
+
+    # Toggle Photos off -> returns to All Media
+    page.locator("#navPhotos").click()
+    expect(page.locator("#navPhotos")).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navAllMedia")).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(6)
+
+    # 6. Test direct combination of Album + Tag
+    vacation_album = page.locator("#albumsList .menu-item", has_text="Vacation")
+    vacation_album.click()
+    expect(cards).to_have_count(2)  # beach.bmp, birthday.bmp
+
+    alice_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Alice")
+    alice_tag.click()
+    expect(vacation_album).to_have_class(re.compile(r"\bactive\b"))
+    expect(alice_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#filterLabel")).to_contain_text("Album: Vacation • Tag: Alice")
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("birthday.bmp")
+
+    # Clear all filters with Clear Filter button
+    page.locator("#clearFiltersBtn").click()
+    expect(page.locator("#navAllMedia")).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(6)
+

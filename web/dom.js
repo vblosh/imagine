@@ -50,6 +50,7 @@ export const dom = {
   totalPicksCount: document.getElementById('totalPicksCount'),
   totalRejectsCount: document.getElementById('totalRejectsCount'),
   totalNotRejectsCount: document.getElementById('totalNotRejectsCount'),
+  totalUnratedCount: document.getElementById('totalUnratedCount'),
   navAllMedia: document.getElementById('navAllMedia'),
   navPhotos: document.getElementById('navPhotos'),
   navVideos: document.getElementById('navVideos'),

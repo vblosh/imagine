@@ -974,6 +974,14 @@ Result<CatalogStats> CatalogDb::getStats() {
             }
         }
         s.total_not_rejects = s.total_media - s.total_rejects;
+
+        auto unratedRes = conn_.prepare("SELECT COUNT(*) FROM media_items WHERE rating = 0;");
+        if (unratedRes.isOk()) {
+            auto uStmt = std::move(unratedRes.value());
+            if (uStmt.step() == StepResult::Row) {
+                s.total_unrated = uStmt.getInt64(0);
+            }
+        }
     }
 
     // tags count

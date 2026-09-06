@@ -476,7 +476,8 @@ int handleStats(int argc, char** argv) {
               << "    Audio:            " << s.total_audio << "\n"
               << "    Picks:            " << s.total_picks << "\n"
               << "    Rejects:          " << s.total_rejects << "\n"
-              << "    Not Rejects:      " << s.total_not_rejects << "\n";
+              << "    Not Rejects:      " << s.total_not_rejects << "\n"
+              << "    Unrated:          " << s.total_unrated << "\n";
     if (s.total_duration > 0) {
         int totalSec = static_cast<int>(s.total_duration);
         int hrs = totalSec / 3600;

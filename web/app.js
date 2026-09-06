@@ -462,6 +462,8 @@ export function setupEventListeners() {
         state.activeAlbumId = null;
         state.activeFolder = null;
         state.activeTimelinePeriod = null;
+        state.activeMediaType = 'all';
+        state.activeStatusFilter = null;
         updateSidebarActive();
         renderTimeline();
         loadMedia();
@@ -469,7 +471,7 @@ export function setupEventListeners() {
     });
   }
 
-  // Nav sidebar filters (all, picks, rejects, unrated)
+  // Nav sidebar filters (all, media types, flags/status)
   if (dom.navAllMedia) {
     dom.navAllMedia.addEventListener('click', () => {
       clearAllFilters();
@@ -477,9 +479,7 @@ export function setupEventListeners() {
   }
   if (dom.navPhotos) {
     dom.navPhotos.addEventListener('click', () => {
-      state.activeNavFilter = 'photos';
-      state.activeTagId = null;
-      state.activeAlbumId = null;
+      state.activeMediaType = (state.activeMediaType === 'photos') ? 'all' : 'photos';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
       updateSidebarActive();
@@ -489,9 +489,7 @@ export function setupEventListeners() {
   }
   if (dom.navVideos) {
     dom.navVideos.addEventListener('click', () => {
-      state.activeNavFilter = 'videos';
-      state.activeTagId = null;
-      state.activeAlbumId = null;
+      state.activeMediaType = (state.activeMediaType === 'videos') ? 'all' : 'videos';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
       updateSidebarActive();
@@ -501,9 +499,7 @@ export function setupEventListeners() {
   }
   if (dom.navAudio) {
     dom.navAudio.addEventListener('click', () => {
-      state.activeNavFilter = 'audio';
-      state.activeTagId = null;
-      state.activeAlbumId = null;
+      state.activeMediaType = (state.activeMediaType === 'audio') ? 'all' : 'audio';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
       updateSidebarActive();
@@ -513,9 +509,7 @@ export function setupEventListeners() {
   }
   if (dom.navPicks) {
     dom.navPicks.addEventListener('click', () => {
-      state.activeNavFilter = 'picks';
-      state.activeTagId = null;
-      state.activeAlbumId = null;
+      state.activeStatusFilter = (state.activeStatusFilter === 'picks') ? null : 'picks';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
       updateSidebarActive();
@@ -525,9 +519,7 @@ export function setupEventListeners() {
   }
   if (dom.navRejects) {
     dom.navRejects.addEventListener('click', () => {
-      state.activeNavFilter = 'rejects';
-      state.activeTagId = null;
-      state.activeAlbumId = null;
+      state.activeStatusFilter = (state.activeStatusFilter === 'rejects') ? null : 'rejects';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
       updateSidebarActive();
@@ -537,9 +529,7 @@ export function setupEventListeners() {
   }
   if (dom.navNotRejects) {
     dom.navNotRejects.addEventListener('click', () => {
-      state.activeNavFilter = 'not_rejects';
-      state.activeTagId = null;
-      state.activeAlbumId = null;
+      state.activeStatusFilter = (state.activeStatusFilter === 'not_rejects') ? null : 'not_rejects';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
       updateSidebarActive();
@@ -549,9 +539,7 @@ export function setupEventListeners() {
   }
   if (dom.navUnrated) {
     dom.navUnrated.addEventListener('click', () => {
-      state.activeNavFilter = 'unrated';
-      state.activeTagId = null;
-      state.activeAlbumId = null;
+      state.activeStatusFilter = (state.activeStatusFilter === 'unrated') ? null : 'unrated';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
       updateSidebarActive();

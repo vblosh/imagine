@@ -74,14 +74,25 @@ export function buildMediaParams() {
   }
   if (state.activeAlbumId) params.album_id = state.activeAlbumId;
 
-  // Nav filters (photos, videos, audio, picks, rejects, not_rejects, unrated)
-  if (state.activeNavFilter === 'photos') params.media_type = 'photo';
-  else if (state.activeNavFilter === 'videos') params.media_type = 'video';
-  else if (state.activeNavFilter === 'audio') params.media_type = 'audio';
-  else if (state.activeNavFilter === 'picks') params.flag = 1;
-  else if (state.activeNavFilter === 'rejects') params.flag = -1;
-  else if (state.activeNavFilter === 'not_rejects') params.not_flag = -1;
-  else if (state.activeNavFilter === 'unrated') {
+  // Media type filter (Photos, Videos, Audio)
+  if (state.activeMediaType === 'photos') {
+    params.media_type = 'photo';
+  } else if (state.activeMediaType === 'videos') {
+    params.media_type = 'video';
+  } else if (state.activeMediaType === 'audio') {
+    params.media_type = 'audio';
+  } else if (['photo', 'video', 'audio'].includes(state.activeMediaType)) {
+    params.media_type = state.activeMediaType;
+  }
+
+  // Nav status filters (picks, rejects, not_rejects, unrated)
+  if (state.activeStatusFilter === 'picks') {
+    params.flag = 1;
+  } else if (state.activeStatusFilter === 'rejects') {
+    params.flag = -1;
+  } else if (state.activeStatusFilter === 'not_rejects') {
+    params.not_flag = -1;
+  } else if (state.activeStatusFilter === 'unrated') {
     params.rating = 0;
     params.max_rating = 0;
   }
@@ -347,6 +358,9 @@ export async function loadMetadata() {
     }
     if (dom.totalNotRejectsCount) {
       dom.totalNotRejectsCount.textContent = state.stats.total_not_rejects || 0;
+    }
+    if (dom.totalUnratedCount) {
+      dom.totalUnratedCount.textContent = state.stats.total_unrated || 0;
     }
   } catch (err) {
     console.error('Failed to load catalog metadata:', err);
@@ -712,8 +726,6 @@ export function renderSidebarTags() {
         state.activeTagId = null;
       } else {
         state.activeTagId = tag.id;
-        state.activeAlbumId = null;
-        state.activeNavFilter = 'all';
         state.activeFolder = null;
         state.activeTimelinePeriod = null;
       }
@@ -773,8 +785,6 @@ export function renderSidebarAlbums() {
         state.activeAlbumId = null;
       } else {
         state.activeAlbumId = album.id;
-        state.activeTagId = null;
-        state.activeNavFilter = 'all';
         state.activeFolder = null;
         state.activeTimelinePeriod = null;
       }
@@ -846,12 +856,6 @@ export function renderSidebarFolders() {
         state.activeFolder = null;
       } else {
         state.activeFolder = folder;
-        state.activeTagId = null;
-        state.activeAlbumId = null;
-        state.activeNavFilter = 'all';
-        state.activeTimelinePeriod = null;
-        state.searchText = '';
-        if (dom.searchInput) dom.searchInput.value = '';
       }
       updateSidebarActive();
       renderTimeline();
@@ -915,14 +919,23 @@ export function renderTimeline() {
 }
 
 export function updateSidebarActive() {
-  if (dom.navAllMedia) dom.navAllMedia.classList.toggle('active', state.activeNavFilter === 'all' && !state.activeTagId && !state.activeAlbumId && !state.activeFolder && !state.searchText && (!state.activeTab || state.activeTab === 'media'));
-  if (dom.navPhotos) dom.navPhotos.classList.toggle('active', state.activeNavFilter === 'photos');
-  if (dom.navVideos) dom.navVideos.classList.toggle('active', state.activeNavFilter === 'videos');
-  if (dom.navAudio) dom.navAudio.classList.toggle('active', state.activeNavFilter === 'audio');
-  if (dom.navPicks) dom.navPicks.classList.toggle('active', state.activeNavFilter === 'picks');
-  if (dom.navRejects) dom.navRejects.classList.toggle('active', state.activeNavFilter === 'rejects');
-  if (dom.navNotRejects) dom.navNotRejects.classList.toggle('active', state.activeNavFilter === 'not_rejects');
-  if (dom.navUnrated) dom.navUnrated.classList.toggle('active', state.activeNavFilter === 'unrated');
+  const isAllMedia = (!state.activeMediaType || state.activeMediaType === 'all')
+    && !state.activeStatusFilter
+    && !state.activeTagId
+    && !state.activeAlbumId
+    && !state.activeFolder
+    && !state.searchText
+    && (!state.activeTab || state.activeTab === 'media')
+    && !state.activeTimelinePeriod;
+
+  if (dom.navAllMedia) dom.navAllMedia.classList.toggle('active', isAllMedia);
+  if (dom.navPhotos) dom.navPhotos.classList.toggle('active', state.activeMediaType === 'photos');
+  if (dom.navVideos) dom.navVideos.classList.toggle('active', state.activeMediaType === 'videos');
+  if (dom.navAudio) dom.navAudio.classList.toggle('active', state.activeMediaType === 'audio');
+  if (dom.navPicks) dom.navPicks.classList.toggle('active', state.activeStatusFilter === 'picks');
+  if (dom.navRejects) dom.navRejects.classList.toggle('active', state.activeStatusFilter === 'rejects');
+  if (dom.navNotRejects) dom.navNotRejects.classList.toggle('active', state.activeStatusFilter === 'not_rejects');
+  if (dom.navUnrated) dom.navUnrated.classList.toggle('active', state.activeStatusFilter === 'unrated');
   renderSidebarTags();
   renderSidebarAlbums();
   if (dom.foldersTree) {
@@ -935,60 +948,58 @@ export function updateSidebarActive() {
 }
 
 export function updateFilterLabel() {
-  let label = 'All Media';
-  let isFiltered = false;
+  const parts = [];
 
   if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
     const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
-    label = `Category: ${tabName}`;
-    isFiltered = true;
-  } else if (state.activeNavFilter === 'photos') {
-    label = 'Photos';
-    isFiltered = true;
-  } else if (state.activeNavFilter === 'videos') {
-    label = 'Videos';
-    isFiltered = true;
-  } else if (state.activeNavFilter === 'audio') {
-    label = 'Audio';
-    isFiltered = true;
-  } else if (state.activeNavFilter === 'picks') {
-    label = 'Picks';
-    isFiltered = true;
-  } else if (state.activeNavFilter === 'rejects') {
-    label = 'Rejects';
-    isFiltered = true;
-  } else if (state.activeNavFilter === 'not_rejects') {
-    label = 'Not Rejects';
-    isFiltered = true;
-  } else if (state.activeNavFilter === 'unrated') {
-    label = 'Unrated Photos';
-    isFiltered = true;
-  } else if (state.activeTagId) {
-    const tag = state.tags.find(t => t.id === state.activeTagId);
-    label = `Tag: ${tag ? tag.name : state.activeTagId}`;
-    isFiltered = true;
-  } else if (state.activeAlbumId) {
+    parts.push(`Category: ${tabName}`);
+  }
+
+  if (state.activeMediaType === 'photos') {
+    parts.push('Photos');
+  } else if (state.activeMediaType === 'videos') {
+    parts.push('Videos');
+  } else if (state.activeMediaType === 'audio') {
+    parts.push('Audio');
+  }
+
+  if (state.activeStatusFilter === 'picks') {
+    parts.push('Picks');
+  } else if (state.activeStatusFilter === 'rejects') {
+    parts.push('Rejects');
+  } else if (state.activeStatusFilter === 'not_rejects') {
+    parts.push('Not Rejects');
+  } else if (state.activeStatusFilter === 'unrated') {
+    parts.push('Unrated Photos');
+  }
+
+  if (state.activeAlbumId) {
     const album = state.albums.find(a => a.id === state.activeAlbumId);
-    label = `Album: ${album ? album.name : state.activeAlbumId}`;
-    isFiltered = true;
+    parts.push(`Album: ${album ? album.name : state.activeAlbumId}`);
+  }
+
+  if (state.activeTagId) {
+    const tag = state.tags.find(t => t.id === state.activeTagId);
+    parts.push(`Tag: ${tag ? tag.name : state.activeTagId}`);
   }
 
   if (state.activeFolder) {
-    const parts = state.activeFolder.split(/[\/\\]/);
-    const folderName = parts[parts.length - 1] || state.activeFolder;
-    label = isFiltered && label !== 'All Photos' ? `${label} • Folder: ${folderName}` : `Folder: ${folderName}`;
-    isFiltered = true;
+    const partsFolder = state.activeFolder.split(/[\/\\]/);
+    const folderName = partsFolder[partsFolder.length - 1] || state.activeFolder;
+    parts.push(`Folder: ${folderName}`);
   }
+
   if (state.searchText) {
-    label = isFiltered && label !== 'All Photos' ? `${label} • Search: "${state.searchText}"` : `Search: "${state.searchText}"`;
-    isFiltered = true;
+    parts.push(`Search: "${state.searchText}"`);
   }
 
   if (state.activeTimelinePeriod) {
     const { year, month } = state.activeTimelinePeriod;
-    label += ` • ${getMonthName(month)} ${year}`;
-    isFiltered = true;
+    parts.push(`${getMonthName(month)} ${year}`);
   }
+
+  const isFiltered = parts.length > 0;
+  const label = isFiltered ? parts.join(' • ') : 'All Media';
 
   if (dom.filterLabel) {
     dom.filterLabel.innerHTML = `<strong>${escapeHtml(label)}</strong> (${state.totalCount} items)`;
@@ -999,7 +1010,8 @@ export function updateFilterLabel() {
 }
 
 export function clearAllFilters() {
-  state.activeNavFilter = 'all';
+  state.activeMediaType = 'all';
+  state.activeStatusFilter = null;
   state.activeTagId = null;
   state.activeAlbumId = null;
   state.activeFolder = null;
@@ -1051,6 +1063,7 @@ export async function updateItemRating(id, rating) {
   if (state.loupeIndex >= 0) updateLoupeControls();
   try {
     await api.post(`/api/media/${id}/rating`, { rating });
+    loadMetadata();
   } catch (err) {
     console.error('Failed to update rating:', err);
     if (item) {
@@ -1139,6 +1152,7 @@ export async function batchUpdateRatings(ids, rating) {
   if (state.loupeIndex >= 0) updateLoupeControls();
   try {
     await api.post('/api/media/batch-rating', { ids, rating });
+    loadMetadata();
   } catch (err) {
     console.error('Failed to batch update ratings:', err);
     prevRatings.forEach((oldRating, id) => {

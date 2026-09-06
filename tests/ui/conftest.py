@@ -144,7 +144,10 @@ def start_backend(imagine_bin: str, web_dir: str, env: Dict[str, Any]) -> Genera
         "--port", str(env["port"]),
         "--web-dir", web_dir
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc_env = os.environ.copy()
+    proc_env.pop("IMAGINE_PHOTOS_DIR", None)
+    proc_env.pop("IMAGINE_THUMBS_DIR", None)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=proc_env)
     url = f"http://127.0.0.1:{env['port']}"
 
     ready = wait_for_server(url, timeout_sec=6.0)

@@ -300,6 +300,7 @@ TEST(TypesTest, CatalogStatsAndTimelineJsonSerialization) {
     stats.total_picks = 120;
     stats.total_rejects = 30;
     stats.total_not_rejects = 470;
+    stats.total_unrated = 150;
     stats.total_size_bytes = 104857600;
     stats.total_tags = 25;
     stats.total_albums = 4;
@@ -312,6 +313,7 @@ TEST(TypesTest, CatalogStatsAndTimelineJsonSerialization) {
     EXPECT_EQ(ds.total_picks, 120);
     EXPECT_EQ(ds.total_rejects, 30);
     EXPECT_EQ(ds.total_not_rejects, 470);
+    EXPECT_EQ(ds.total_unrated, 150);
     EXPECT_EQ(ds.total_size_bytes, 104857600);
     EXPECT_EQ(ds.total_tags, 25);
     EXPECT_EQ(ds.total_albums, 4);
@@ -324,6 +326,7 @@ TEST(TypesTest, CatalogStatsAndTimelineJsonSerialization) {
     EXPECT_EQ(dsEmpty.total_picks, 0);
     EXPECT_EQ(dsEmpty.total_rejects, 0);
     EXPECT_EQ(dsEmpty.total_not_rejects, 0);
+    EXPECT_EQ(dsEmpty.total_unrated, 0);
 
     TimelineEntry entry;
     entry.year = 2026;

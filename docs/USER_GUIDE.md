@@ -145,15 +145,25 @@ In the top right bar, slide the thumbnail zoom controller:
 - **Right (360px)**: Large preview cards showing rich detail, star ratings, flags, and titles.
 
 ### The Left Navigation Sidebar
-- **Quick Filters**:
-  - **All Media**: Resets all filters and shows the entire catalog.
-  - **Picks**: Displays only photos marked with the green Pick flag (includes live item count).
-  - **Rejects**: Displays photos marked with the red Reject flag (includes live item count, ideal for cleaning up bad shots).
-  - **Not Rejects**: Displays all items except rejected ones (`flag != -1`, includes live item count) — ideal for browsing working sets without deleted/rejected photos.
-  - **Unrated**: Displays photos that haven't received star ratings yet.
-- **Albums**: Custom user collections. Click any album to view its contents.
+- **Navigation & Quick Filters**:
+  - **All Media**: Resets all active filters and displays the entire catalog.
+  - **Media Types**: Choose between **Photos**, **Videos**, and **Audio** (each includes live count badges).
+  - **Status & Rating Flags**:
+    - **Picks**: Displays only media marked with the green Pick flag (includes live item count).
+    - **Rejects**: Displays media marked with the red Reject flag (includes live item count, ideal for cleaning up bad shots).
+    - **Not Rejects**: Displays all items except rejected ones (`flag != -1`, includes live item count) — ideal for browsing working sets without deleted/rejected items.
+    - **Unrated**: Displays media items that have not yet received a star rating (0 stars) (includes live item count badge).
+- **Combining Filters (`AND` Logic)**:
+  - Navigation filters can be combined cumulatively across multiple dimensions simultaneously:
+    - **Media Type** (e.g., Photos) `AND`
+    - **Status / Flag** (e.g., Picks or Unrated) `AND`
+    - **Album** (e.g., *Best of 2026*) `AND`
+    - **Keyword Tag** (e.g., *Vacation*)
+  - The filter banner displays a breadcrumb summary of all active criteria (e.g., `Photos • Picks • Album: Best of 2026 • Tag: Vacation`).
+  - **Independent Toggling**: Clicking an already active filter toggles it off without clearing the rest of your active criteria. Click **"All Media"** or the **"Clear Filter"** button to reset all filters at once.
+- **Albums**: Custom user collections. Click any album to filter media by collection.
 - **Keyword Tags**: Categorized tree of tags (People, Places, Events, Keywords). Click any tag to filter.
-- **Folders Tree**: Physical directory tree showing the file system layout of your imported photos.
+- **Folders Tree**: Physical directory tree showing the file system layout of your imported photos and media.
 
 ### Bottom Timeline Scrubber
 At the bottom of the screen is an interactive year and month scrub bar:
@@ -335,12 +345,20 @@ imagine stats [--catalog <file>]
 ```
 ============= Catalog Statistics =============
   Catalog Database:   catalog.db
-  Total Photos:       1,420
+  Total Items:        1,420
+    Photos:           1,200
+    Videos:           180
+    Audio:            40
+    Picks:            350
+    Rejects:          45
+    Not Rejects:      1,375
+    Unrated:          215
+  Total Media Time:   1h 24m 10s
   Total Disk Size:    8.4 GB
   Total Tags:         28
   Total Albums:       6
-  Earliest Photo:     2018-04-12 11:20
-  Latest Photo:       2026-09-03 19:30
+  Earliest Item:      2018-04-12 11:20
+  Latest Item:        2026-09-03 19:30
 ==============================================
 ```
 

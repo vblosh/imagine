@@ -11,7 +11,23 @@ export const state = {
   selectedIds: new Set(),
   lastSelectedId: null,
   activeTab: 'media',      // 'media', 'people', 'places', 'events'
-  activeNavFilter: 'all',  // 'all', 'photos', 'videos', 'audio', 'picks', 'rejects', 'not_rejects', 'unrated'
+  activeMediaType: 'all',  // 'all', 'photos', 'videos', 'audio'
+  activeStatusFilter: null,// null, 'picks', 'rejects', 'not_rejects', 'unrated'
+  get activeNavFilter() {
+    if (this.activeStatusFilter) return this.activeStatusFilter;
+    if (this.activeMediaType && this.activeMediaType !== 'all') return this.activeMediaType;
+    return 'all';
+  },
+  set activeNavFilter(val) {
+    if (['photos', 'videos', 'audio'].includes(val)) {
+      this.activeMediaType = val;
+    } else if (['picks', 'rejects', 'not_rejects', 'unrated'].includes(val)) {
+      this.activeStatusFilter = val;
+    } else {
+      this.activeMediaType = 'all';
+      this.activeStatusFilter = null;
+    }
+  },
   activeTagId: null,
   activeAlbumId: null,
   activeFolder: null,
