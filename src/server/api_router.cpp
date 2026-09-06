@@ -3,6 +3,8 @@
 #include "imagine/core/catalog.hpp"
 #include "imagine/core/query.hpp"
 #include "imagine/core/importer.hpp"
+#include "imagine/metadata/hasher.hpp"
+#include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/logger.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -14,10 +16,52 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <cstdlib>
+#include <cctype>
 
 namespace imagine::server {
 
 namespace {
+
+std::vector<uint8_t> base64Decode(const std::string& input) {
+    size_t commaPos = input.find(',');
+    std::string_view sv = (commaPos != std::string::npos) ? std::string_view(input).substr(commaPos + 1) : std::string_view(input);
+
+    static const int b64Table[256] = {
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
+        52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
+        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
+        15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+        -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
+        41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+    };
+
+    std::vector<uint8_t> out;
+    out.reserve((sv.size() * 3) / 4);
+    uint32_t val = 0;
+    int valb = -8;
+    for (char c : sv) {
+        if (c == '=' || std::isspace(static_cast<unsigned char>(c))) continue;
+        int d = b64Table[static_cast<unsigned char>(c)];
+        if (d < 0) continue;
+        val = (val << 6) | d;
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<uint8_t>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
 
 constexpr size_t kMaxBatchSize = 1000;
 constexpr size_t kMaxSearchLength = 500;
@@ -1159,6 +1203,201 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
 
         res.set_file_content(photoPath, mime);
     });
+
+    // POST /api/photos/:id/edit and POST /api/media/:id/edit
+    auto handleEditPhoto = [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        MediaId id = std::stoll(req.matches[1]);
+        auto mediaRes = db().getMediaById(id);
+        if (!mediaRes.isOk()) {
+            sendError(res, "Media not found", 404);
+            return;
+        }
+
+        auto item = mediaRes.value();
+        std::string photoPath = resolvePhotoPath(item.file_path);
+        std::error_code ec;
+        if (!std::filesystem::exists(photoPath, ec) || !std::filesystem::is_regular_file(photoPath, ec)) {
+            sendError(res, "Source photo not found on disk: " + photoPath, 404);
+            return;
+        }
+
+        std::string mode = "overwrite";
+        std::vector<uint8_t> newImageBytes;
+
+        bool isJson = false;
+        std::string contentType = req.get_header_value("Content-Type");
+        if (contentType.find("application/json") != std::string::npos || (!req.body.empty() && req.body.front() == '{')) {
+            isJson = true;
+        }
+
+        if (isJson) {
+            try {
+                auto body = nlohmann::json::parse(req.body);
+                if (body.contains("mode") && body["mode"].is_string()) {
+                    mode = body["mode"].get<std::string>();
+                }
+                if (body.contains("image_data") && body["image_data"].is_string()) {
+                    newImageBytes = base64Decode(body["image_data"].get<std::string>());
+                } else if (body.contains("operations") && body["operations"].is_object()) {
+                    auto loadRes = thumbnail::Generator::loadImage(photoPath);
+                    if (!loadRes.isOk()) {
+                        sendStatusError(res, loadRes.status());
+                        return;
+                    }
+                    auto img = loadRes.value();
+                    const auto& ops = body["operations"];
+                    if (ops.contains("crop") && ops["crop"].is_object()) {
+                        int x = ops["crop"].value("x", 0);
+                        int y = ops["crop"].value("y", 0);
+                        int w = ops["crop"].value("width", img.width);
+                        int h = ops["crop"].value("height", img.height);
+                        auto cropRes = thumbnail::Generator::crop(img, x, y, w, h);
+                        if (!cropRes.isOk()) {
+                            sendStatusError(res, cropRes.status());
+                            return;
+                        }
+                        img = cropRes.value();
+                    }
+                    if (ops.contains("rotation") && ops["rotation"].is_number_integer()) {
+                        int deg = ops["rotation"].get<int>();
+                        img = thumbnail::Generator::rotateAngle(img, deg);
+                    }
+                    std::string tmpOut = photoPath + ".proc.tmp";
+                    auto saveStatus = thumbnail::Generator::saveJpeg(img, tmpOut, 95);
+                    if (!saveStatus.isOk()) {
+                        sendStatusError(res, saveStatus);
+                        return;
+                    }
+                    std::ifstream ifs(tmpOut, std::ios::binary);
+                    newImageBytes.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+                    ifs.close();
+                    std::filesystem::remove(tmpOut, ec);
+                } else {
+                    sendError(res, "Missing image_data or operations in edit request");
+                    return;
+                }
+            } catch (const std::exception& ex) {
+                sendError(res, std::string("Invalid JSON: ") + ex.what());
+                return;
+            }
+        } else {
+            if (req.has_param("mode")) {
+                mode = req.get_param_value("mode");
+            }
+            newImageBytes.assign(req.body.begin(), req.body.end());
+        }
+
+        if (newImageBytes.empty()) {
+            sendError(res, "No image data provided");
+            return;
+        }
+
+        auto dimRes = thumbnail::Generator::getImageDimensionsFromMemory(newImageBytes.data(), newImageBytes.size());
+        if (!dimRes.isOk()) {
+            sendError(res, "Invalid image data: unable to parse dimensions");
+            return;
+        }
+        int newW = dimRes.value().first;
+        int newH = dimRes.value().second;
+
+        if (mode == "copy") {
+            std::filesystem::path origPath(photoPath);
+            std::string stem = origPath.stem().string();
+            std::string ext = origPath.extension().string();
+            auto parent = origPath.parent_path();
+
+            std::filesystem::path destPath;
+            int counter = 1;
+            while (true) {
+                std::string suffix = (counter == 1) ? "_edited" : ("_edited_" + std::to_string(counter));
+                destPath = parent / (stem + suffix + ext);
+                if (!std::filesystem::exists(destPath, ec)) {
+                    break;
+                }
+                counter++;
+            }
+
+            {
+                std::ofstream ofs(destPath, std::ios::binary);
+                if (!ofs) {
+                    sendError(res, "Failed to write new file: " + destPath.string(), 500);
+                    return;
+                }
+                ofs.write(reinterpret_cast<const char*>(newImageBytes.data()), newImageBytes.size());
+            }
+
+            if (catalog_) {
+                auto importRes = catalog_->importFile(destPath.string());
+                if (!importRes.isOk()) {
+                    sendStatusError(res, importRes.status());
+                    return;
+                }
+                auto newItem = importRes.value();
+                if (item.rating > 0) catalog_->setRating(newItem.id, item.rating);
+                if (item.flag != FlagState::Unflagged) catalog_->setFlag(newItem.id, item.flag);
+                auto tagsRes = catalog_->getTagsForMedia(item.id);
+                if (tagsRes.isOk()) {
+                    for (const auto& tag : tagsRes.value()) {
+                        catalog_->addTag(newItem.id, tag.id);
+                    }
+                }
+                auto reloaded = catalog_->getMedia(newItem.id);
+                sendJson(res, reloaded.isOk() ? reloaded.value() : newItem, 201);
+            } else {
+                sendJson(res, {{"status", "created"}, {"path", destPath.string()}}, 201);
+            }
+        } else {
+            std::string tmpPath = photoPath + ".edit.tmp";
+            {
+                std::ofstream ofs(tmpPath, std::ios::binary);
+                if (!ofs) {
+                    sendError(res, "Failed to create temporary file for saving", 500);
+                    return;
+                }
+                ofs.write(reinterpret_cast<const char*>(newImageBytes.data()), newImageBytes.size());
+            }
+
+            std::filesystem::rename(tmpPath, photoPath, ec);
+            if (ec) {
+                std::filesystem::remove(tmpPath, ec);
+                sendError(res, "Failed to overwrite original file: " + ec.message(), 500);
+                return;
+            }
+
+            auto hashRes = metadata::Hasher::computeFileSha256(photoPath);
+            if (!hashRes.isOk()) {
+                sendStatusError(res, hashRes.status());
+                return;
+            }
+            std::string newHash = hashRes.value();
+            auto fsize = std::filesystem::file_size(photoPath, ec);
+            auto mtime = std::filesystem::last_write_time(photoPath, ec);
+            int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
+
+            cache().ensureDualThumbnails(photoPath, newHash, item.exif.orientation);
+
+            item.content_hash = newHash;
+            item.width = newW;
+            item.height = newH;
+            item.file_size = static_cast<int64_t>(fsize);
+            item.file_modified_time = mtimeSec;
+            item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(newHash, thumbnail::Cache::SmallSize);
+            item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(newHash, thumbnail::Cache::LargeSize);
+            item.updated_at = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+            auto updateStatus = db().updateMedia(item);
+            if (!updateStatus.isOk()) {
+                sendStatusError(res, updateStatus);
+                return;
+            }
+
+            sendJson(res, item, 200);
+        }
+    };
+
+    server.Post(R"(/api/photos/(\d+)/edit)", handleEditPhoto);
+    server.Post(R"(/api/media/(\d+)/edit)", handleEditPhoto);
 }
 
 void ApiRouter::registerTagRoutes(httplib::Server& server) {

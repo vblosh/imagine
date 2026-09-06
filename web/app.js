@@ -77,6 +77,24 @@ import {
   loupePrev
 } from './loupe.js';
 import {
+  openQuickEdit,
+  closeQuickEdit,
+  rotateLeft,
+  rotateRight,
+  toggleCrop,
+  setCropAspectRatio,
+  applyCrop,
+  cancelCrop,
+  toggleSmartFix,
+  setSmartFixIntensity,
+  startCompare,
+  stopCompare,
+  resetAllEdits,
+  saveEdits,
+  setupCropMouseListeners,
+  quickEditState
+} from './quick-edit.js';
+import {
   openImportModal,
   closeImportModal,
   cancelImport,
@@ -652,6 +670,39 @@ export function setupEventListeners() {
       }
     });
   }
+
+  // Quick Edit controls
+  if (dom.loupeQuickEditBtn) {
+    dom.loupeQuickEditBtn.addEventListener('click', () => {
+      if (quickEditState.isOpen) {
+        closeQuickEdit(true);
+      } else {
+        openQuickEdit();
+      }
+    });
+  }
+  if (dom.quickEditRotateLeftBtn) dom.quickEditRotateLeftBtn.addEventListener('click', rotateLeft);
+  if (dom.quickEditRotateRightBtn) dom.quickEditRotateRightBtn.addEventListener('click', rotateRight);
+  if (dom.quickEditCropBtn) dom.quickEditCropBtn.addEventListener('click', toggleCrop);
+  if (dom.cropAspectRatioSelect) {
+    dom.cropAspectRatioSelect.addEventListener('change', (e) => setCropAspectRatio(e.target.value));
+  }
+  if (dom.quickEditApplyCropBtn) dom.quickEditApplyCropBtn.addEventListener('click', applyCrop);
+  if (dom.quickEditCancelCropBtn) dom.quickEditCancelCropBtn.addEventListener('click', cancelCrop);
+  if (dom.quickEditSmartFixBtn) dom.quickEditSmartFixBtn.addEventListener('click', toggleSmartFix);
+  if (dom.smartFixIntensitySlider) {
+    dom.smartFixIntensitySlider.addEventListener('input', (e) => setSmartFixIntensity(parseInt(e.target.value, 10)));
+  }
+  if (dom.quickEditCompareBtn) {
+    dom.quickEditCompareBtn.addEventListener('pointerdown', startCompare);
+    dom.quickEditCompareBtn.addEventListener('pointerup', stopCompare);
+    dom.quickEditCompareBtn.addEventListener('pointerleave', stopCompare);
+  }
+  if (dom.quickEditResetBtn) dom.quickEditResetBtn.addEventListener('click', resetAllEdits);
+  if (dom.quickEditCancelBtn) dom.quickEditCancelBtn.addEventListener('click', () => closeQuickEdit(true));
+  if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.addEventListener('click', () => saveEdits('overwrite'));
+  if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.addEventListener('click', () => saveEdits('copy'));
+  setupCropMouseListeners();
 
   // Loupe navigation
   if (dom.loupePrevBtn) dom.loupePrevBtn.addEventListener('click', loupePrev);

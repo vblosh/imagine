@@ -1,0 +1,220 @@
+"""
+Deterministic UI tests for Quick Edit mode in the Original (Loupe) view.
+"""
+
+import re
+from playwright.sync_api import Page, expect
+
+
+def test_open_and_close_quick_edit(server, page: Page):
+    """Opening and closing quick edit mode via button and E shortcut."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+
+    quick_edit_btn = page.locator("#loupeQuickEditBtn")
+    expect(quick_edit_btn).to_be_visible()
+
+    # 1. Click Quick Edit button
+    quick_edit_btn.click()
+    expect(loupe).to_have_class(re.compile(r"\bis-quick-editing\b"))
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+    expect(page.locator("#quickEditContainer")).to_be_visible()
+    expect(page.locator("#quickEditCanvas")).to_be_visible()
+
+    # Normal loupe nav buttons should be hidden in quick edit mode
+    expect(page.locator("#loupePrevBtn")).to_be_hidden()
+    expect(page.locator("#loupeNextBtn")).to_be_hidden()
+
+    # 2. Click Cancel to exit
+    page.locator("#quickEditCancelBtn").click()
+    expect(loupe).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
+    expect(page.locator("#quickEditToolbar")).to_be_hidden()
+
+    # 3. Press E key to toggle Quick Edit
+    page.keyboard.press("e")
+    expect(loupe).to_have_class(re.compile(r"\bis-quick-editing\b"))
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Press Escape to exit Quick Edit
+    page.keyboard.press("Escape")
+    expect(loupe).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
+    expect(page.locator("#quickEditToolbar")).to_be_hidden()
+
+
+def test_rotate_left_and_right(server, page: Page):
+    """Rotating image 90 degrees left and right in Quick Edit."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    canvas = page.locator("#quickEditCanvas")
+    expect(canvas).to_be_visible()
+
+    orig_w = int(canvas.evaluate("el => el.width"))
+    orig_h = int(canvas.evaluate("el => el.height"))
+
+    # 1. Click Rotate Right
+    page.locator("#quickEditRotateRightBtn").click()
+    new_w = int(canvas.evaluate("el => el.width"))
+    new_h = int(canvas.evaluate("el => el.height"))
+    assert new_w == orig_h
+    assert new_h == orig_w
+
+    # 2. Click Rotate Left
+    page.locator("#quickEditRotateLeftBtn").click()
+    restored_w = int(canvas.evaluate("el => el.width"))
+    restored_h = int(canvas.evaluate("el => el.height"))
+    assert restored_w == orig_w
+    assert restored_h == orig_h
+
+    # 3. Test keyboard shortcuts R and L
+    page.keyboard.press("r")
+    assert int(canvas.evaluate("el => el.width")) == orig_h
+    page.keyboard.press("l")
+    assert int(canvas.evaluate("el => el.width")) == orig_w
+
+
+def test_crop_tool_flow(server, page: Page):
+    """Interactive crop overlay, aspect ratios, apply and cancel crop."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    crop_btn = page.locator("#quickEditCropBtn")
+    crop_overlay = page.locator("#cropOverlay")
+    crop_sub_options = page.locator("#cropSubOptions")
+
+    expect(crop_overlay).to_be_hidden()
+    expect(crop_sub_options).to_be_hidden()
+
+    # 1. Toggle Crop on
+    crop_btn.click()
+    expect(crop_overlay).to_be_visible()
+    expect(crop_sub_options).to_be_visible()
+    expect(page.locator("#cropBox")).to_be_visible()
+    expect(page.locator(".crop-handle")).to_have_count(8)
+
+    # 2. Select 1:1 Square aspect ratio
+    page.locator("#cropAspectRatioSelect").select_option("1:1")
+    badge_text = page.locator("#cropDimensionsBadge").text_content()
+    w_str, h_str = [s.strip() for s in badge_text.split("×")]
+    assert int(w_str) == int(h_str)
+
+    # 3. Apply Crop
+    page.locator("#quickEditApplyCropBtn").click()
+    expect(crop_overlay).to_be_hidden()
+    expect(crop_sub_options).to_be_hidden()
+
+    canvas = page.locator("#quickEditCanvas")
+    cropped_w = int(canvas.evaluate("el => el.width"))
+    cropped_h = int(canvas.evaluate("el => el.height"))
+    assert cropped_w == cropped_h
+
+
+def test_smart_fix_and_compare(server, page: Page):
+    """Toggling Smart Fix, intensity slider, and compare button."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    sf_btn = page.locator("#quickEditSmartFixBtn")
+    sf_sub = page.locator("#smartFixSubOptions")
+    expect(sf_sub).to_be_hidden()
+
+    # 1. Toggle Smart Fix on
+    sf_btn.click()
+    expect(sf_btn).to_have_class(re.compile(r"\bactive\b"))
+    expect(sf_sub).to_be_visible()
+
+    # 2. Change intensity
+    slider = page.locator("#smartFixIntensitySlider")
+    slider.fill("75")
+    slider.dispatch_event("input")
+    expect(page.locator("#smartFixIntensityVal")).to_have_text("75%")
+
+    # 3. Compare button
+    compare_btn = page.locator("#quickEditCompareBtn")
+    compare_btn.dispatch_event("pointerdown")
+    expect(compare_btn).to_have_class(re.compile(r"\bactive\b"))
+    compare_btn.dispatch_event("pointerup")
+    expect(compare_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+
+def test_reset_all_edits(server, page: Page):
+    """Resetting edits reverts all adjustments back to original state."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+
+    page.locator("#loupeQuickEditBtn").click()
+    canvas = page.locator("#quickEditCanvas")
+    orig_w = int(canvas.evaluate("el => el.width"))
+
+    # Apply rotation and Smart Fix
+    page.locator("#quickEditRotateRightBtn").click()
+    page.locator("#quickEditSmartFixBtn").click()
+    expect(page.locator("#quickEditSmartFixBtn")).to_have_class(re.compile(r"\bactive\b"))
+    assert int(canvas.evaluate("el => el.width")) != orig_w
+
+    # Click Reset
+    page.locator("#quickEditResetBtn").click()
+    assert int(canvas.evaluate("el => el.width")) == orig_w
+    expect(page.locator("#quickEditSmartFixBtn")).not_to_have_class(re.compile(r"\bactive\b"))
+
+
+def test_save_overwrite_and_save_copy(server, page: Page):
+    """Saving edits in-place (overwrite) and as a new copy."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="birthday.bmp")
+    card.dblclick()
+
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    canvas = page.locator("#quickEditCanvas")
+    orig_w = int(canvas.evaluate("el => el.width"))
+    orig_h = int(canvas.evaluate("el => el.height"))
+
+    # 1. Rotate 90 degrees and Save
+    page.locator("#quickEditRotateRightBtn").click()
+    page.locator("#quickEditSaveBtn").click()
+
+    # Verify toast alert
+    expect(page.locator("#toastContainer .toast", has_text="Photo edited and saved successfully")).to_be_visible()
+
+    # Loupe should return to normal viewer with updated image
+    loupe = page.locator("#loupeModal")
+    expect(loupe).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
+
+    # 2. Open quick edit again and Save Copy
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    page.locator("#quickEditRotateLeftBtn").click()
+    page.locator("#quickEditSaveCopyBtn").click()
+
+    expect(page.locator("#toastContainer .toast", has_text="Saved as new copy")).to_be_visible()
+
+    # Close loupe and verify new card appears in media grid
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+    expect(page.locator(".photo-card", has_text="birthday_edited")).to_be_visible()

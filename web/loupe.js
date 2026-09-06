@@ -7,6 +7,7 @@ import { state } from './state.js';
 import { dom } from './dom.js';
 import { updateItemRating, loadMoreMedia } from './media-grid.js';
 import { renderStarWidget } from './inspector.js';
+import { closeQuickEdit, quickEditState } from './quick-edit.js';
 
 export const LOUPE_MIN_ZOOM = 1.0;
 export const LOUPE_MAX_ZOOM = 5.0;
@@ -24,12 +25,18 @@ export function openLoupeForMedia(id) {
 }
 
 export function closeLoupe() {
+  if (quickEditState.isOpen) {
+    closeQuickEdit(false);
+  }
   state.loupeIndex = -1;
   resetLoupeZoomToFit();
   if (dom.loupeModal) dom.loupeModal.style.display = 'none';
 }
 
 export function updateLoupeView() {
+  if (quickEditState.isOpen) {
+    closeQuickEdit(false);
+  }
   if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return;
   const item = state.mediaItems[state.loupeIndex];
 

@@ -146,6 +146,55 @@ TEST_F(ThumbnailTest, RotateAllOrientations) {
     EXPECT_EQ(rot2.height, 200);
 }
 
+TEST_F(ThumbnailTest, RotateAngle) {
+    auto loadRes = Generator::loadImage(testImgPath);
+    ASSERT_TRUE(loadRes.isOk());
+    const auto& img = loadRes.value();
+
+    auto r90 = Generator::rotateAngle(img, 90);
+    EXPECT_EQ(r90.width, 200);
+    EXPECT_EQ(r90.height, 400);
+
+    auto rNeg90 = Generator::rotateAngle(img, -90);
+    EXPECT_EQ(rNeg90.width, 200);
+    EXPECT_EQ(rNeg90.height, 400);
+
+    auto r180 = Generator::rotateAngle(img, 180);
+    EXPECT_EQ(r180.width, 400);
+    EXPECT_EQ(r180.height, 200);
+
+    auto r0 = Generator::rotateAngle(img, 0);
+    EXPECT_EQ(r0.width, 400);
+    EXPECT_EQ(r0.height, 200);
+}
+
+TEST_F(ThumbnailTest, CropImage) {
+    auto loadRes = Generator::loadImage(testImgPath);
+    ASSERT_TRUE(loadRes.isOk());
+    const auto& img = loadRes.value();
+
+    // Valid crop
+    auto cropRes = Generator::crop(img, 50, 20, 100, 80);
+    ASSERT_TRUE(cropRes.isOk());
+    EXPECT_EQ(cropRes.value().width, 100);
+    EXPECT_EQ(cropRes.value().height, 80);
+    EXPECT_EQ(cropRes.value().channels, img.channels);
+
+    // Clamped crop
+    auto clampRes = Generator::crop(img, 350, 150, 200, 200);
+    ASSERT_TRUE(clampRes.isOk());
+    EXPECT_EQ(clampRes.value().width, 50);  // 400 - 350
+    EXPECT_EQ(clampRes.value().height, 50); // 200 - 150
+
+    // Out of bounds crop
+    auto outRes = Generator::crop(img, 450, 250, 50, 50);
+    EXPECT_FALSE(outRes.isOk());
+
+    // Invalid parameters
+    auto zeroRes = Generator::crop(img, 0, 0, 0, 0);
+    EXPECT_FALSE(zeroRes.isOk());
+}
+
 TEST_F(ThumbnailTest, SaveJpegAndPng) {
     auto loadRes = Generator::loadImage(testImgPath);
     ASSERT_TRUE(loadRes.isOk());

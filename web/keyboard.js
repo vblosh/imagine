@@ -39,6 +39,18 @@ import {
   loupeZoomOut,
   resetLoupeZoom
 } from './loupe.js';
+import {
+  quickEditState,
+  openQuickEdit,
+  closeQuickEdit,
+  rotateLeft,
+  rotateRight,
+  toggleCrop,
+  applyCrop,
+  cancelCrop,
+  toggleSmartFix,
+  saveEdits
+} from './quick-edit.js';
 
 export function handleEscapeKey() {
   // 1. Modals (highest priority)
@@ -65,6 +77,16 @@ export function handleEscapeKey() {
   if (dom.addToAlbumModal && dom.addToAlbumModal.style.display === 'flex') {
     if (document.activeElement?.blur) document.activeElement.blur();
     closeAddToAlbumModal();
+    return true;
+  }
+
+  // 1b. Quick Edit Mode (cancel crop or exit quick edit)
+  if (quickEditState.isOpen) {
+    if (quickEditState.cropActive) {
+      cancelCrop();
+      return true;
+    }
+    closeQuickEdit(true);
     return true;
   }
 
@@ -148,6 +170,53 @@ export function setupKeyboardShortcuts() {
 
     // Loupe mode active
     if (state.loupeIndex >= 0) {
+      if (quickEditState.isOpen) {
+        if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+          e.preventDefault();
+          saveEdits('overwrite');
+          return;
+        }
+        if (e.key === 'e' || e.key === 'E') {
+          e.preventDefault();
+          closeQuickEdit(true);
+          return;
+        }
+        if (e.key === 'l' || e.key === 'L') {
+          e.preventDefault();
+          rotateLeft();
+          return;
+        }
+        if (e.key === 'r' || e.key === 'R') {
+          e.preventDefault();
+          rotateRight();
+          return;
+        }
+        if (e.key === 'c' || e.key === 'C') {
+          e.preventDefault();
+          toggleCrop();
+          return;
+        }
+        if (e.key === 's' || e.key === 'S') {
+          e.preventDefault();
+          toggleSmartFix();
+          return;
+        }
+        if (e.key === 'Enter') {
+          if (quickEditState.cropActive) {
+            e.preventDefault();
+            applyCrop();
+            return;
+          }
+        }
+        return;
+      }
+
+      if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault();
+        openQuickEdit();
+        return;
+      }
+
       if (e.key === 'ArrowRight' || e.key === 'PageDown') {
         loupeNext();
       } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {

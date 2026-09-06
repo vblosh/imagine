@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <cstring>
 
 #if IMAGINE_HAS_TURBOJPEG
 #include <turbojpeg.h>
@@ -239,6 +240,60 @@ ImageBuffer Generator::rotate(const ImageBuffer& src, int orientation) {
     }
 
     return src;
+}
+
+ImageBuffer Generator::rotateAngle(const ImageBuffer& src, int degrees) {
+    int norm = ((degrees % 360) + 360) % 360;
+    if (norm == 90) {
+        return rotate(src, 6); // 90 CW
+    } else if (norm == 180) {
+        return rotate(src, 3); // 180
+    } else if (norm == 270) {
+        return rotate(src, 8); // 270 CW (90 CCW)
+    }
+    return src;
+}
+
+Result<ImageBuffer> Generator::crop(const ImageBuffer& src, int x, int y, int width, int height) {
+    if (src.data.empty() || src.width <= 0 || src.height <= 0) {
+        return Status::invalidArgument("Empty source image for cropping");
+    }
+    if (width <= 0 || height <= 0) {
+        return Status::invalidArgument("Invalid crop dimensions");
+    }
+
+    int srcW = src.width;
+    int srcH = src.height;
+    int c = src.channels;
+
+    if (x < 0) {
+        width += x;
+        x = 0;
+    }
+    if (y < 0) {
+        height += y;
+        y = 0;
+    }
+    if (x >= srcW || y >= srcH || width <= 0 || height <= 0) {
+        return Status::invalidArgument("Crop rectangle outside image bounds");
+    }
+
+    width = std::min(width, srcW - x);
+    height = std::min(height, srcH - y);
+
+    ImageBuffer dst;
+    dst.width = width;
+    dst.height = height;
+    dst.channels = c;
+    dst.data.resize(static_cast<size_t>(width) * height * c);
+
+    for (int row = 0; row < height; ++row) {
+        const uint8_t* srcRow = src.data.data() + ((static_cast<size_t>(y + row) * srcW + x) * c);
+        uint8_t* dstRow = dst.data.data() + (static_cast<size_t>(row) * width * c);
+        std::memcpy(dstRow, srcRow, static_cast<size_t>(width) * c);
+    }
+
+    return dst;
 }
 
 Result<ImageBuffer> Generator::resize(const ImageBuffer& src, int maxDimension) {

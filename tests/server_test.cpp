@@ -1213,3 +1213,64 @@ TEST_F(ServerTest, DeleteMediaSingleAndBatchWithDiskOption) {
     EXPECT_FALSE(std::filesystem::exists(f4)); // File deleted from disk
 }
 
+TEST_F(ServerTest, EditPhotoEndpointOverwriteAndCopy) {
+    auto photosDir = testDir_ / "photos";
+    std::filesystem::create_directories(photosDir);
+    std::string photoPath = (photosDir / "test_photo.jpg").string();
+
+    ImageBuffer buf;
+    buf.width = 400;
+    buf.height = 300;
+    buf.channels = 3;
+    buf.data.resize(400 * 300 * 3, 120);
+    ASSERT_TRUE(Generator::saveJpeg(buf, photoPath).isOk());
+
+    auto impRes = catalog_->importDirectory(photosDir.string(), true, nullptr);
+    ASSERT_TRUE(impRes.isOk());
+
+    auto mRes = catalog_->getMediaByPath(photoPath);
+    ASSERT_TRUE(mRes.isOk());
+    MediaId id = mRes.value().id;
+    std::string oldHash = mRes.value().content_hash;
+
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Overwrite edit with operations (crop 200x150 and rotate 90)
+    nlohmann::json editPayload = {
+        {"mode", "overwrite"},
+        {"operations", {
+            {"crop", {{"x", 0}, {"y", 0}, {"width", 200}, {"height", 150}}},
+            {"rotation", 90}
+        }}
+    };
+
+    auto editRes = client.Post("/api/photos/" + std::to_string(id) + "/edit", editPayload.dump(), "application/json");
+    ASSERT_TRUE(editRes);
+    EXPECT_EQ(editRes->status, 200);
+
+    auto resJson = nlohmann::json::parse(editRes->body);
+    EXPECT_EQ(resJson["id"].get<MediaId>(), id);
+    // After 200x150 crop + 90 deg rotation, dimensions are 150x200
+    EXPECT_EQ(resJson["width"].get<int>(), 150);
+    EXPECT_EQ(resJson["height"].get<int>(), 200);
+    std::string newHash = resJson["content_hash"].get<std::string>();
+    EXPECT_NE(newHash, oldHash);
+
+    // 2. Copy edit mode
+    nlohmann::json copyPayload = {
+        {"mode", "copy"},
+        {"operations", {
+            {"rotation", 180}
+        }}
+    };
+
+    auto copyRes = client.Post("/api/photos/" + std::to_string(id) + "/edit", copyPayload.dump(), "application/json");
+    ASSERT_TRUE(copyRes);
+    EXPECT_EQ(copyRes->status, 201);
+
+    auto copyJson = nlohmann::json::parse(copyRes->body);
+    MediaId copyId = copyJson["id"].get<MediaId>();
+    EXPECT_NE(copyId, id);
+    EXPECT_TRUE(copyJson["file_name"].get<std::string>().find("test_photo_edited") != std::string::npos);
+}
+

@@ -21,6 +21,8 @@ public:
 
     static Result<ImageBuffer> resize(const ImageBuffer& src, int maxDimension);
     static ImageBuffer rotate(const ImageBuffer& src, int orientation);
+    static ImageBuffer rotateAngle(const ImageBuffer& src, int degrees);
+    static Result<ImageBuffer> crop(const ImageBuffer& src, int x, int y, int width, int height);
 
     static Status saveJpeg(const ImageBuffer& img, const std::string& destPath, int quality = 85);
     static Status saveJpegFast(const ImageBuffer& img, const std::string& destPath, int quality = 85);

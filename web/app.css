@@ -1457,6 +1457,228 @@ body.resizing-horizontal * {
   background: var(--reject-color);
 }
 
+/* Quick Edit Mode in Loupe */
+.loupe-modal.is-quick-editing .loupe-btn.loupe-prev,
+.loupe-modal.is-quick-editing .loupe-btn.loupe-next,
+.loupe-modal.is-quick-editing .loupe-toolbar {
+  display: none !important;
+}
+
+.loupe-quick-edit-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #333333;
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.loupe-quick-edit-btn:hover,
+.loupe-quick-edit-btn.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #ffffff;
+}
+
+.quick-edit-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  background: rgba(28, 28, 28, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  padding: 8px 18px;
+  border-radius: 20px;
+  z-index: 1003;
+  flex-shrink: 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+.quick-edit-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-edit-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border-color);
+  margin: 0 4px;
+}
+
+.quick-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #333333;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.quick-edit-btn:hover {
+  background: #444444;
+  color: #ffffff;
+}
+
+.quick-edit-btn.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #ffffff;
+}
+
+.quick-edit-sub-options {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border-color);
+}
+
+.quick-edit-select {
+  background: #222222;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  outline: none;
+  cursor: pointer;
+}
+
+.quick-edit-select:focus {
+  border-color: var(--accent-color);
+}
+
+.quick-edit-slider-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.quick-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Quick Edit Viewport Container & Canvas */
+.quick-edit-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  user-select: none;
+}
+
+#quickEditCanvas {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
+  border-radius: 2px;
+}
+
+/* Crop Overlay & Handles */
+.crop-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 100;
+}
+
+.crop-scrim {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.65);
+  pointer-events: auto;
+}
+
+.crop-box {
+  position: absolute;
+  border: 2px solid var(--accent-color);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  cursor: move;
+  pointer-events: auto;
+  box-sizing: border-box;
+}
+
+.crop-grid {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.crop-grid-line {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 1px rgba(0, 0, 0, 0.6);
+}
+
+.crop-grid-h1 { top: 33.333%; left: 0; width: 100%; height: 1px; }
+.crop-grid-h2 { top: 66.666%; left: 0; width: 100%; height: 1px; }
+.crop-grid-v1 { left: 33.333%; top: 0; width: 1px; height: 100%; }
+.crop-grid-v2 { left: 66.666%; top: 0; width: 1px; height: 100%; }
+
+.crop-badge {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #ffffff;
+  font-size: 10px;
+  font-family: monospace;
+  padding: 2px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+}
+
+.crop-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #ffffff;
+  border: 2px solid var(--accent-color);
+  border-radius: 2px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  z-index: 10;
+  pointer-events: auto;
+}
+
+.handle-nw { top: -6px; left: -6px; cursor: nwse-resize; }
+.handle-n  { top: -6px; left: calc(50% - 6px); cursor: ns-resize; }
+.handle-ne { top: -6px; right: -6px; cursor: nesw-resize; }
+.handle-e  { top: calc(50% - 6px); right: -6px; cursor: ew-resize; }
+.handle-se { bottom: -6px; right: -6px; cursor: nwse-resize; }
+.handle-s  { bottom: -6px; left: calc(50% - 6px); cursor: ns-resize; }
+.handle-sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
+.handle-w  { top: calc(50% - 6px); left: -6px; cursor: ew-resize; }
+
 /* Modals */
 .modal {
   position: fixed;
