@@ -4,7 +4,7 @@
 #include <vector>
 #include <ctime>
 #include <sstream>
-#include <iomanip>
+#include <chrono>
 
 namespace imagine::metadata {
 
@@ -14,22 +14,19 @@ int64_t ExifReader::parseExifDate(const std::string& dateStr) {
     }
 
     // Format: "YYYY:MM:DD HH:MM:SS"
-    std::tm tm{};
     std::istringstream ss(dateStr);
     char sep;
     int year, month, day, hour, min, sec;
     if (ss >> year >> sep >> month >> sep >> day >> hour >> sep >> min >> sep >> sec) {
-        tm.tm_year = year - 1900;
-        tm.tm_mon = month - 1;
-        tm.tm_mday = day;
-        tm.tm_hour = hour;
-        tm.tm_min = min;
-        tm.tm_sec = sec;
-        tm.tm_isdst = -1;
-        time_t t = timegm(&tm);
-        if (t != -1) {
-            return static_cast<int64_t>(t);
-        }
+        std::chrono::year_month_day ymd{
+            std::chrono::year{year},
+            std::chrono::month{static_cast<unsigned>(month)},
+            std::chrono::day{static_cast<unsigned>(day)}
+        };
+        if (!ymd.ok()) return 0;
+        std::chrono::sys_days sd = ymd;
+        auto tp = sd + std::chrono::hours{hour} + std::chrono::minutes{min} + std::chrono::seconds{sec};
+        return std::chrono::duration_cast<std::chrono::seconds>(tp.time_since_epoch()).count();
     }
     return 0;
 }

@@ -190,7 +190,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         return ProcessStatus::Failed;
     }
 
-    auto sctp = std::chrono::file_clock::to_sys(lwt);
+    auto sctp = std::chrono::clock_cast<std::chrono::system_clock>(lwt);
     int64_t modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
 
     // Check existing file by relative stored path (or normalized absolute path fallback for legacy DBs)
@@ -270,7 +270,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     // TOCTOU verification: re-fetch modification time after reading
     auto lwtPost = std::filesystem::last_write_time(filePath, ec);
     if (!ec) {
-        auto sctpPost = std::chrono::file_clock::to_sys(lwtPost);
+        auto sctpPost = std::chrono::clock_cast<std::chrono::system_clock>(lwtPost);
         modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctpPost.time_since_epoch()).count();
     }
 

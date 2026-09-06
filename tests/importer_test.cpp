@@ -219,13 +219,11 @@ TEST_F(ImporterTest, SynchronousAndNonRecursiveAndCorrupted) {
     EXPECT_FALSE(noDir.isOk());
     EXPECT_EQ(noDir.status().code(), StatusCode::NotFound);
 
-    // Add unreadable image to test failed_files counter
+    // Add invalid/empty image to test failed_files counter
     std::string corruptPath = (photosDir / "corrupted.jpg").string();
     {
-        std::ofstream ofs(corruptPath);
-        ofs << "not a real image content at all";
+        std::ofstream ofs(corruptPath); // 0-byte file fails validation
     }
-    std::filesystem::permissions(corruptPath, std::filesystem::perms::none);
 
     // Subdirectory to test non-recursive mode
     auto subDir = photosDir / "sub";

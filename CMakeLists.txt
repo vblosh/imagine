@@ -9,6 +9,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Compiler options & warnings
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
+elseif (MSVC)
+    add_compile_options(/permissive- /utf-8)
+endif()
+
+if (WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 
 # Native host optimization
@@ -73,8 +79,10 @@ target_link_libraries(imagine_lib
         OpenSSL::SSL
         OpenSSL::Crypto
         ZLIB::ZLIB
-        pthread
+        Threads::Threads
         $<$<BOOL:${TURBOJPEG_FOUND}>:turbojpeg_lib>
+        $<$<BOOL:${WIN32}>:ws2_32>
+        $<$<BOOL:${WIN32}>:crypt32>
 )
 
 # CLI Application

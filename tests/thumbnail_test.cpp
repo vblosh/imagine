@@ -161,14 +161,18 @@ TEST_F(ThumbnailTest, SaveJpegAndPng) {
     EXPECT_EQ(pngDims.value().first, 400);
     EXPECT_EQ(pngDims.value().second, 200);
 
-    // Save to invalid path should return ioError
-    auto badJpeg = Generator::saveJpeg(loadRes.value(), "/proc/invalid_dir/test.jpg");
+    // Save to invalid path should return ioError (cannot create file inside a regular file)
+    std::string dummyFile = (testDir / "dummy_not_a_dir.tmp").string();
+    { std::ofstream ofs(dummyFile); ofs << "x"; }
+
+    auto badJpeg = Generator::saveJpeg(loadRes.value(), dummyFile + "/test.jpg");
     EXPECT_FALSE(badJpeg.isOk());
     EXPECT_EQ(badJpeg.code(), StatusCode::IoError);
 
-    auto badPng = Generator::savePng(loadRes.value(), "/proc/invalid_dir/test.png");
+    auto badPng = Generator::savePng(loadRes.value(), dummyFile + "/test.png");
     EXPECT_FALSE(badPng.isOk());
     EXPECT_EQ(badPng.code(), StatusCode::IoError);
+    std::filesystem::remove(dummyFile);
 }
 
 TEST_F(ThumbnailTest, CacheOperationsAndSingleThumbnail) {

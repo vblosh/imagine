@@ -42,7 +42,7 @@ std::string Cache::getRelativeThumbnailPath(const std::string& hash, int size) {
 }
 
 std::string Cache::getThumbnailPath(const std::string& hash, int size) const {
-    return (std::filesystem::path(cacheDir_) / getRelativeThumbnailPath(hash, size)).string();
+    return (std::filesystem::path(cacheDir_) / std::filesystem::path(getRelativeThumbnailPath(hash, size))).make_preferred().string();
 }
 
 bool Cache::hasThumbnail(const std::string& hash, int size) const {

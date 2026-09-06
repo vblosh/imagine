@@ -39,11 +39,20 @@ std::string formatBytes(int64_t bytes) {
 
 std::string formatUnixTime(int64_t sec) {
     if (sec <= 0) return "Unknown";
-    std::time_t t = static_cast<std::time_t>(sec);
-    std::tm tm{};
-    gmtime_r(&t, &tm);
+    std::chrono::sys_seconds tp{std::chrono::seconds{sec}};
+    std::chrono::sys_days sd = std::chrono::floor<std::chrono::days>(tp);
+    std::chrono::year_month_day ymd{sd};
+    auto timeOfDay = tp - sd;
+    auto h = std::chrono::duration_cast<std::chrono::hours>(timeOfDay);
+    auto m = std::chrono::duration_cast<std::chrono::minutes>(timeOfDay - h);
+
     char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
+    std::snprintf(buf, sizeof(buf), "%04d-%02u-%02u %02d:%02d",
+                  static_cast<int>(ymd.year()),
+                  static_cast<unsigned>(ymd.month()),
+                  static_cast<unsigned>(ymd.day()),
+                  static_cast<int>(h.count()),
+                  static_cast<int>(m.count()));
     return std::string(buf);
 }
 

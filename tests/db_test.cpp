@@ -2,6 +2,7 @@
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/db/connection.hpp"
 #include <chrono>
+#include <fstream>
 
 using namespace imagine;
 using namespace imagine::db;
@@ -282,8 +283,11 @@ TEST(ConnectionAndStatementTest, LowLevelOperationsAndErrors) {
     EXPECT_EQ(conn.lastErrorCode(), -1);
     EXPECT_EQ(conn.lastErrorMessage(), "Database closed");
 
-    // Open invalid path
-    EXPECT_FALSE(conn.open("/proc/invalid_dir/db.sqlite").isOk());
+    // Open invalid path (cannot create directory inside a regular file)
+    std::string dummyFile = (std::filesystem::temp_directory_path() / "imagine_dummy_not_a_dir.tmp").string();
+    { std::ofstream ofs(dummyFile); ofs << "x"; }
+    EXPECT_FALSE(conn.open(dummyFile + "/sub/db.sqlite").isOk());
+    std::filesystem::remove(dummyFile);
 
     // Valid open
     ASSERT_TRUE(conn.open(":memory:").isOk());

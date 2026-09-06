@@ -31,7 +31,9 @@ void Logger::log(LogLevel level, std::string_view file, int line, std::string_vi
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
 
     std::tm tm_buf{};
-    localtime_r(&time_t_now, &tm_buf);
+    if (const std::tm* tm_ptr = std::localtime(&time_t_now)) {
+        tm_buf = *tm_ptr;
+    }
 
     const char* level_str = "INFO";
     const char* color_code = "\033[0m";

@@ -8,6 +8,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(sqlite3_amalgamation)
 
+find_package(Threads REQUIRED)
+
 add_library(sqlite3 STATIC "${sqlite3_amalgamation_SOURCE_DIR}/sqlite3.c")
 target_include_directories(sqlite3 PUBLIC "${sqlite3_amalgamation_SOURCE_DIR}")
 target_compile_definitions(sqlite3 PUBLIC
@@ -17,7 +19,7 @@ target_compile_definitions(sqlite3 PUBLIC
     SQLITE_THREADSAFE=1
     SQLITE_DEFAULT_WAL_SYNCHRONOUS=1
 )
-target_link_libraries(sqlite3 PUBLIC ${CMAKE_DL_LIBS} pthread)
+target_link_libraries(sqlite3 PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
 
 # STB single-header libraries for image loading, resizing, and writing
 FetchContent_Declare(
@@ -64,6 +66,9 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(httplib)
 target_compile_definitions(httplib INTERFACE CPPHTTPLIB_ZLIB_SUPPORT CPPHTTPLIB_OPENSSL_SUPPORT)
 target_link_libraries(httplib INTERFACE ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto)
+if (WIN32)
+    target_link_libraries(httplib INTERFACE ws2_32 crypt32)
+endif()
 
 # OpenSSL for cryptographic SHA-256
 find_package(OpenSSL REQUIRED)
