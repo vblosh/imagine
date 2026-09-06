@@ -14,7 +14,8 @@ import {
   normalizeAlbum,
   normalizeTimelineEntry,
   normalizeCatalogStats,
-  getMonthName
+  getMonthName,
+  getOriginalMediaUrl
 } from './api.js';
 import { state, invalidateGpsCache } from './state.js';
 import { dom, showToast } from './dom.js';
@@ -551,7 +552,7 @@ export function createPhotoCard(item) {
   // Thumbnail URL with fallback
   const thumbUrl = item.content_hash
     ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
-    : `/api/photos/${item.id}/original`;
+    : getOriginalMediaUrl(item);
 
   const flagBadge = item.flag === 1
     ? '<span class="flag-badge pick" title="Pick">✔</span>'

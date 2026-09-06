@@ -13,7 +13,8 @@ import {
   normalizeAlbum,
   normalizeCatalogStats,
   normalizeTimelineEntry,
-  normalizeImportProgress
+  normalizeImportProgress,
+  getOriginalMediaUrl
 } from './api.js';
 import { state } from './state.js';
 import { dom, validateRequiredDom, showToast } from './dom.js';
@@ -1016,5 +1017,6 @@ window._imagineApp = {
   loupeNext,
   loupePrev,
   clearAllFilters,
-  showToast
+  showToast,
+  getOriginalMediaUrl
 };

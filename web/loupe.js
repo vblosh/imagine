@@ -5,6 +5,7 @@
 
 import { state } from './state.js';
 import { dom } from './dom.js';
+import { getOriginalMediaUrl } from './api.js';
 import { updateItemRating, loadMoreMedia } from './media-grid.js';
 import { renderStarWidget } from './inspector.js';
 import { closeQuickEdit, quickEditState } from './quick-edit.js';
@@ -69,7 +70,7 @@ export function updateLoupeView() {
     dom.loupeImg.style.display = 'none';
   }
 
-  const fileUrl = `/api/photos/${item.id}/original`;
+  const fileUrl = getOriginalMediaUrl(item);
 
   if (item.media_type === 'video') {
     if (dom.loupeVideo) {

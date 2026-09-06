@@ -11,7 +11,7 @@
  * - Save (in-place overwrite with thumbnail & DB update) and Save Copy
  */
 
-import { normalizeMediaItem } from "./api.js";
+import { normalizeMediaItem, getOriginalMediaUrl } from "./api.js";
 import { state } from "./state.js";
 import { dom, showToast } from "./dom.js";
 import { renderGrid } from "./media-grid.js";
@@ -182,10 +182,10 @@ export function openQuickEdit() {
   const initialCtx = initialCanvas.getContext("2d");
 
   const cardImg = document.querySelector(`.photo-card[data-id="${item.id}"] img`);
-  if (cardImg && cardImg.complete && cardImg.naturalWidth > 0) {
-    initialCtx.drawImage(cardImg, 0, 0, w, h);
-  } else if (dom.loupeImg && dom.loupeImg.complete && dom.loupeImg.naturalWidth > 0) {
+  if (dom.loupeImg && dom.loupeImg.complete && dom.loupeImg.naturalWidth > 0 && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`)) {
     initialCtx.drawImage(dom.loupeImg, 0, 0, w, h);
+  } else if (cardImg && cardImg.complete && cardImg.naturalWidth > 0) {
+    initialCtx.drawImage(cardImg, 0, 0, w, h);
   }
 
   quickEditState.originalImage = initialCanvas;
@@ -212,6 +212,10 @@ export function openQuickEdit() {
     if (resolveImageLoaded) resolveImageLoaded(loadedImg);
   };
 
+  const targetOriginalUrl = (dom.loupeImg && dom.loupeImg.src && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`))
+    ? dom.loupeImg.src
+    : getOriginalMediaUrl(item);
+
   if (dom.loupeImg && dom.loupeImg.complete && dom.loupeImg.naturalWidth > 0 && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`)) {
     onImageReady(dom.loupeImg);
   } else if (dom.loupeImg && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`)) {
@@ -221,7 +225,7 @@ export function openQuickEdit() {
   const img = new Image();
   img.crossOrigin = "anonymous";
   img.onload = () => onImageReady(img);
-  img.src = `/api/photos/${item.id}/original`;
+  img.src = targetOriginalUrl;
 }
 
 export function closeQuickEdit(promptIfDirty = true) {
@@ -632,18 +636,23 @@ export async function saveEdits(mode = "overwrite") {
 
     const rawItem = await res.json();
     const updatedItem = normalizeMediaItem(rawItem);
-    const cacheBuster = `?t=${Date.now()}`;
+    const ts = Date.now();
+    if (updatedItem) {
+      updatedItem._cacheBuster = ts;
+    }
+    const cacheBuster = `?t=${ts}`;
 
     if (mode === "overwrite") {
       const idx = state.mediaItems.findIndex(m => m.id === id);
       if (idx !== -1) {
         state.mediaItems[idx] = updatedItem;
       }
-      if (dom.loupeImg) dom.loupeImg.src = `/api/photos/${id}/original${cacheBuster}`;
+      const newOriginalUrl = getOriginalMediaUrl(updatedItem);
+      if (dom.loupeImg) dom.loupeImg.src = newOriginalUrl;
       const cardImg = document.querySelector(`.photo-card[data-id="${id}"] img`);
       if (cardImg) cardImg.src = `/api/thumbnails/${updatedItem.content_hash}/256${cacheBuster}`;
       if (dom.inspectorImg && state.selectedIds.has(id)) {
-        dom.inspectorImg.src = `/api/photos/${id}/original${cacheBuster}`;
+        dom.inspectorImg.src = newOriginalUrl;
       }
       showToast("Photo edited and saved successfully");
     } else {

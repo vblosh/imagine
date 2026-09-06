@@ -287,6 +287,17 @@ export function normalizeMediaItem(raw) {
     thumb_small: typeof raw.thumb_small === 'string' ? raw.thumb_small : '',
     thumb_large: typeof raw.thumb_large === 'string' ? raw.thumb_large : '',
     caption: typeof raw.caption === 'string' ? raw.caption : '',
+    created_at: Number.isFinite(Number(raw.created_at)) ? Number(raw.created_at) : 0,
+    updated_at: Number.isFinite(Number(raw.updated_at)) ? Number(raw.updated_at) : 0,
+    _cacheBuster: raw._cacheBuster || null,
     tags: Array.isArray(raw.tags) ? raw.tags.map(normalizeTag).filter(Boolean) : []
   };
+}
+
+export function getOriginalMediaUrl(item, cacheBuster = null) {
+  if (!item || !item.id) return '';
+  const buster = cacheBuster !== null
+    ? cacheBuster
+    : (item._cacheBuster || (item.updated_at && item.created_at && item.updated_at > item.created_at ? item.updated_at : ''));
+  return buster ? `/api/photos/${item.id}/original?t=${encodeURIComponent(buster)}` : `/api/photos/${item.id}/original`;
 }

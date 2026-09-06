@@ -8,7 +8,8 @@ import {
   escapeHtml,
   numeric,
   hasValidGps,
-  formatDateTime
+  formatDateTime,
+  getOriginalMediaUrl
 } from './api.js';
 import { state, getGpsMediaItems, invalidateGpsCache } from './state.js';
 import { dom, showToast } from './dom.js';
@@ -267,7 +268,7 @@ export function renderMapMarkers(force = false) {
     const safeFileName = escapeHtml(repItem.file_name);
     const thumbUrl = repItem.content_hash
       ? `/api/thumbnails/${encodeURIComponent(repItem.content_hash)}/256`
-      : `/api/photos/${repItem.id}/original`;
+      : getOriginalMediaUrl(repItem);
 
     const isSelected = items.some(i => state.selectedIds.has(i.id));
     const countBadge = count > 1 ? `<span class="photo-pin-count">${count}</span>` : '';
@@ -365,7 +366,7 @@ export function createMapPopupElement(items, initialItemId) {
     const safeFileName = escapeHtml(item.file_name);
     const thumbUrl = item.content_hash
       ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
-      : `/api/photos/${item.id}/original`;
+      : getOriginalMediaUrl(item);
 
     // Update marker activeMediaId and pin thumbnail if applicable
     const marker = state.mapMarkers.find(m => m.clusterItems === items) || state.activeMapMarker;
@@ -631,7 +632,7 @@ export function renderUnmappedTray() {
     const safeFileName = escapeHtml(item.file_name);
     const thumbUrl = item.content_hash
       ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
-      : `/api/photos/${item.id}/original`;
+      : getOriginalMediaUrl(item);
 
     const checkBadge = isSelected ? '<div class="unmapped-chip-check">✓</div>' : '';
     chip.innerHTML = `

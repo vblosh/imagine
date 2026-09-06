@@ -8,7 +8,8 @@ import {
   escapeHtml,
   formatDate,
   formatBytes,
-  normalizeImportProgress
+  normalizeImportProgress,
+  getOriginalMediaUrl
 } from './api.js';
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
@@ -278,9 +279,9 @@ export function openTagModal(targetMediaIds = null) {
       if (dom.tagModalPhotoThumb) {
         dom.tagModalPhotoThumb.src = firstItem.content_hash
           ? `/api/thumbnails/${encodeURIComponent(firstItem.content_hash)}/256`
-          : `/api/photos/${firstItem.id}/original`;
+          : getOriginalMediaUrl(firstItem);
         dom.tagModalPhotoThumb.onerror = () => {
-          dom.tagModalPhotoThumb.src = `/api/photos/${firstItem.id}/original`;
+          dom.tagModalPhotoThumb.src = getOriginalMediaUrl(firstItem);
         };
       }
       if (dom.tagModalPhotoName) {

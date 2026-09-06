@@ -1235,6 +1235,18 @@ TEST_F(ServerTest, EditPhotoEndpointOverwriteAndCopy) {
 
     httplib::Client client("127.0.0.1", port_);
 
+    // Check caching headers before edit
+    auto origBefore = client.Get("/api/photos/" + std::to_string(id) + "/original");
+    ASSERT_TRUE(origBefore);
+    EXPECT_EQ(origBefore->status, 200);
+    EXPECT_EQ(origBefore->get_header_value("Cache-Control"), "no-cache, must-revalidate");
+    std::string etagBefore = origBefore->get_header_value("ETag");
+    EXPECT_FALSE(etagBefore.empty());
+
+    // Conditional request before edit returns 304 Not Modified
+    httplib::Headers condBefore = {{"If-None-Match", etagBefore}};
+    EXPECT_EQ(client.Get("/api/photos/" + std::to_string(id) + "/original", condBefore)->status, 304);
+
     // 1. Overwrite edit with operations (crop 200x150 and rotate 90)
     nlohmann::json editPayload = {
         {"mode", "overwrite"},
@@ -1247,6 +1259,13 @@ TEST_F(ServerTest, EditPhotoEndpointOverwriteAndCopy) {
     auto editRes = client.Post("/api/photos/" + std::to_string(id) + "/edit", editPayload.dump(), "application/json");
     ASSERT_TRUE(editRes);
     EXPECT_EQ(editRes->status, 200);
+
+    // Verify that after overwrite, GET with previous ETag returns 200 OK (not 304) and new content
+    auto origAfter = client.Get("/api/photos/" + std::to_string(id) + "/original", condBefore);
+    ASSERT_TRUE(origAfter);
+    EXPECT_EQ(origAfter->status, 200);
+    EXPECT_EQ(origAfter->get_header_value("Cache-Control"), "no-cache, must-revalidate");
+    EXPECT_NE(origAfter->get_header_value("ETag"), etagBefore);
 
     auto resJson = nlohmann::json::parse(editRes->body);
     EXPECT_EQ(resJson["id"].get<MediaId>(), id);

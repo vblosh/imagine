@@ -276,3 +276,63 @@ def test_quick_edit_disabled_on_video_and_audio(media_server, page: Page):
     page.keyboard.press("Escape")
     expect(toolbar).to_be_hidden()
 
+
+def test_after_save_original_file_not_loaded_from_browser_cache(server, page: Page):
+    """Verify that after saving an overwrite edit, subsequent views (loupe, quick edit, inspector)
+    load the fresh updated image and do not load the stale pre-edit file from browser cache."""
+    page.goto(server["url"])
+
+    # Use mountain.bmp which is 800x600 (not square)
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+
+    # Open quick edit
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    canvas = page.locator("#quickEditCanvas")
+    orig_w = int(canvas.evaluate("el => el.width"))
+    orig_h = int(canvas.evaluate("el => el.height"))
+    assert orig_w > orig_h  # mountain.bmp is landscape
+
+    # Rotate right 90 degrees: dimensions become orig_h x orig_w
+    page.locator("#quickEditRotateRightBtn").click()
+    assert int(canvas.evaluate("el => el.width")) == orig_h
+    assert int(canvas.evaluate("el => el.height")) == orig_w
+
+    # Save with overwrite
+    page.locator("#quickEditSaveBtn").click()
+    expect(page.locator("#toastContainer .toast", has_text="Photo edited and saved successfully")).to_be_visible()
+    expect(loupe).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
+
+    # Loupe image should have the updated src and dimensions
+    loupe_img = page.locator("#loupeImg")
+    expect(loupe_img).to_be_visible()
+    assert int(loupe_img.evaluate("el => el.naturalWidth")) == orig_h
+    assert int(loupe_img.evaluate("el => el.naturalHeight")) == orig_w
+
+    # Close loupe
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+
+    # Re-open loupe on mountain.bmp: must show the updated image, NOT the old cached image
+    card.dblclick()
+    expect(loupe).to_be_visible()
+    assert int(loupe_img.evaluate("el => el.naturalWidth")) == orig_h
+    assert int(loupe_img.evaluate("el => el.naturalHeight")) == orig_w
+
+    # Open Quick Edit again on the photo: canvas must be initialized with orig_h x orig_w, NOT orig_w x orig_h from cache
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+    assert int(canvas.evaluate("el => el.width")) == orig_h
+    assert int(canvas.evaluate("el => el.height")) == orig_w
+
+    # Close quick edit and loupe
+    page.keyboard.press("Escape")
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+
+

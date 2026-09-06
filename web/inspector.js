@@ -12,7 +12,8 @@ import {
   formatExposureTime,
   numeric,
   hasValidGps,
-  normalizeMediaItem
+  normalizeMediaItem,
+  getOriginalMediaUrl
 } from './api.js';
 import { state } from './state.js';
 import { dom } from './dom.js';
@@ -48,11 +49,11 @@ export function renderInspectorContent(item) {
   // Inspector Preview
   const previewUrl = item.content_hash
     ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/1024`
-    : `/api/photos/${item.id}/original`;
+    : getOriginalMediaUrl(item);
   if (dom.inspectorImg) {
     dom.inspectorImg.src = previewUrl;
     dom.inspectorImg.onerror = () => {
-      dom.inspectorImg.src = `/api/photos/${item.id}/original`;
+      dom.inspectorImg.src = getOriginalMediaUrl(item);
     };
   }
 
