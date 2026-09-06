@@ -83,7 +83,17 @@ void to_json(nlohmann::json& j, const MediaItem& m) {
         {"tags", m.tags},
         {"caption", m.caption},
         {"created_at", m.created_at},
-        {"updated_at", m.updated_at}
+        {"updated_at", m.updated_at},
+        {"media_type", m.media_type},
+        {"duration", m.duration},
+        {"audio_artist", m.audio_artist},
+        {"audio_title", m.audio_title},
+        {"audio_album", m.audio_album},
+        {"audio_genre", m.audio_genre},
+        {"codec", m.codec},
+        {"bitrate", m.bitrate},
+        {"channels", m.channels},
+        {"sample_rate", m.sample_rate}
     };
 }
 
@@ -110,6 +120,16 @@ void from_json(const nlohmann::json& j, MediaItem& m) {
     m.caption = j.value("caption", "");
     m.created_at = j.value("created_at", int64_t{0});
     m.updated_at = j.value("updated_at", int64_t{0});
+    m.media_type = j.value("media_type", "photo");
+    m.duration = j.value("duration", 0.0);
+    m.audio_artist = j.value("audio_artist", "");
+    m.audio_title = j.value("audio_title", "");
+    m.audio_album = j.value("audio_album", "");
+    m.audio_genre = j.value("audio_genre", "");
+    m.codec = j.value("codec", "");
+    m.bitrate = j.value("bitrate", int32_t{0});
+    m.channels = j.value("channels", int32_t{0});
+    m.sample_rate = j.value("sample_rate", int32_t{0});
 }
 
 void to_json(nlohmann::json& j, const Album& a) {
@@ -147,6 +167,10 @@ void from_json(const nlohmann::json& j, Album& a) {
 void to_json(nlohmann::json& j, const CatalogStats& s) {
     j = nlohmann::json{
         {"total_media", s.total_media},
+        {"total_photos", s.total_photos},
+        {"total_videos", s.total_videos},
+        {"total_audio", s.total_audio},
+        {"total_duration", s.total_duration},
         {"total_size_bytes", s.total_size_bytes},
         {"total_tags", s.total_tags},
         {"total_albums", s.total_albums},
@@ -157,6 +181,10 @@ void to_json(nlohmann::json& j, const CatalogStats& s) {
 
 void from_json(const nlohmann::json& j, CatalogStats& s) {
     s.total_media = j.value("total_media", int64_t{0});
+    s.total_photos = j.value("total_photos", int64_t{0});
+    s.total_videos = j.value("total_videos", int64_t{0});
+    s.total_audio = j.value("total_audio", int64_t{0});
+    s.total_duration = j.value("total_duration", 0.0);
     s.total_size_bytes = j.value("total_size_bytes", int64_t{0});
     s.total_tags = j.value("total_tags", int64_t{0});
     s.total_albums = j.value("total_albums", int64_t{0});

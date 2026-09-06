@@ -34,6 +34,7 @@ struct QueryCriteria {
     std::optional<double> max_lat{std::nullopt};
     std::optional<double> min_lon{std::nullopt};
     std::optional<double> max_lon{std::nullopt};
+    std::optional<std::string> media_type{std::nullopt};
 };
 
 void to_json(nlohmann::json& j, const QueryCriteria& c);
@@ -73,6 +74,7 @@ public:
     QueryBuilder& paginate(int32_t limit, int32_t offset = 0);
     QueryBuilder& hasGps(bool hasGps = true);
     QueryBuilder& boundingBox(double minLat, double maxLat, double minLon, double maxLon);
+    QueryBuilder& mediaType(std::string type);
 
     std::pair<std::string, std::vector<std::string>> buildWhere() const;
     std::string buildOrderBy() const;

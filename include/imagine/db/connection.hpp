@@ -50,6 +50,7 @@ public:
     Status reset();
 
     bool isNull(int col) const;
+    int columnCount() const;
     int32_t getInt(int col) const;
     int64_t getInt64(int col) const;
     double getDouble(int col) const;
@@ -57,7 +58,6 @@ public:
     std::optional<std::string> getOptionalString(int col) const;
 
     sqlite3_stmt* raw() const { return stmt_; }
-    int columnCount() const noexcept { return stmt_ ? sqlite3_column_count(stmt_) : 0; }
 
 private:
     sqlite3_stmt* stmt_{nullptr};

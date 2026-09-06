@@ -52,6 +52,7 @@ set(IMAGINE_LIB_SOURCES
     src/db/catalog_db.cpp
     src/metadata/hasher.cpp
     src/metadata/exif_reader.cpp
+    src/metadata/media_reader.cpp
     src/thumbnail/generator.cpp
     src/thumbnail/cache.cpp
     src/concurrency/thread_pool.cpp
@@ -108,6 +109,7 @@ if (BUILD_TESTING)
         tests/importer_test.cpp
         tests/query_test.cpp
         tests/server_test.cpp
+        tests/media_test.cpp
     )
 
     add_executable(imagine_tests ${IMAGINE_TEST_SOURCES})

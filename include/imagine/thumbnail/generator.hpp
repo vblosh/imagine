@@ -32,6 +32,11 @@ public:
     static Result<std::pair<int, int>> getImageDimensionsFromMemory(const uint8_t* data, size_t size);
 
     static bool isJpeg(const uint8_t* data, size_t size);
+    static Result<ImageBuffer> generateProceduralThumbnail(
+        const std::string& mediaType,
+        const std::string& title = "",
+        int size = 256
+    );
     static Result<ImageBuffer> loadImageFromMemoryTurboJpeg(
         const uint8_t* data,
         size_t size,

@@ -432,4 +432,85 @@ Status Generator::savePng(const ImageBuffer& img, const std::string& destPath) {
     return Status::ok();
 }
 
+Result<ImageBuffer> Generator::generateProceduralThumbnail(
+    const std::string& mediaType,
+    const std::string& title,
+    int size
+) {
+    if (size <= 0) size = 256;
+    ImageBuffer img;
+    img.width = size;
+    img.height = size;
+    img.channels = 3;
+    img.data.resize(size * size * 3);
+
+    bool isAudio = (mediaType == "audio");
+
+    uint8_t r1 = isAudio ? 24 : 18;
+    uint8_t g1 = isAudio ? 18 : 24;
+    uint8_t b1 = isAudio ? 36 : 38;
+
+    uint8_t r2 = isAudio ? 48 : 28;
+    uint8_t g2 = isAudio ? 28 : 42;
+    uint8_t b2 = isAudio ? 72 : 68;
+
+    int cx = size / 2;
+    int cy = size / 2;
+    int maxR = size / 3;
+
+    for (int y = 0; y < size; ++y) {
+        float ty = static_cast<float>(y) / size;
+        for (int x = 0; x < size; ++x) {
+            float tx = static_cast<float>(x) / size;
+            float t = (tx + ty) * 0.5f;
+
+            uint8_t pr = static_cast<uint8_t>(r1 + (r2 - r1) * t);
+            uint8_t pg = static_cast<uint8_t>(g1 + (g2 - g1) * t);
+            uint8_t pb = static_cast<uint8_t>(b1 + (b2 - b1) * t);
+
+            int dx = x - cx;
+            int dy = y - cy;
+            int distSq = dx * dx + dy * dy;
+            int dist = static_cast<int>(std::sqrt(distSq));
+
+            if (isAudio) {
+                if (dist <= maxR) {
+                    if (dist <= maxR * 0.12f) {
+                        pr = 15; pg = 12; pb = 20;
+                    } else if (dist <= maxR * 0.38f) {
+                        pr = 145; pg = 70; pb = 210;
+                    } else {
+                        int groove = (dist % 7 < 2) ? 48 : 34;
+                        pr = groove; pg = groove - 2; pb = groove + 4;
+                    }
+                }
+            } else {
+                if (std::abs(dx) <= maxR && std::abs(dy) <= maxR) {
+                    pr = static_cast<uint8_t>(std::min(255, pr + 15));
+                    pg = static_cast<uint8_t>(std::min(255, pg + 20));
+                    pb = static_cast<uint8_t>(std::min(255, pb + 28));
+
+                    int triLeft = -maxR / 3;
+                    int triRight = maxR / 2;
+                    int triHalfH = maxR / 2;
+
+                    if (dx >= triLeft && dx <= triRight) {
+                        int currentHalfH = triHalfH * (triRight - dx) / std::max(1, (triRight - triLeft));
+                        if (std::abs(dy) <= currentHalfH) {
+                            pr = 70; pg = 160; pb = 245;
+                        }
+                    }
+                }
+            }
+
+            size_t idx = (y * size + x) * 3;
+            img.data[idx] = pr;
+            img.data[idx + 1] = pg;
+            img.data[idx + 2] = pb;
+        }
+    }
+
+    return img;
+}
+
 } // namespace imagine::thumbnail

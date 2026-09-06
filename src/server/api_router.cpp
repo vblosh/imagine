@@ -115,6 +115,27 @@ void sendStatusError(httplib::Response& res, const Status& s) {
     sendError(res, s.message(), statusToHttpCode(s));
 }
 
+std::vector<uint8_t> base64Decode(const std::string& in) {
+    std::vector<uint8_t> out;
+    std::vector<int> T(256, -1);
+    for (int i = 0; i < 64; i++) {
+        T["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[i]] = i;
+    }
+    int val = 0, valb = -8;
+    for (unsigned char c : in) {
+        if (c == '=') break;
+        if (std::isspace(c)) continue;
+        if (T[c] == -1) continue;
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<uint8_t>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
 bool isSensitiveSystemPath(const std::filesystem::path& canonicalPath) {
     std::string s = canonicalPath.lexically_normal().string();
     if (s.empty()) return true;
@@ -368,6 +389,14 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
             criteria.flag = static_cast<FlagState>(val);
         }
+        if (req.has_param("media_type")) {
+            std::string mt = req.get_param_value("media_type");
+            if (mt != "photo" && mt != "video" && mt != "audio") {
+                sendError(res, "Query parameter 'media_type' must be 'photo', 'video', or 'audio'", 400);
+                return;
+            }
+            criteria.media_type = std::move(mt);
+        }
         if (req.has_param("search")) {
             std::string search = req.get_param_value("search");
             if (search.size() > kMaxSearchLength) {
@@ -466,7 +495,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 desc = (dir != "asc");
             }
             static const std::unordered_set<std::string> allowedSortCols = {
-                "date_taken", "rating", "file_name", "file_size"
+                "date_taken", "rating", "file_name", "file_size", "duration"
             };
             if (allowedSortCols.find(col) == allowedSortCols.end()) {
                 sendError(res, "Invalid sort column: " + col, 400);
@@ -1124,10 +1153,21 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
             auto mediaRes = db().getMediaByHash(hash);
             if (mediaRes.isOk()) {
                 const auto& item = mediaRes.value();
-                std::string photoPath = resolvePhotoPath(item.file_path);
-                auto genRes = cache().ensureThumbnail(photoPath, hash, size, item.exif.orientation);
-                if (genRes.isOk()) {
-                    thumbPath = genRes.value();
+                if (item.media_type == "video" || item.media_type == "audio") {
+                    std::string label;
+                    if (item.media_type == "audio" && !item.audio_artist.empty()) {
+                        label = item.audio_artist + (!item.audio_title.empty() ? " - " + item.audio_title : "");
+                    }
+                    auto procRes = cache().ensureProceduralThumbnails(hash, item.media_type, label);
+                    if (procRes.isOk()) {
+                        thumbPath = cache().getThumbnailPath(hash, size);
+                    }
+                } else {
+                    std::string photoPath = resolvePhotoPath(item.file_path);
+                    auto genRes = cache().ensureThumbnail(photoPath, hash, size, item.exif.orientation);
+                    if (genRes.isOk()) {
+                        thumbPath = genRes.value();
+                    }
                 }
             }
         }
@@ -1152,9 +1192,15 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         }
     });
 
-    // GET /api/photos/:id/original
-    server.Get(R"(/api/photos/(\d+)/original)", [this](const httplib::Request& req, httplib::Response& res) {
-        MediaId id = std::stoll(req.matches[1]);
+    // GET /api/photos/:id/original (and /api/media/:id/file, /api/media/:id/original)
+    auto handleServeFile = [this](const httplib::Request& req, httplib::Response& res) {
+        MediaId id = 0;
+        try {
+            id = std::stoll(req.matches[1]);
+        } catch (...) {
+            sendError(res, "Invalid media ID", 400);
+            return;
+        }
         auto mediaRes = db().getMediaById(id);
         if (!mediaRes.isOk()) {
             sendError(res, "Media not found", 404);
@@ -1202,6 +1248,72 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         }
 
         res.set_file_content(photoPath, mime);
+    };
+
+    server.Get(R"(/api/photos/(\d+)/original)", handleServeFile);
+    server.Get(R"(/api/media/(\d+)/file)", handleServeFile);
+    server.Get(R"(/api/media/(\d+)/original)", handleServeFile);
+
+    // POST /api/media/:id/thumbnail
+    server.Post(R"(/api/media/(\d+)/thumbnail)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        MediaId id = 0;
+        try {
+            id = std::stoll(req.matches[1]);
+        } catch (...) {
+            sendError(res, "Invalid media ID", 400);
+            return;
+        }
+
+        auto mediaRes = db().getMediaById(id);
+        if (!mediaRes.isOk()) {
+            sendError(res, "Media not found", 404);
+            return;
+        }
+
+        const auto& item = mediaRes.value();
+        if (req.body.empty()) {
+            sendError(res, "Request body cannot be empty", 400);
+            return;
+        }
+
+        const uint8_t* data = reinterpret_cast<const uint8_t*>(req.body.data());
+        size_t size = req.body.size();
+
+        std::vector<uint8_t> decoded;
+        if (req.body.rfind("data:image/", 0) == 0) {
+            auto comma = req.body.find(',');
+            if (comma != std::string::npos) {
+                std::string b64 = req.body.substr(comma + 1);
+                decoded = base64Decode(b64);
+                data = decoded.data();
+                size = decoded.size();
+            }
+        }
+
+        if (size == 0) {
+            sendError(res, "Invalid thumbnail data", 400);
+            return;
+        }
+
+        std::error_code ec;
+        std::filesystem::remove(cache().getThumbnailPath(item.content_hash, thumbnail::Cache::SmallSize), ec);
+        std::filesystem::remove(cache().getThumbnailPath(item.content_hash, thumbnail::Cache::LargeSize), ec);
+
+        int outW = 0, outH = 0;
+        auto thumbRes = cache().ensureDualThumbnailsFromMemory(
+            data, size, item.content_hash, 1, &outW, &outH
+        );
+        if (!thumbRes.isOk()) {
+            sendError(res, "Failed to create thumbnail: " + thumbRes.status().message(), 500);
+            return;
+        }
+
+        sendJson(res, {
+            {"status", "ok"},
+            {"thumb_small", thumbnail::Cache::getRelativeThumbnailPath(item.content_hash, thumbnail::Cache::SmallSize)},
+            {"thumb_large", thumbnail::Cache::getRelativeThumbnailPath(item.content_hash, thumbnail::Cache::LargeSize)}
+        });
     });
 
     // POST /api/photos/:id/edit and POST /api/media/:id/edit

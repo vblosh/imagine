@@ -68,6 +68,18 @@ MediaItem CatalogDb::extractMediaItem(Statement& stmt) {
     if (stmt.columnCount() > 28) {
         m.caption = stmt.getString(28);
     }
+    if (stmt.columnCount() > 29) {
+        m.media_type = stmt.getString(29);
+        m.duration = stmt.getDouble(30);
+        m.audio_artist = stmt.getString(31);
+        m.audio_title = stmt.getString(32);
+        m.audio_album = stmt.getString(33);
+        m.audio_genre = stmt.getString(34);
+        m.codec = stmt.getString(35);
+        m.bitrate = stmt.getInt(36);
+        m.channels = stmt.getInt(37);
+        m.sample_rate = stmt.getInt(38);
+    }
     return m;
 }
 
@@ -79,13 +91,17 @@ Result<MediaId> CatalogDb::insertMedia(MediaItem& item) {
             width, height, date_taken, date_taken_str, rating, flag,
             camera_make, camera_model, lens, exposure_time, f_number, iso,
             focal_length, orientation, has_gps, latitude, longitude, altitude,
-            thumb_small, thumb_large, created_at, updated_at, caption
+            thumb_small, thumb_large, created_at, updated_at, caption,
+            media_type, duration, audio_artist, audio_title, audio_album, audio_genre,
+            codec, bitrate, channels, sample_rate
         ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?
         );
     )SQL";
 
@@ -125,6 +141,16 @@ Result<MediaId> CatalogDb::insertMedia(MediaItem& item) {
     stmt.bind(26, item.created_at);
     stmt.bind(27, item.updated_at);
     stmt.bind(28, item.caption);
+    stmt.bind(29, item.media_type);
+    stmt.bind(30, item.duration);
+    stmt.bind(31, item.audio_artist);
+    stmt.bind(32, item.audio_title);
+    stmt.bind(33, item.audio_album);
+    stmt.bind(34, item.audio_genre);
+    stmt.bind(35, item.codec);
+    stmt.bind(36, item.bitrate);
+    stmt.bind(37, item.channels);
+    stmt.bind(38, item.sample_rate);
 
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to insert media item: " + conn_.lastErrorMessage());
@@ -146,13 +172,17 @@ Result<size_t> CatalogDb::insertMediaBatch(std::vector<MediaItem>& items) {
             width, height, date_taken, date_taken_str, rating, flag,
             camera_make, camera_model, lens, exposure_time, f_number, iso,
             focal_length, orientation, has_gps, latitude, longitude, altitude,
-            thumb_small, thumb_large, created_at, updated_at, caption
+            thumb_small, thumb_large, created_at, updated_at, caption,
+            media_type, duration, audio_artist, audio_title, audio_album, audio_genre,
+            codec, bitrate, channels, sample_rate
         ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?
         );
     )SQL";
 
@@ -197,6 +227,16 @@ Result<size_t> CatalogDb::insertMediaBatch(std::vector<MediaItem>& items) {
         stmt.bind(26, item.created_at);
         stmt.bind(27, item.updated_at);
         stmt.bind(28, item.caption);
+        stmt.bind(29, item.media_type);
+        stmt.bind(30, item.duration);
+        stmt.bind(31, item.audio_artist);
+        stmt.bind(32, item.audio_title);
+        stmt.bind(33, item.audio_album);
+        stmt.bind(34, item.audio_genre);
+        stmt.bind(35, item.codec);
+        stmt.bind(36, item.bitrate);
+        stmt.bind(37, item.channels);
+        stmt.bind(38, item.sample_rate);
 
         if (stmt.step() != StepResult::Done) {
             return Status::databaseError("Failed to insert media item in batch: " + conn_.lastErrorMessage());
@@ -224,7 +264,9 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
             rating = ?, flag = ?, camera_make = ?, camera_model = ?, lens = ?,
             exposure_time = ?, f_number = ?, iso = ?, focal_length = ?,
             orientation = ?, has_gps = ?, latitude = ?, longitude = ?, altitude = ?,
-            thumb_small = ?, thumb_large = ?, updated_at = ?, caption = ?
+            thumb_small = ?, thumb_large = ?, updated_at = ?, caption = ?,
+            media_type = ?, duration = ?, audio_artist = ?, audio_title = ?, audio_album = ?,
+            audio_genre = ?, codec = ?, bitrate = ?, channels = ?, sample_rate = ?
         WHERE id = ?;
     )SQL";
 
@@ -259,7 +301,17 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
     stmt.bind(24, item.thumb_large);
     stmt.bind(25, now);
     stmt.bind(26, item.caption);
-    stmt.bind(27, item.id);
+    stmt.bind(27, item.media_type);
+    stmt.bind(28, item.duration);
+    stmt.bind(29, item.audio_artist);
+    stmt.bind(30, item.audio_title);
+    stmt.bind(31, item.audio_album);
+    stmt.bind(32, item.audio_genre);
+    stmt.bind(33, item.codec);
+    stmt.bind(34, item.bitrate);
+    stmt.bind(35, item.channels);
+    stmt.bind(36, item.sample_rate);
+    stmt.bind(37, item.id);
 
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to update media item: " + conn_.lastErrorMessage());
@@ -280,7 +332,9 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
             rating = ?, flag = ?, camera_make = ?, camera_model = ?, lens = ?,
             exposure_time = ?, f_number = ?, iso = ?, focal_length = ?,
             orientation = ?, has_gps = ?, latitude = ?, longitude = ?, altitude = ?,
-            thumb_small = ?, thumb_large = ?, updated_at = ?, caption = ?
+            thumb_small = ?, thumb_large = ?, updated_at = ?, caption = ?,
+            media_type = ?, duration = ?, audio_artist = ?, audio_title = ?, audio_album = ?,
+            audio_genre = ?, codec = ?, bitrate = ?, channels = ?, sample_rate = ?
         WHERE id = ?;
     )SQL";
 
@@ -320,7 +374,17 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
         stmt.bind(24, item.thumb_large);
         stmt.bind(25, now);
         stmt.bind(26, item.caption);
-        stmt.bind(27, item.id);
+        stmt.bind(27, item.media_type);
+        stmt.bind(28, item.duration);
+        stmt.bind(29, item.audio_artist);
+        stmt.bind(30, item.audio_title);
+        stmt.bind(31, item.audio_album);
+        stmt.bind(32, item.audio_genre);
+        stmt.bind(33, item.codec);
+        stmt.bind(34, item.bitrate);
+        stmt.bind(35, item.channels);
+        stmt.bind(36, item.sample_rate);
+        stmt.bind(37, item.id);
 
         if (stmt.step() != StepResult::Done) {
             return Status::databaseError("Failed to update media item in batch: " + conn_.lastErrorMessage());
@@ -874,6 +938,25 @@ Result<CatalogStats> CatalogDb::getStats() {
                 s.total_size_bytes = stmt.getInt64(1);
                 s.earliest_date = stmt.getInt64(2);
                 s.latest_date = stmt.getInt64(3);
+            }
+        }
+
+        auto brkRes = conn_.prepare("SELECT media_type, COUNT(*), COALESCE(SUM(duration), 0.0) FROM media_items GROUP BY media_type;");
+        if (brkRes.isOk()) {
+            auto bStmt = std::move(brkRes.value());
+            while (bStmt.step() == StepResult::Row) {
+                std::string mt = bStmt.getString(0);
+                int64_t cnt = bStmt.getInt64(1);
+                double dur = bStmt.getDouble(2);
+                if (mt == "video") {
+                    s.total_videos += cnt;
+                    s.total_duration += dur;
+                } else if (mt == "audio") {
+                    s.total_audio += cnt;
+                    s.total_duration += dur;
+                } else {
+                    s.total_photos += cnt;
+                }
             }
         }
     }

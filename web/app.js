@@ -474,6 +474,42 @@ export function setupEventListeners() {
       clearAllFilters();
     });
   }
+  if (dom.navPhotos) {
+    dom.navPhotos.addEventListener('click', () => {
+      state.activeNavFilter = 'photos';
+      state.activeTagId = null;
+      state.activeAlbumId = null;
+      state.activeFolder = null;
+      state.activeTimelinePeriod = null;
+      updateSidebarActive();
+      renderTimeline();
+      loadMedia();
+    });
+  }
+  if (dom.navVideos) {
+    dom.navVideos.addEventListener('click', () => {
+      state.activeNavFilter = 'videos';
+      state.activeTagId = null;
+      state.activeAlbumId = null;
+      state.activeFolder = null;
+      state.activeTimelinePeriod = null;
+      updateSidebarActive();
+      renderTimeline();
+      loadMedia();
+    });
+  }
+  if (dom.navAudio) {
+    dom.navAudio.addEventListener('click', () => {
+      state.activeNavFilter = 'audio';
+      state.activeTagId = null;
+      state.activeAlbumId = null;
+      state.activeFolder = null;
+      state.activeTimelinePeriod = null;
+      updateSidebarActive();
+      renderTimeline();
+      loadMedia();
+    });
+  }
   if (dom.navPicks) {
     dom.navPicks.addEventListener('click', () => {
       state.activeNavFilter = 'picks';

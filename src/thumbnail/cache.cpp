@@ -212,4 +212,36 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemor
     return std::make_pair(smallPath, largePath);
 }
 
+Result<std::pair<std::string, std::string>> Cache::ensureProceduralThumbnails(
+    const std::string& hash,
+    const std::string& mediaType,
+    const std::string& label
+) {
+    std::string smallPath = getThumbnailPath(hash, SmallSize);
+    std::string largePath = getThumbnailPath(hash, LargeSize);
+
+    bool hasSmall = hasThumbnail(hash, SmallSize);
+    bool hasLarge = hasThumbnail(hash, LargeSize);
+    if (hasSmall && hasLarge) {
+        return std::make_pair(smallPath, largePath);
+    }
+
+    auto genRes = Generator::generateProceduralThumbnail(mediaType, label, LargeSize);
+    if (!genRes.isOk()) {
+        return genRes.status();
+    }
+
+    auto largeImg = std::move(genRes.value());
+    Status saveLarge = Generator::saveJpegFast(largeImg, largePath);
+    if (!saveLarge.isOk()) return saveLarge;
+
+    auto resSmall = Generator::resize(largeImg, SmallSize);
+    if (!resSmall.isOk()) return resSmall.status();
+
+    Status saveSmall = Generator::saveJpegFast(resSmall.value(), smallPath);
+    if (!saveSmall.isOk()) return saveSmall;
+
+    return std::make_pair(smallPath, largePath);
+}
+
 } // namespace imagine::thumbnail

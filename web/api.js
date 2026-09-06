@@ -107,6 +107,21 @@ export function formatExposureTime(sec) {
   return `1/${fraction}s`;
 }
 
+export function formatDuration(seconds) {
+  const s = numeric(seconds);
+  if (s === null || s <= 0) return '0:00';
+  const totalSec = Math.round(s);
+  const hrs = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  const padSec = secs < 10 ? '0' + secs : secs;
+  if (hrs > 0) {
+    const padMin = mins < 10 ? '0' + mins : mins;
+    return `${hrs}:${padMin}:${padSec}`;
+  }
+  return `${mins}:${padSec}`;
+}
+
 export function getMonthName(monthNumber) {
   const months = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -186,6 +201,10 @@ export function normalizeCatalogStats(raw) {
   if (!raw || typeof raw !== 'object') {
     return {
       total_media: 0,
+      total_photos: 0,
+      total_videos: 0,
+      total_audio: 0,
+      total_duration: 0,
       total_size_bytes: 0,
       total_tags: 0,
       total_albums: 0,
@@ -196,6 +215,10 @@ export function normalizeCatalogStats(raw) {
   return {
     ...raw,
     total_media: Number.isFinite(Number(raw.total_media)) ? Number(raw.total_media) : 0,
+    total_photos: Number.isFinite(Number(raw.total_photos)) ? Number(raw.total_photos) : 0,
+    total_videos: Number.isFinite(Number(raw.total_videos)) ? Number(raw.total_videos) : 0,
+    total_audio: Number.isFinite(Number(raw.total_audio)) ? Number(raw.total_audio) : 0,
+    total_duration: Number.isFinite(Number(raw.total_duration)) ? Number(raw.total_duration) : 0,
     total_size_bytes: Number.isFinite(Number(raw.total_size_bytes)) ? Number(raw.total_size_bytes) : 0,
     total_tags: Number.isFinite(Number(raw.total_tags)) ? Number(raw.total_tags) : 0,
     total_albums: Number.isFinite(Number(raw.total_albums)) ? Number(raw.total_albums) : 0,
@@ -240,6 +263,7 @@ export function normalizeMediaItem(raw) {
   return {
     ...raw,
     id,
+    media_type: typeof raw.media_type === 'string' ? raw.media_type : 'photo',
     file_name: typeof raw.file_name === 'string' ? raw.file_name : String(raw.file_name || ''),
     file_path: typeof raw.file_path === 'string' ? raw.file_path : '',
     file_size: Number.isFinite(Number(raw.file_size)) ? Number(raw.file_size) : 0,
@@ -247,7 +271,16 @@ export function normalizeMediaItem(raw) {
     content_hash: typeof raw.content_hash === 'string' ? raw.content_hash : '',
     width: Number.isFinite(Number(raw.width)) ? Number(raw.width) : 0,
     height: Number.isFinite(Number(raw.height)) ? Number(raw.height) : 0,
+    duration: Number.isFinite(Number(raw.duration)) ? Number(raw.duration) : 0,
     date_taken: Number.isFinite(Number(raw.date_taken)) ? Number(raw.date_taken) : 0,
+    audio_artist: typeof raw.audio_artist === 'string' ? raw.audio_artist : '',
+    audio_title: typeof raw.audio_title === 'string' ? raw.audio_title : '',
+    audio_album: typeof raw.audio_album === 'string' ? raw.audio_album : '',
+    audio_genre: typeof raw.audio_genre === 'string' ? raw.audio_genre : '',
+    codec: typeof raw.codec === 'string' ? raw.codec : '',
+    bitrate: Number.isFinite(Number(raw.bitrate)) ? Number(raw.bitrate) : 0,
+    channels: Number.isFinite(Number(raw.channels)) ? Number(raw.channels) : 0,
+    sample_rate: Number.isFinite(Number(raw.sample_rate)) ? Number(raw.sample_rate) : 0,
     rating,
     flag,
     exif,

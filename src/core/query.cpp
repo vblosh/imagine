@@ -45,6 +45,9 @@ void to_json(nlohmann::json& j, const QueryCriteria& c) {
     if (c.max_lon.has_value()) {
         j["max_lon"] = *c.max_lon;
     }
+    if (c.media_type.has_value()) {
+        j["media_type"] = *c.media_type;
+    }
 }
 
 void from_json(const nlohmann::json& j, QueryCriteria& c) {
@@ -68,6 +71,9 @@ void from_json(const nlohmann::json& j, QueryCriteria& c) {
     }
     if (j.contains("tag_category") && j["tag_category"].is_string()) {
         c.tag_category = j["tag_category"].get<std::string>();
+    }
+    if (j.contains("media_type") && j["media_type"].is_string()) {
+        c.media_type = j["media_type"].get<std::string>();
     }
     if (j.contains("sort_by") && j["sort_by"].is_string()) {
         c.sort_by = j["sort_by"].get<std::string>();
@@ -219,9 +225,23 @@ QueryBuilder& QueryBuilder::boundingBox(double minLat, double maxLat, double min
     return *this;
 }
 
+QueryBuilder& QueryBuilder::mediaType(std::string type) {
+    if (type.empty() || type == "all") {
+        criteria_.media_type = std::nullopt;
+    } else {
+        criteria_.media_type = std::move(type);
+    }
+    return *this;
+}
+
 std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() const {
     std::vector<std::string> clauses;
     std::vector<std::string> params;
+
+    if (criteria_.media_type.has_value() && !criteria_.media_type->empty() && *criteria_.media_type != "all") {
+        clauses.push_back("media_type = ?");
+        params.push_back(*criteria_.media_type);
+    }
 
     if (criteria_.min_rating.has_value()) {
         clauses.push_back("rating >= ?");
@@ -286,8 +306,11 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
     }
 
     if (!criteria_.search_text.empty()) {
-        clauses.push_back("(file_name LIKE ? OR file_path LIKE ? OR camera_make LIKE ? OR camera_model LIKE ? OR lens LIKE ? OR caption LIKE ? OR id IN (SELECT media_id FROM media_tags JOIN tags ON media_tags.tag_id = tags.id WHERE tags.name LIKE ?))");
+        clauses.push_back("(file_name LIKE ? OR file_path LIKE ? OR camera_make LIKE ? OR camera_model LIKE ? OR lens LIKE ? OR caption LIKE ? OR audio_artist LIKE ? OR audio_title LIKE ? OR audio_album LIKE ? OR id IN (SELECT media_id FROM media_tags JOIN tags ON media_tags.tag_id = tags.id WHERE tags.name LIKE ?))");
         std::string pattern = "%" + criteria_.search_text + "%";
+        params.push_back(pattern);
+        params.push_back(pattern);
+        params.push_back(pattern);
         params.push_back(pattern);
         params.push_back(pattern);
         params.push_back(pattern);
@@ -326,7 +349,8 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
 std::string QueryBuilder::buildOrderBy() const {
     std::string column = "date_taken";
     if (criteria_.sort_by == "date_taken" || criteria_.sort_by == "rating" ||
-        criteria_.sort_by == "file_name" || criteria_.sort_by == "file_size") {
+        criteria_.sort_by == "file_name" || criteria_.sort_by == "file_size" ||
+        criteria_.sort_by == "duration") {
         column = criteria_.sort_by;
     }
     std::string direction = criteria_.sort_descending ? "DESC" : "ASC";

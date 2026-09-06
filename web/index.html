@@ -87,6 +87,21 @@
               <span>All Media</span>
               <span class="count-badge" id="totalMediaCount">0</span>
             </li>
+            <li class="menu-item" data-filter="photos" id="navPhotos">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span>Photos</span>
+              <span class="count-badge" id="totalPhotosCount">0</span>
+            </li>
+            <li class="menu-item" data-filter="videos" id="navVideos">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+              <span>Videos</span>
+              <span class="count-badge" id="totalVideosCount">0</span>
+            </li>
+            <li class="menu-item" data-filter="audio" id="navAudio">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3"/><path d="M12 18v3"/></svg>
+              <span>Audio</span>
+              <span class="count-badge" id="totalAudioCount">0</span>
+            </li>
             <li class="menu-item" data-filter="picks" id="navPicks">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
               <span>Picks</span>
@@ -346,6 +361,8 @@
                 <dl class="prop-list">
                   <dt>Name</dt>
                   <dd id="infoFileName">-</dd>
+                  <dt>Type</dt>
+                  <dd id="infoMediaType">-</dd>
                   <dt>Dimensions</dt>
                   <dd id="infoDimensions">-</dd>
                   <dt>File Size</dt>
@@ -359,6 +376,36 @@
                 </dl>
               </div>
               <div class="panel-resizer" id="fileInfoResizer" data-target="fileInfoSection" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag to resize File Information panel (double-click to reset)">
+                <div class="resizer-handle-bar"></div>
+              </div>
+            </div>
+
+            <!-- Audio / Video Media Properties Section -->
+            <div class="inspector-section resizable-panel" id="avSection" data-panel="av" style="display: none;">
+              <div class="section-header-row">
+                <h4 class="section-heading">Audio / Video Info</h4>
+              </div>
+              <div class="resizable-panel-body" id="avBody">
+                <dl class="prop-list">
+                  <dt>Duration</dt>
+                  <dd id="infoDuration">-</dd>
+                  <dt id="dtArtist">Artist</dt>
+                  <dd id="infoArtist">-</dd>
+                  <dt id="dtTitle">Title</dt>
+                  <dd id="infoTitle">-</dd>
+                  <dt id="dtAlbum">Album</dt>
+                  <dd id="infoAlbum">-</dd>
+                  <dt id="dtGenre">Genre</dt>
+                  <dd id="infoGenre">-</dd>
+                  <dt id="dtCodec">Codec</dt>
+                  <dd id="infoCodec">-</dd>
+                  <dt id="dtBitrate">Bitrate</dt>
+                  <dd id="infoBitrate">-</dd>
+                  <dt id="dtAudioDetails">Audio</dt>
+                  <dd id="infoAudioDetails">-</dd>
+                </dl>
+              </div>
+              <div class="panel-resizer" id="avResizer" data-target="avSection" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag to resize Audio / Video panel (double-click to reset)">
                 <div class="resizer-handle-bar"></div>
               </div>
             </div>
@@ -485,6 +532,17 @@
                   <div class="crop-handle handle-w" data-handle="w"></div>
                 </div>
               </div>
+            </div>
+            <video id="loupeVideo" controls playsinline style="display: none; max-width: 100%; max-height: 100%; outline: none;"></video>
+            <div id="loupeAudioContainer" class="loupe-audio-container" style="display: none;">
+              <div class="loupe-audio-cover">
+                <img id="loupeAudioCover" src="" alt="Audio Cover">
+              </div>
+              <div class="loupe-audio-meta">
+                <h4 id="loupeAudioTitle">Track Title</h4>
+                <p id="loupeAudioArtist">Artist - Album</p>
+              </div>
+              <audio id="loupeAudio" controls style="width: 100%; margin-top: 16px;"></audio>
             </div>
           </div>
           <div class="loupe-toolbar">

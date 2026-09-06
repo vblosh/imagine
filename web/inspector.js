@@ -8,6 +8,7 @@ import {
   escapeHtml,
   formatBytes,
   formatDateTime,
+  formatDuration,
   formatExposureTime,
   numeric,
   hasValidGps,
@@ -72,13 +73,40 @@ export function renderInspectorContent(item) {
 
   // File Properties
   if (dom.infoFileName) dom.infoFileName.textContent = item.file_name || '-';
+  const typeLabels = { photo: 'Photo', video: 'Video', audio: 'Audio' };
+  if (dom.infoMediaType) dom.infoMediaType.textContent = typeLabels[item.media_type] || item.media_type || 'Photo';
   if (dom.infoDimensions) dom.infoDimensions.textContent = item.width && item.height ? `${item.width} × ${item.height} px` : '-';
   if (dom.infoFileSize) dom.infoFileSize.textContent = formatBytes(item.file_size);
   if (dom.infoDateTaken) dom.infoDateTaken.textContent = formatDateTime(item.date_taken);
   if (dom.infoCaption) dom.infoCaption.textContent = item.caption || '-';
   if (dom.infoFilePath) dom.infoFilePath.textContent = item.file_path || '-';
 
+  // Audio / Video Media Properties
+  if (dom.avSection) {
+    if (item.media_type === 'video' || item.media_type === 'audio') {
+      dom.avSection.style.display = 'block';
+      if (dom.infoDuration) dom.infoDuration.textContent = item.duration > 0 ? formatDuration(item.duration) : '-';
+      if (dom.infoArtist) dom.infoArtist.textContent = item.audio_artist || '-';
+      if (dom.infoTitle) dom.infoTitle.textContent = item.audio_title || '-';
+      if (dom.infoAlbum) dom.infoAlbum.textContent = item.audio_album || '-';
+      if (dom.infoGenre) dom.infoGenre.textContent = item.audio_genre || '-';
+      if (dom.infoCodec) dom.infoCodec.textContent = item.codec || '-';
+      if (dom.infoBitrate) dom.infoBitrate.textContent = item.bitrate > 0 ? `${Math.round(item.bitrate / 1000)} kbps` : '-';
+      if (dom.infoAudioDetails) {
+        const details = [];
+        if (item.channels > 0) details.push(item.channels === 1 ? 'Mono' : item.channels === 2 ? 'Stereo' : `${item.channels} ch`);
+        if (item.sample_rate > 0) details.push(`${(item.sample_rate / 1000).toFixed(1)} kHz`);
+        dom.infoAudioDetails.textContent = details.length > 0 ? details.join(', ') : '-';
+      }
+    } else {
+      dom.avSection.style.display = 'none';
+    }
+  }
+
   // EXIF properties
+  if (dom.exifSection) {
+    dom.exifSection.style.display = (item.media_type === 'audio') ? 'none' : 'block';
+  }
   const exif = item.exif || {};
   const cameraStr = [exif.camera_make, exif.camera_model].filter(Boolean).join(' ') || '-';
   if (dom.infoCamera) dom.infoCamera.textContent = cameraStr;

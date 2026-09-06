@@ -37,7 +37,8 @@ import {
   setLoupeZoom,
   loupeZoomIn,
   loupeZoomOut,
-  resetLoupeZoom
+  resetLoupeZoom,
+  toggleLoupePlayback
 } from './loupe.js';
 import {
   quickEditState,
@@ -236,6 +237,9 @@ export function setupKeyboardShortcuts() {
         loupeZoomOut();
       } else if (e.key === 'z' || e.key === 'Z') {
         resetLoupeZoom();
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        toggleLoupePlayback();
       } else if (e.key >= '0' && e.key <= '5') {
         const item = state.mediaItems[state.loupeIndex];
         if (item) {

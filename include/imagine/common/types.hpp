@@ -138,6 +138,16 @@ struct MediaItem {
     std::string caption;
     int64_t created_at{0};
     int64_t updated_at{0};
+    std::string media_type{"photo"}; // "photo", "video", "audio"
+    double duration{0.0}; // in seconds
+    std::string audio_artist;
+    std::string audio_title;
+    std::string audio_album;
+    std::string audio_genre;
+    std::string codec;
+    int32_t bitrate{0};
+    int32_t channels{0};
+    int32_t sample_rate{0};
 };
 
 struct Album {
@@ -153,6 +163,10 @@ struct Album {
 
 struct CatalogStats {
     int64_t total_media{0};
+    int64_t total_photos{0};
+    int64_t total_videos{0};
+    int64_t total_audio{0};
+    double total_duration{0.0};
     int64_t total_size_bytes{0};
     int64_t total_tags{0};
     int64_t total_albums{0};

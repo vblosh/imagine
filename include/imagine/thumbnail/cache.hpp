@@ -43,6 +43,12 @@ public:
         int* outHeight = nullptr
     );
 
+    Result<std::pair<std::string, std::string>> ensureProceduralThumbnails(
+        const std::string& hash,
+        const std::string& mediaType,
+        const std::string& label = ""
+    );
+
     static std::string defaultCacheDir();
 
 private:

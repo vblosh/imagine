@@ -709,6 +709,35 @@ body, html {
   color: #ffffff;
 }
 
+.media-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(18, 18, 20, 0.85);
+  backdrop-filter: blur(4px);
+  color: #f1f3f5;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
+  letter-spacing: 0.02em;
+}
+
+.media-type-badge.video-badge {
+  color: #ffb74d;
+}
+
+.media-type-badge.audio-badge {
+  color: #81c784;
+}
+
+.media-type-badge .badge-icon {
+  font-size: 9px;
+}
+
 .card-info {
   padding: 8px 10px;
   display: flex;
@@ -2943,4 +2972,60 @@ body.resizing-horizontal * {
   background: var(--bg-hover);
   border-color: var(--accent-color);
   color: var(--text-color);
+}
+
+/* Loupe Audio Player Styles */
+.loupe-audio-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(28, 28, 30, 0.95);
+  padding: 32px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+  max-width: 480px;
+  width: 90%;
+}
+
+.loupe-audio-cover {
+  width: 200px;
+  height: 200px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  margin-bottom: 20px;
+  background: #111;
+}
+
+.loupe-audio-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.loupe-audio-meta {
+  text-align: center;
+  margin-bottom: 8px;
+  width: 100%;
+}
+
+.loupe-audio-meta h4 {
+  margin: 0 0 6px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-color, #fff);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.loupe-audio-meta p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted, #aaa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

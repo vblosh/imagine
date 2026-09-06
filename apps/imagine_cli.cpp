@@ -58,24 +58,24 @@ std::string formatUnixTime(int64_t sec) {
 
 void printHelp() {
     std::cout << R"(
-Imagine Photo Organizer CLI
+Imagine Media Organizer CLI (Photos, Videos, Audio)
 Usage:
   imagine <command> [options]
 
 Commands:
-  import <path>       Import photos from a folder into the catalog
+  import <path>       Import photos, videos, and audio from a folder into the catalog
   serve               Start the embedded HTTP web server and REST API
-  relocate            Make photo and thumbnail paths in catalog relative
-  list                List and query photos in the catalog
+  relocate            Make media and thumbnail paths in catalog relative
+  list                List and query media in the catalog
   stats               Display catalog statistics and metrics
-  tag <id> <name>     Attach a keyword tag to a photo
-  geotag <id> <lat> <lon> Set GPS coordinates for a photo
-  delete <id...>      Delete one or more photos from the catalog
+  tag <id> <name>     Attach a keyword tag to an item
+  geotag <id> <lat> <lon> Set GPS coordinates for an item
+  delete <id...>      Delete one or more items from the catalog
   --help, -h          Show this help message
 
 Options for 'import':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
-  --photos-dir <dir>  Base root directory for photos (default: <path>)
+  --photos-dir <dir>  Base root directory for media (default: <path>)
   --thumbs-dir <dir>  Path to thumbnail cache directory (default: system cache)
   --thumbs <dir>      Alias for --thumbs-dir
   --recursive         Recursively scan subdirectories (default: true)
@@ -84,7 +84,7 @@ Options for 'import':
 
 Options for 'serve':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
-  --photos-dir <dir>  Path to photos directory (default: current/catalog directory)
+  --photos-dir <dir>  Path to media directory (default: current/catalog directory)
   --thumbs-dir <dir>  Path to thumbnail cache directory (default: system cache)
   --thumbs <dir>      Alias for --thumbs-dir
   --host <ip>         Host address to bind to (default: 0.0.0.0)
@@ -93,15 +93,16 @@ Options for 'serve':
 
 Options for 'relocate':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
-  --photos-dir <dir>  Base root directory to make photo paths relative to
+  --photos-dir <dir>  Base root directory to make media paths relative to
   --thumbs-dir <dir>  Base root directory to make thumbnail paths relative to
   --thumbs <dir>      Alias for --thumbs-dir
 
 Options for 'list':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
+  --type <type>       Filter by media type: photo, video, audio
   --rating <N>        Filter by minimum star rating (0-5)
-  --search <text>     Search keyword in filename, camera, lens, or tags
-  --gps               Filter only photos with GPS coordinates
+  --search <text>     Search keyword in filename, artist, album, camera, or tags
+  --gps               Filter only media with GPS coordinates
   --limit <N>         Maximum items to display (default: 50)
   --offset <N>        Offset pagination (default: 0)
 
@@ -287,6 +288,9 @@ int handleServe(int argc, char** argv) {
     std::signal(SIGINT, sigHandler);
     std::signal(SIGTERM, sigHandler);
 
+    std::string effectiveCacheDir = thumbsDir.empty() ? imagine::thumbnail::Cache::defaultCacheDir() : thumbsDir;
+    std::string effectivePhotosDir = photosDir.empty() ? "(none / relative to catalog)" : photosDir;
+
     std::cout << R"(
 ======================================================
   IMAGINE Photo Organizer Web Server
@@ -294,11 +298,30 @@ int handleServe(int argc, char** argv) {
   URL:        http://)" << (host == "0.0.0.0" ? "localhost" : host) << ":" << port << R"(
   Web Dir:    )" << webDir << R"(
   Catalog DB: )" << catalogDb << R"(
-  Photos Dir: )" << (photosDir.empty() ? "(none / relative to catalog)" : photosDir) << R"(
-  Cache Dir:  )" << (thumbsDir.empty() ? imagine::thumbnail::Cache::defaultCacheDir() : thumbsDir) << R"(
+  Photos Dir: )" << effectivePhotosDir << R"(
+  Cache Dir:  )" << effectiveCacheDir << R"(
+------------------------------------------------------
+  Available Options for 'serve':
+    --catalog <db>      Path to SQLite catalog database [current: )" << catalogDb << R"(]
+    --photos-dir <dir>  Path to photos directory [current: )" << effectivePhotosDir << R"(]
+    --thumbs-dir <dir>  Path to thumbnail cache directory [current: )" << effectiveCacheDir << R"(]
+    --thumbs <dir>      Alias for --thumbs-dir
+    --host <ip>         Host address to bind to [current: )" << host << R"(]
+    --port <port>       Port number to listen on [current: )" << port << R"(]
+    --web-dir <dir>     Path to directory containing web UI assets [current: )" << webDir << R"(]
+  Environment Variables:
+    IMAGINE_PHOTOS_DIR  Default path to photos directory
+    IMAGINE_THUMBS_DIR  Default path to thumbnail cache directory
 ======================================================
   Press Ctrl+C to stop the server.
 )" << std::endl;
+
+    IMAGINE_LOG_INFO("Serve option values: catalog=" + catalogDb +
+                     ", photos-dir=" + effectivePhotosDir +
+                     ", thumbs-dir=" + effectiveCacheDir +
+                     ", host=" + host +
+                     ", port=" + std::to_string(port) +
+                     ", web-dir=" + webDir);
 
     auto startStatus = webServer.run(host, port, webDir);
     if (!startStatus.isOk()) {
@@ -318,6 +341,8 @@ int handleList(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "--catalog" && i + 1 < argc) {
             catalogDb = argv[++i];
+        } else if (arg == "--type" && i + 1 < argc) {
+            criteria.media_type = argv[++i];
         } else if (arg == "--rating" && i + 1 < argc) {
             criteria.min_rating = std::stoi(argv[++i]);
         } else if (arg == "--search" && i + 1 < argc) {
@@ -345,12 +370,13 @@ int handleList(int argc, char** argv) {
     }
 
     const auto& qr = res.value();
-    std::cout << "\nFound " << qr.total_count << " photos (showing " << qr.items.size() << "):\n\n";
+    std::cout << "\nFound " << qr.total_count << " items (showing " << qr.items.size() << "):\n\n";
 
     bool showGps = criteria.has_gps.value_or(false);
     std::cout << std::setfill(' ') << std::left
               << std::setw(6)  << "ID"
-              << std::setw(30) << "File Name"
+              << std::setw(8)  << "Type"
+              << std::setw(28) << "File Name"
               << std::setw(8)  << "Rating"
               << std::setw(8)  << "Flag"
               << std::setw(18) << "Date Taken"
@@ -358,24 +384,41 @@ int handleList(int argc, char** argv) {
     if (showGps) {
         std::cout << std::setw(24) << "GPS (Lat, Lon)";
     }
-    std::cout << "Camera\n";
-    std::cout << std::string(showGps ? 124 : 100, '-') << "\n";
+    std::cout << "Details\n";
+    std::cout << std::string(showGps ? 132 : 108, '-') << "\n";
 
     for (const auto& item : qr.items) {
         std::string flagStr = (item.flag == imagine::FlagState::Pick) ? "Pick"
                             : (item.flag == imagine::FlagState::Reject) ? "Reject" : "-";
         std::string stars = (item.rating > 0) ? (std::to_string(item.rating) + "*") : "-";
-        std::string camera = item.exif.camera_make.empty() ? "-"
-                           : (item.exif.camera_make + " " + item.exif.camera_model);
+
+        std::string details = "-";
+        if (item.media_type == "video") {
+            int dur = static_cast<int>(item.duration);
+            details = "Video (" + std::to_string(dur / 60) + "m" + std::to_string(dur % 60) + "s)";
+            if (item.width > 0 && item.height > 0) {
+                details += " " + std::to_string(item.width) + "x" + std::to_string(item.height);
+            }
+        } else if (item.media_type == "audio") {
+            int dur = static_cast<int>(item.duration);
+            details = "Audio (" + std::to_string(dur / 60) + "m" + std::to_string(dur % 60) + "s)";
+            if (!item.audio_artist.empty()) {
+                details += " " + item.audio_artist;
+            }
+        } else {
+            details = item.exif.camera_make.empty() ? "-"
+                    : (item.exif.camera_make + " " + item.exif.camera_model);
+        }
 
         std::string fname = item.file_name;
-        if (fname.size() > 28) {
-            fname = fname.substr(0, 25) + "...";
+        if (fname.size() > 26) {
+            fname = fname.substr(0, 23) + "...";
         }
 
         std::cout << std::left
                   << std::setw(6)  << item.id
-                  << std::setw(30) << fname
+                  << std::setw(8)  << item.media_type
+                  << std::setw(28) << fname
                   << std::setw(8)  << stars
                   << std::setw(8)  << flagStr
                   << std::setw(18) << formatUnixTime(item.date_taken)
@@ -389,7 +432,7 @@ int handleList(int argc, char** argv) {
             }
             std::cout << std::setw(24) << gpsStr;
         }
-        std::cout << camera << "\n";
+        std::cout << details << "\n";
     }
     std::cout << "\n";
     return 0;
@@ -421,12 +464,24 @@ int handleStats(int argc, char** argv) {
     const auto& s = statsRes.value();
     std::cout << "\n============= Catalog Statistics =============\n"
               << "  Catalog Database:   " << catalogDb << "\n"
-              << "  Total Photos:       " << s.total_media << "\n"
-              << "  Total Disk Size:    " << formatBytes(s.total_size_bytes) << "\n"
+              << "  Total Items:        " << s.total_media << "\n"
+              << "    Photos:           " << s.total_photos << "\n"
+              << "    Videos:           " << s.total_videos << "\n"
+              << "    Audio:            " << s.total_audio << "\n";
+    if (s.total_duration > 0) {
+        int totalSec = static_cast<int>(s.total_duration);
+        int hrs = totalSec / 3600;
+        int mins = (totalSec % 3600) / 60;
+        int secs = totalSec % 60;
+        std::cout << "  Total Media Time:   ";
+        if (hrs > 0) std::cout << hrs << "h ";
+        std::cout << mins << "m " << secs << "s\n";
+    }
+    std::cout << "  Total Disk Size:    " << formatBytes(s.total_size_bytes) << "\n"
               << "  Total Tags:         " << s.total_tags << "\n"
               << "  Total Albums:       " << s.total_albums << "\n"
-              << "  Earliest Photo:     " << formatUnixTime(s.earliest_date) << "\n"
-              << "  Latest Photo:       " << formatUnixTime(s.latest_date) << "\n"
+              << "  Earliest Item:      " << formatUnixTime(s.earliest_date) << "\n"
+              << "  Latest Item:        " << formatUnixTime(s.latest_date) << "\n"
               << "==============================================\n\n";
 
     return 0;

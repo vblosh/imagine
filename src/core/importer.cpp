@@ -1,6 +1,7 @@
 #include "imagine/core/importer.hpp"
 #include "imagine/metadata/hasher.hpp"
 #include "imagine/metadata/exif_reader.hpp"
+#include "imagine/metadata/media_reader.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/logger.hpp"
 #include <fstream>
@@ -124,13 +125,7 @@ std::string Importer::toRelativePath(const std::filesystem::path& fullPath, cons
 }
 
 bool Importer::isSupportedExtension(const std::string& path) {
-    std::filesystem::path p = pathFromUtf8(path);
-    std::string ext = p.extension().string();
-    for (char& c : ext) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    return ext == ".jpg" || ext == ".jpeg" || ext == ".png" ||
-           ext == ".bmp" || ext == ".webp" || ext == ".tiff" || ext == ".tif";
+    return metadata::MediaReader::isSupportedExtension(path);
 }
 
 std::string Importer::normalizePath(const std::string& path) {
@@ -205,10 +200,14 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         return ProcessStatus::Failed;
     }
 
-    // File size limit: reject 0-byte files or files exceeding 500 MB limit
-    constexpr uintmax_t kMaxFileSize = 500ULL * 1024ULL * 1024ULL; // 500 MB
-    if (fsize == 0 || fsize > kMaxFileSize) {
-        IMAGINE_LOG_ERROR("File size invalid or exceeds 500MB limit: " + filePath);
+    std::string mediaType = metadata::MediaReader::detectMediaType(filePath);
+
+    // File size limit: reject 0-byte files or files exceeding limits (500MB photo, 10GB video/audio)
+    constexpr uintmax_t kMaxPhotoFileSize = 500ULL * 1024ULL * 1024ULL; // 500 MB
+    constexpr uintmax_t kMaxMediaFileSize = 10ULL * 1024ULL * 1024ULL * 1024ULL; // 10 GB
+    uintmax_t maxAllowed = (mediaType == "photo") ? kMaxPhotoFileSize : kMaxMediaFileSize;
+    if (fsize == 0 || fsize > maxAllowed) {
+        IMAGINE_LOG_ERROR("File size invalid or exceeds limit: " + filePath);
         return ProcessStatus::Failed;
     }
 
@@ -237,7 +236,13 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         }
     }
 
-    // Memory throttling: limit aggregate in-flight memory allocation across workers.
+    MediaItem item;
+    if (isUpdate) {
+        item = existingRes.value();
+    }
+
+    if (mediaType == "photo") {
+        // Memory throttling: limit aggregate in-flight memory allocation across workers.
     // Files larger than kMaxInFlightBytes are allowed to proceed as a single exclusive
     // allocation when in_flight_bytes_ == 0.
     const size_t requiredBudget = std::min<size_t>(static_cast<size_t>(fsize), kMaxInFlightBytes);
@@ -341,22 +346,117 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     std::vector<uint8_t>().swap(fileBytes);
     memGuard.release();
 
-    // Populate media item
-    MediaItem item;
-    if (isUpdate) {
-        item = existingRes.value();
+        // Populate media item
+        item.media_type = "photo";
+        item.file_path = storedPath;
+        item.file_name = pathToUtf8(pathFromUtf8(normalizedPath).filename());
+        item.file_size = static_cast<int64_t>(fsize);
+        item.file_modified_time = modifiedTime;
+        item.content_hash = hash;
+        item.width = width;
+        item.height = height;
+        item.duration = 0.0;
+        item.date_taken = dateTaken;
+        item.exif = exif;
+        item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize);
+        item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize);
+    } else {
+        // Video or Audio file processing (streamed hashing, parser metadata, procedural/embedded thumbnail)
+        auto hashRes = metadata::Hasher::computeFileSha256(filePath);
+        if (!hashRes.isOk() || hashRes.value().empty()) {
+            IMAGINE_LOG_ERROR("Failed to compute SHA-256 for " + filePath + ": " + hashRes.status().message());
+            return ProcessStatus::Failed;
+        }
+        std::string hash = hashRes.value();
+
+        // TOCTOU verification
+        auto lwtPost = std::filesystem::last_write_time(pathFromUtf8(filePath), ec);
+        if (!ec) {
+            auto sctpPost = std::chrono::clock_cast<std::chrono::system_clock>(lwtPost);
+            modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctpPost.time_since_epoch()).count();
+        }
+
+        metadata::MediaFileInfo mediaInfo;
+        auto metaRes = metadata::MediaReader::readMetadata(filePath);
+        if (metaRes.isOk()) {
+            mediaInfo = metaRes.value();
+        } else {
+            IMAGINE_LOG_WARN("Failed to extract metadata for " + filePath + ": " + metaRes.status().message());
+        }
+
+        int64_t dateTaken = mediaInfo.date_taken;
+        if (dateTaken <= 0) {
+            dateTaken = modifiedTime;
+        }
+
+        int width = mediaInfo.width;
+        int height = mediaInfo.height;
+        std::string thumbSmall;
+        std::string thumbLarge;
+
+        // Try embedded cover art first (for audio tags or MP4 poster)
+        if (!mediaInfo.cover_art.empty()) {
+            int coverW = 0, coverH = 0;
+            auto thumbRes = cache_.ensureDualThumbnailsFromMemory(
+                mediaInfo.cover_art.data(), mediaInfo.cover_art.size(), hash, 1, &coverW, &coverH
+            );
+            if (thumbRes.isOk()) {
+                thumbSmall = thumbRes.value().first;
+                thumbLarge = thumbRes.value().second;
+            }
+        }
+
+        // Try video frame extraction if ffmpeg is available
+        if (thumbSmall.empty() && mediaType == "video" && metadata::FfmpegHelper::isAvailable()) {
+            std::string tmpThumb = cache_.cacheDir() + "/tmp_" + hash + ".jpg";
+            double captureTime = std::min(1.0, mediaInfo.duration > 0 ? mediaInfo.duration / 2.0 : 0.0);
+            auto ffRes = metadata::FfmpegHelper::extractVideoFrame(filePath, captureTime, tmpThumb);
+            if (ffRes.isOk()) {
+                auto dualRes = cache_.ensureDualThumbnails(tmpThumb, hash);
+                if (dualRes.isOk()) {
+                    thumbSmall = dualRes.value().first;
+                    thumbLarge = dualRes.value().second;
+                }
+                std::filesystem::remove(tmpThumb, ec);
+            }
+        }
+
+        // Fall back to procedural thumbnail
+        if (thumbSmall.empty()) {
+            std::string label;
+            if (mediaType == "audio" && !mediaInfo.audio_artist.empty()) {
+                label = mediaInfo.audio_artist + (!mediaInfo.audio_title.empty() ? " - " + mediaInfo.audio_title : "");
+            }
+            auto procRes = cache_.ensureProceduralThumbnails(hash, mediaType, label);
+            if (procRes.isOk()) {
+                thumbSmall = procRes.value().first;
+                thumbLarge = procRes.value().second;
+            } else {
+                IMAGINE_LOG_WARN("Failed to generate procedural thumbnail for " + filePath + ": " + procRes.status().message());
+            }
+        }
+
+        item.media_type = mediaType;
+        item.file_path = storedPath;
+        item.file_name = pathToUtf8(pathFromUtf8(normalizedPath).filename());
+        item.file_size = static_cast<int64_t>(fsize);
+        item.file_modified_time = modifiedTime;
+        item.content_hash = hash;
+        item.width = width;
+        item.height = height;
+        item.duration = mediaInfo.duration;
+        item.date_taken = dateTaken;
+        item.audio_artist = mediaInfo.audio_artist;
+        item.audio_title = mediaInfo.audio_title;
+        item.audio_album = mediaInfo.audio_album;
+        item.audio_genre = mediaInfo.audio_genre;
+        item.codec = mediaInfo.codec;
+        item.bitrate = mediaInfo.bitrate;
+        item.channels = mediaInfo.channels;
+        item.sample_rate = mediaInfo.sample_rate;
+        item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize);
+        item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize);
     }
-    item.file_path = storedPath;
-    item.file_name = pathToUtf8(pathFromUtf8(normalizedPath).filename());
-    item.file_size = static_cast<int64_t>(fsize);
-    item.file_modified_time = modifiedTime;
-    item.content_hash = hash;
-    item.width = width;
-    item.height = height;
-    item.date_taken = dateTaken;
-    item.exif = exif;
-    item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize);
-    item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize);
 
     // Database persistence: if commitToDb is true, persist immediately.
     // Otherwise, persistence is deferred to batch persistence in importDirectory.
@@ -387,7 +487,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
 
 Result<MediaItem> Importer::importFile(const std::string& filePath) {
     if (!isSupportedExtension(filePath)) {
-        return Status::invalidArgument("Unsupported image extension: " + filePath);
+        return Status::invalidArgument("Unsupported media extension: " + filePath);
     }
     std::string normPath = normalizePath(filePath);
     if (photosDir_.empty()) {
@@ -398,7 +498,7 @@ Result<MediaItem> Importer::importFile(const std::string& filePath) {
     MediaItem item;
     ProcessStatus st = processFileInternal(filePath, &item, true);
     if (st == ProcessStatus::Failed) {
-        return Status::internal("Failed to import image: " + filePath);
+        return Status::internal("Failed to import media file: " + filePath);
     }
     return item;
 }

@@ -16,7 +16,7 @@ from typing import Generator, Dict, Any
 
 from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
-from fixtures import init_schema, seed_default_catalog, create_import_photos
+from fixtures import init_schema, seed_default_catalog, create_import_photos, seed_media_catalog
 
 
 @pytest.fixture(scope="session")
@@ -178,6 +178,41 @@ def empty_server(imagine_bin: str, web_dir: str, empty_env: Dict[str, Any]) -> G
 def server(imagine_bin: str, web_dir: str, seeded_env: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
     """Launch imagine serve with seeded catalog."""
     yield from start_backend(imagine_bin, web_dir, seeded_env)
+
+
+@pytest.fixture
+def media_env() -> Generator[Dict[str, Any], None, None]:
+    """Provide an isolated environment seeded with photos, video, and audio."""
+    tmpdir = tempfile.mkdtemp(prefix="imagine_ui_media_")
+    db_path = os.path.join(tmpdir, "catalog.db")
+    thumbs_dir = os.path.join(tmpdir, "thumbs")
+    photos_dir = os.path.join(tmpdir, "photos")
+    import_dir = os.path.join(tmpdir, "to_import")
+
+    os.makedirs(thumbs_dir, exist_ok=True)
+    os.makedirs(photos_dir, exist_ok=True)
+    os.makedirs(import_dir, exist_ok=True)
+
+    items = seed_media_catalog(db_path, photos_dir)
+    port = get_free_port()
+    env = {
+        "tmpdir": tmpdir,
+        "db_path": db_path,
+        "thumbs_dir": thumbs_dir,
+        "photos_dir": photos_dir,
+        "import_dir": import_dir,
+        "import_files": [],
+        "port": port,
+        "items": items
+    }
+    yield env
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@pytest.fixture
+def media_server(imagine_bin: str, web_dir: str, media_env: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
+    """Launch imagine serve with media catalog (photos + video + audio)."""
+    yield from start_backend(imagine_bin, web_dir, media_env)
 
 
 @pytest.fixture(scope="session")

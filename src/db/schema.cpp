@@ -124,6 +124,32 @@ Status Schema::applyMigrationV2(Connection& conn) {
     return tx.commit();
 }
 
+Status Schema::applyMigrationV3(Connection& conn) {
+    const char* v3_sql = R"SQL(
+        ALTER TABLE media_items ADD COLUMN media_type TEXT DEFAULT 'photo';
+        ALTER TABLE media_items ADD COLUMN duration REAL DEFAULT 0.0;
+        ALTER TABLE media_items ADD COLUMN audio_artist TEXT DEFAULT '';
+        ALTER TABLE media_items ADD COLUMN audio_title TEXT DEFAULT '';
+        ALTER TABLE media_items ADD COLUMN audio_album TEXT DEFAULT '';
+        ALTER TABLE media_items ADD COLUMN audio_genre TEXT DEFAULT '';
+        ALTER TABLE media_items ADD COLUMN codec TEXT DEFAULT '';
+        ALTER TABLE media_items ADD COLUMN bitrate INTEGER DEFAULT 0;
+        ALTER TABLE media_items ADD COLUMN channels INTEGER DEFAULT 0;
+        ALTER TABLE media_items ADD COLUMN sample_rate INTEGER DEFAULT 0;
+
+        CREATE INDEX IF NOT EXISTS idx_media_type ON media_items(media_type);
+    )SQL";
+
+    Transaction tx(conn);
+    Status s = conn.execute(v3_sql);
+    if (!s.isOk()) return s;
+
+    s = conn.execute("INSERT INTO schema_version (version) VALUES (3);");
+    if (!s.isOk()) return s;
+
+    return tx.commit();
+}
+
 Status Schema::migrate(Connection& conn) {
     auto verResult = getCurrentVersion(conn);
     if (!verResult.isOk()) {
@@ -137,12 +163,17 @@ Status Schema::migrate(Connection& conn) {
         if (!s.isOk()) return s;
         current = 1;
     }
-
     if (current < 2) {
         IMAGINE_LOG_INFO("Applying database migration v2...");
         Status s = applyMigrationV2(conn);
         if (!s.isOk()) return s;
         current = 2;
+    }
+    if (current < 3) {
+        IMAGINE_LOG_INFO("Applying database migration v3...");
+        Status s = applyMigrationV3(conn);
+        if (!s.isOk()) return s;
+        current = 3;
     }
 
     IMAGINE_LOG_INFO("Database schema up to date at version " + std::to_string(current));

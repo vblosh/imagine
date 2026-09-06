@@ -345,3 +345,157 @@ def create_import_photos(import_dir: str) -> List[str]:
     create_bmp(f1, 300, 200, (120, 220, 100))
     create_bmp(f2, 400, 300, (220, 120, 100))
     return [f1, f2]
+
+
+def create_wav(filepath: str, duration_sec: float = 2.0, sample_rate: int = 44100) -> str:
+    """Create a minimal valid 16-bit PCM WAV audio file."""
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    num_samples = int(duration_sec * sample_rate)
+    data_size = num_samples * 2  # 16-bit mono = 2 bytes per sample
+    byte_rate = sample_rate * 2
+    riff_header = struct.pack('<4sI4s4sIHHIIHH4sI',
+        b'RIFF', 36 + data_size, b'WAVE',
+        b'fmt ', 16, 1, 1, sample_rate, byte_rate, 2, 16,
+        b'data', data_size
+    )
+    with open(filepath, 'wb') as f:
+        f.write(riff_header)
+        f.write(b'\x00' * data_size)
+    return filepath
+
+
+def create_mp4(filepath: str, duration_sec: float = 15.0, width: int = 1280, height: int = 720) -> str:
+    """Create a minimal valid ISO Base Media MP4 video file with ftyp, mvhd, and tkhd."""
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    ftyp_data = b'isom\x00\x00\x02\x00isomiso2mp41'
+    ftyp = struct.pack('>I4s', 8 + len(ftyp_data), b'ftyp') + ftyp_data
+
+    timescale = 1000
+    duration_units = int(duration_sec * timescale)
+    mvhd_payload = struct.pack('>BBBBIIII', 0, 0, 0, 0, 0, 0, timescale, duration_units) + (b'\x00' * 80)
+    mvhd = struct.pack('>I4s', 8 + len(mvhd_payload), b'mvhd') + mvhd_payload
+
+    tkhd_payload = (
+        struct.pack('>BBBBIIIII', 0, 0, 0, 0, 0, 0, 1, 0, duration_units) +
+        (b'\x00' * 8) +
+        struct.pack('>hhhh', 0, 0, 0, 0) +
+        (b'\x00' * 36) +
+        struct.pack('>II', width << 16, height << 16)
+    )
+    tkhd = struct.pack('>I4s', 8 + len(tkhd_payload), b'tkhd') + tkhd_payload
+    trak = struct.pack('>I4s', 8 + len(tkhd), b'trak') + tkhd
+    moov_payload = mvhd + trak
+    moov = struct.pack('>I4s', 8 + len(moov_payload), b'moov') + moov_payload
+
+    with open(filepath, 'wb') as f:
+        f.write(ftyp + moov)
+    return filepath
+
+
+def init_v3_schema(conn: sqlite3.Connection) -> None:
+    """Initialize or upgrade SQLite database schema to IMAGINE v3."""
+    init_schema(conn)
+    cols = [
+        ("caption", "TEXT DEFAULT ''"),
+        ("media_type", "TEXT DEFAULT 'photo'"),
+        ("duration", "REAL DEFAULT 0.0"),
+        ("audio_artist", "TEXT DEFAULT ''"),
+        ("audio_title", "TEXT DEFAULT ''"),
+        ("audio_album", "TEXT DEFAULT ''"),
+        ("audio_genre", "TEXT DEFAULT ''"),
+        ("codec", "TEXT DEFAULT ''"),
+        ("bitrate", "INTEGER DEFAULT 0"),
+        ("channels", "INTEGER DEFAULT 0"),
+        ("sample_rate", "INTEGER DEFAULT 0")
+    ]
+    for col_name, col_def in cols:
+        try:
+            conn.execute(f"ALTER TABLE media_items ADD COLUMN {col_name} {col_def};")
+        except Exception:
+            pass
+    conn.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (3);")
+    conn.commit()
+
+
+init_v2_schema = init_v3_schema
+
+
+def seed_media_catalog(db_path: str, photos_dir: str) -> List[Dict[str, Any]]:
+    """Seed catalog with 6 photos plus 1 video and 1 audio file."""
+    records = seed_default_catalog(db_path, photos_dir)
+    conn = sqlite3.connect(db_path)
+    init_v3_schema(conn)
+
+    # 1. Video item
+    video_rel = "media/drone_flight.mp4"
+    video_abs = os.path.join(photos_dir, video_rel)
+    create_mp4(video_abs, duration_sec=15.0, width=1920, height=1080)
+    v_size = os.path.getsize(video_abs)
+    with open(video_abs, "rb") as f:
+        v_hash = hashlib.sha256(f.read()).hexdigest()
+
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO media_items (
+            file_path, file_name, file_size, file_modified_time, content_hash,
+            width, height, date_taken, rating, flag, media_type, duration, codec,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        video_abs, "drone_flight.mp4", v_size, 1771200000, v_hash,
+        1920, 1080, 1771200000, 4, 1, "video", 15.0, "h264",
+        1771200000, 1771200000
+    ))
+    v_id = cur.lastrowid
+    records.append({
+        "id": v_id,
+        "rel_path": video_rel,
+        "file_name": "drone_flight.mp4",
+        "file_path": video_abs,
+        "content_hash": v_hash,
+        "media_type": "video",
+        "duration": 15.0,
+        "width": 1920,
+        "height": 1080,
+        "codec": "h264"
+    })
+
+    # 2. Audio item
+    audio_rel = "media/ambient_track.wav"
+    audio_abs = os.path.join(photos_dir, audio_rel)
+    create_wav(audio_abs, duration_sec=45.0, sample_rate=44100)
+    a_size = os.path.getsize(audio_abs)
+    with open(audio_abs, "rb") as f:
+        a_hash = hashlib.sha256(f.read()).hexdigest()
+
+    cur.execute("""
+        INSERT INTO media_items (
+            file_path, file_name, file_size, file_modified_time, content_hash,
+            width, height, date_taken, rating, flag, media_type, duration,
+            audio_artist, audio_title, audio_album, audio_genre, codec, channels, sample_rate,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        audio_abs, "ambient_track.wav", a_size, 1771250000, a_hash,
+        0, 0, 1771250000, 5, 0, "audio", 45.0,
+        "SynthWave Artist", "Night Drive", "Neon City", "Electronic", "pcm", 1, 44100,
+        1771250000, 1771250000
+    ))
+    a_id = cur.lastrowid
+    records.append({
+        "id": a_id,
+        "rel_path": audio_rel,
+        "file_name": "ambient_track.wav",
+        "file_path": audio_abs,
+        "content_hash": a_hash,
+        "media_type": "audio",
+        "duration": 45.0,
+        "audio_artist": "SynthWave Artist",
+        "audio_title": "Night Drive",
+        "audio_album": "Neon City",
+        "codec": "pcm"
+    })
+
+    conn.commit()
+    conn.close()
+    return records

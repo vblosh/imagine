@@ -30,6 +30,16 @@ export function closeLoupe() {
   }
   state.loupeIndex = -1;
   resetLoupeZoomToFit();
+  if (dom.loupeVideo) {
+    dom.loupeVideo.pause();
+    dom.loupeVideo.removeAttribute('src');
+    dom.loupeVideo.load();
+  }
+  if (dom.loupeAudio) {
+    dom.loupeAudio.pause();
+    dom.loupeAudio.removeAttribute('src');
+    dom.loupeAudio.load();
+  }
   if (dom.loupeModal) dom.loupeModal.style.display = 'none';
 }
 
@@ -40,7 +50,72 @@ export function updateLoupeView() {
   if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return;
   const item = state.mediaItems[state.loupeIndex];
 
-  if (dom.loupeImg) dom.loupeImg.src = `/api/photos/${item.id}/original`;
+  // Stop previous video/audio
+  if (dom.loupeVideo) {
+    dom.loupeVideo.pause();
+    dom.loupeVideo.removeAttribute('src');
+    dom.loupeVideo.load();
+    dom.loupeVideo.style.display = 'none';
+  }
+  if (dom.loupeAudio) {
+    dom.loupeAudio.pause();
+    dom.loupeAudio.removeAttribute('src');
+    dom.loupeAudio.load();
+  }
+  if (dom.loupeAudioContainer) {
+    dom.loupeAudioContainer.style.display = 'none';
+  }
+  if (dom.loupeImg) {
+    dom.loupeImg.style.display = 'none';
+  }
+
+  const fileUrl = `/api/photos/${item.id}/original`;
+
+  if (item.media_type === 'video') {
+    if (dom.loupeVideo) {
+      dom.loupeVideo.src = fileUrl;
+      dom.loupeVideo.style.display = 'block';
+      dom.loupeVideo.load();
+    }
+    if (dom.loupeZoomControls) {
+      dom.loupeZoomControls.style.display = 'none';
+    }
+  } else if (item.media_type === 'audio') {
+    if (dom.loupeAudioContainer) {
+      dom.loupeAudioContainer.style.display = 'flex';
+    }
+    if (dom.loupeAudioCover) {
+      const coverUrl = item.content_hash
+        ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
+        : '';
+      dom.loupeAudioCover.src = coverUrl;
+    }
+    if (dom.loupeAudioTitle) {
+      dom.loupeAudioTitle.textContent = item.audio_title || item.file_name;
+    }
+    if (dom.loupeAudioArtist) {
+      const artist = item.audio_artist || 'Unknown Artist';
+      const album = item.audio_album ? ` - ${item.audio_album}` : '';
+      dom.loupeAudioArtist.textContent = `${artist}${album}`;
+    }
+    if (dom.loupeAudio) {
+      dom.loupeAudio.src = fileUrl;
+      dom.loupeAudio.load();
+    }
+    if (dom.loupeZoomControls) {
+      dom.loupeZoomControls.style.display = 'none';
+    }
+  } else {
+    // Photo
+    if (dom.loupeImg) {
+      dom.loupeImg.src = fileUrl;
+      dom.loupeImg.style.display = 'block';
+    }
+    if (dom.loupeZoomControls) {
+      dom.loupeZoomControls.style.display = 'flex';
+    }
+  }
+
   if (dom.loupeFileName) dom.loupeFileName.textContent = item.file_name;
   if (dom.loupeIndex) {
     if (state.totalCount > state.mediaItems.length) {
@@ -52,6 +127,30 @@ export function updateLoupeView() {
 
   resetLoupeZoomToFit();
   updateLoupeControls();
+}
+
+export function toggleLoupePlayback() {
+  if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return false;
+  const item = state.mediaItems[state.loupeIndex];
+  if (!item) return false;
+
+  if (item.media_type === 'video' && dom.loupeVideo) {
+    if (dom.loupeVideo.paused) {
+      dom.loupeVideo.play().catch(() => {});
+    } else {
+      dom.loupeVideo.pause();
+    }
+    return true;
+  }
+  if (item.media_type === 'audio' && dom.loupeAudio) {
+    if (dom.loupeAudio.paused) {
+      dom.loupeAudio.play().catch(() => {});
+    } else {
+      dom.loupeAudio.pause();
+    }
+    return true;
+  }
+  return false;
 }
 
 export function setLoupeZoom(targetZoom, focusClientX = null, focusClientY = null) {

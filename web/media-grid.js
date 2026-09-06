@@ -7,6 +7,7 @@ import {
   api,
   escapeHtml,
   formatDate,
+  formatDuration,
   numeric,
   normalizeMediaItem,
   normalizeTag,
@@ -72,8 +73,11 @@ export function buildMediaParams() {
   }
   if (state.activeAlbumId) params.album_id = state.activeAlbumId;
 
-  // Nav filters (picks, rejects, unrated)
-  if (state.activeNavFilter === 'picks') params.flag = 1;
+  // Nav filters (photos, videos, audio, picks, rejects, unrated)
+  if (state.activeNavFilter === 'photos') params.media_type = 'photo';
+  else if (state.activeNavFilter === 'videos') params.media_type = 'video';
+  else if (state.activeNavFilter === 'audio') params.media_type = 'audio';
+  else if (state.activeNavFilter === 'picks') params.flag = 1;
   else if (state.activeNavFilter === 'rejects') params.flag = -1;
   else if (state.activeNavFilter === 'unrated') {
     params.rating = 0;
@@ -324,6 +328,15 @@ export async function loadMetadata() {
     if (dom.totalMediaCount) {
       dom.totalMediaCount.textContent = state.stats.total_media || 0;
     }
+    if (dom.totalPhotosCount) {
+      dom.totalPhotosCount.textContent = state.stats.total_photos || 0;
+    }
+    if (dom.totalVideosCount) {
+      dom.totalVideosCount.textContent = state.stats.total_videos || 0;
+    }
+    if (dom.totalAudioCount) {
+      dom.totalAudioCount.textContent = state.stats.total_audio || 0;
+    }
   } catch (err) {
     console.error('Failed to load catalog metadata:', err);
     showToast('Failed to load catalog metadata: ' + (err.message || 'Server error'), 'error');
@@ -533,6 +546,7 @@ export function createPhotoCard(item) {
   const card = document.createElement('div');
   card.className = 'photo-card' + (state.selectedIds.has(item.id) ? ' selected' : '');
   card.dataset.id = item.id;
+  card.dataset.mediaType = item.media_type || 'photo';
 
   // Thumbnail URL with fallback
   const thumbUrl = item.content_hash
@@ -544,6 +558,15 @@ export function createPhotoCard(item) {
     : item.flag === -1
       ? '<span class="flag-badge reject" title="Reject">✖</span>'
       : '';
+
+  let mediaBadge = '';
+  if (item.media_type === 'video') {
+    const durStr = formatDuration(item.duration);
+    mediaBadge = `<span class="media-type-badge video-badge" title="Video (${durStr})"><span class="badge-icon">▶</span> ${durStr}</span>`;
+  } else if (item.media_type === 'audio') {
+    const durStr = item.duration > 0 ? formatDuration(item.duration) : '';
+    mediaBadge = `<span class="media-type-badge audio-badge" title="Audio${durStr ? ` (${durStr})` : ''}"><span class="badge-icon">🎵</span> ${durStr}</span>`;
+  }
 
   // Star rating HTML
   let starsHtml = '';
@@ -558,6 +581,7 @@ export function createPhotoCard(item) {
       <img src="${thumbUrl}" alt="${safeFileName}" loading="lazy" onerror="this.onerror=null;this.src='/api/photos/${item.id}/original';">
       <div class="card-badges">
         ${flagBadge}
+        ${mediaBadge}
       </div>
     </div>
     <div class="card-info">
@@ -881,6 +905,9 @@ export function renderTimeline() {
 
 export function updateSidebarActive() {
   if (dom.navAllMedia) dom.navAllMedia.classList.toggle('active', state.activeNavFilter === 'all' && !state.activeTagId && !state.activeAlbumId && !state.activeFolder && !state.searchText && (!state.activeTab || state.activeTab === 'media'));
+  if (dom.navPhotos) dom.navPhotos.classList.toggle('active', state.activeNavFilter === 'photos');
+  if (dom.navVideos) dom.navVideos.classList.toggle('active', state.activeNavFilter === 'videos');
+  if (dom.navAudio) dom.navAudio.classList.toggle('active', state.activeNavFilter === 'audio');
   if (dom.navPicks) dom.navPicks.classList.toggle('active', state.activeNavFilter === 'picks');
   if (dom.navRejects) dom.navRejects.classList.toggle('active', state.activeNavFilter === 'rejects');
   if (dom.navUnrated) dom.navUnrated.classList.toggle('active', state.activeNavFilter === 'unrated');
@@ -896,12 +923,21 @@ export function updateSidebarActive() {
 }
 
 export function updateFilterLabel() {
-  let label = 'All Photos';
+  let label = 'All Media';
   let isFiltered = false;
 
   if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
     const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
     label = `Category: ${tabName}`;
+    isFiltered = true;
+  } else if (state.activeNavFilter === 'photos') {
+    label = 'Photos';
+    isFiltered = true;
+  } else if (state.activeNavFilter === 'videos') {
+    label = 'Videos';
+    isFiltered = true;
+  } else if (state.activeNavFilter === 'audio') {
+    label = 'Audio';
     isFiltered = true;
   } else if (state.activeNavFilter === 'picks') {
     label = 'Picks';

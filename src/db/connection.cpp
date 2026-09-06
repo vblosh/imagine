@@ -93,6 +93,11 @@ bool Statement::isNull(int col) const {
     return sqlite3_column_type(stmt_, col) == SQLITE_NULL;
 }
 
+int Statement::columnCount() const {
+    if (!stmt_) return 0;
+    return sqlite3_column_count(stmt_);
+}
+
 int32_t Statement::getInt(int col) const {
     return sqlite3_column_int(stmt_, col);
 }
