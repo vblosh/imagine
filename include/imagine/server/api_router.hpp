@@ -53,6 +53,7 @@ private:
     void registerThumbnailRoutes(httplib::Server& server);
     void registerTimelineRoutes(httplib::Server& server);
     void registerStatsRoutes(httplib::Server& server);
+    void registerFolderRoutes(httplib::Server& server);
     void registerImportRoutes(httplib::Server& server);
     void registerGeocodeRoutes(httplib::Server& server);
 

@@ -219,6 +219,7 @@ void ApiRouter::registerRoutes(httplib::Server& server) {
     registerThumbnailRoutes(server);
     registerTimelineRoutes(server);
     registerStatsRoutes(server);
+    registerFolderRoutes(server);
     registerImportRoutes(server);
     registerGeocodeRoutes(server);
 }
@@ -1264,6 +1265,18 @@ void ApiRouter::registerStatsRoutes(httplib::Server& server) {
             return;
         }
         sendJson(res, statsRes.value());
+    });
+}
+
+void ApiRouter::registerFolderRoutes(httplib::Server& server) {
+    // GET /api/folders
+    server.Get("/api/folders", [this](const httplib::Request& req, httplib::Response& res) {
+        auto foldersRes = catalog_ ? catalog_->getFolders() : db().getAllFolders();
+        if (!foldersRes.isOk()) {
+            sendStatusError(res, foldersRes.status());
+            return;
+        }
+        sendJson(res, foldersRes.value());
     });
 }
 

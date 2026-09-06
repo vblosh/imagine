@@ -146,3 +146,48 @@ def test_folder_tree_navigation(server, page: Page):
     page.locator("#clearFiltersBtn").click()
     expect(nature_folder).not_to_have_class(re.compile(r"\bactive\b"))
     expect(cards).to_have_count(6)
+
+
+def test_folders_and_tags_visible_for_all_images_without_scroll(server, page: Page):
+    """Verify that all folders and tags across the entire catalog are visible immediately on load, even before scrolling or loading paginated media."""
+    # Route media request to only return 1 item (from 'nature' folder) initially, with total=6
+    original_route = page.route
+    def handle_media(route):
+        url = route.request.url
+        if "offset=0" in url and "folder=" not in url and "tag_id=" not in url and "search=" not in url:
+            # Fetch normal response and slice items to only 1 item
+            response = route.fetch()
+            data = response.json()
+            data["items"] = data["items"][:1]  # Only 1 item (mountain.bmp in 'nature')
+            data["total"] = 6
+            route.fulfill(response=response, json=data)
+        else:
+            route.continue_()
+
+    page.route("**/api/media*", handle_media)
+    page.goto(server["url"])
+
+    # Grid only has 1 card initially (simulating first page with limit)
+    expect(page.locator(".photo-card")).to_have_count(1)
+
+    # BUT the folders sidebar must already show ALL folders (both 'family' and 'nature'), not just 'nature'
+    folders = page.locator("#foldersTree .folder-item")
+    expect(folders).to_have_count(2)
+    expect(page.locator("#foldersTree .folder-item", has_text="family")).to_be_visible()
+    expect(page.locator("#foldersTree .folder-item", has_text="nature")).to_be_visible()
+
+    # And tags sidebar must show all tags across categories
+    expect(page.locator("#tagCategoryPeople")).to_contain_text("Alice")
+    expect(page.locator("#tagCategoryPlaces")).to_contain_text("Alps")
+    expect(page.locator("#tagCategoryEvents")).to_contain_text("Birthday 2026")
+    expect(page.locator("#tagCategoryKeyword")).to_contain_text("Sunset")
+
+    # Clicking 'family' folder (which had 0 photos in the initial 1-photo page) works and loads family photos
+    family_folder = page.locator("#foldersTree .folder-item", has_text="family")
+    family_folder.click()
+    expect(family_folder).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator(".photo-card")).to_have_count(2)
+
+    # Both folders remain visible
+    expect(folders).to_have_count(2)
+    expect(page.locator("#foldersTree .folder-item", has_text="nature")).to_be_visible()

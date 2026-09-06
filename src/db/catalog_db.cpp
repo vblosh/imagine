@@ -2,6 +2,7 @@
 #include "imagine/db/schema.hpp"
 #include "imagine/common/logger.hpp"
 #include <chrono>
+#include <set>
 
 namespace imagine::db {
 
@@ -875,6 +876,24 @@ Result<CatalogStats> CatalogDb::getStats() {
     }
 
     return s;
+}
+
+Result<std::vector<std::string>> CatalogDb::getAllFolders() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const char* sql = "SELECT file_path FROM media_items;";
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+
+    std::set<std::string> folders;
+    while (stmt.step() == StepResult::Row) {
+        std::string path = stmt.getString(0);
+        size_t lastSlash = path.find_last_of("/\\");
+        if (lastSlash != std::string::npos && lastSlash > 0) {
+            folders.insert(path.substr(0, lastSlash));
+        }
+    }
+    return std::vector<std::string>(folders.begin(), folders.end());
 }
 
 Result<std::vector<MediaItem>> CatalogDb::queryMedia(

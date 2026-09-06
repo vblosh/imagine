@@ -150,6 +150,46 @@ TEST_F(ServerTest, AlbumsApi) {
     EXPECT_EQ(albums[0]["name"].get<std::string>(), "Vacation 2026");
 }
 
+TEST_F(ServerTest, FoldersApi) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. GET /api/folders initially empty
+    auto getRes1 = client.Get("/api/folders");
+    ASSERT_TRUE(getRes1);
+    EXPECT_EQ(getRes1->status, 200);
+    auto folders1 = nlohmann::json::parse(getRes1->body);
+    EXPECT_TRUE(folders1.is_array());
+    EXPECT_EQ(folders1.size(), 0u);
+
+    // 2. Insert media items in multiple folders
+    MediaItem item1;
+    item1.file_path = "vacation/beach.jpg";
+    item1.file_name = "beach.jpg";
+    item1.content_hash = "h_vacation";
+    catalog_->db().insertMedia(item1);
+
+    MediaItem item2;
+    item2.file_path = "family/birthday.jpg";
+    item2.file_name = "birthday.jpg";
+    item2.content_hash = "h_family";
+    catalog_->db().insertMedia(item2);
+
+    MediaItem item3;
+    item3.file_path = "root_pic.jpg";
+    item3.file_name = "root_pic.jpg";
+    item3.content_hash = "h_root";
+    catalog_->db().insertMedia(item3);
+
+    // 3. GET /api/folders returns discovered folders in alphabetical order
+    auto getRes2 = client.Get("/api/folders");
+    ASSERT_TRUE(getRes2);
+    EXPECT_EQ(getRes2->status, 200);
+    auto folders2 = nlohmann::json::parse(getRes2->body);
+    EXPECT_EQ(folders2.size(), 2u);
+    EXPECT_EQ(folders2[0].get<std::string>(), "family");
+    EXPECT_EQ(folders2[1].get<std::string>(), "vacation");
+}
+
 TEST_F(ServerTest, MediaItemCrudAndRatings) {
     httplib::Client client("127.0.0.1", port_);
 

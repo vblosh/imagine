@@ -78,9 +78,10 @@ public:
     Status removeMediaFromAlbum(AlbumId albumId, MediaId mediaId);
     Result<std::vector<MediaItem>> getMediaInAlbum(AlbumId albumId);
 
-    // Timeline & Stats
+    // Timeline, Stats & Folders
     Result<std::vector<TimelineEntry>> getTimeline();
     Result<CatalogStats> getStats();
+    Result<std::vector<std::string>> getFolders();
 
     // Component accessors
     db::CatalogDb& db();

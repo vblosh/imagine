@@ -431,6 +431,14 @@ Result<CatalogStats> Catalog::getStats() {
     return db_->getStats();
 }
 
+Result<std::vector<std::string>> Catalog::getFolders() {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+    return db_->getAllFolders();
+}
+
 db::CatalogDb& Catalog::db() {
     if (!db_) throw std::runtime_error("Catalog db accessed while closed");
     return *db_;

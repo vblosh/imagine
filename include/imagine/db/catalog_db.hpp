@@ -57,6 +57,7 @@ public:
     // Timeline & Aggregates
     Result<std::vector<TimelineEntry>> getTimeline();
     Result<CatalogStats> getStats();
+    Result<std::vector<std::string>> getAllFolders();
 
     // Query execution
     Result<std::vector<MediaItem>> queryMedia(

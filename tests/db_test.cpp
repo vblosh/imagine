@@ -469,3 +469,58 @@ TEST_F(CatalogDbTest, MakePathsRelative) {
     auto m3 = db.getMediaById(id3).value();
     EXPECT_EQ(m3.file_path, "/var/other/img3.jpg");
 }
+
+TEST_F(CatalogDbTest, GetAllFolders) {
+    // 1. Initially empty database has no folders
+    auto emptyRes = db.getAllFolders();
+    ASSERT_TRUE(emptyRes.isOk());
+    EXPECT_TRUE(emptyRes.value().empty());
+
+    // 2. Insert items across multiple folders, duplicates, and root
+    MediaItem item1;
+    item1.file_path = "family/birthday.jpg";
+    item1.file_name = "birthday.jpg";
+    item1.content_hash = "h1";
+    db.insertMedia(item1);
+
+    MediaItem item2;
+    item2.file_path = "family/portrait.jpg";
+    item2.file_name = "portrait.jpg";
+    item2.content_hash = "h2";
+    db.insertMedia(item2);
+
+    MediaItem item3;
+    item3.file_path = "nature/mountain.jpg";
+    item3.file_name = "mountain.jpg";
+    item3.content_hash = "h3";
+    auto id3 = db.insertMedia(item3).value();
+
+    MediaItem item4;
+    item4.file_path = "Egypt/Betlehem/pic.jpg";
+    item4.file_name = "pic.jpg";
+    item4.content_hash = "h4";
+    db.insertMedia(item4);
+
+    MediaItem item5;
+    item5.file_path = "root_file.jpg";
+    item5.file_name = "root_file.jpg";
+    item5.content_hash = "h5";
+    db.insertMedia(item5);
+
+    auto foldersRes = db.getAllFolders();
+    ASSERT_TRUE(foldersRes.isOk());
+    const auto& folders = foldersRes.value();
+    EXPECT_EQ(folders.size(), 3u);
+    EXPECT_EQ(folders[0], "Egypt/Betlehem");
+    EXPECT_EQ(folders[1], "family");
+    EXPECT_EQ(folders[2], "nature");
+
+    // 3. Delete nature item -> "nature" folder disappears
+    ASSERT_TRUE(db.deleteMedia(id3).isOk());
+    auto afterDelRes = db.getAllFolders();
+    ASSERT_TRUE(afterDelRes.isOk());
+    const auto& afterDel = afterDelRes.value();
+    EXPECT_EQ(afterDel.size(), 2u);
+    EXPECT_EQ(afterDel[0], "Egypt/Betlehem");
+    EXPECT_EQ(afterDel[1], "family");
+}

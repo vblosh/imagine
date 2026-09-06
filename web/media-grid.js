@@ -293,15 +293,20 @@ export async function loadMoreMedia() {
 
 export async function loadMetadata() {
   try {
-    const [tags, albums, timeline, stats] = await Promise.all([
+    const [tags, albums, folders, timeline, stats] = await Promise.all([
       api.get('/api/tags'),
       api.get('/api/albums'),
+      api.get('/api/folders').catch(err => {
+        console.warn('Failed to load folders from server, falling back to discovered folders:', err);
+        return Array.from(state.allFolders);
+      }),
       api.get('/api/timeline'),
       api.get('/api/stats')
     ]);
 
     state.tags = Array.isArray(tags) ? tags.map(normalizeTag).filter(Boolean) : [];
     state.albums = Array.isArray(albums) ? albums.map(normalizeAlbum).filter(Boolean) : [];
+    state.allFolders = new Set(Array.isArray(folders) ? folders.filter(Boolean) : []);
     state.timelineData = Array.isArray(timeline) ? timeline.map(normalizeTimelineEntry).filter(Boolean) : [];
     state.stats = normalizeCatalogStats(stats);
 
@@ -773,8 +778,8 @@ export function renderSidebarFolders() {
   if (!dom.foldersTree) return;
   dom.foldersTree.innerHTML = '';
 
-  // If allFolders is empty, populate from current media items
-  if (state.allFolders.size === 0) {
+  // If allFolders is empty, populate from current media items (fallback)
+  if (state.allFolders.size === 0 && state.mediaItems && state.mediaItems.length > 0) {
     state.mediaItems.forEach(item => {
       if (item.file_path) {
         const lastSlash = Math.max(item.file_path.lastIndexOf('/'), item.file_path.lastIndexOf('\\'));
