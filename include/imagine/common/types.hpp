@@ -2,12 +2,87 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <optional>
 #include <chrono>
+#include <filesystem>
 #include <nlohmann/json.hpp>
 
 namespace imagine {
+
+inline std::filesystem::path stripExtendedPrefix(const std::filesystem::path& p) {
+#if defined(_WIN32)
+    std::wstring ws = p.native();
+    if (ws.rfind(L"\\\\?\\", 0) == 0 && ws.size() > 4 && ws[5] == L':') {
+        return std::filesystem::path(ws.substr(4));
+    }
+#endif
+    return p;
+}
+
+inline std::string pathToUtf8(const std::filesystem::path& p) {
+    auto cleaned = stripExtendedPrefix(p);
+#if defined(_WIN32)
+    auto u8 = cleaned.u8string();
+    return std::string(u8.begin(), u8.end());
+#else
+    return cleaned.string();
+#endif
+}
+
+inline std::filesystem::path pathFromUtf8(const std::string& utf8Str) {
+#if defined(_WIN32)
+    return std::filesystem::path(std::u8string(utf8Str.begin(), utf8Str.end()));
+#else
+    return std::filesystem::path(utf8Str);
+#endif
+}
+
+inline std::string sanitizeUtf8(std::string_view sv) {
+    std::string out;
+    out.reserve(sv.size());
+    for (size_t i = 0; i < sv.size(); ) {
+        unsigned char c = static_cast<unsigned char>(sv[i]);
+        if (c < 0x80) {
+            out.push_back(c);
+            ++i;
+        } else if ((c & 0xE0) == 0xC0) {
+            if (i + 1 < sv.size() && (static_cast<unsigned char>(sv[i + 1]) & 0xC0) == 0x80) {
+                out.append(sv.substr(i, 2));
+                i += 2;
+            } else {
+                out += "\xEF\xBF\xBD";
+                ++i;
+            }
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 < sv.size() &&
+                (static_cast<unsigned char>(sv[i + 1]) & 0xC0) == 0x80 &&
+                (static_cast<unsigned char>(sv[i + 2]) & 0xC0) == 0x80) {
+                out.append(sv.substr(i, 3));
+                i += 3;
+            } else {
+                out += "\xEF\xBF\xBD";
+                ++i;
+            }
+        } else if ((c & 0xF8) == 0xF0) {
+            if (i + 3 < sv.size() &&
+                (static_cast<unsigned char>(sv[i + 1]) & 0xC0) == 0x80 &&
+                (static_cast<unsigned char>(sv[i + 2]) & 0xC0) == 0x80 &&
+                (static_cast<unsigned char>(sv[i + 3]) & 0xC0) == 0x80) {
+                out.append(sv.substr(i, 4));
+                i += 4;
+            } else {
+                out += "\xEF\xBF\xBD";
+                ++i;
+            }
+        } else {
+            out += "\xEF\xBF\xBD";
+            ++i;
+        }
+    }
+    return out;
+}
 
 using MediaId = int64_t;
 using TagId = int64_t;

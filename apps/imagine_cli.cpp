@@ -124,6 +124,13 @@ Options for 'stats':
 )" << std::endl;
 }
 
+std::string getCatalogDbDefault() {
+    const char* env = std::getenv("IMAGINE_CATALOG");
+    if (!env || !*env) env = std::getenv("IMAGINE_CATALOG_DB");
+    if (env && *env) return std::string(env);
+    return "catalog.db";
+}
+
 int handleImport(int argc, char** argv) {
     if (argc < 3) {
         std::cerr << "Error: 'import' requires a directory path.\n";
@@ -132,7 +139,7 @@ int handleImport(int argc, char** argv) {
     }
 
     std::string path = argv[2];
-    std::string catalogDb = "catalog.db";
+    std::string catalogDb = getCatalogDbDefault();
     std::string photosDir = "";
     std::string thumbsDir = "";
     bool recursive = true;
@@ -212,7 +219,7 @@ int handleImport(int argc, char** argv) {
 }
 
 int handleServe(int argc, char** argv) {
-    std::string catalogDb = "catalog.db";
+    std::string catalogDb = getCatalogDbDefault();
     std::string photosDir = "";
     std::string thumbsDir = "";
     std::string host = "0.0.0.0";
@@ -226,6 +233,18 @@ int handleServe(int argc, char** argv) {
     const char* envThumbs = std::getenv("IMAGINE_THUMBS_DIR");
     if (envThumbs && *envThumbs) {
         thumbsDir = envThumbs;
+    }
+    const char* envHost = std::getenv("IMAGINE_HOST");
+    if (envHost && *envHost) {
+        host = envHost;
+    }
+    const char* envPort = std::getenv("IMAGINE_PORT");
+    if (envPort && *envPort) {
+        try { port = std::stoi(envPort); } catch (...) {}
+    }
+    const char* envWeb = std::getenv("IMAGINE_WEB_DIR");
+    if (envWeb && *envWeb) {
+        webDir = envWeb;
     }
 
     for (int i = 2; i < argc; ++i) {
@@ -242,6 +261,15 @@ int handleServe(int argc, char** argv) {
             port = std::stoi(argv[++i]);
         } else if (arg == "--web-dir" && i + 1 < argc) {
             webDir = argv[++i];
+        }
+    }
+
+    if (!std::filesystem::exists(webDir) && argc > 0 && argv[0]) {
+        std::filesystem::path exeDir = std::filesystem::path(argv[0]).parent_path();
+        if (std::filesystem::exists(exeDir / "web")) {
+            webDir = (exeDir / "web").string();
+        } else if (std::filesystem::exists(exeDir.parent_path() / "web")) {
+            webDir = (exeDir.parent_path() / "web").string();
         }
     }
 
@@ -282,7 +310,7 @@ int handleServe(int argc, char** argv) {
 }
 
 int handleList(int argc, char** argv) {
-    std::string catalogDb = "catalog.db";
+    std::string catalogDb = getCatalogDbDefault();
     imagine::core::QueryCriteria criteria;
     criteria.limit = 50;
 
@@ -368,7 +396,7 @@ int handleList(int argc, char** argv) {
 }
 
 int handleStats(int argc, char** argv) {
-    std::string catalogDb = "catalog.db";
+    std::string catalogDb = getCatalogDbDefault();
 
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
@@ -414,7 +442,7 @@ int handleTag(int argc, char** argv) {
     imagine::MediaId mediaId = std::stoll(argv[2]);
     std::string tagName = argv[3];
     std::string category = "keyword";
-    std::string catalogDb = "catalog.db";
+    std::string catalogDb = getCatalogDbDefault();
 
     for (int i = 4; i < argc; ++i) {
         std::string arg = argv[i];
@@ -444,7 +472,7 @@ int handleTag(int argc, char** argv) {
 }
 
 int handleDelete(int argc, char** argv) {
-    std::string catalogDb = "catalog.db";
+    std::string catalogDb = getCatalogDbDefault();
     bool skipConfirm = false;
     bool deleteRejected = false;
     std::vector<imagine::MediaId> targetIds;
@@ -546,7 +574,7 @@ int handleGeotag(int argc, char** argv) {
         return 1;
     }
 
-    std::string catalogDb = "catalog.db";
+    std::string catalogDb = getCatalogDbDefault();
     bool clearGps = false;
     double lat = 0.0;
     double lon = 0.0;
@@ -609,9 +637,14 @@ int handleGeotag(int argc, char** argv) {
 }
 
 int handleRelocate(int argc, char** argv) {
-    std::string catalogDb = "catalog.db";
+    std::string catalogDb = getCatalogDbDefault();
     std::string photosDir = "";
     std::string thumbsDir = "";
+
+    const char* envPhotos = std::getenv("IMAGINE_PHOTOS_DIR");
+    if (envPhotos && *envPhotos) photosDir = envPhotos;
+    const char* envThumbs = std::getenv("IMAGINE_THUMBS_DIR");
+    if (envThumbs && *envThumbs) thumbsDir = envThumbs;
 
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
@@ -651,6 +684,12 @@ int handleRelocate(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
+        const char* envCat = std::getenv("IMAGINE_CATALOG");
+        if (!envCat || !*envCat) envCat = std::getenv("IMAGINE_CATALOG_DB");
+        if ((envCat && *envCat) || std::getenv("IMAGINE_PHOTOS_DIR")) {
+            char* defaultArgv[] = {argv[0], const_cast<char*>("serve")};
+            return handleServe(2, defaultArgv);
+        }
         printHelp();
         return 0;
     }

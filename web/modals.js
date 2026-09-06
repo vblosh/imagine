@@ -42,6 +42,20 @@ export function closeImportModal() {
   }
 }
 
+export async function cancelImport() {
+  if (state.isImporting) {
+    try {
+      if (dom.importStatusCounts) {
+        dom.importStatusCounts.textContent = 'Cancelling import...';
+      }
+      await api.post('/api/import/cancel');
+    } catch (err) {
+      console.warn('Failed to cancel import:', err);
+    }
+  }
+  closeImportModal();
+}
+
 export async function pollImportProgress() {
   if (!state.isImporting) return;
 
@@ -61,12 +75,22 @@ export async function pollImportProgress() {
       dom.importProgressBar.style.width = `${percent}%`;
     }
 
-    if (dom.importStatusCounts) {
-      dom.importStatusCounts.textContent =
-        `Processed: ${processed} / ${total} (Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed})`;
-    }
-    if (dom.importCurrentFile) {
-      dom.importCurrentFile.textContent = prog.current_file || '';
+    if (prog.is_running && total === 0) {
+      if (dom.importProgressBar) dom.importProgressBar.style.width = '10%';
+      if (dom.importStatusCounts) {
+        dom.importStatusCounts.textContent = 'Scanning folders...';
+      }
+      if (dom.importCurrentFile) {
+        dom.importCurrentFile.textContent = prog.current_file || 'Scanning folders...';
+      }
+    } else {
+      if (dom.importStatusCounts) {
+        dom.importStatusCounts.textContent =
+          `Processed: ${processed} / ${total} (Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed})`;
+      }
+      if (dom.importCurrentFile) {
+        dom.importCurrentFile.textContent = prog.current_file || '';
+      }
     }
 
     if (prog.is_running) {
@@ -75,14 +99,17 @@ export async function pollImportProgress() {
       state.importPollInterval = null;
       state.isImporting = false;
       if (dom.importProgressBar) dom.importProgressBar.style.width = '100%';
-      if (dom.importStatusCounts) dom.importStatusCounts.textContent = `Completed! ${imported} imported, ${skipped} skipped.`;
+      const summaryMsg = (total === 0 && imported === 0 && skipped === 0)
+        ? 'Import finished: no new photos found.'
+        : `Completed! ${imported} imported, ${skipped} skipped.`;
+      if (dom.importStatusCounts) dom.importStatusCounts.textContent = summaryMsg;
       if (dom.startImportBtn) dom.startImportBtn.disabled = false;
       setTimeout(() => {
         if (dom.importModal) dom.importModal.style.display = 'none';
         if (dom.importProgressBox) dom.importProgressBox.style.display = 'none';
         loadMetadata();
         loadMedia();
-        showToast(`Import completed: ${imported} imported, ${skipped} skipped.`, 'success');
+        showToast(summaryMsg, 'success');
       }, 1200);
     }
   } catch (pollErr) {

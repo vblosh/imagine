@@ -1,4 +1,5 @@
 #include "imagine/thumbnail/generator.hpp"
+#include "imagine/common/types.hpp"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -26,8 +27,27 @@
 namespace imagine::thumbnail {
 
 Result<std::pair<int, int>> Generator::getImageDimensions(const std::string& filePath) {
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
+    if (!file) {
+        return Status::parseError("Failed to read image info: " + filePath);
+    }
+    stbi_io_callbacks callbacks;
+    callbacks.read = [](void* user, char* data, int size) -> int {
+        auto* stream = static_cast<std::istream*>(user);
+        stream->read(data, size);
+        return static_cast<int>(stream->gcount());
+    };
+    callbacks.skip = [](void* user, int n) {
+        auto* stream = static_cast<std::istream*>(user);
+        stream->clear();
+        stream->seekg(n, std::ios::cur);
+    };
+    callbacks.eof = [](void* user) -> int {
+        auto* stream = static_cast<std::istream*>(user);
+        return stream->eof() ? 1 : 0;
+    };
     int w = 0, h = 0, comp = 0;
-    if (stbi_info(filePath.c_str(), &w, &h, &comp)) {
+    if (stbi_info_from_callbacks(&callbacks, &file, &w, &h, &comp)) {
         return std::make_pair(w, h);
     }
     return Status::parseError("Failed to read image info: " + filePath);
@@ -64,7 +84,7 @@ Result<std::pair<int, int>> Generator::getImageDimensionsFromMemory(const uint8_
 }
 
 Result<ImageBuffer> Generator::loadImage(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file) {
         return Status::ioError("Failed to open image file: " + filePath);
     }
@@ -269,21 +289,31 @@ Result<ImageBuffer> Generator::resize(const ImageBuffer& src, int maxDimension) 
 }
 
 Status Generator::saveJpeg(const ImageBuffer& img, const std::string& destPath, int quality) {
-    std::filesystem::path p(destPath);
+    std::filesystem::path p = pathFromUtf8(destPath);
     if (p.has_parent_path()) {
         std::error_code ec;
         std::filesystem::create_directories(p.parent_path(), ec);
     }
 
-    int rc = stbi_write_jpg(destPath.c_str(), img.width, img.height, img.channels, img.data.data(), quality);
-    if (!rc) {
+    std::ofstream ofs(p, std::ios::binary);
+    if (!ofs) {
+        return Status::ioError("Failed to open output file: " + destPath);
+    }
+
+    auto writeFunc = [](void* context, void* data, int size) {
+        auto* stream = static_cast<std::ostream*>(context);
+        stream->write(reinterpret_cast<const char*>(data), size);
+    };
+
+    int rc = stbi_write_jpg_to_func(writeFunc, &ofs, img.width, img.height, img.channels, img.data.data(), quality);
+    if (!rc || !ofs) {
         return Status::ioError("Failed to write JPEG thumbnail to " + destPath);
     }
     return Status::ok();
 }
 
 Status Generator::saveJpegFast(const ImageBuffer& img, const std::string& destPath, int quality) {
-    std::filesystem::path p(destPath);
+    std::filesystem::path p = pathFromUtf8(destPath);
     if (p.has_parent_path()) {
         std::error_code ec;
         std::filesystem::create_directories(p.parent_path(), ec);
@@ -304,7 +334,7 @@ Status Generator::saveJpegFast(const ImageBuffer& img, const std::string& destPa
 
             if (tjCompress2(handle, img.data.data(), img.width, 0, img.height, TJPF_RGB,
                             &jpegBuf, &jpegSize, TJSAMP_420, quality, flags) == 0) {
-                std::ofstream ofs(destPath, std::ios::binary);
+                std::ofstream ofs(p, std::ios::binary);
                 if (ofs) {
                     ofs.write(reinterpret_cast<const char*>(jpegBuf), static_cast<std::streamsize>(jpegSize));
                     tjFree(jpegBuf);
@@ -323,15 +353,25 @@ Status Generator::saveJpegFast(const ImageBuffer& img, const std::string& destPa
 }
 
 Status Generator::savePng(const ImageBuffer& img, const std::string& destPath) {
-    std::filesystem::path p(destPath);
+    std::filesystem::path p = pathFromUtf8(destPath);
     if (p.has_parent_path()) {
         std::error_code ec;
         std::filesystem::create_directories(p.parent_path(), ec);
     }
 
+    std::ofstream ofs(p, std::ios::binary);
+    if (!ofs) {
+        return Status::ioError("Failed to open output file: " + destPath);
+    }
+
+    auto writeFunc = [](void* context, void* data, int size) {
+        auto* stream = static_cast<std::ostream*>(context);
+        stream->write(reinterpret_cast<const char*>(data), size);
+    };
+
     int stride = img.width * img.channels;
-    int rc = stbi_write_png(destPath.c_str(), img.width, img.height, img.channels, img.data.data(), stride);
-    if (!rc) {
+    int rc = stbi_write_png_to_func(writeFunc, &ofs, img.width, img.height, img.channels, img.data.data(), stride);
+    if (!rc || !ofs) {
         return Status::ioError("Failed to write PNG thumbnail to " + destPath);
     }
     return Status::ok();

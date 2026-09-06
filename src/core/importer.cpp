@@ -18,7 +18,7 @@ void to_json(nlohmann::json& j, const ImportProgress& p) {
         {"skipped_files", p.skipped_files.load()},
         {"failed_files", p.failed_files.load()},
         {"cancelled_files", p.cancelled_files.load()},
-        {"current_file", p.current_file},
+        {"current_file", sanitizeUtf8(p.current_file)},
         {"is_running", p.is_running}
     };
 }
@@ -58,48 +58,73 @@ bool Importer::isInsideRootDir(const std::filesystem::path& target, const std::f
         return false;
     }
     std::error_code ec;
-    auto canTarget = std::filesystem::weakly_canonical(target, ec);
-    if (ec) canTarget = target.lexically_normal();
-    auto canRoot = std::filesystem::weakly_canonical(rootDir, ec);
-    if (ec) canRoot = rootDir.lexically_normal();
+    auto canTarget = stripExtendedPrefix(target).lexically_normal();
+    auto canRoot = stripExtendedPrefix(rootDir).lexically_normal();
 
     auto rel = std::filesystem::relative(canTarget, canRoot, ec);
+    if (!ec && !rel.empty()) {
+        std::string relStr = rel.generic_string();
+        if (!relStr.empty() && relStr != "." && relStr != ".." && relStr.rfind("../", 0) != 0) {
+            return true;
+        }
+    }
+
+    canTarget = stripExtendedPrefix(std::filesystem::weakly_canonical(target, ec));
+    if (ec) canTarget = stripExtendedPrefix(target).lexically_normal();
+    canRoot = stripExtendedPrefix(std::filesystem::weakly_canonical(rootDir, ec));
+    if (ec) canRoot = stripExtendedPrefix(rootDir).lexically_normal();
+
+    rel = std::filesystem::relative(canTarget, canRoot, ec);
     if (ec || rel.empty()) {
         return false;
     }
     std::string relStr = rel.generic_string();
-    if (relStr.empty() || relStr == ".") {
-        return false;
-    }
-    if (relStr == ".." || relStr.rfind("../", 0) == 0) {
+    if (relStr.empty() || relStr == "." || relStr == ".." || relStr.rfind("../", 0) == 0) {
         return false;
     }
     return true;
 }
 
 std::string Importer::toRelativePath(const std::filesystem::path& fullPath, const std::filesystem::path& baseDir) {
+    auto toGeneric = [](const std::filesystem::path& p) -> std::string {
+        std::string s = pathToUtf8(stripExtendedPrefix(p).lexically_normal());
+        std::replace(s.begin(), s.end(), '\\', '/');
+        return s;
+    };
+
     if (baseDir.empty()) {
-        return fullPath.lexically_normal().generic_string();
+        return toGeneric(fullPath);
     }
     std::error_code ec;
-    auto canTarget = std::filesystem::weakly_canonical(fullPath, ec);
-    if (ec) canTarget = fullPath.lexically_normal();
-    auto canRoot = std::filesystem::weakly_canonical(baseDir, ec);
-    if (ec) canRoot = baseDir.lexically_normal();
+    auto canTarget = stripExtendedPrefix(fullPath).lexically_normal();
+    auto canRoot = stripExtendedPrefix(baseDir).lexically_normal();
 
     auto rel = std::filesystem::relative(canTarget, canRoot, ec);
+    if (!ec && !rel.empty()) {
+        std::string relStr = rel.generic_string();
+        if (relStr != ".." && relStr.rfind("../", 0) != 0) {
+            return relStr;
+        }
+    }
+
+    canTarget = stripExtendedPrefix(std::filesystem::weakly_canonical(fullPath, ec));
+    if (ec) canTarget = stripExtendedPrefix(fullPath).lexically_normal();
+    canRoot = stripExtendedPrefix(std::filesystem::weakly_canonical(baseDir, ec));
+    if (ec) canRoot = stripExtendedPrefix(baseDir).lexically_normal();
+
+    rel = std::filesystem::relative(canTarget, canRoot, ec);
     if (ec || rel.empty()) {
-        return fullPath.lexically_normal().generic_string();
+        return toGeneric(fullPath);
     }
     std::string relStr = rel.generic_string();
     if (relStr.rfind("../", 0) == 0 || relStr == "..") {
-        return fullPath.lexically_normal().generic_string();
+        return toGeneric(fullPath);
     }
     return relStr;
 }
 
 bool Importer::isSupportedExtension(const std::string& path) {
-    std::filesystem::path p(path);
+    std::filesystem::path p = pathFromUtf8(path);
     std::string ext = p.extension().string();
     for (char& c : ext) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -110,15 +135,16 @@ bool Importer::isSupportedExtension(const std::string& path) {
 
 std::string Importer::normalizePath(const std::string& path) {
     std::error_code ec;
+    auto p = pathFromUtf8(path);
     // Preserve symlink rejection: do not follow or normalize symlink paths
-    if (std::filesystem::is_symlink(std::filesystem::symlink_status(path, ec))) {
+    if (std::filesystem::is_symlink(std::filesystem::symlink_status(p, ec))) {
         return path;
     }
-    auto weakly = std::filesystem::weakly_canonical(path, ec);
+    auto weakly = std::filesystem::weakly_canonical(p, ec);
     if (!ec) {
-        return weakly.string();
+        return pathToUtf8(stripExtendedPrefix(weakly));
     }
-    return std::filesystem::path(path).lexically_normal().string();
+    return pathToUtf8(stripExtendedPrefix(p.lexically_normal()));
 }
 
 void Importer::cancel() noexcept {
@@ -141,13 +167,15 @@ ImportProgress Importer::currentProgress() const {
 
 Importer::ProcessStatus Importer::processFileInternal(const std::string& filePath, MediaItem* outItem, bool commitToDb) {
     std::error_code ec;
+    auto fPath = pathFromUtf8(filePath);
+
     // Symlink restriction: disallow importing symlink files
-    if (std::filesystem::is_symlink(std::filesystem::symlink_status(filePath, ec))) {
+    if (std::filesystem::is_symlink(std::filesystem::symlink_status(fPath, ec))) {
         IMAGINE_LOG_ERROR("Symlink file rejected for security: " + filePath);
         return ProcessStatus::Failed;
     }
 
-    if (!std::filesystem::exists(filePath, ec) || !std::filesystem::is_regular_file(filePath, ec)) {
+    if (!std::filesystem::exists(fPath, ec) || !std::filesystem::is_regular_file(fPath, ec)) {
         IMAGINE_LOG_ERROR("File does not exist or is not a regular file: " + filePath);
         return ProcessStatus::Failed;
     }
@@ -171,7 +199,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
 
     std::string storedPath = !photosDir_.empty() ? toRelativePath(normalizedPath, photosDir_) : normalizedPath;
 
-    auto fsize = std::filesystem::file_size(filePath, ec);
+    auto fsize = std::filesystem::file_size(fPath, ec);
     if (ec) {
         IMAGINE_LOG_ERROR("Failed to get file size for " + filePath + ": " + ec.message());
         return ProcessStatus::Failed;
@@ -184,7 +212,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         return ProcessStatus::Failed;
     }
 
-    auto lwt = std::filesystem::last_write_time(filePath, ec);
+    auto lwt = std::filesystem::last_write_time(fPath, ec);
     if (ec) {
         IMAGINE_LOG_ERROR("Failed to get modified time for " + filePath + ": " + ec.message());
         return ProcessStatus::Failed;
@@ -247,7 +275,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     } memGuard{memory_mutex_, memory_cv_, in_flight_bytes_, requiredBudget};
 
     // Read file once into memory buffer
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         IMAGINE_LOG_ERROR("Unable to open file for import: " + filePath);
         return ProcessStatus::Failed;
@@ -268,7 +296,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     }
 
     // TOCTOU verification: re-fetch modification time after reading
-    auto lwtPost = std::filesystem::last_write_time(filePath, ec);
+    auto lwtPost = std::filesystem::last_write_time(pathFromUtf8(filePath), ec);
     if (!ec) {
         auto sctpPost = std::chrono::clock_cast<std::chrono::system_clock>(lwtPost);
         modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctpPost.time_since_epoch()).count();
@@ -319,7 +347,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         item = existingRes.value();
     }
     item.file_path = storedPath;
-    item.file_name = std::filesystem::path(normalizedPath).filename().string();
+    item.file_name = pathToUtf8(pathFromUtf8(normalizedPath).filename());
     item.file_size = static_cast<int64_t>(fsize);
     item.file_modified_time = modifiedTime;
     item.content_hash = hash;
@@ -389,11 +417,30 @@ Result<ImportProgress> Importer::importDirectory(
     // RAII guard ensuring running_ is always reset on exit or exceptions
     struct RunningGuard {
         std::atomic<bool>& flag;
-        ~RunningGuard() { flag.store(false); }
-    } runningGuard{running_};
+        std::mutex& mtx;
+        ImportProgress& prog;
+        ~RunningGuard() {
+            flag.store(false);
+            std::lock_guard<std::mutex> lock(mtx);
+            prog.is_running = false;
+        }
+    } runningGuard{running_, progress_mutex_, current_progress_};
+
+    {
+        std::lock_guard<std::mutex> lock(progress_mutex_);
+        current_progress_.total_files = 0;
+        current_progress_.processed_files = 0;
+        current_progress_.imported_files = 0;
+        current_progress_.skipped_files = 0;
+        current_progress_.failed_files = 0;
+        current_progress_.cancelled_files = 0;
+        current_progress_.current_file = "Scanning folder...";
+        current_progress_.is_running = true;
+    }
 
     std::error_code ec;
-    if (!std::filesystem::exists(directoryPath, ec) || !std::filesystem::is_directory(directoryPath, ec)) {
+    auto dirP = pathFromUtf8(directoryPath);
+    if (!std::filesystem::exists(dirP, ec) || !std::filesystem::is_directory(dirP, ec)) {
         return Status::notFound("Directory does not exist: " + directoryPath);
     }
 
@@ -407,10 +454,15 @@ Result<ImportProgress> Importer::importDirectory(
         }
     }
 
+    std::string cacheDirPath;
+    if (!cache_.cacheDir().empty()) {
+        cacheDirPath = normalizePath(cache_.cacheDir());
+    }
+
     std::vector<std::string> files;
     if (recursive) {
         std::filesystem::recursive_directory_iterator it(
-            directoryPath,
+            dirP,
             std::filesystem::directory_options::skip_permission_denied,
             ec
         );
@@ -419,17 +471,41 @@ Result<ImportProgress> Importer::importDirectory(
             return Status::ioError("Directory iteration failed: " + ec.message());
         }
         std::filesystem::recursive_directory_iterator end;
-        while (it != end && !ec) {
+        while (it != end) {
+            if (cancelled_.load()) {
+                break;
+            }
+            if (ec) {
+                IMAGINE_LOG_WARN("Skipping directory with error: " + ec.message());
+                ec.clear();
+                it.increment(ec);
+                continue;
+            }
             const auto& entry = *it;
             std::error_code entryEc;
-            if (entry.is_regular_file(entryEc) && !entry.is_symlink(entryEc) && isSupportedExtension(entry.path().string())) {
-                files.push_back(entry.path().string());
+            if (entry.is_directory(entryEc)) {
+                std::string fname = pathToUtf8(entry.path().filename());
+                if (!fname.empty() && (fname[0] == '.' || fname == "$RECYCLE.BIN" || fname == "System Volume Information")) {
+                    it.disable_recursion_pending();
+                } else if (!cacheDirPath.empty()) {
+                    std::string entryNorm = normalizePath(pathToUtf8(entry.path()));
+                    if (entryNorm == cacheDirPath || isInsideRootDir(entryNorm, cacheDirPath)) {
+                        it.disable_recursion_pending();
+                    }
+                }
+            } else if (entry.is_regular_file(entryEc) && !entry.is_symlink(entryEc)) {
+                std::string pathStr = pathToUtf8(entry.path());
+                if (isSupportedExtension(pathStr)) {
+                    if (cacheDirPath.empty() || !isInsideRootDir(pathStr, cacheDirPath)) {
+                        files.push_back(std::move(pathStr));
+                    }
+                }
             }
             it.increment(ec);
         }
     } else {
         std::filesystem::directory_iterator it(
-            directoryPath,
+            dirP,
             std::filesystem::directory_options::skip_permission_denied,
             ec
         );
@@ -438,20 +514,28 @@ Result<ImportProgress> Importer::importDirectory(
             return Status::ioError("Directory iteration failed: " + ec.message());
         }
         std::filesystem::directory_iterator end;
-        while (it != end && !ec) {
+        while (it != end) {
+            if (cancelled_.load()) {
+                break;
+            }
+            if (ec) {
+                IMAGINE_LOG_WARN("Skipping entry with error: " + ec.message());
+                ec.clear();
+                it.increment(ec);
+                continue;
+            }
             const auto& entry = *it;
             std::error_code entryEc;
-            if (entry.is_regular_file(entryEc) && !entry.is_symlink(entryEc) && isSupportedExtension(entry.path().string())) {
-                files.push_back(entry.path().string());
+            if (entry.is_regular_file(entryEc) && !entry.is_symlink(entryEc)) {
+                std::string pathStr = pathToUtf8(entry.path());
+                if (isSupportedExtension(pathStr)) {
+                    if (cacheDirPath.empty() || !isInsideRootDir(pathStr, cacheDirPath)) {
+                        files.push_back(std::move(pathStr));
+                    }
+                }
             }
             it.increment(ec);
         }
-    }
-
-    // Check directory iteration errors
-    if (ec) {
-        IMAGINE_LOG_ERROR("Directory iteration error in " + directoryPath + ": " + ec.message());
-        return Status::ioError("Directory iteration failed: " + ec.message());
     }
 
     files.shrink_to_fit();
@@ -609,7 +693,7 @@ Result<ImportProgress> Importer::importDirectory(
 
         {
             std::lock_guard<std::mutex> lock(progress_mutex_);
-            current_progress_.current_file = file;
+            current_progress_.current_file = sanitizeUtf8(file);
         }
 
         MediaItem item;

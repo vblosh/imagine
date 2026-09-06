@@ -79,6 +79,7 @@ import {
 import {
   openImportModal,
   closeImportModal,
+  cancelImport,
   pollImportProgress,
   triggerImport,
   openAlbumModal,
@@ -746,7 +747,7 @@ export function setupEventListeners() {
   if (dom.importBtn) dom.importBtn.addEventListener('click', openImportModal);
   if (dom.emptyImportBtn) dom.emptyImportBtn.addEventListener('click', openImportModal);
   if (dom.closeImportModalBtn) dom.closeImportModalBtn.addEventListener('click', closeImportModal);
-  if (dom.cancelImportBtn) dom.cancelImportBtn.addEventListener('click', closeImportModal);
+  if (dom.cancelImportBtn) dom.cancelImportBtn.addEventListener('click', cancelImport);
   if (dom.importBackdrop) dom.importBackdrop.addEventListener('click', closeImportModal);
 
   if (dom.startImportBtn) {

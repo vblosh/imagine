@@ -29,13 +29,23 @@ constexpr size_t kMaxAlbumDescLength = 2000;
 
 void sendJson(httplib::Response& res, const nlohmann::json& j, int status = 200) {
     res.status = status;
-    res.set_content(j.dump(), "application/json");
+    try {
+        res.set_content(j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+    } catch (const std::exception& ex) {
+        IMAGINE_LOG_ERROR("JSON serialization failed: " + std::string(ex.what()));
+        res.status = 500;
+        res.set_content(R"({"error":"Internal JSON serialization error"})", "application/json");
+    }
 }
 
 void sendError(httplib::Response& res, const std::string& message, int status = 400) {
-    nlohmann::json err = {{"error", message}};
+    nlohmann::json err = {{"error", sanitizeUtf8(message)}};
     res.status = status;
-    res.set_content(err.dump(), "application/json");
+    try {
+        res.set_content(err.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "application/json");
+    } catch (...) {
+        res.set_content(R"({"error":"Error"})", "application/json");
+    }
 }
 
 int statusToHttpCode(const Status& s) {
@@ -1316,7 +1326,7 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
             std::string rawPath = body["path"].get<std::string>();
             bool recursive = body.value("recursive", true);
 
-            std::filesystem::path p(rawPath);
+            auto p = pathFromUtf8(rawPath);
             std::error_code ec;
             if (!std::filesystem::exists(p, ec)) {
                 sendError(res, "Directory does not exist: " + rawPath, 404);
@@ -1324,7 +1334,7 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
             }
 
             // Path canonicalization (resolves '..' traversal and relative paths)
-            auto canonicalPath = std::filesystem::canonical(p, ec);
+            auto canonicalPath = stripExtendedPrefix(std::filesystem::canonical(p, ec));
             if (ec) {
                 sendError(res, "Failed to resolve directory path: " + ec.message(), 400);
                 return;
@@ -1359,7 +1369,12 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
                 return;
             }
 
-            std::string path = canonicalPath.string();
+            std::string path = pathToUtf8(canonicalPath);
+
+            if (isImportRunning()) {
+                sendError(res, "An import is already running", 409);
+                return;
+            }
 
             std::lock_guard<std::mutex> lock(importThreadMutex_);
             if (importThread_.joinable()) {
@@ -1367,11 +1382,6 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
             }
 
             if (catalog_) {
-                if (catalog_->importer().isRunning()) {
-                    sendError(res, "An import is already running", 409);
-                    return;
-                }
-
                 importThread_ = std::jthread([this, path, recursive](std::stop_token stopToken) {
                     IMAGINE_LOG_INFO("Starting background import of: " + path);
                     auto res = catalog_->importDirectory(path, recursive, [stopToken, this](const ImportProgress&) {
@@ -1386,10 +1396,6 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
                     }
                 });
             } else {
-                if (g_isImporting.load()) {
-                    sendError(res, "An import is already running", 409);
-                    return;
-                }
                 g_isImporting.store(true);
                 cancelFallbackImport_.store(false);
 
@@ -1419,14 +1425,30 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
         }
     });
 
+    // POST /api/import/cancel
+    server.Post("/api/import/cancel", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            stopImport();
+            sendJson(res, {{"status", "cancelled"}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Error cancelling import: ") + ex.what(), 500);
+        }
+    });
+
     // GET /api/import/progress
     server.Get("/api/import/progress", [this](const httplib::Request& req, httplib::Response& res) {
-        if (catalog_) {
-            auto progress = catalog_->importer().currentProgress();
-            sendJson(res, progress);
-        } else {
-            std::lock_guard<std::mutex> lock(g_importMutex);
-            sendJson(res, g_fallbackProgress);
+        try {
+            if (catalog_) {
+                auto progress = catalog_->importer().currentProgress();
+                sendJson(res, progress);
+            } else {
+                std::lock_guard<std::mutex> lock(g_importMutex);
+                sendJson(res, g_fallbackProgress);
+            }
+        } catch (const std::exception& ex) {
+            IMAGINE_LOG_ERROR("Error getting import progress: " + std::string(ex.what()));
+            sendError(res, "Failed to get import progress", 500);
         }
     });
 }

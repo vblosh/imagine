@@ -164,25 +164,45 @@ Result<ImportProgress> Catalog::importDirectory(
     bool recursive,
     Importer::ProgressCallback progressCb
 ) {
-    std::unique_lock<std::shared_mutex> lock(rwMutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !importer_) {
         return Status::internal("Catalog is not open");
     }
     auto res = importer_->importDirectory(path, recursive, std::move(progressCb));
+    bool needUpdatePhotosDir = false;
+    std::string newPhotosDir;
     if (photosDir_.empty() && !importer_->photosDir().empty()) {
-        photosDir_ = importer_->photosDir();
+        needUpdatePhotosDir = true;
+        newPhotosDir = importer_->photosDir();
+    }
+    lock.unlock();
+    if (needUpdatePhotosDir) {
+        std::unique_lock<std::shared_mutex> ulock(rwMutex_);
+        if (photosDir_.empty()) {
+            photosDir_ = std::move(newPhotosDir);
+        }
     }
     return res;
 }
 
 Result<MediaItem> Catalog::importFile(const std::string& path) {
-    std::unique_lock<std::shared_mutex> lock(rwMutex_);
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !importer_) {
         return Status::internal("Catalog is not open");
     }
     auto res = importer_->importFile(path);
-    if (photosDir_.empty() && !importer_->photosDir().empty()) {
-        photosDir_ = importer_->photosDir();
+    bool needUpdatePhotosDir = false;
+    std::string newPhotosDir;
+    if (res.isOk() && photosDir_.empty() && !importer_->photosDir().empty()) {
+        needUpdatePhotosDir = true;
+        newPhotosDir = importer_->photosDir();
+    }
+    lock.unlock();
+    if (needUpdatePhotosDir) {
+        std::unique_lock<std::shared_mutex> ulock(rwMutex_);
+        if (photosDir_.empty()) {
+            photosDir_ = std::move(newPhotosDir);
+        }
     }
     return res;
 }

@@ -63,7 +63,7 @@ void Logger::log(LogLevel level, std::string_view file, int line, std::string_vi
     std::cout << color_code << "[" << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S")
               << "." << std::setfill('0') << std::setw(3) << ms.count() << std::setfill(' ') << "] ["
               << level_str << "] [" << filename << ":" << line << "] "
-              << message << "\033[0m\n";
+              << message << "\033[0m\n" << std::flush;
 }
 
 } // namespace imagine

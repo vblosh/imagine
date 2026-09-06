@@ -1,5 +1,6 @@
 #include "imagine/thumbnail/cache.hpp"
 #include "imagine/thumbnail/generator.hpp"
+#include "imagine/common/types.hpp"
 #include <cstdlib>
 #include <filesystem>
 
@@ -8,11 +9,11 @@ namespace imagine::thumbnail {
 std::string Cache::defaultCacheDir() {
     const char* xdgCache = std::getenv("XDG_CACHE_HOME");
     if (xdgCache && *xdgCache) {
-        return (std::filesystem::path(xdgCache) / "imagine" / "thumbs").string();
+        return pathToUtf8(std::filesystem::path(xdgCache) / "imagine" / "thumbs");
     }
     const char* home = std::getenv("HOME");
     if (home && *home) {
-        return (std::filesystem::path(home) / ".cache" / "imagine" / "thumbs").string();
+        return pathToUtf8(std::filesystem::path(home) / ".cache" / "imagine" / "thumbs");
     }
     return "./.imagine/thumbs";
 }
@@ -42,13 +43,13 @@ std::string Cache::getRelativeThumbnailPath(const std::string& hash, int size) {
 }
 
 std::string Cache::getThumbnailPath(const std::string& hash, int size) const {
-    return (std::filesystem::path(cacheDir_) / std::filesystem::path(getRelativeThumbnailPath(hash, size))).make_preferred().string();
+    return pathToUtf8((pathFromUtf8(cacheDir_) / pathFromUtf8(getRelativeThumbnailPath(hash, size))).make_preferred());
 }
 
 bool Cache::hasThumbnail(const std::string& hash, int size) const {
     std::string p = getThumbnailPath(hash, size);
     std::error_code ec;
-    return std::filesystem::exists(p, ec);
+    return std::filesystem::exists(pathFromUtf8(p), ec);
 }
 
 Result<std::string> Cache::ensureThumbnail(
@@ -77,7 +78,7 @@ Result<std::string> Cache::ensureThumbnail(
         return resizeRes.status();
     }
 
-    Status saveStatus = Generator::saveJpeg(resizeRes.value(), targetPath);
+    Status saveStatus = Generator::saveJpegFast(resizeRes.value(), targetPath);
     if (!saveStatus.isOk()) {
         return saveStatus;
     }

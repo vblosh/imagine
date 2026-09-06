@@ -88,6 +88,9 @@ target_link_libraries(imagine_lib
 # CLI Application
 add_executable(imagine apps/imagine_cli.cpp)
 target_link_libraries(imagine PRIVATE imagine_lib)
+if (WIN32)
+    target_sources(imagine PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/app.manifest)
+endif()
 
 # Tests
 include(CTest)
@@ -109,6 +112,9 @@ if (BUILD_TESTING)
 
     add_executable(imagine_tests ${IMAGINE_TEST_SOURCES})
     target_link_libraries(imagine_tests PRIVATE imagine_lib GTest::gtest)
+    if (WIN32)
+        target_sources(imagine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/app.manifest)
+    endif()
     add_test(NAME imagine_unit_tests COMMAND imagine_tests)
 
     find_package(Python3 COMPONENTS Interpreter)
