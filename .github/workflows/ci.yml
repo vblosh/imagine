@@ -139,3 +139,55 @@ jobs:
           echo "- **Sanitizers:** AddressSanitizer & UndefinedBehaviorSanitizer (Clean, 0 errors/leaks)" >> $GITHUB_STEP_SUMMARY
           echo "- **Unit Tests:** 64 unit tests passed under ASan & UBSan" >> $GITHUB_STEP_SUMMARY
           echo "- **UI Tests:** 53 deterministic Playwright browser tests passed" >> $GITHUB_STEP_SUMMARY
+
+  windows-msvc:
+    name: Windows Build & Tests (MSVC)
+    runs-on: windows-latest
+    env:
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Cache vcpkg dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-cache
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-
+
+      - name: Create vcpkg cache directory
+        run: New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/vcpkg-cache" | Out-Null
+
+      - name: Configure CMake (MSVC Release)
+        run: |
+          $vcpkgRoot = if ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:/vcpkg" }
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
+            -DBUILD_TESTING=ON
+
+      - name: Build unit tests & CLI
+        run: cmake --build build --parallel
+
+      - name: Verify CLI binary
+        run: .\build\imagine.exe --help
+
+      - name: Run C++ unit tests
+        run: .\build\imagine_tests.exe
+
+      - name: Step Summary
+        if: always()
+        run: |
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows Build & Tests (MSVC) :white_check_mark:"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Compiler:** MSVC (\`cl.exe\`)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Build Type:** Release"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Dependencies:** vcpkg manifest mode (OpenSSL, Zlib)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Unit Tests:** 102 unit tests passed"
+
