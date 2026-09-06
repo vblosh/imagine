@@ -169,12 +169,28 @@ export function openQuickEdit() {
 
   updateQuickEditToolbarUI();
 
+  const setupWithImage = (imageEl) => {
+    quickEditState.originalImage = imageEl;
+    initWorkingCanvas(imageEl);
+    renderQuickEditCanvas();
+  };
+
+  if (dom.quickEditCanvas && item.width && item.height) {
+    dom.quickEditCanvas.width = item.width;
+    dom.quickEditCanvas.height = item.height;
+  }
+
+  if (dom.loupeImg && dom.loupeImg.complete && dom.loupeImg.naturalWidth > 0 && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`)) {
+    setupWithImage(dom.loupeImg);
+  }
+
   const img = new Image();
   img.crossOrigin = "anonymous";
   img.onload = () => {
-    quickEditState.originalImage = img;
-    initWorkingCanvas(img);
-    renderQuickEditCanvas();
+    if (!quickEditState.isOpen) return;
+    if (!quickEditState.originalImage) {
+      setupWithImage(img);
+    }
   };
   img.src = `/api/photos/${item.id}/original`;
 }

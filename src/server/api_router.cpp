@@ -115,26 +115,6 @@ void sendStatusError(httplib::Response& res, const Status& s) {
     sendError(res, s.message(), statusToHttpCode(s));
 }
 
-std::vector<uint8_t> base64Decode(const std::string& in) {
-    std::vector<uint8_t> out;
-    std::vector<int> T(256, -1);
-    for (int i = 0; i < 64; i++) {
-        T["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[i]] = i;
-    }
-    int val = 0, valb = -8;
-    for (unsigned char c : in) {
-        if (c == '=') break;
-        if (std::isspace(c)) continue;
-        if (T[c] == -1) continue;
-        val = (val << 6) + T[c];
-        valb += 6;
-        if (valb >= 0) {
-            out.push_back(static_cast<uint8_t>((val >> valb) & 0xFF));
-            valb -= 8;
-        }
-    }
-    return out;
-}
 
 bool isSensitiveSystemPath(const std::filesystem::path& canonicalPath) {
     std::string s = canonicalPath.lexically_normal().string();
@@ -843,7 +823,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
         if (!catalog_ && deleteFromDisk && !filePath.empty()) {
             std::error_code ec;
-            if (!std::filesystem::remove(std::filesystem::u8path(filePath), ec)) {
+            if (!std::filesystem::remove(pathFromUtf8(filePath), ec)) {
                 if (ec) {
                     IMAGINE_LOG_WARN("Failed to delete file from disk: " + filePath + " (" + ec.message() + ")");
                 }
@@ -888,7 +868,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 if (s.isOk()) {
                     if (!catalog_ && deleteFromDisk && !filePath.empty()) {
                         std::error_code ec;
-                        if (!std::filesystem::remove(std::filesystem::u8path(filePath), ec)) {
+                        if (!std::filesystem::remove(pathFromUtf8(filePath), ec)) {
                             if (ec) {
                                 IMAGINE_LOG_WARN("Failed to delete file from disk: " + filePath + " (" + ec.message() + ")");
                             }
