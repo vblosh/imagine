@@ -18,6 +18,7 @@ public:
     const std::string& cacheDir() const { return cacheDir_; }
 
     std::string getThumbnailPath(const std::string& hash, int size) const;
+    static std::string getRelativeThumbnailPath(const std::string& hash, int size);
     bool hasThumbnail(const std::string& hash, int size) const;
 
     Result<std::string> ensureThumbnail(

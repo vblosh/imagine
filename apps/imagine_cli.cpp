@@ -56,6 +56,7 @@ Usage:
 Commands:
   import <path>       Import photos from a folder into the catalog
   serve               Start the embedded HTTP web server and REST API
+  relocate            Make photo and thumbnail paths in catalog relative
   list                List and query photos in the catalog
   stats               Display catalog statistics and metrics
   tag <id> <name>     Attach a keyword tag to a photo
@@ -65,17 +66,27 @@ Commands:
 
 Options for 'import':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
-  --thumbs <dir>      Path to thumbnail cache directory (default: system cache)
+  --photos-dir <dir>  Base root directory for photos (default: <path>)
+  --thumbs-dir <dir>  Path to thumbnail cache directory (default: system cache)
+  --thumbs <dir>      Alias for --thumbs-dir
   --recursive         Recursively scan subdirectories (default: true)
   --no-recursive      Do not scan subdirectories
   --threads <N>       Number of worker threads (default: hardware concurrency)
 
 Options for 'serve':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
-  --thumbs <dir>      Path to thumbnail cache directory (default: system cache)
+  --photos-dir <dir>  Path to photos directory (default: current/catalog directory)
+  --thumbs-dir <dir>  Path to thumbnail cache directory (default: system cache)
+  --thumbs <dir>      Alias for --thumbs-dir
   --host <ip>         Host address to bind to (default: 0.0.0.0)
   --port <port>       Port number to listen on (default: 8080)
   --web-dir <dir>     Path to directory containing web UI assets (default: web)
+
+Options for 'relocate':
+  --catalog <db>      Path to SQLite catalog database (default: catalog.db)
+  --photos-dir <dir>  Base root directory to make photo paths relative to
+  --thumbs-dir <dir>  Base root directory to make thumbnail paths relative to
+  --thumbs <dir>      Alias for --thumbs-dir
 
 Options for 'list':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
@@ -113,6 +124,7 @@ int handleImport(int argc, char** argv) {
 
     std::string path = argv[2];
     std::string catalogDb = "catalog.db";
+    std::string photosDir = "";
     std::string thumbsDir = "";
     bool recursive = true;
     size_t threads = std::max(1u, std::thread::hardware_concurrency());
@@ -121,7 +133,9 @@ int handleImport(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "--catalog" && i + 1 < argc) {
             catalogDb = argv[++i];
-        } else if (arg == "--thumbs" && i + 1 < argc) {
+        } else if (arg == "--photos-dir" && i + 1 < argc) {
+            photosDir = argv[++i];
+        } else if ((arg == "--thumbs-dir" || arg == "--thumbs") && i + 1 < argc) {
             thumbsDir = argv[++i];
         } else if (arg == "--threads" && i + 1 < argc) {
             threads = static_cast<size_t>(std::stoul(argv[++i]));
@@ -137,8 +151,19 @@ int handleImport(int argc, char** argv) {
         return 1;
     }
 
+    if (photosDir.empty()) {
+        photosDir = path;
+    } else {
+        std::string normPath = imagine::core::Importer::normalizePath(path);
+        std::string normRoot = imagine::core::Importer::normalizePath(photosDir);
+        if (normPath != normRoot && !imagine::core::Importer::isInsideRootDir(normPath, normRoot)) {
+            std::cerr << "Error: Directory '" << path << "' is outside photos root directory '" << photosDir << "'\n";
+            return 1;
+        }
+    }
+
     imagine::core::Catalog catalog(threads);
-    auto status = catalog.open(catalogDb, thumbsDir);
+    auto status = catalog.open(catalogDb, thumbsDir, photosDir);
     if (!status.isOk()) {
         std::cerr << "Error opening catalog: " << status.message() << "\n";
         return 1;
@@ -179,16 +204,28 @@ int handleImport(int argc, char** argv) {
 
 int handleServe(int argc, char** argv) {
     std::string catalogDb = "catalog.db";
+    std::string photosDir = "";
     std::string thumbsDir = "";
     std::string host = "0.0.0.0";
     int port = 8080;
     std::string webDir = "web";
 
+    const char* envPhotos = std::getenv("IMAGINE_PHOTOS_DIR");
+    if (envPhotos && *envPhotos) {
+        photosDir = envPhotos;
+    }
+    const char* envThumbs = std::getenv("IMAGINE_THUMBS_DIR");
+    if (envThumbs && *envThumbs) {
+        thumbsDir = envThumbs;
+    }
+
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--catalog" && i + 1 < argc) {
             catalogDb = argv[++i];
-        } else if (arg == "--thumbs" && i + 1 < argc) {
+        } else if (arg == "--photos-dir" && i + 1 < argc) {
+            photosDir = argv[++i];
+        } else if ((arg == "--thumbs-dir" || arg == "--thumbs") && i + 1 < argc) {
             thumbsDir = argv[++i];
         } else if (arg == "--host" && i + 1 < argc) {
             host = argv[++i];
@@ -199,8 +236,9 @@ int handleServe(int argc, char** argv) {
         }
     }
 
+
     imagine::core::Catalog catalog;
-    auto status = catalog.open(catalogDb, thumbsDir);
+    auto status = catalog.open(catalogDb, thumbsDir, photosDir);
     if (!status.isOk()) {
         std::cerr << "Error opening catalog database: " << status.message() << "\n";
         return 1;
@@ -219,6 +257,7 @@ int handleServe(int argc, char** argv) {
   URL:        http://)" << (host == "0.0.0.0" ? "localhost" : host) << ":" << port << R"(
   Web Dir:    )" << webDir << R"(
   Catalog DB: )" << catalogDb << R"(
+  Photos Dir: )" << (photosDir.empty() ? "(none / relative to catalog)" : photosDir) << R"(
   Cache Dir:  )" << (thumbsDir.empty() ? imagine::thumbnail::Cache::defaultCacheDir() : thumbsDir) << R"(
 ======================================================
   Press Ctrl+C to stop the server.
@@ -560,6 +599,45 @@ int handleGeotag(int argc, char** argv) {
     return 0;
 }
 
+int handleRelocate(int argc, char** argv) {
+    std::string catalogDb = "catalog.db";
+    std::string photosDir = "";
+    std::string thumbsDir = "";
+
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--catalog" && i + 1 < argc) {
+            catalogDb = argv[++i];
+        } else if (arg == "--photos-dir" && i + 1 < argc) {
+            photosDir = argv[++i];
+        } else if ((arg == "--thumbs-dir" || arg == "--thumbs") && i + 1 < argc) {
+            thumbsDir = argv[++i];
+        }
+    }
+
+    if (photosDir.empty() && thumbsDir.empty()) {
+        std::cerr << "Error: 'relocate' requires --photos-dir or --thumbs-dir.\n";
+        std::cerr << "Usage: imagine relocate [--catalog <db>] --photos-dir <dir> [--thumbs-dir <dir>]\n";
+        return 1;
+    }
+
+    imagine::core::Catalog catalog;
+    auto status = catalog.open(catalogDb, thumbsDir, photosDir);
+    if (!status.isOk()) {
+        std::cerr << "Error opening catalog: " << status.message() << "\n";
+        return 1;
+    }
+
+    auto res = catalog.makePathsRelative(photosDir, thumbsDir);
+    if (!res.isOk()) {
+        std::cerr << "Relocation failed: " << res.status().message() << "\n";
+        return 1;
+    }
+
+    std::cout << "Successfully updated " << res.value() << " media item(s) in catalog database to relative paths.\n";
+    return 0;
+}
+
 } // anonymous namespace
 
 int main(int argc, char** argv) {
@@ -577,6 +655,8 @@ int main(int argc, char** argv) {
         return handleImport(argc, argv);
     } else if (command == "serve") {
         return handleServe(argc, argv);
+    } else if (command == "relocate") {
+        return handleRelocate(argc, argv);
     } else if (command == "list") {
         return handleList(argc, argv);
     } else if (command == "stats") {

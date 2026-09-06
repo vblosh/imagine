@@ -430,3 +430,42 @@ TEST_F(CatalogDbTest, UpdateGpsCoordinates) {
     ASSERT_TRUE(cleared.isOk());
     EXPECT_FALSE(cleared.value().exif.has_gps);
 }
+
+TEST_F(CatalogDbTest, MakePathsRelative) {
+    MediaItem item1;
+    item1.file_path = "/home/user/Pictures/2026/img1.jpg";
+    item1.file_name = "img1.jpg";
+    item1.content_hash = "h1";
+    item1.thumb_small = "/home/user/.cache/thumbs/ab/cd/h1_256.jpg";
+    item1.thumb_large = "/home/user/.cache/thumbs/ab/cd/h1_1024.jpg";
+    auto id1 = db.insertMedia(item1).value();
+
+    MediaItem item2;
+    item2.file_path = "/home/user/Pictures/nature.jpg";
+    item2.file_name = "nature.jpg";
+    item2.content_hash = "h2";
+    item2.thumb_small = "/home/user/.cache/thumbs/12/34/h2_256.jpg";
+    auto id2 = db.insertMedia(item2).value();
+
+    MediaItem item3;
+    item3.file_path = "/var/other/img3.jpg";
+    item3.file_name = "img3.jpg";
+    item3.content_hash = "h3";
+    auto id3 = db.insertMedia(item3).value();
+
+    auto relRes = db.makePathsRelative("/home/user/Pictures", "/home/user/.cache/thumbs");
+    ASSERT_TRUE(relRes.isOk());
+    EXPECT_EQ(relRes.value(), 2);
+
+    auto m1 = db.getMediaById(id1).value();
+    EXPECT_EQ(m1.file_path, "2026/img1.jpg");
+    EXPECT_EQ(m1.thumb_small, "ab/cd/h1_256.jpg");
+    EXPECT_EQ(m1.thumb_large, "ab/cd/h1_1024.jpg");
+
+    auto m2 = db.getMediaById(id2).value();
+    EXPECT_EQ(m2.file_path, "nature.jpg");
+    EXPECT_EQ(m2.thumb_small, "12/34/h2_256.jpg");
+
+    auto m3 = db.getMediaById(id3).value();
+    EXPECT_EQ(m3.file_path, "/var/other/img3.jpg");
+}

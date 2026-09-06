@@ -204,6 +204,13 @@ thumbnail::Cache& ApiRouter::cache() const {
     throw std::runtime_error("No Thumbnail Cache available in ApiRouter");
 }
 
+std::string ApiRouter::resolvePhotoPath(const std::string& recordedPath) const {
+    if (catalog_) {
+        return catalog_->resolvePhotoPath(recordedPath);
+    }
+    return recordedPath;
+}
+
 void ApiRouter::registerRoutes(httplib::Server& server) {
     registerCorsHandler(server);
     registerMediaRoutes(server);
@@ -996,7 +1003,8 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
             auto mediaRes = db().getMediaByHash(hash);
             if (mediaRes.isOk()) {
                 const auto& item = mediaRes.value();
-                auto genRes = cache().ensureThumbnail(item.file_path, hash, size, item.exif.orientation);
+                std::string photoPath = resolvePhotoPath(item.file_path);
+                auto genRes = cache().ensureThumbnail(photoPath, hash, size, item.exif.orientation);
                 if (genRes.isOk()) {
                     thumbPath = genRes.value();
                 }
@@ -1033,14 +1041,15 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         }
 
         const auto& item = mediaRes.value();
+        std::string photoPath = resolvePhotoPath(item.file_path);
         std::error_code ec;
-        if (!std::filesystem::exists(item.file_path, ec) || !std::filesystem::is_regular_file(item.file_path, ec)) {
-            sendError(res, "File not found on disk: " + item.file_path, 404);
+        if (!std::filesystem::exists(photoPath, ec) || !std::filesystem::is_regular_file(photoPath, ec)) {
+            sendError(res, "File not found on disk: " + photoPath, 404);
             return;
         }
 
-        auto fsize = std::filesystem::file_size(item.file_path, ec);
-        auto mtime = std::filesystem::last_write_time(item.file_path, ec);
+        auto fsize = std::filesystem::file_size(photoPath, ec);
+        auto mtime = std::filesystem::last_write_time(photoPath, ec);
         int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
         std::string etag = "\"" + std::to_string(id) + "-" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
 
@@ -1053,7 +1062,7 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
             return;
         }
 
-        std::string mime = getMimeType(item.file_path);
+        std::string mime = getMimeType(photoPath);
 
         if (req.has_header("Range") && !req.ranges.empty()) {
             bool satisfiable = true;
@@ -1071,7 +1080,7 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
             }
         }
 
-        res.set_file_content(item.file_path, mime);
+        res.set_file_content(photoPath, mime);
     });
 }
 

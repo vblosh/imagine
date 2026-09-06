@@ -37,6 +37,7 @@ public:
 
     void stopImport();
     bool isImportRunning() const;
+    std::string resolvePhotoPath(const std::string& recordedPath) const;
 
     void setApiToken(std::string token);
     const std::string& apiToken() const { return apiToken_; }

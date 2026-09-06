@@ -940,4 +940,142 @@ Result<int64_t> CatalogDb::countMedia(
     return 0;
 }
 
+Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const std::string& thumbsDir) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!conn_.isOpen()) {
+        return Status::internal("Database not open");
+    }
+
+    std::error_code ec;
+    std::filesystem::path normPhotos;
+    if (!photosDir.empty()) {
+        normPhotos = std::filesystem::weakly_canonical(photosDir, ec);
+        if (ec) normPhotos = std::filesystem::path(photosDir).lexically_normal();
+    }
+
+    std::filesystem::path normThumbs;
+    if (!thumbsDir.empty()) {
+        normThumbs = std::filesystem::weakly_canonical(thumbsDir, ec);
+        if (ec) normThumbs = std::filesystem::path(thumbsDir).lexically_normal();
+    }
+
+    auto stmtRes = conn_.prepare("SELECT id, file_path, thumb_small, thumb_large FROM media_items;");
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+
+    struct RowUpdate {
+        int64_t id;
+        std::string file_path;
+        std::string thumb_small;
+        std::string thumb_large;
+    };
+    std::vector<RowUpdate> updates;
+
+    while (stmt.step() == StepResult::Row) {
+        int64_t id = stmt.getInt64(0);
+        std::string filePath = stmt.getString(1);
+        std::string thumbSmall = stmt.getString(2);
+        std::string thumbLarge = stmt.getString(3);
+        bool changed = false;
+
+        // Process file_path
+        if (!normPhotos.empty() && !filePath.empty()) {
+            std::filesystem::path p(filePath);
+            auto canP = std::filesystem::weakly_canonical(p, ec);
+            if (ec) canP = p.lexically_normal();
+            auto rel = std::filesystem::relative(canP, normPhotos, ec);
+            if (!ec && !rel.empty()) {
+                std::string relStr = rel.generic_string();
+                if (relStr != ".." && relStr.rfind("../", 0) != 0 && relStr != ".") {
+                    if (relStr != filePath) {
+                        filePath = relStr;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        std::string genericFilePath = std::filesystem::path(filePath).generic_string();
+        if (genericFilePath != filePath) {
+            filePath = genericFilePath;
+            changed = true;
+        }
+
+        // Process thumb_small
+        if (!normThumbs.empty() && !thumbSmall.empty()) {
+            std::filesystem::path p(thumbSmall);
+            auto canP = std::filesystem::weakly_canonical(p, ec);
+            if (ec) canP = p.lexically_normal();
+            auto rel = std::filesystem::relative(canP, normThumbs, ec);
+            if (!ec && !rel.empty()) {
+                std::string relStr = rel.generic_string();
+                if (relStr != ".." && relStr.rfind("../", 0) != 0 && relStr != ".") {
+                    if (relStr != thumbSmall) {
+                        thumbSmall = relStr;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        std::string genericThumbSmall = std::filesystem::path(thumbSmall).generic_string();
+        if (genericThumbSmall != thumbSmall) {
+            thumbSmall = genericThumbSmall;
+            changed = true;
+        }
+
+        // Process thumb_large
+        if (!normThumbs.empty() && !thumbLarge.empty()) {
+            std::filesystem::path p(thumbLarge);
+            auto canP = std::filesystem::weakly_canonical(p, ec);
+            if (ec) canP = p.lexically_normal();
+            auto rel = std::filesystem::relative(canP, normThumbs, ec);
+            if (!ec && !rel.empty()) {
+                std::string relStr = rel.generic_string();
+                if (relStr != ".." && relStr.rfind("../", 0) != 0 && relStr != ".") {
+                    if (relStr != thumbLarge) {
+                        thumbLarge = relStr;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        std::string genericThumbLarge = std::filesystem::path(thumbLarge).generic_string();
+        if (genericThumbLarge != thumbLarge) {
+            thumbLarge = genericThumbLarge;
+            changed = true;
+        }
+
+        if (changed) {
+            updates.push_back({id, filePath, thumbSmall, thumbLarge});
+        }
+    }
+
+    if (updates.empty()) {
+        return 0;
+    }
+
+    Transaction tx(conn_);
+    auto updateStmtRes = conn_.prepare("UPDATE media_items SET file_path = ?, thumb_small = ?, thumb_large = ?, updated_at = ? WHERE id = ?;");
+    if (!updateStmtRes.isOk()) return updateStmtRes.status();
+    auto updateStmt = std::move(updateStmtRes.value());
+
+    int64_t now = currentUnixTime();
+    for (const auto& u : updates) {
+        updateStmt.reset();
+        updateStmt.bind(1, u.file_path);
+        updateStmt.bind(2, u.thumb_small);
+        updateStmt.bind(3, u.thumb_large);
+        updateStmt.bind(4, now);
+        updateStmt.bind(5, u.id);
+        if (updateStmt.step() == StepResult::Error) {
+            tx.rollback();
+            return Status::internal("Failed to update media item path during relative migration: " + conn_.lastErrorMessage());
+        }
+    }
+
+    Status commitStatus = tx.commit();
+    if (!commitStatus.isOk()) return commitStatus;
+
+    return static_cast<int64_t>(updates.size());
+}
+
 } // namespace imagine::db

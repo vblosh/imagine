@@ -104,11 +104,17 @@ public:
         Failed
     };
 
-    Importer(db::CatalogDb& db, thumbnail::Cache& cache, concurrency::ThreadPool* pool = nullptr);
+    Importer(db::CatalogDb& db, thumbnail::Cache& cache, concurrency::ThreadPool* pool = nullptr, std::string photosDir = "");
     ~Importer() = default;
 
     Importer(const Importer&) = delete;
     Importer& operator=(const Importer&) = delete;
+
+    void setPhotosDir(std::string dir) { photosDir_ = std::move(dir); }
+    const std::string& photosDir() const noexcept { return photosDir_; }
+
+    static bool isInsideRootDir(const std::filesystem::path& target, const std::filesystem::path& rootDir);
+    static std::string toRelativePath(const std::filesystem::path& fullPath, const std::filesystem::path& baseDir);
 
     Result<ImportProgress> importDirectory(
         const std::string& directoryPath,
@@ -138,6 +144,7 @@ private:
     db::CatalogDb& db_;
     thumbnail::Cache& cache_;
     concurrency::ThreadPool* pool_{nullptr};
+    std::string photosDir_;
 
     std::atomic<bool> cancelled_{false};
     std::atomic<bool> running_{false};

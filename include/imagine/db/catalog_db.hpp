@@ -34,6 +34,7 @@ public:
     Status updateThumbnails(MediaId id, const std::string& smallPath, const std::string& largePath);
     Status updateGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
     Status deleteMedia(MediaId id);
+    Result<int64_t> makePathsRelative(const std::string& photosDir, const std::string& thumbsDir = "");
 
     // Tags
     Result<TagId> createOrGetTag(const std::string& name, const std::string& category = "keyword", std::optional<TagId> parent_id = std::nullopt);

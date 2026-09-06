@@ -50,8 +50,53 @@ void from_json(const nlohmann::json& j, ImportProgress& p) {
     }
 }
 
-Importer::Importer(db::CatalogDb& db, thumbnail::Cache& cache, concurrency::ThreadPool* pool)
-    : db_(db), cache_(cache), pool_(pool) {}
+Importer::Importer(db::CatalogDb& db, thumbnail::Cache& cache, concurrency::ThreadPool* pool, std::string photosDir)
+    : db_(db), cache_(cache), pool_(pool), photosDir_(std::move(photosDir)) {}
+
+bool Importer::isInsideRootDir(const std::filesystem::path& target, const std::filesystem::path& rootDir) {
+    if (rootDir.empty() || target.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    auto canTarget = std::filesystem::weakly_canonical(target, ec);
+    if (ec) canTarget = target.lexically_normal();
+    auto canRoot = std::filesystem::weakly_canonical(rootDir, ec);
+    if (ec) canRoot = rootDir.lexically_normal();
+
+    auto rel = std::filesystem::relative(canTarget, canRoot, ec);
+    if (ec || rel.empty()) {
+        return false;
+    }
+    std::string relStr = rel.generic_string();
+    if (relStr.empty() || relStr == ".") {
+        return false;
+    }
+    if (relStr == ".." || relStr.rfind("../", 0) == 0) {
+        return false;
+    }
+    return true;
+}
+
+std::string Importer::toRelativePath(const std::filesystem::path& fullPath, const std::filesystem::path& baseDir) {
+    if (baseDir.empty()) {
+        return fullPath.lexically_normal().generic_string();
+    }
+    std::error_code ec;
+    auto canTarget = std::filesystem::weakly_canonical(fullPath, ec);
+    if (ec) canTarget = fullPath.lexically_normal();
+    auto canRoot = std::filesystem::weakly_canonical(baseDir, ec);
+    if (ec) canRoot = baseDir.lexically_normal();
+
+    auto rel = std::filesystem::relative(canTarget, canRoot, ec);
+    if (ec || rel.empty()) {
+        return fullPath.lexically_normal().generic_string();
+    }
+    std::string relStr = rel.generic_string();
+    if (relStr.rfind("../", 0) == 0 || relStr == "..") {
+        return fullPath.lexically_normal().generic_string();
+    }
+    return relStr;
+}
 
 bool Importer::isSupportedExtension(const std::string& path) {
     std::filesystem::path p(path);
@@ -116,6 +161,16 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     // Path normalization for deduplication and consistent DB querying
     std::string normalizedPath = normalizePath(filePath);
 
+    // Root containment check: if photosDir_ is set, file must be inside photosDir_
+    if (!photosDir_.empty()) {
+        if (!isInsideRootDir(normalizedPath, photosDir_)) {
+            IMAGINE_LOG_ERROR("File rejected: must be located inside photos root directory (" + photosDir_ + "): " + filePath);
+            return ProcessStatus::Failed;
+        }
+    }
+
+    std::string storedPath = !photosDir_.empty() ? toRelativePath(normalizedPath, photosDir_) : normalizedPath;
+
     auto fsize = std::filesystem::file_size(filePath, ec);
     if (ec) {
         IMAGINE_LOG_ERROR("Failed to get file size for " + filePath + ": " + ec.message());
@@ -138,8 +193,11 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     auto sctp = std::chrono::file_clock::to_sys(lwt);
     int64_t modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
 
-    // Check existing file by normalized path and modified time in DB. If unchanged, mark skipped.
-    auto existingRes = db_.getMediaByPath(normalizedPath);
+    // Check existing file by relative stored path (or normalized absolute path fallback for legacy DBs)
+    auto existingRes = db_.getMediaByPath(storedPath);
+    if (!existingRes.isOk() && storedPath != normalizedPath) {
+        existingRes = db_.getMediaByPath(normalizedPath);
+    }
     bool isUpdate = existingRes.isOk();
     if (isUpdate) {
         const auto& existing = existingRes.value();
@@ -260,7 +318,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     if (isUpdate) {
         item = existingRes.value();
     }
-    item.file_path = normalizedPath;
+    item.file_path = storedPath;
     item.file_name = std::filesystem::path(normalizedPath).filename().string();
     item.file_size = static_cast<int64_t>(fsize);
     item.file_modified_time = modifiedTime;
@@ -269,8 +327,8 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     item.height = height;
     item.date_taken = dateTaken;
     item.exif = exif;
-    item.thumb_small = thumbSmall;
-    item.thumb_large = thumbLarge;
+    item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize);
+    item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize);
 
     // Database persistence: if commitToDb is true, persist immediately.
     // Otherwise, persistence is deferred to batch persistence in importDirectory.
@@ -278,13 +336,13 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         if (isUpdate) {
             Status s = db_.updateMedia(item);
             if (!s.isOk()) {
-                IMAGINE_LOG_ERROR("Failed to update media in DB for " + normalizedPath + ": " + s.message());
+                IMAGINE_LOG_ERROR("Failed to update media in DB for " + storedPath + ": " + s.message());
                 return ProcessStatus::Failed;
             }
         } else {
             auto insRes = db_.insertMedia(item);
             if (!insRes.isOk()) {
-                IMAGINE_LOG_ERROR("Failed to insert media into DB for " + normalizedPath + ": " + insRes.status().message());
+                IMAGINE_LOG_ERROR("Failed to insert media into DB for " + storedPath + ": " + insRes.status().message());
                 return ProcessStatus::Failed;
             }
             item.id = insRes.value();
@@ -302,6 +360,12 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
 Result<MediaItem> Importer::importFile(const std::string& filePath) {
     if (!isSupportedExtension(filePath)) {
         return Status::invalidArgument("Unsupported image extension: " + filePath);
+    }
+    std::string normPath = normalizePath(filePath);
+    if (photosDir_.empty()) {
+        photosDir_ = std::filesystem::path(normPath).parent_path().string();
+    } else if (!isInsideRootDir(normPath, photosDir_)) {
+        return Status::invalidArgument("File is outside photos root directory (" + photosDir_ + "): " + filePath);
     }
     MediaItem item;
     ProcessStatus st = processFileInternal(filePath, &item, true);
@@ -331,6 +395,16 @@ Result<ImportProgress> Importer::importDirectory(
     std::error_code ec;
     if (!std::filesystem::exists(directoryPath, ec) || !std::filesystem::is_directory(directoryPath, ec)) {
         return Status::notFound("Directory does not exist: " + directoryPath);
+    }
+
+    std::string normDir = normalizePath(directoryPath);
+    if (photosDir_.empty()) {
+        photosDir_ = normDir;
+    } else {
+        std::string normRoot = normalizePath(photosDir_);
+        if (normDir != normRoot && !isInsideRootDir(normDir, normRoot)) {
+            return Status::invalidArgument("Directory is outside photos root directory (" + photosDir_ + "): " + directoryPath);
+        }
     }
 
     std::vector<std::string> files;

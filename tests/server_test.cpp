@@ -4,6 +4,7 @@
 #include "imagine/server/api_router.hpp"
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/thumbnail/cache.hpp"
+#include "imagine/thumbnail/generator.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -1034,5 +1035,79 @@ TEST_F(ServerTest, GeocodeValidationAndCaching) {
 
     // Limit not a number
     EXPECT_EQ(client.Get("/api/geocode?q=Paris&limit=abc")->status, 400);
+}
+
+TEST_F(ServerTest, ServeRelocatedPhotosAndThumbnails) {
+    // 1. Set up initial photo and thumbnail directories
+    auto initPhotos = testDir_ / "initial_photos";
+    auto subDir = initPhotos / "vacation" / "2026";
+    std::filesystem::create_directories(subDir);
+    std::string photoPath = (subDir / "summer.jpg").string();
+
+    ImageBuffer buf;
+    buf.width = 300;
+    buf.height = 200;
+    buf.channels = 3;
+    buf.data.resize(300 * 200 * 3, 150);
+    ASSERT_TRUE(Generator::saveJpeg(buf, photoPath).isOk());
+
+    auto initThumbs = testDir_ / "initial_thumbs";
+    std::filesystem::create_directories(initThumbs);
+
+    std::string customDb = (testDir_ / "relocated.db").string();
+    Catalog cat1(2);
+    ASSERT_TRUE(cat1.open(customDb, initThumbs.string(), initPhotos.string()).isOk());
+
+    auto impRes = cat1.importDirectory(initPhotos.string(), true, nullptr);
+    ASSERT_TRUE(impRes.isOk());
+    EXPECT_EQ(impRes.value().imported_files.load(), 1);
+
+    auto mRes = cat1.getMediaByPath("vacation/2026/summer.jpg");
+    ASSERT_TRUE(mRes.isOk());
+    MediaId mid = mRes.value().id;
+    std::string hash = mRes.value().content_hash;
+    cat1.close();
+
+    // 2. Physically move both photos and thumbnails directories to new locations
+    auto movedPhotos = testDir_ / "moved_photos";
+    auto movedThumbs = testDir_ / "moved_thumbs";
+    std::filesystem::rename(initPhotos, movedPhotos);
+    std::filesystem::rename(initThumbs, movedThumbs);
+
+    // 3. Open catalog with new photosDir and thumbsDir locations
+    Catalog cat2(2);
+    ASSERT_TRUE(cat2.open(customDb, movedThumbs.string(), movedPhotos.string()).isOk());
+
+    int newPort = 19500 + (std::rand() % 4000);
+    WebServer server2(cat2, webDir_.string());
+    ASSERT_TRUE(server2.start("127.0.0.1", newPort, webDir_.string()).isOk());
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    httplib::Client client2("127.0.0.1", newPort);
+
+    // 4. Verify GET /api/photos/:id/original serves photo from movedPhotos
+    auto origRes = client2.Get("/api/photos/" + std::to_string(mid) + "/original");
+    ASSERT_TRUE(origRes);
+    EXPECT_EQ(origRes->status, 200);
+    EXPECT_EQ(origRes->get_header_value("Content-Type"), "image/jpeg");
+    EXPECT_EQ(origRes->body.size(), std::filesystem::file_size(movedPhotos / "vacation" / "2026" / "summer.jpg"));
+
+    // 5. Verify GET /api/thumbnails/:hash/256 serves thumbnail from movedThumbs
+    auto thumbRes = client2.Get("/api/thumbnails/" + hash + "/256");
+    ASSERT_TRUE(thumbRes);
+    EXPECT_EQ(thumbRes->status, 200);
+
+    // 6. Delete thumbnail on disk, verify on-demand generation regenerates it from movedPhotos into movedThumbs
+    std::string smallThumbPath = cat2.cache().getThumbnailPath(hash, 256);
+    EXPECT_TRUE(std::filesystem::exists(smallThumbPath));
+    std::filesystem::remove(smallThumbPath);
+    EXPECT_FALSE(std::filesystem::exists(smallThumbPath));
+
+    auto regenRes = client2.Get("/api/thumbnails/" + hash + "/256");
+    ASSERT_TRUE(regenRes);
+    EXPECT_EQ(regenRes->status, 200);
+    EXPECT_TRUE(std::filesystem::exists(smallThumbPath));
+
+    server2.stop();
 }
 

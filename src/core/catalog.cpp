@@ -10,7 +10,7 @@ Catalog::~Catalog() {
     close();
 }
 
-Status Catalog::open(const std::string& dbPath, const std::string& cacheDir) {
+Status Catalog::open(const std::string& dbPath, const std::string& cacheDir, const std::string& photosDir) {
     std::unique_lock<std::shared_mutex> lock(rwMutex_);
     if (isOpen_) {
         closeInternal();
@@ -23,9 +23,10 @@ Status Catalog::open(const std::string& dbPath, const std::string& cacheDir) {
         return s;
     }
 
+    photosDir_ = photosDir;
     cache_ = std::make_unique<thumbnail::Cache>(cacheDir);
     threadPool_ = std::make_unique<concurrency::ThreadPool>(threadCount_);
-    importer_ = std::make_unique<Importer>(*db_, *cache_, threadPool_.get());
+    importer_ = std::make_unique<Importer>(*db_, *cache_, threadPool_.get(), photosDir_);
 
     isOpen_ = true;
     IMAGINE_LOG_INFO("Catalog opened successfully with DB: " + dbPath);
@@ -74,24 +75,116 @@ bool Catalog::isOpen() const {
     return isOpen_;
 }
 
+void Catalog::setPhotosDir(std::string photosDir) {
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
+    photosDir_ = std::move(photosDir);
+    if (importer_) {
+        importer_->setPhotosDir(photosDir_);
+    }
+}
+
+const std::string& Catalog::photosDir() const {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    return photosDir_;
+}
+
+std::string Catalog::resolvePhotoPath(const std::string& recordedPath) const {
+    if (recordedPath.empty()) {
+        return "";
+    }
+    std::filesystem::path recPath(recordedPath);
+    std::error_code ec;
+
+    // 1. If recordedPath is a relative path
+    if (recPath.is_relative()) {
+        std::shared_lock<std::shared_mutex> lock(rwMutex_);
+        if (!photosDir_.empty()) {
+            return (std::filesystem::path(photosDir_) / recPath).string();
+        }
+        return recordedPath;
+    }
+
+    // 2. If recordedPath is an absolute path and exists directly on disk
+    if (std::filesystem::exists(recPath, ec) && std::filesystem::is_regular_file(recPath, ec)) {
+        return recPath.string();
+    }
+
+    // 3. Absolute path not found on disk, but photosDir_ is configured:
+    // Try resolving under photosDir_ by relative suffix or filename (backward compatibility for moved libraries)
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!photosDir_.empty()) {
+        std::filesystem::path pDir(photosDir_);
+        std::filesystem::path fname = recPath.filename();
+        std::filesystem::path directCandidate = pDir / fname;
+        if (std::filesystem::exists(directCandidate, ec) && std::filesystem::is_regular_file(directCandidate, ec)) {
+            return directCandidate.string();
+        }
+
+        std::vector<std::string> parts;
+        for (const auto& part : recPath) {
+            std::string s = part.string();
+            if (!s.empty() && s != "/" && s != "\\" && s.back() != ':') {
+                parts.push_back(s);
+            }
+        }
+        for (size_t i = 1; i < parts.size(); ++i) {
+            std::filesystem::path sub;
+            for (size_t j = i; j < parts.size(); ++j) {
+                sub /= parts[j];
+            }
+            std::filesystem::path candidate = pDir / sub;
+            if (std::filesystem::exists(candidate, ec) && std::filesystem::is_regular_file(candidate, ec)) {
+                return candidate.string();
+            }
+        }
+
+        return (pDir / fname).string();
+    }
+
+    return recordedPath;
+}
+
+Result<int64_t> Catalog::makePathsRelative(const std::string& photosDir, const std::string& thumbsDir) {
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+    auto res = db_->makePathsRelative(photosDir, thumbsDir);
+    if (res.isOk() && !photosDir.empty()) {
+        photosDir_ = photosDir;
+        if (importer_) {
+            importer_->setPhotosDir(photosDir_);
+        }
+    }
+    return res;
+}
+
 Result<ImportProgress> Catalog::importDirectory(
     const std::string& path,
     bool recursive,
     Importer::ProgressCallback progressCb
 ) {
-    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !importer_) {
         return Status::internal("Catalog is not open");
     }
-    return importer_->importDirectory(path, recursive, std::move(progressCb));
+    auto res = importer_->importDirectory(path, recursive, std::move(progressCb));
+    if (photosDir_.empty() && !importer_->photosDir().empty()) {
+        photosDir_ = importer_->photosDir();
+    }
+    return res;
 }
 
 Result<MediaItem> Catalog::importFile(const std::string& path) {
-    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !importer_) {
         return Status::internal("Catalog is not open");
     }
-    return importer_->importFile(path);
+    auto res = importer_->importFile(path);
+    if (photosDir_.empty() && !importer_->photosDir().empty()) {
+        photosDir_ = importer_->photosDir();
+    }
+    return res;
 }
 
 void Catalog::cancelImport() {
@@ -122,7 +215,35 @@ Result<MediaItem> Catalog::getMediaByPath(const std::string& path) {
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
-    return db_->getMediaByPath(path);
+    auto res = db_->getMediaByPath(path);
+    if (res.isOk()) {
+        return res;
+    }
+
+    // If path was absolute and not found, try relative to photosDir_
+    std::string effPhotosDir = photosDir_;
+    if (effPhotosDir.empty() && importer_) {
+        effPhotosDir = importer_->photosDir();
+    }
+    if (!effPhotosDir.empty()) {
+        std::string relPath = Importer::toRelativePath(path, effPhotosDir);
+        if (relPath != path) {
+            auto relRes = db_->getMediaByPath(relPath);
+            if (relRes.isOk()) {
+                return relRes;
+            }
+        }
+    }
+
+    std::string genericP = std::filesystem::path(path).generic_string();
+    if (genericP != path) {
+        auto gRes = db_->getMediaByPath(genericP);
+        if (gRes.isOk()) {
+            return gRes;
+        }
+    }
+
+    return res;
 }
 
 Result<MediaItem> Catalog::getMediaByHash(const std::string& hash) {

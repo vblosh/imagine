@@ -30,15 +30,19 @@ void Cache::setCacheDir(const std::string& cacheDir) {
     cacheDir_ = cacheDir;
 }
 
-std::string Cache::getThumbnailPath(const std::string& hash, int size) const {
+std::string Cache::getRelativeThumbnailPath(const std::string& hash, int size) {
     if (hash.size() < 4) {
-        return (std::filesystem::path(cacheDir_) / ("misc_" + hash + "_" + std::to_string(size) + ".jpg")).string();
+        return "misc_" + hash + "_" + std::to_string(size) + ".jpg";
     }
     std::string p1 = hash.substr(0, 2);
     std::string p2 = hash.substr(2, 2);
     std::string filename = hash + "_" + std::to_string(size) + ".jpg";
 
-    return (std::filesystem::path(cacheDir_) / p1 / p2 / filename).string();
+    return (std::filesystem::path(p1) / p2 / filename).generic_string();
+}
+
+std::string Cache::getThumbnailPath(const std::string& hash, int size) const {
+    return (std::filesystem::path(cacheDir_) / getRelativeThumbnailPath(hash, size)).string();
 }
 
 bool Cache::hasThumbnail(const std::string& hash, int size) const {

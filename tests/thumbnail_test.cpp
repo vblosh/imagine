@@ -364,3 +364,20 @@ TEST_F(ThumbnailTest, TurboJpegAccelerationAndIdctScaling) {
     EXPECT_LE(largeDim.value().first, 1024);
     EXPECT_LE(largeDim.value().second, 1024);
 }
+
+TEST_F(ThumbnailTest, RelativeThumbnailPathAndCustomCacheDir) {
+    std::string hash = "a1b2c3d4e5f6071829";
+    std::string relSmall = Cache::getRelativeThumbnailPath(hash, 256);
+    EXPECT_EQ(relSmall, "a1/b2/a1b2c3d4e5f6071829_256.jpg");
+
+    std::string relLarge = Cache::getRelativeThumbnailPath(hash, 1024);
+    EXPECT_EQ(relLarge, "a1/b2/a1b2c3d4e5f6071829_1024.jpg");
+
+    std::string shortRel = Cache::getRelativeThumbnailPath("xyz", 256);
+    EXPECT_EQ(shortRel, "misc_xyz_256.jpg");
+
+    std::string customCacheDir = (testDir / "my_custom_thumbs").string();
+    Cache cache(customCacheDir);
+    std::string fullPath = cache.getThumbnailPath(hash, 256);
+    EXPECT_EQ(fullPath, (std::filesystem::path(customCacheDir) / "a1" / "b2" / "a1b2c3d4e5f6071829_256.jpg").string());
+}

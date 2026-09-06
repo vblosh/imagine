@@ -28,9 +28,15 @@ public:
     Catalog& operator=(Catalog&&) = delete;
 
     // Lifecycle
-    Status open(const std::string& dbPath, const std::string& cacheDir = "");
+    Status open(const std::string& dbPath, const std::string& cacheDir = "", const std::string& photosDir = "");
     void close();
     bool isOpen() const;
+
+    // Photos Directory & Path Resolution
+    void setPhotosDir(std::string photosDir);
+    const std::string& photosDir() const;
+    std::string resolvePhotoPath(const std::string& recordedPath) const;
+    Result<int64_t> makePathsRelative(const std::string& photosDir, const std::string& thumbsDir = "");
 
     // Importer
     Result<ImportProgress> importDirectory(
@@ -92,6 +98,7 @@ private:
     std::unique_ptr<thumbnail::Cache> cache_;
     std::unique_ptr<concurrency::ThreadPool> threadPool_;
     std::unique_ptr<Importer> importer_;
+    std::string photosDir_;
     bool isOpen_{false};
     mutable std::shared_mutex rwMutex_;
 };

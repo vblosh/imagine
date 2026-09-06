@@ -422,3 +422,76 @@ TEST_F(ImporterTest, CommitToDbFalseAndBatchPersistence) {
 
     db.close();
 }
+
+TEST_F(ImporterTest, RootContainmentAndRelativePaths) {
+    CatalogDb db;
+    ASSERT_TRUE(db.open(dbPath).isOk());
+    Cache cache(thumbsDir.string());
+    Importer importer(db, cache, nullptr, photosDir.string());
+
+    // 1. Create subfolder with image
+    auto subDir = photosDir / "vacation" / "2026";
+    std::filesystem::create_directories(subDir);
+    std::string subImgPath = (subDir / "beach.jpg").string();
+    {
+        std::ofstream ofs(subImgPath, std::ios::binary);
+        ofs << "RIFF"; // dummy content
+    }
+    // Make it a valid JPEG so importer accepts it
+    ImageBuffer buf;
+    buf.width = 100;
+    buf.height = 100;
+    buf.channels = 3;
+    buf.data.resize(100 * 100 * 3, 200);
+    ASSERT_TRUE(Generator::saveJpeg(buf, subImgPath).isOk());
+
+    // 2. Create image outside photosDir
+    std::string outsideImg = (testDir / "outside.jpg").string();
+    ASSERT_TRUE(Generator::saveJpeg(buf, outsideImg).isOk());
+
+    // 3. Attempting to import file outside photos root should be rejected
+    auto badFileRes = importer.importFile(outsideImg);
+    EXPECT_FALSE(badFileRes.isOk());
+
+    // 4. Attempting to import directory outside photos root should be rejected
+    auto badDirRes = importer.importDirectory(testDir.string(), true);
+    EXPECT_FALSE(badDirRes.isOk());
+
+    // 5. Import photosDir
+    auto impRes = importer.importDirectory(photosDir.string(), true);
+    ASSERT_TRUE(impRes.isOk());
+
+    // 6. Verify stored paths in DB are relative to photosDir
+    auto stats = db.getStats().value();
+    EXPECT_EQ(stats.total_media, 3); // img1, img2, vacation/2026/beach.jpg
+
+    auto beachRes = db.getMediaByPath("vacation/2026/beach.jpg");
+    ASSERT_TRUE(beachRes.isOk());
+    EXPECT_EQ(beachRes.value().file_path, "vacation/2026/beach.jpg");
+    EXPECT_EQ(beachRes.value().file_name, "beach.jpg");
+    EXPECT_EQ(beachRes.value().thumb_small.find("thumbs"), std::string::npos);
+    EXPECT_NE(beachRes.value().thumb_small.find("_256.jpg"), std::string::npos);
+
+    auto img1Res = db.getMediaByPath("img1.jpg");
+    ASSERT_TRUE(img1Res.isOk());
+    EXPECT_EQ(img1Res.value().file_path, "img1.jpg");
+
+    db.close();
+}
+
+TEST_F(ImporterTest, WindowsRelativePathCompatibility) {
+    std::filesystem::path root = "/photos/library";
+    std::filesystem::path sub = "/photos/library/summer/2026/pic.jpg";
+    std::filesystem::path outside = "/other/folder/pic.jpg";
+
+    EXPECT_TRUE(Importer::isInsideRootDir(sub, root));
+    EXPECT_FALSE(Importer::isInsideRootDir(outside, root));
+    EXPECT_FALSE(Importer::isInsideRootDir(root, root));
+
+    std::string rel = Importer::toRelativePath(sub, root);
+    EXPECT_EQ(rel, "summer/2026/pic.jpg");
+    EXPECT_EQ(rel.find('\\'), std::string::npos); // Guaranteed forward slashes
+
+    std::string relOutside = Importer::toRelativePath(outside, root);
+    EXPECT_EQ(relOutside, outside.generic_string());
+}
