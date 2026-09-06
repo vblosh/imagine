@@ -74,12 +74,13 @@ export function buildMediaParams() {
   }
   if (state.activeAlbumId) params.album_id = state.activeAlbumId;
 
-  // Nav filters (photos, videos, audio, picks, rejects, unrated)
+  // Nav filters (photos, videos, audio, picks, rejects, not_rejects, unrated)
   if (state.activeNavFilter === 'photos') params.media_type = 'photo';
   else if (state.activeNavFilter === 'videos') params.media_type = 'video';
   else if (state.activeNavFilter === 'audio') params.media_type = 'audio';
   else if (state.activeNavFilter === 'picks') params.flag = 1;
   else if (state.activeNavFilter === 'rejects') params.flag = -1;
+  else if (state.activeNavFilter === 'not_rejects') params.not_flag = -1;
   else if (state.activeNavFilter === 'unrated') {
     params.rating = 0;
     params.max_rating = 0;
@@ -337,6 +338,15 @@ export async function loadMetadata() {
     }
     if (dom.totalAudioCount) {
       dom.totalAudioCount.textContent = state.stats.total_audio || 0;
+    }
+    if (dom.totalPicksCount) {
+      dom.totalPicksCount.textContent = state.stats.total_picks || 0;
+    }
+    if (dom.totalRejectsCount) {
+      dom.totalRejectsCount.textContent = state.stats.total_rejects || 0;
+    }
+    if (dom.totalNotRejectsCount) {
+      dom.totalNotRejectsCount.textContent = state.stats.total_not_rejects || 0;
     }
   } catch (err) {
     console.error('Failed to load catalog metadata:', err);
@@ -911,6 +921,7 @@ export function updateSidebarActive() {
   if (dom.navAudio) dom.navAudio.classList.toggle('active', state.activeNavFilter === 'audio');
   if (dom.navPicks) dom.navPicks.classList.toggle('active', state.activeNavFilter === 'picks');
   if (dom.navRejects) dom.navRejects.classList.toggle('active', state.activeNavFilter === 'rejects');
+  if (dom.navNotRejects) dom.navNotRejects.classList.toggle('active', state.activeNavFilter === 'not_rejects');
   if (dom.navUnrated) dom.navUnrated.classList.toggle('active', state.activeNavFilter === 'unrated');
   renderSidebarTags();
   renderSidebarAlbums();
@@ -945,6 +956,9 @@ export function updateFilterLabel() {
     isFiltered = true;
   } else if (state.activeNavFilter === 'rejects') {
     label = 'Rejects';
+    isFiltered = true;
+  } else if (state.activeNavFilter === 'not_rejects') {
+    label = 'Not Rejects';
     isFiltered = true;
   } else if (state.activeNavFilter === 'unrated') {
     label = 'Unrated Photos';
@@ -1062,6 +1076,7 @@ export async function updateItemFlag(id, flag) {
   if (state.loupeIndex >= 0) updateLoupeControls();
   try {
     await api.post(`/api/media/${id}/flag`, { flag });
+    loadMetadata();
   } catch (err) {
     console.error('Failed to update flag:', err);
     if (item) {
@@ -1091,6 +1106,7 @@ export async function batchUpdateFlags(ids, flag) {
   if (state.loupeIndex >= 0) updateLoupeControls();
   try {
     await api.post('/api/media/batch-flag', { ids, flag });
+    loadMetadata();
   } catch (err) {
     console.error('Failed to batch update flags:', err);
     prevFlags.forEach((oldFlag, id) => {

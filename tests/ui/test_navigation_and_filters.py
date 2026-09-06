@@ -13,6 +13,12 @@ def test_sidebar_quick_filters(server, page: Page):
     cards = page.locator(".photo-card")
     expect(cards).to_have_count(6)
 
+    # Verify navigation count badges
+    expect(page.locator("#totalMediaCount")).to_have_text("6")
+    expect(page.locator("#totalPicksCount")).to_have_text("2")
+    expect(page.locator("#totalRejectsCount")).to_have_text("2")
+    expect(page.locator("#totalNotRejectsCount")).to_have_text("4")
+
     # 1. Picks filter (flag = 1: mountain.bmp, portrait.bmp)
     page.locator("#navPicks").click()
     expect(page.locator("#navPicks")).to_have_class(re.compile(r"\bactive\b"))
@@ -31,7 +37,20 @@ def test_sidebar_quick_filters(server, page: Page):
     assert "beach.bmp" in names
     assert "forest.bmp" in names
 
-    # 3. Unrated filter (rating = 0: birthday.bmp, forest.bmp)
+    # 3. Not Rejects filter (flag != -1: mountain.bmp, sunset.bmp, portrait.bmp, birthday.bmp)
+    page.locator("#navNotRejects").click()
+    expect(page.locator("#navNotRejects")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#filterLabel")).to_contain_text("Not Rejects")
+    expect(cards).to_have_count(4)
+    not_reject_names = [cards.nth(i).locator(".card-filename").text_content() for i in range(4)]
+    assert "mountain.bmp" in not_reject_names
+    assert "sunset.bmp" in not_reject_names
+    assert "portrait.bmp" in not_reject_names
+    assert "birthday.bmp" in not_reject_names
+    assert "beach.bmp" not in not_reject_names
+    assert "forest.bmp" not in not_reject_names
+
+    # 4. Unrated filter (rating = 0: birthday.bmp, forest.bmp)
     page.locator("#navUnrated").click()
     expect(page.locator("#navUnrated")).to_have_class(re.compile(r"\bactive\b"))
     expect(page.locator("#filterLabel")).to_contain_text("Unrated Photos")
@@ -40,7 +59,7 @@ def test_sidebar_quick_filters(server, page: Page):
     assert "birthday.bmp" in names
     assert "forest.bmp" in names
 
-    # 4. Return to All Media
+    # 5. Return to All Media
     page.locator("#navAllMedia").click()
     expect(page.locator("#navAllMedia")).to_have_class(re.compile(r"\bactive\b"))
     expect(cards).to_have_count(6)

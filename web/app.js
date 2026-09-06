@@ -535,6 +535,18 @@ export function setupEventListeners() {
       loadMedia();
     });
   }
+  if (dom.navNotRejects) {
+    dom.navNotRejects.addEventListener('click', () => {
+      state.activeNavFilter = 'not_rejects';
+      state.activeTagId = null;
+      state.activeAlbumId = null;
+      state.activeFolder = null;
+      state.activeTimelinePeriod = null;
+      updateSidebarActive();
+      renderTimeline();
+      loadMedia();
+    });
+  }
   if (dom.navUnrated) {
     dom.navUnrated.addEventListener('click', () => {
       state.activeNavFilter = 'unrated';

@@ -431,6 +431,9 @@ def test_response_schema_validation_and_normalization(server, page: Page):
     assert results["validStats"]["total_media"] == 15
     assert results["validStats"]["total_albums"] == 2
     assert results["nullStats"]["total_media"] == 0
+    assert results["nullStats"]["total_picks"] == 0
+    assert results["nullStats"]["total_rejects"] == 0
+    assert results["nullStats"]["total_not_rejects"] == 0
 
     # Assertions for normalizeTimelineEntry
     assert results["validTimeline"]["year"] == 2026

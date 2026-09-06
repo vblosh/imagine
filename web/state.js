@@ -11,7 +11,7 @@ export const state = {
   selectedIds: new Set(),
   lastSelectedId: null,
   activeTab: 'media',      // 'media', 'people', 'places', 'events'
-  activeNavFilter: 'all',  // 'all', 'picks', 'rejects', 'unrated'
+  activeNavFilter: 'all',  // 'all', 'photos', 'videos', 'audio', 'picks', 'rejects', 'not_rejects', 'unrated'
   activeTagId: null,
   activeAlbumId: null,
   activeFolder: null,

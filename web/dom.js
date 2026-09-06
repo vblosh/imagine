@@ -47,12 +47,16 @@ export const dom = {
   totalPhotosCount: document.getElementById('totalPhotosCount'),
   totalVideosCount: document.getElementById('totalVideosCount'),
   totalAudioCount: document.getElementById('totalAudioCount'),
+  totalPicksCount: document.getElementById('totalPicksCount'),
+  totalRejectsCount: document.getElementById('totalRejectsCount'),
+  totalNotRejectsCount: document.getElementById('totalNotRejectsCount'),
   navAllMedia: document.getElementById('navAllMedia'),
   navPhotos: document.getElementById('navPhotos'),
   navVideos: document.getElementById('navVideos'),
   navAudio: document.getElementById('navAudio'),
   navPicks: document.getElementById('navPicks'),
   navRejects: document.getElementById('navRejects'),
+  navNotRejects: document.getElementById('navNotRejects'),
   navUnrated: document.getElementById('navUnrated'),
   albumsList: document.getElementById('albumsList'),
   newAlbumBtn: document.getElementById('newAlbumBtn'),
@@ -259,6 +263,7 @@ export function validateRequiredDom() {
     'navAllMedia',
     'navPicks',
     'navRejects',
+    'navNotRejects',
     'navUnrated'
   ];
 
