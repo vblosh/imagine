@@ -228,6 +228,14 @@ export function setupEventListeners() {
       loadMedia();
     });
   }
+  if (dom.timelineContainer) {
+    dom.timelineContainer.addEventListener('wheel', (e) => {
+      if (e.deltaY !== 0 && e.deltaX === 0) {
+        e.preventDefault();
+        dom.timelineContainer.scrollLeft += e.deltaY;
+      }
+    }, { passive: false });
+  }
 
   // View Mode Toggle (Grid vs Map)
   if (dom.viewGridBtn) {

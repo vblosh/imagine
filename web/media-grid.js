@@ -838,13 +838,18 @@ export function renderTimeline() {
   const entries = [...state.timelineData].sort((a, b) => b.year - a.year || b.month - a.month);
   const maxCount = Math.max(...entries.map(t => t.count), 1);
 
+  let activeWrap = null;
+
   entries.forEach(entry => {
     const wrap = document.createElement('div');
     wrap.className = 'timeline-bar-wrap';
     const isAct = state.activeTimelinePeriod &&
       state.activeTimelinePeriod.year === entry.year &&
       state.activeTimelinePeriod.month === entry.month;
-    if (isAct) wrap.classList.add('active');
+    if (isAct) {
+      wrap.classList.add('active');
+      activeWrap = wrap;
+    }
 
     const heightPercent = Math.max(10, Math.round((entry.count / maxCount) * 100));
     const monthAbbr = getMonthName(entry.month).substring(0, 3);
@@ -868,6 +873,10 @@ export function renderTimeline() {
 
     dom.timelineContainer.appendChild(wrap);
   });
+
+  if (activeWrap) {
+    activeWrap.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 }
 
 export function updateSidebarActive() {

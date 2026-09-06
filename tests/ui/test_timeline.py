@@ -60,3 +60,74 @@ def test_timeline_click_to_filter_and_reset(server, page: Page):
     page.locator("#resetTimelineBtn").click()
     expect(jan_bar).not_to_have_class(re.compile(r"\bactive\b"))
     expect(cards).to_have_count(6)
+
+
+def test_timeline_labels_do_not_overlap_with_many_months(server, page: Page):
+    """Ensure timeline labels do not overlap when catalog contains dozens of months."""
+    page.goto(server["url"])
+
+    # Provide 60 months of data across 5 years
+    months_data = []
+    for y in range(2026, 2021, -1):
+        for m in range(12, 0, -1):
+            months_data.append({"year": y, "month": m, "count": (y * 12 + m) % 50 + 1})
+
+    page.evaluate(
+        """(data) => {
+        window._imagineApp.state.timelineData = data;
+        window._imagineApp.renderTimeline();
+    }""",
+        months_data,
+    )
+
+    bars = page.locator("#timelineContainer .timeline-bar-wrap")
+    expect(bars).to_have_count(60)
+
+    # Check bounding rects of first 10 visible bars to guarantee no overlapping
+    overlap_check = page.evaluate(
+        """() => {
+        const labels = Array.from(document.querySelectorAll('#timelineContainer .timeline-bar-wrap .timeline-tick-label'));
+        let hasOverlap = false;
+        for (let i = 0; i < labels.length - 1; i++) {
+            const r1 = labels[i].getBoundingClientRect();
+            const r2 = labels[i + 1].getBoundingClientRect();
+            // Since timeline is rendered left-to-right (descending order):
+            // r1 is to the left of r2, so r1.right should not be greater than r2.left
+            if (r1.right > r2.left + 0.5) {
+                hasOverlap = true;
+                break;
+            }
+        }
+        return { hasOverlap };
+    }"""
+    )
+    assert not overlap_check["hasOverlap"], "Timeline month labels must not overlap"
+
+
+def test_timeline_wheel_scrolls_horizontally(server, page: Page):
+    """Wheel scrolling on timelineContainer translates vertical deltaY into horizontal scroll."""
+    page.goto(server["url"])
+
+    # Provide 60 months of data so timeline overflows and can scroll
+    months_data = [{"year": 2026 - i // 12, "month": 12 - (i % 12), "count": 10} for i in range(60)]
+    page.evaluate(
+        """(data) => {
+        window._imagineApp.state.timelineData = data;
+        window._imagineApp.renderTimeline();
+    }""",
+        months_data,
+    )
+
+    timeline = page.locator("#timelineContainer")
+    expect(timeline).to_be_visible()
+
+    scroll_result = page.evaluate(
+        """() => {
+        const el = document.getElementById('timelineContainer');
+        const start = el.scrollLeft;
+        el.dispatchEvent(new WheelEvent('wheel', { deltaY: 150, cancelable: true, bubbles: true }));
+        return { start, after: el.scrollLeft };
+    }"""
+    )
+    assert scroll_result["after"] > scroll_result["start"]
+

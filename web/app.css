@@ -783,20 +783,44 @@ body, html {
   flex: 1;
   display: flex;
   align-items: flex-end;
-  height: 36px;
-  gap: 3px;
+  height: 38px;
+  gap: 4px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding-bottom: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: #555555 transparent;
+}
+
+.timeline-container::-webkit-scrollbar {
+  height: 6px;
+}
+
+.timeline-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.timeline-container::-webkit-scrollbar-thumb {
+  background-color: #555555;
+  border-radius: 3px;
+}
+
+.timeline-container::-webkit-scrollbar-thumb:hover {
+  background-color: #777777;
 }
 
 .timeline-bar-wrap {
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-width: 24px;
+  justify-content: flex-end;
+  height: 100%;
+  flex-shrink: 0;
+  min-width: 38px;
   cursor: pointer;
-  padding: 2px;
-  border-radius: 2px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  box-sizing: border-box;
 }
 
 .timeline-bar-wrap:hover, .timeline-bar-wrap.active {
@@ -808,6 +832,7 @@ body, html {
   background-color: var(--accent-color);
   border-radius: 2px 2px 0 0;
   min-height: 4px;
+  max-height: 16px;
   transition: height 0.2s, background-color 0.15s;
 }
 
