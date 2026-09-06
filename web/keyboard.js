@@ -214,7 +214,10 @@ export function setupKeyboardShortcuts() {
 
       if (e.key === 'e' || e.key === 'E') {
         e.preventDefault();
-        openQuickEdit();
+        const item = state.mediaItems[state.loupeIndex];
+        if (item && item.media_type !== 'video' && item.media_type !== 'audio') {
+          openQuickEdit();
+        }
         return;
       }
 

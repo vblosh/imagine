@@ -710,6 +710,12 @@ export function setupEventListeners() {
   // Quick Edit controls
   if (dom.loupeQuickEditBtn) {
     dom.loupeQuickEditBtn.addEventListener('click', () => {
+      const item = (state.loupeIndex >= 0 && state.loupeIndex < state.mediaItems.length)
+        ? state.mediaItems[state.loupeIndex]
+        : null;
+      if (item && (item.media_type === 'video' || item.media_type === 'audio')) {
+        return;
+      }
       if (quickEditState.isOpen) {
         closeQuickEdit(true);
       } else {

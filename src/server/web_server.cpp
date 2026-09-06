@@ -92,6 +92,15 @@ WebServer::WebServer(core::Catalog& catalog, std::string webRoot)
     if (envOrigin && *envOrigin) {
         allowedOrigin_ = envOrigin;
     }
+    const char* envPayload = std::getenv("IMAGINE_MAX_PAYLOAD_MB");
+    if (envPayload && *envPayload) {
+        try {
+            size_t mb = std::stoul(envPayload);
+            if (mb > 0) {
+                payloadMaxLength_ = mb * 1024 * 1024;
+            }
+        } catch (...) {}
+    }
 }
 
 WebServer::~WebServer() {
@@ -114,10 +123,24 @@ void WebServer::setAllowedOrigin(std::string origin) {
     }
 }
 
+void WebServer::setPayloadMaxLength(size_t bytes) {
+    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    payloadMaxLength_ = bytes;
+    if (server_) {
+        server_->set_payload_max_length(payloadMaxLength_);
+    }
+}
+
+size_t WebServer::payloadMaxLength() const {
+    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    return payloadMaxLength_;
+}
+
 httplib::Server& WebServer::server() {
     std::lock_guard<std::mutex> lock(lifecycleMutex_);
     if (!server_) {
         server_ = std::make_unique<httplib::Server>();
+        server_->set_payload_max_length(payloadMaxLength_);
     }
     return *server_;
 }
@@ -142,7 +165,7 @@ Status WebServer::start(const std::string& host, int port, const std::string& we
     }
 
     server_ = std::make_unique<httplib::Server>();
-    server_->set_payload_max_length(10 * 1024 * 1024); // 10MB payload limit
+    server_->set_payload_max_length(payloadMaxLength_);
 
     router_ = std::make_unique<ApiRouter>(catalog_);
     if (!apiToken_.empty()) {

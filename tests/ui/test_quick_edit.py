@@ -218,3 +218,61 @@ def test_save_overwrite_and_save_copy(server, page: Page):
     page.keyboard.press("Escape")
     expect(loupe).to_be_hidden()
     expect(page.locator(".photo-card", has_text="birthday_edited")).to_be_visible()
+
+
+def test_quick_edit_disabled_on_video_and_audio(media_server, page: Page):
+    """Quick edit button and shortcuts must be disabled for video and audio files."""
+    page.goto(media_server["url"])
+
+    loupe = page.locator("#loupeModal")
+    quick_edit_btn = page.locator("#loupeQuickEditBtn")
+    toolbar = page.locator("#quickEditToolbar")
+
+    # 1. Video item
+    video_card = page.locator(".photo-card", has_text="drone_flight.mp4")
+    video_card.dblclick()
+    expect(loupe).to_be_visible()
+
+    # Quick Edit button should be hidden
+    expect(quick_edit_btn).to_be_hidden()
+
+    # Pressing E should NOT activate Quick Edit
+    page.keyboard.press("e")
+    expect(toolbar).to_be_hidden()
+    expect(loupe).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
+
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+
+    # 2. Audio item
+    audio_card = page.locator(".photo-card", has_text="ambient_track.wav")
+    audio_card.dblclick()
+    expect(loupe).to_be_visible()
+
+    # Quick Edit button should be hidden
+    expect(quick_edit_btn).to_be_hidden()
+
+    # Pressing E should NOT activate Quick Edit
+    page.keyboard.press("e")
+    expect(toolbar).to_be_hidden()
+    expect(loupe).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
+
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+
+    # 3. Photo item
+    photo_card = page.locator(".photo-card", has_text="birthday.bmp")
+    photo_card.dblclick()
+    expect(loupe).to_be_visible()
+
+    # Quick Edit button should be visible for photo
+    expect(quick_edit_btn).to_be_visible()
+
+    # Pressing E should open Quick Edit
+    page.keyboard.press("e")
+    expect(toolbar).to_be_visible()
+    expect(loupe).to_have_class(re.compile(r"\bis-quick-editing\b"))
+
+    page.keyboard.press("Escape")
+    expect(toolbar).to_be_hidden()
+

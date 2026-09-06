@@ -43,8 +43,13 @@ public:
     void setAllowedOrigin(std::string origin);
     const std::string& allowedOrigin() const { return allowedOrigin_; }
 
+    void setPayloadMaxLength(size_t bytes);
+    size_t payloadMaxLength() const;
+
     httplib::Server& server();
     ApiRouter* router() const { return router_.get(); }
+
+    static constexpr size_t kDefaultPayloadMaxLength = 256 * 1024 * 1024; // 256MB default
 
 private:
     void setupStaticFileServing();
@@ -56,6 +61,7 @@ private:
     int port_{8080};
     std::string apiToken_;
     std::string allowedOrigin_{"*"};
+    size_t payloadMaxLength_{kDefaultPayloadMaxLength};
     std::unique_ptr<httplib::Server> server_;
     std::unique_ptr<ApiRouter> router_;
     std::shared_ptr<std::thread> thread_;

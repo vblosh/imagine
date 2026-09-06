@@ -80,6 +80,10 @@ export function updateLoupeView() {
     if (dom.loupeZoomControls) {
       dom.loupeZoomControls.style.display = 'none';
     }
+    if (dom.loupeQuickEditBtn) {
+      dom.loupeQuickEditBtn.style.display = 'none';
+      dom.loupeQuickEditBtn.disabled = true;
+    }
   } else if (item.media_type === 'audio') {
     if (dom.loupeAudioContainer) {
       dom.loupeAudioContainer.style.display = 'flex';
@@ -105,6 +109,10 @@ export function updateLoupeView() {
     if (dom.loupeZoomControls) {
       dom.loupeZoomControls.style.display = 'none';
     }
+    if (dom.loupeQuickEditBtn) {
+      dom.loupeQuickEditBtn.style.display = 'none';
+      dom.loupeQuickEditBtn.disabled = true;
+    }
   } else {
     // Photo
     if (dom.loupeImg) {
@@ -113,6 +121,10 @@ export function updateLoupeView() {
     }
     if (dom.loupeZoomControls) {
       dom.loupeZoomControls.style.display = 'flex';
+    }
+    if (dom.loupeQuickEditBtn) {
+      dom.loupeQuickEditBtn.style.display = '';
+      dom.loupeQuickEditBtn.disabled = false;
     }
   }
 

@@ -108,6 +108,7 @@ def test_media_loupe_player(media_server, page: Page):
     expect(loupe).to_be_visible()
     expect(page.locator("#loupeVideo")).to_be_visible()
     expect(page.locator("#loupeImg")).to_be_hidden()
+    expect(page.locator("#loupeQuickEditBtn")).to_be_hidden()
 
     # Toggle spacebar in loupe
     page.keyboard.press("Space")
@@ -125,6 +126,7 @@ def test_media_loupe_player(media_server, page: Page):
     expect(page.locator("#loupeAudioTitle")).to_have_text("Night Drive")
     expect(page.locator("#loupeAudioArtist")).to_contain_text("SynthWave Artist")
     expect(page.locator("#loupeImg")).to_be_hidden()
+    expect(page.locator("#loupeQuickEditBtn")).to_be_hidden()
 
     # Spacebar toggle
     page.keyboard.press("Space")

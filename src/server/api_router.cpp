@@ -1307,6 +1307,11 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         }
 
         auto item = mediaRes.value();
+        if (item.media_type == "video" || item.media_type == "audio" || item.media_type != "photo") {
+            sendError(res, "Quick edit is not supported for " + item.media_type + " files", 400);
+            return;
+        }
+
         std::string photoPath = resolvePhotoPath(item.file_path);
         std::error_code ec;
         if (!std::filesystem::exists(photoPath, ec) || !std::filesystem::is_regular_file(photoPath, ec)) {
@@ -1328,6 +1333,10 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                 auto body = nlohmann::json::parse(req.body);
                 if (body.contains("mode") && body["mode"].is_string()) {
                     mode = body["mode"].get<std::string>();
+                } else if (req.has_param("mode")) {
+                    mode = req.get_param_value("mode");
+                } else if (req.has_header("X-Edit-Mode")) {
+                    mode = req.get_header_value("X-Edit-Mode");
                 }
                 if (body.contains("image_data") && body["image_data"].is_string()) {
                     newImageBytes = base64Decode(body["image_data"].get<std::string>());
@@ -1376,8 +1385,11 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         } else {
             if (req.has_param("mode")) {
                 mode = req.get_param_value("mode");
+            } else if (req.has_header("X-Edit-Mode")) {
+                mode = req.get_header_value("X-Edit-Mode");
             }
-            newImageBytes.assign(req.body.begin(), req.body.end());
+            newImageBytes.assign(reinterpret_cast<const uint8_t*>(req.body.data()),
+                                 reinterpret_cast<const uint8_t*>(req.body.data()) + req.body.size());
         }
 
         if (newImageBytes.empty()) {

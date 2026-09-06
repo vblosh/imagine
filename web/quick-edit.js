@@ -152,6 +152,7 @@ function applySmartFixToImageData(srcData, dstData, lut, intensity) {
 export function openQuickEdit() {
   if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return;
   const item = state.mediaItems[state.loupeIndex];
+  if (!item || item.media_type === "video" || item.media_type === "audio" || (item.media_type && item.media_type !== "photo")) return;
 
   quickEditState.isOpen = true;
   quickEditState.isDirty = false;
@@ -576,26 +577,57 @@ export async function saveEdits(mode = "overwrite") {
   }
 
   const id = quickEditState.photoId;
+  const currentItem = state.mediaItems.find(m => m.id === id);
+  if (currentItem && (currentItem.media_type === "video" || currentItem.media_type === "audio")) {
+    return;
+  }
   const canvas = dom.quickEditCanvas;
 
   try {
     if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = true;
     if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.disabled = true;
 
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
+    let res;
+    if (typeof canvas.toBlob === "function") {
+      try {
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.95));
+        if (blob) {
+          res = await fetch(`/api/photos/${id}/edit?mode=${encodeURIComponent(mode)}`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "image/jpeg",
+              "X-Edit-Mode": mode,
+            },
+            body: blob,
+          });
+        }
+      } catch (blobErr) {
+        console.warn("Failed to create blob from canvas, falling back to data URL:", blobErr);
+      }
+    }
 
-    const res = await fetch(`/api/photos/${id}/edit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        mode,
-        image_data: dataUrl,
-      }),
-    });
+    if (!res) {
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
+      res = await fetch(`/api/photos/${id}/edit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          image_data: dataUrl,
+        }),
+      });
+    }
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || "Failed to save edit");
+      let errMsg = res.statusText;
+      try {
+        const err = await res.json();
+        if (err.error) errMsg = err.error;
+      } catch (_) {}
+      if (res.status === 413) {
+        errMsg = `Payload too large (${res.statusText || "413"}). Image size exceeds server limit.`;
+      }
+      throw new Error(errMsg || "Failed to save edit");
     }
 
     const rawItem = await res.json();

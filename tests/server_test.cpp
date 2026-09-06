@@ -1274,3 +1274,149 @@ TEST_F(ServerTest, EditPhotoEndpointOverwriteAndCopy) {
     EXPECT_TRUE(copyJson["file_name"].get<std::string>().find("test_photo_edited") != std::string::npos);
 }
 
+TEST_F(ServerTest, EditPhotoRejectsVideoAndAudio) {
+    auto photosDir = testDir_ / "photos";
+    std::filesystem::create_directories(photosDir);
+    std::string videoPath = (photosDir / "sample_video.mp4").string();
+    std::string audioPath = (photosDir / "sample_audio.mp3").string();
+
+    {
+        std::ofstream vout(videoPath, std::ios::binary);
+        vout << "fake video content";
+    }
+    {
+        std::ofstream aout(audioPath, std::ios::binary);
+        aout << "fake audio content";
+    }
+
+    MediaItem videoItem;
+    videoItem.file_path = videoPath;
+    videoItem.file_name = "sample_video.mp4";
+    videoItem.media_type = "video";
+    videoItem.file_size = 18;
+    videoItem.content_hash = "fakevideohash1234";
+    auto vidRes = catalog_->db().insertMedia(videoItem);
+    ASSERT_TRUE(vidRes.isOk());
+    MediaId videoId = vidRes.value();
+
+    MediaItem audioItem;
+    audioItem.file_path = audioPath;
+    audioItem.file_name = "sample_audio.mp3";
+    audioItem.media_type = "audio";
+    audioItem.file_size = 18;
+    audioItem.content_hash = "fakeaudiohash1234";
+    auto aidRes = catalog_->db().insertMedia(audioItem);
+    ASSERT_TRUE(aidRes.isOk());
+    MediaId audioId = aidRes.value();
+
+    httplib::Client client("127.0.0.1", port_);
+    nlohmann::json editPayload = {
+        {"mode", "overwrite"},
+        {"operations", {{"rotation", 90}}}
+    };
+
+    auto resVideo = client.Post("/api/photos/" + std::to_string(videoId) + "/edit", editPayload.dump(), "application/json");
+    ASSERT_TRUE(resVideo);
+    EXPECT_EQ(resVideo->status, 400);
+
+    auto resAudio = client.Post("/api/photos/" + std::to_string(audioId) + "/edit", editPayload.dump(), "application/json");
+    ASSERT_TRUE(resAudio);
+    EXPECT_EQ(resAudio->status, 400);
+}
+
+TEST_F(ServerTest, EditPhotoEndpointBinaryPayload) {
+    auto photosDir = testDir_ / "photos";
+    std::filesystem::create_directories(photosDir);
+    std::string photoPath = (photosDir / "binary_test.jpg").string();
+
+    ImageBuffer buf;
+    buf.width = 100;
+    buf.height = 100;
+    buf.channels = 3;
+    buf.data.resize(100 * 100 * 3, 150);
+    ASSERT_TRUE(Generator::saveJpeg(buf, photoPath).isOk());
+
+    auto impRes = catalog_->importDirectory(photosDir.string(), true, nullptr);
+    ASSERT_TRUE(impRes.isOk());
+
+    auto mRes = catalog_->getMediaByPath(photoPath);
+    ASSERT_TRUE(mRes.isOk());
+    MediaId id = mRes.value().id;
+
+    // Create a modified JPEG
+    std::string newPhotoPath = (photosDir / "new_binary.jpg").string();
+    buf.width = 120;
+    buf.height = 80;
+    buf.data.resize(120 * 80 * 3, 200);
+    ASSERT_TRUE(Generator::saveJpeg(buf, newPhotoPath).isOk());
+
+    std::ifstream ifs(newPhotoPath, std::ios::binary);
+    std::string jpegBytes((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ifs.close();
+
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Overwrite via binary POST with query parameter ?mode=overwrite
+    auto resOverwrite = client.Post("/api/photos/" + std::to_string(id) + "/edit?mode=overwrite",
+                                    jpegBytes, "image/jpeg");
+    ASSERT_TRUE(resOverwrite);
+    EXPECT_EQ(resOverwrite->status, 200);
+    auto jsonOverwrite = nlohmann::json::parse(resOverwrite->body);
+    EXPECT_EQ(jsonOverwrite["width"].get<int>(), 120);
+    EXPECT_EQ(jsonOverwrite["height"].get<int>(), 80);
+
+    // 2. Copy via binary POST with X-Edit-Mode header
+    httplib::Headers headers = {{"X-Edit-Mode", "copy"}};
+    auto resCopy = client.Post("/api/photos/" + std::to_string(id) + "/edit",
+                               headers, jpegBytes, "image/jpeg");
+    ASSERT_TRUE(resCopy);
+    EXPECT_EQ(resCopy->status, 201);
+    auto jsonCopy = nlohmann::json::parse(resCopy->body);
+    EXPECT_NE(jsonCopy["id"].get<MediaId>(), id);
+    EXPECT_TRUE(jsonCopy["file_name"].get<std::string>().find("_edited") != std::string::npos);
+}
+
+TEST_F(ServerTest, EditPhotoEndpointLargePayload) {
+    auto photosDir = testDir_ / "photos";
+    std::filesystem::create_directories(photosDir);
+    std::string photoPath = (photosDir / "large_photo.jpg").string();
+
+    ImageBuffer buf;
+    buf.width = 200;
+    buf.height = 200;
+    buf.channels = 3;
+    buf.data.resize(200 * 200 * 3, 100);
+    ASSERT_TRUE(Generator::saveJpeg(buf, photoPath).isOk());
+
+    auto impRes = catalog_->importDirectory(photosDir.string(), true, nullptr);
+    ASSERT_TRUE(impRes.isOk());
+
+    auto mRes = catalog_->getMediaByPath(photoPath);
+    ASSERT_TRUE(mRes.isOk());
+    MediaId id = mRes.value().id;
+
+    // Read valid JPEG bytes
+    std::ifstream ifs(photoPath, std::ios::binary);
+    std::string jpegBytes((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    ifs.close();
+
+    // Pad bytes to 11MB (exceeding old 10MB limit)
+    size_t targetSize = 11 * 1024 * 1024;
+    ASSERT_GT(targetSize, jpegBytes.size());
+    jpegBytes.resize(targetSize, 0);
+
+    httplib::Client client("127.0.0.1", port_);
+    // Sending >10MB payload should NOT return 413 Payload Too Large
+    auto res = client.Post("/api/photos/" + std::to_string(id) + "/edit?mode=overwrite",
+                           jpegBytes, "image/jpeg");
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->status, 200);
+}
+
+TEST_F(ServerTest, WebServerPayloadLimitConfig) {
+    EXPECT_EQ(server_->payloadMaxLength(), WebServer::kDefaultPayloadMaxLength);
+    server_->setPayloadMaxLength(50 * 1024 * 1024);
+    EXPECT_EQ(server_->payloadMaxLength(), 50 * 1024 * 1024);
+}
+
+
