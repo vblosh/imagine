@@ -108,6 +108,22 @@ Status Schema::applyMigrationV1(Connection& conn) {
     return tx.commit();
 }
 
+Status Schema::applyMigrationV2(Connection& conn) {
+    const char* v2_sql = R"SQL(
+        ALTER TABLE media_items ADD COLUMN caption TEXT DEFAULT '';
+        CREATE INDEX IF NOT EXISTS idx_media_caption ON media_items(caption);
+    )SQL";
+
+    Transaction tx(conn);
+    Status s = conn.execute(v2_sql);
+    if (!s.isOk()) return s;
+
+    s = conn.execute("INSERT INTO schema_version (version) VALUES (2);");
+    if (!s.isOk()) return s;
+
+    return tx.commit();
+}
+
 Status Schema::migrate(Connection& conn) {
     auto verResult = getCurrentVersion(conn);
     if (!verResult.isOk()) {
@@ -120,6 +136,13 @@ Status Schema::migrate(Connection& conn) {
         Status s = applyMigrationV1(conn);
         if (!s.isOk()) return s;
         current = 1;
+    }
+
+    if (current < 2) {
+        IMAGINE_LOG_INFO("Applying database migration v2...");
+        Status s = applyMigrationV2(conn);
+        if (!s.isOk()) return s;
+        current = 2;
     }
 
     IMAGINE_LOG_INFO("Database schema up to date at version " + std::to_string(current));

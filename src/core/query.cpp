@@ -286,8 +286,9 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
     }
 
     if (!criteria_.search_text.empty()) {
-        clauses.push_back("(file_name LIKE ? OR file_path LIKE ? OR camera_make LIKE ? OR camera_model LIKE ? OR lens LIKE ? OR id IN (SELECT media_id FROM media_tags JOIN tags ON media_tags.tag_id = tags.id WHERE tags.name LIKE ?))");
+        clauses.push_back("(file_name LIKE ? OR file_path LIKE ? OR camera_make LIKE ? OR camera_model LIKE ? OR lens LIKE ? OR caption LIKE ? OR id IN (SELECT media_id FROM media_tags JOIN tags ON media_tags.tag_id = tags.id WHERE tags.name LIKE ?))");
         std::string pattern = "%" + criteria_.search_text + "%";
+        params.push_back(pattern);
         params.push_back(pattern);
         params.push_back(pattern);
         params.push_back(pattern);

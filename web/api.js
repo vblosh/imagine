@@ -253,6 +253,7 @@ export function normalizeMediaItem(raw) {
     exif,
     thumb_small: typeof raw.thumb_small === 'string' ? raw.thumb_small : '',
     thumb_large: typeof raw.thumb_large === 'string' ? raw.thumb_large : '',
+    caption: typeof raw.caption === 'string' ? raw.caption : '',
     tags: Array.isArray(raw.tags) ? raw.tags.map(normalizeTag).filter(Boolean) : []
   };
 }

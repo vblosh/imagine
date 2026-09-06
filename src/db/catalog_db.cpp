@@ -65,6 +65,9 @@ MediaItem CatalogDb::extractMediaItem(Statement& stmt) {
     m.thumb_large = stmt.getString(25);
     m.created_at = stmt.getInt64(26);
     m.updated_at = stmt.getInt64(27);
+    if (stmt.columnCount() > 28) {
+        m.caption = stmt.getString(28);
+    }
     return m;
 }
 
@@ -76,13 +79,13 @@ Result<MediaId> CatalogDb::insertMedia(MediaItem& item) {
             width, height, date_taken, date_taken_str, rating, flag,
             camera_make, camera_model, lens, exposure_time, f_number, iso,
             focal_length, orientation, has_gps, latitude, longitude, altitude,
-            thumb_small, thumb_large, created_at, updated_at
+            thumb_small, thumb_large, created_at, updated_at, caption
         ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?
+            ?, ?, ?, ?, ?
         );
     )SQL";
 
@@ -121,6 +124,7 @@ Result<MediaId> CatalogDb::insertMedia(MediaItem& item) {
     stmt.bind(25, item.thumb_large);
     stmt.bind(26, item.created_at);
     stmt.bind(27, item.updated_at);
+    stmt.bind(28, item.caption);
 
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to insert media item: " + conn_.lastErrorMessage());
@@ -142,13 +146,13 @@ Result<size_t> CatalogDb::insertMediaBatch(std::vector<MediaItem>& items) {
             width, height, date_taken, date_taken_str, rating, flag,
             camera_make, camera_model, lens, exposure_time, f_number, iso,
             focal_length, orientation, has_gps, latitude, longitude, altitude,
-            thumb_small, thumb_large, created_at, updated_at
+            thumb_small, thumb_large, created_at, updated_at, caption
         ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?
+            ?, ?, ?, ?, ?
         );
     )SQL";
 
@@ -192,6 +196,7 @@ Result<size_t> CatalogDb::insertMediaBatch(std::vector<MediaItem>& items) {
         stmt.bind(25, item.thumb_large);
         stmt.bind(26, item.created_at);
         stmt.bind(27, item.updated_at);
+        stmt.bind(28, item.caption);
 
         if (stmt.step() != StepResult::Done) {
             return Status::databaseError("Failed to insert media item in batch: " + conn_.lastErrorMessage());
@@ -219,7 +224,7 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
             rating = ?, flag = ?, camera_make = ?, camera_model = ?, lens = ?,
             exposure_time = ?, f_number = ?, iso = ?, focal_length = ?,
             orientation = ?, has_gps = ?, latitude = ?, longitude = ?, altitude = ?,
-            thumb_small = ?, thumb_large = ?, updated_at = ?
+            thumb_small = ?, thumb_large = ?, updated_at = ?, caption = ?
         WHERE id = ?;
     )SQL";
 
@@ -253,7 +258,8 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
     stmt.bind(23, item.thumb_small);
     stmt.bind(24, item.thumb_large);
     stmt.bind(25, now);
-    stmt.bind(26, item.id);
+    stmt.bind(26, item.caption);
+    stmt.bind(27, item.id);
 
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to update media item: " + conn_.lastErrorMessage());
@@ -274,7 +280,7 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
             rating = ?, flag = ?, camera_make = ?, camera_model = ?, lens = ?,
             exposure_time = ?, f_number = ?, iso = ?, focal_length = ?,
             orientation = ?, has_gps = ?, latitude = ?, longitude = ?, altitude = ?,
-            thumb_small = ?, thumb_large = ?, updated_at = ?
+            thumb_small = ?, thumb_large = ?, updated_at = ?, caption = ?
         WHERE id = ?;
     )SQL";
 
@@ -313,7 +319,8 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
         stmt.bind(23, item.thumb_small);
         stmt.bind(24, item.thumb_large);
         stmt.bind(25, now);
-        stmt.bind(26, item.id);
+        stmt.bind(26, item.caption);
+        stmt.bind(27, item.id);
 
         if (stmt.step() != StepResult::Done) {
             return Status::databaseError("Failed to update media item in batch: " + conn_.lastErrorMessage());
@@ -328,6 +335,24 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
     }
 
     return updatedCount;
+}
+
+Status CatalogDb::updateCaption(MediaId id, const std::string& caption) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto stmtRes = conn_.prepare("UPDATE media_items SET caption = ?, updated_at = ? WHERE id = ?;");
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+    stmt.bind(1, caption);
+    stmt.bind(2, currentUnixTime());
+    stmt.bind(3, id);
+
+    if (stmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to update caption: " + conn_.lastErrorMessage());
+    }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Media item not found: " + std::to_string(id));
+    }
+    return Status::ok();
 }
 
 

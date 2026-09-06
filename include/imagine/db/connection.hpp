@@ -57,6 +57,7 @@ public:
     std::optional<std::string> getOptionalString(int col) const;
 
     sqlite3_stmt* raw() const { return stmt_; }
+    int columnCount() const noexcept { return stmt_ ? sqlite3_column_count(stmt_) : 0; }
 
 private:
     sqlite3_stmt* stmt_{nullptr};

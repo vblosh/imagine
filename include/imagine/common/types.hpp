@@ -60,6 +60,7 @@ struct MediaItem {
     std::string thumb_small; // path or relative URL
     std::string thumb_large; // path or relative URL
     std::vector<Tag> tags;
+    std::string caption;
     int64_t created_at{0};
     int64_t updated_at{0};
 };

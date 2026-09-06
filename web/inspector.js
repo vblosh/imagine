@@ -75,6 +75,7 @@ export function renderInspectorContent(item) {
   if (dom.infoDimensions) dom.infoDimensions.textContent = item.width && item.height ? `${item.width} × ${item.height} px` : '-';
   if (dom.infoFileSize) dom.infoFileSize.textContent = formatBytes(item.file_size);
   if (dom.infoDateTaken) dom.infoDateTaken.textContent = formatDateTime(item.date_taken);
+  if (dom.infoCaption) dom.infoCaption.textContent = item.caption || '-';
   if (dom.infoFilePath) dom.infoFilePath.textContent = item.file_path || '-';
 
   // EXIF properties

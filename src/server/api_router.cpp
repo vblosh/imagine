@@ -597,6 +597,29 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
         }
     });
 
+    // POST /api/media/:id/caption
+    server.Post(R"(/api/media/(\d+)/caption)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        MediaId id = std::stoll(req.matches[1]);
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.contains("caption") || !body["caption"].is_string()) {
+                sendError(res, "Missing or invalid caption field: must be a string");
+                return;
+            }
+            std::string caption = body["caption"].get<std::string>();
+            Status s = catalog_ ? catalog_->setCaption(id, caption) : db().updateCaption(id, caption);
+            if (!s.isOk()) {
+                sendStatusError(res, s);
+                return;
+            }
+
+            sendJson(res, {{"status", "ok"}, {"id", id}, {"caption", caption}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
     // POST /api/media/:id/gps
     server.Post(R"(/api/media/(\d+)/gps)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;

@@ -86,6 +86,7 @@ export const dom = {
   infoDimensions: document.getElementById('infoDimensions'),
   infoFileSize: document.getElementById('infoFileSize'),
   infoDateTaken: document.getElementById('infoDateTaken'),
+  infoCaption: document.getElementById('infoCaption'),
   infoFilePath: document.getElementById('infoFilePath'),
   exifSection: document.getElementById('exifSection'),
   exifBody: document.getElementById('exifBody'),

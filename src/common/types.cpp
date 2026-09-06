@@ -81,6 +81,7 @@ void to_json(nlohmann::json& j, const MediaItem& m) {
         {"thumb_small", m.thumb_small},
         {"thumb_large", m.thumb_large},
         {"tags", m.tags},
+        {"caption", m.caption},
         {"created_at", m.created_at},
         {"updated_at", m.updated_at}
     };
@@ -106,6 +107,7 @@ void from_json(const nlohmann::json& j, MediaItem& m) {
     if (j.contains("tags")) {
         m.tags = j["tags"].get<std::vector<Tag>>();
     }
+    m.caption = j.value("caption", "");
     m.created_at = j.value("created_at", int64_t{0});
     m.updated_at = j.value("updated_at", int64_t{0});
 }

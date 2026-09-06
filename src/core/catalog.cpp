@@ -262,6 +262,14 @@ Status Catalog::setRating(MediaId id, int32_t rating) {
     return db_->updateRating(id, rating);
 }
 
+Status Catalog::setCaption(MediaId id, const std::string& caption) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+    return db_->updateCaption(id, caption);
+}
+
 Status Catalog::setFlag(MediaId id, FlagState flag) {
     std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
