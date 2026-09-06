@@ -183,7 +183,9 @@ export const dom = {
   closeDeleteMediaModalBtn: document.getElementById('closeDeleteMediaModalBtn'),
   cancelDeleteMediaBtn: document.getElementById('cancelDeleteMediaBtn'),
   confirmDeleteMediaBtn: document.getElementById('confirmDeleteMediaBtn'),
-  deleteMediaPromptText: document.getElementById('deleteMediaPromptText')
+  deleteMediaPromptText: document.getElementById('deleteMediaPromptText'),
+  deleteFromDiskCheckbox: document.getElementById('deleteFromDiskCheckbox'),
+  deleteMediaWarningText: document.getElementById('deleteMediaWarningText')
 };
 
 export function refreshDomReferences() {

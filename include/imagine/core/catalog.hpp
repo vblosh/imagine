@@ -58,7 +58,7 @@ public:
     Status setFlag(MediaId id, FlagState flag);
     Status setCaption(MediaId id, const std::string& caption);
     Status setGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
-    Status deleteMedia(MediaId id);
+    Status deleteMedia(MediaId id, bool deleteFromDisk = false);
 
     // Tags
     Status addTag(MediaId id, const std::string& tagName, const std::string& category = "keyword");

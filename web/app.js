@@ -847,6 +847,25 @@ export function setupEventListeners() {
   if (dom.cancelDeleteMediaBtn) dom.cancelDeleteMediaBtn.addEventListener('click', closeDeleteMediaModal);
   if (dom.deleteMediaBackdrop) dom.deleteMediaBackdrop.addEventListener('click', closeDeleteMediaModal);
   if (dom.confirmDeleteMediaBtn) dom.confirmDeleteMediaBtn.addEventListener('click', submitDeleteMedia);
+  if (dom.deleteFromDiskCheckbox) {
+    dom.deleteFromDiskCheckbox.addEventListener('change', () => {
+      const checked = dom.deleteFromDiskCheckbox.checked;
+      if (dom.deleteMediaWarningText) {
+        if (checked) {
+          dom.deleteMediaWarningText.textContent =
+            'Warning: This will permanently delete the original file(s) from disk in addition to removing them from the catalog database. This action cannot be undone.';
+          dom.deleteMediaWarningText.style.color = 'var(--reject-color, #e05252)';
+        } else {
+          dom.deleteMediaWarningText.textContent =
+            'This removes photo metadata, ratings, tags, and album associations from the catalog database. The original files on disk will not be deleted.';
+          dom.deleteMediaWarningText.style.color = 'var(--text-dim)';
+        }
+      }
+      if (dom.confirmDeleteMediaBtn) {
+        dom.confirmDeleteMediaBtn.textContent = checked ? 'Delete from Disk' : 'Delete from Catalog';
+      }
+    });
+  }
 
   setupResizablePanels();
   setupKeyboardShortcuts();

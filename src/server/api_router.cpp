@@ -751,13 +751,33 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             return;
         }
 
-        Status s = catalog_ ? catalog_->deleteMedia(id) : db().deleteMedia(id);
+        bool deleteFromDisk = false;
+        if (req.has_param("delete_from_disk")) {
+            std::string val = req.get_param_value("delete_from_disk");
+            deleteFromDisk = (val == "true" || val == "1");
+        }
+
+        std::string filePath;
+        if (!catalog_ && deleteFromDisk) {
+            filePath = resolvePhotoPath(mediaRes.value().file_path);
+        }
+
+        Status s = catalog_ ? catalog_->deleteMedia(id, deleteFromDisk) : db().deleteMedia(id);
         if (!s.isOk()) {
             sendStatusError(res, s);
             return;
         }
 
-        sendJson(res, {{"status", "ok"}, {"id", id}});
+        if (!catalog_ && deleteFromDisk && !filePath.empty()) {
+            std::error_code ec;
+            if (!std::filesystem::remove(std::filesystem::u8path(filePath), ec)) {
+                if (ec) {
+                    IMAGINE_LOG_WARN("Failed to delete file from disk: " + filePath + " (" + ec.message() + ")");
+                }
+            }
+        }
+
+        sendJson(res, {{"status", "ok"}, {"id", id}, {"deleted_from_disk", deleteFromDisk}});
     });
 
     // POST /api/media/batch-delete
@@ -769,6 +789,13 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 sendError(res, "Missing or invalid 'ids' array");
                 return;
             }
+            bool deleteFromDisk = false;
+            if (body.contains("delete_from_disk") && body["delete_from_disk"].is_boolean()) {
+                deleteFromDisk = body["delete_from_disk"].get<bool>();
+            } else if (req.has_param("delete_from_disk")) {
+                std::string val = req.get_param_value("delete_from_disk");
+                deleteFromDisk = (val == "true" || val == "1");
+            }
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
             if (ids.size() > kMaxBatchSize) {
                 sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
@@ -777,8 +804,23 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             int deletedCount = 0;
             std::vector<MediaId> failedIds;
             for (MediaId id : ids) {
-                Status s = catalog_ ? catalog_->deleteMedia(id) : db().deleteMedia(id);
+                std::string filePath;
+                if (!catalog_ && deleteFromDisk) {
+                    auto itemRes = db().getMediaById(id);
+                    if (itemRes.isOk()) {
+                        filePath = resolvePhotoPath(itemRes.value().file_path);
+                    }
+                }
+                Status s = catalog_ ? catalog_->deleteMedia(id, deleteFromDisk) : db().deleteMedia(id);
                 if (s.isOk()) {
+                    if (!catalog_ && deleteFromDisk && !filePath.empty()) {
+                        std::error_code ec;
+                        if (!std::filesystem::remove(std::filesystem::u8path(filePath), ec)) {
+                            if (ec) {
+                                IMAGINE_LOG_WARN("Failed to delete file from disk: " + filePath + " (" + ec.message() + ")");
+                            }
+                        }
+                    }
                     deletedCount++;
                 } else {
                     failedIds.push_back(id);
@@ -787,7 +829,8 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             sendJson(res, {
                 {"status", failedIds.empty() ? "ok" : "partial"},
                 {"deleted_count", deletedCount},
-                {"failed_ids", failedIds}
+                {"failed_ids", failedIds},
+                {"deleted_from_disk", deleteFromDisk}
             });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());

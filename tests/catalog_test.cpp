@@ -171,3 +171,30 @@ TEST_F(CatalogClassTest, OpenLifecycleAndFullOperations) {
     // Calling close again is safe
     cat.close();
 }
+
+TEST_F(CatalogClassTest, DeleteMediaWithDiskDeletion) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+
+    auto impRes = cat.importFile(sampleImg);
+    ASSERT_TRUE(impRes.isOk());
+    MediaId mid = impRes.value().id;
+
+    std::string sampleImg2 = (testDir / "photo2.jpg").string();
+    std::filesystem::copy_file(sampleImg, sampleImg2);
+    auto impRes2 = cat.importFile(sampleImg2);
+    ASSERT_TRUE(impRes2.isOk());
+    MediaId mid2 = impRes2.value().id;
+
+    // Delete mid2 without disk deletion
+    EXPECT_TRUE(std::filesystem::exists(sampleImg2));
+    EXPECT_TRUE(cat.deleteMedia(mid2, false).isOk());
+    EXPECT_FALSE(cat.getMedia(mid2).isOk());
+    EXPECT_TRUE(std::filesystem::exists(sampleImg2));
+
+    // Delete mid with disk deletion
+    EXPECT_TRUE(std::filesystem::exists(sampleImg));
+    EXPECT_TRUE(cat.deleteMedia(mid, true).isOk());
+    EXPECT_FALSE(cat.getMedia(mid).isOk());
+    EXPECT_FALSE(std::filesystem::exists(sampleImg));
+}

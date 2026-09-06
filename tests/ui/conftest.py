@@ -23,7 +23,8 @@ from fixtures import init_schema, seed_default_catalog, create_import_photos
 def imagine_bin() -> str:
     """Locate and validate the compiled C++ imagine binary."""
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    bin_path = os.path.join(repo_root, "build", "imagine")
+    bin_name = "imagine.exe" if sys.platform == "win32" else "imagine"
+    bin_path = os.path.join(repo_root, "build", bin_name)
     if not os.path.isfile(bin_path) or not os.access(bin_path, os.X_OK):
         # Trigger build if needed
         res = subprocess.run(["cmake", "--build", "build", "--target", "imagine", "-j"], cwd=repo_root)

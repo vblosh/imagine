@@ -1151,3 +1151,65 @@ TEST_F(ServerTest, ServeRelocatedPhotosAndThumbnails) {
     server2.stop();
 }
 
+TEST_F(ServerTest, DeleteMediaSingleAndBatchWithDiskOption) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Create test files on disk
+    std::filesystem::path f1 = testDir_ / "disk_test1.jpg";
+    std::filesystem::path f2 = testDir_ / "disk_test2.jpg";
+    std::filesystem::path f3 = testDir_ / "disk_test3.jpg";
+    std::filesystem::path f4 = testDir_ / "disk_test4.jpg";
+
+    {
+        std::ofstream ofs1(f1); ofs1 << "test data 1";
+        std::ofstream ofs2(f2); ofs2 << "test data 2";
+        std::ofstream ofs3(f3); ofs3 << "test data 3";
+        std::ofstream ofs4(f4); ofs4 << "test data 4";
+    }
+
+    ASSERT_TRUE(std::filesystem::exists(f1));
+    ASSERT_TRUE(std::filesystem::exists(f2));
+    ASSERT_TRUE(std::filesystem::exists(f3));
+    ASSERT_TRUE(std::filesystem::exists(f4));
+
+    MediaItem it1, it2, it3, it4;
+    it1.file_path = f1.string(); it1.file_name = "disk_test1.jpg"; it1.content_hash = "h_dt1";
+    it2.file_path = f2.string(); it2.file_name = "disk_test2.jpg"; it2.content_hash = "h_dt2";
+    it3.file_path = f3.string(); it3.file_name = "disk_test3.jpg"; it3.content_hash = "h_dt3";
+    it4.file_path = f4.string(); it4.file_name = "disk_test4.jpg";
+
+    MediaId id1 = catalog_->db().insertMedia(it1).value();
+    MediaId id2 = catalog_->db().insertMedia(it2).value();
+    MediaId id3 = catalog_->db().insertMedia(it3).value();
+    MediaId id4 = catalog_->db().insertMedia(it4).value();
+
+    // 2. Single delete without delete_from_disk (default catalog only)
+    auto delRes1 = client.Delete("/api/media/" + std::to_string(id1));
+    ASSERT_TRUE(delRes1);
+    EXPECT_EQ(delRes1->status, 200);
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(id1))->status, 404);
+    EXPECT_TRUE(std::filesystem::exists(f1)); // File still exists on disk
+
+    // 3. Single delete with delete_from_disk=true
+    auto delRes2 = client.Delete("/api/media/" + std::to_string(id2) + "?delete_from_disk=true");
+    ASSERT_TRUE(delRes2);
+    EXPECT_EQ(delRes2->status, 200);
+    auto delJson2 = nlohmann::json::parse(delRes2->body);
+    EXPECT_EQ(delJson2["deleted_from_disk"], true);
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(id2))->status, 404);
+    EXPECT_FALSE(std::filesystem::exists(f2)); // File deleted from disk
+
+    // 4. Batch delete with delete_from_disk: true
+    nlohmann::json bDelBody = {{"ids", {id3, id4}}, {"delete_from_disk", true}};
+    auto bDelRes = client.Post("/api/media/batch-delete", bDelBody.dump(), "application/json");
+    ASSERT_TRUE(bDelRes);
+    EXPECT_EQ(bDelRes->status, 200);
+    auto bDelJson = nlohmann::json::parse(bDelRes->body);
+    EXPECT_EQ(bDelJson["deleted_count"].get<int>(), 2);
+    EXPECT_EQ(bDelJson["deleted_from_disk"], true);
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(id3))->status, 404);
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(id4))->status, 404);
+    EXPECT_FALSE(std::filesystem::exists(f3)); // File deleted from disk
+    EXPECT_FALSE(std::filesystem::exists(f4)); // File deleted from disk
+}
+

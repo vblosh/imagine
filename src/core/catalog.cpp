@@ -306,12 +306,36 @@ Status Catalog::setGps(MediaId id, bool hasGps, double latitude, double longitud
     return db_->updateGps(id, hasGps, latitude, longitude, altitude);
 }
 
-Status Catalog::deleteMedia(MediaId id) {
+Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
     std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
-    return db_->deleteMedia(id);
+
+    std::string filePath;
+    if (deleteFromDisk) {
+        auto itemRes = db_->getMediaById(id);
+        if (!itemRes.isOk()) {
+            return itemRes.status();
+        }
+        filePath = resolvePhotoPath(itemRes.value().file_path);
+    }
+
+    Status s = db_->deleteMedia(id);
+    if (!s.isOk()) {
+        return s;
+    }
+
+    if (deleteFromDisk && !filePath.empty()) {
+        std::error_code ec;
+        if (!std::filesystem::remove(std::filesystem::u8path(filePath), ec)) {
+            if (ec) {
+                IMAGINE_LOG_WARN("Failed to delete file from disk: " + filePath + " (" + ec.message() + ")");
+            }
+        }
+    }
+
+    return Status::ok();
 }
 
 Status Catalog::addTag(MediaId id, const std::string& tagName, const std::string& category) {

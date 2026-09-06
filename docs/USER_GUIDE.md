@@ -369,8 +369,8 @@ The embedded C++ HTTP server provides a full REST API for developers and externa
 |---|---|---|
 | `GET` | `/api/media` | Query photos with filtering, sorting, and pagination |
 | `GET` | `/api/media/:id` | Get single photo details and EXIF |
-| `DELETE` | `/api/media/:id` | Delete photo from catalog database |
-| `POST` | `/api/media/batch-delete` | Batch delete photos (`{"ids": [1, 2, ...]}`) |
+| `DELETE` | `/api/media/:id` | Delete photo from catalog database (optional query `delete_from_disk=true`) |
+| `POST` | `/api/media/batch-delete` | Batch delete photos (`{"ids": [1, 2, ...], "delete_from_disk": false}`) |
 | `POST` | `/api/media/:id/rating` | Set star rating (`{"rating": 0-5}`) |
 | `POST` | `/api/media/:id/flag` | Set flag (`{"flag": -1\|0\|1}`) |
 | `POST` | `/api/media/:id/tags` | Attach tag (`{"name": "...", "category": "..."}`) |

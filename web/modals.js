@@ -546,6 +546,17 @@ export function openDeleteMediaModal(mediaIds) {
       ? 'Are you sure you want to delete this photo from the catalog?'
       : `Are you sure you want to delete ${count} selected photos from the catalog?`;
   }
+  if (dom.deleteFromDiskCheckbox) {
+    dom.deleteFromDiskCheckbox.checked = false;
+  }
+  if (dom.deleteMediaWarningText) {
+    dom.deleteMediaWarningText.textContent =
+      'This removes photo metadata, ratings, tags, and album associations from the catalog database. The original files on disk will not be deleted.';
+    dom.deleteMediaWarningText.style.color = 'var(--text-dim)';
+  }
+  if (dom.confirmDeleteMediaBtn) {
+    dom.confirmDeleteMediaBtn.textContent = 'Delete from Catalog';
+  }
   if (dom.deleteMediaModal) {
     dom.deleteMediaModal.style.display = 'flex';
   }
@@ -554,6 +565,17 @@ export function openDeleteMediaModal(mediaIds) {
 export function closeDeleteMediaModal() {
   if (dom.deleteMediaModal) {
     dom.deleteMediaModal.style.display = 'none';
+  }
+  if (dom.deleteFromDiskCheckbox) {
+    dom.deleteFromDiskCheckbox.checked = false;
+  }
+  if (dom.deleteMediaWarningText) {
+    dom.deleteMediaWarningText.textContent =
+      'This removes photo metadata, ratings, tags, and album associations from the catalog database. The original files on disk will not be deleted.';
+    dom.deleteMediaWarningText.style.color = 'var(--text-dim)';
+  }
+  if (dom.confirmDeleteMediaBtn) {
+    dom.confirmDeleteMediaBtn.textContent = 'Delete from Catalog';
   }
   pendingDeleteMediaIds = [];
 }
@@ -565,13 +587,14 @@ export async function submitDeleteMedia() {
   }
 
   const idsToDelete = [...pendingDeleteMediaIds];
+  const deleteFromDisk = !!(dom.deleteFromDiskCheckbox && dom.deleteFromDiskCheckbox.checked);
   const failedIds = [];
   try {
-    await api.post('/api/media/batch-delete', { ids: idsToDelete });
+    await api.post('/api/media/batch-delete', { ids: idsToDelete, delete_from_disk: deleteFromDisk });
   } catch (e) {
     for (const id of idsToDelete) {
       try {
-        await api.del(`/api/media/${id}`);
+        await api.del(`/api/media/${id}${deleteFromDisk ? '?delete_from_disk=true' : ''}`);
       } catch (err) {
         console.warn('Failed to delete media', id, err);
         failedIds.push(id);
@@ -581,6 +604,8 @@ export async function submitDeleteMedia() {
 
   if (failedIds.length > 0) {
     showToast(`${failedIds.length} photos could not be deleted`, 'error');
+  } else if (deleteFromDisk) {
+    showToast(`Deleted ${idsToDelete.length} photo${idsToDelete.length === 1 ? '' : 's'} from catalog and disk`, 'success');
   }
 
   const actuallyDeletedIds = idsToDelete.filter(id => !failedIds.includes(id));

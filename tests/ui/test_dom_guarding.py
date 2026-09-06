@@ -130,7 +130,9 @@ def test_setup_event_listeners_safe_with_missing_optional_elements(server, page:
             'closeDeleteMediaModalBtn',
             'cancelDeleteMediaBtn',
             'deleteMediaBackdrop',
-            'confirmDeleteMediaBtn'
+            'confirmDeleteMediaBtn',
+            'deleteFromDiskCheckbox',
+            'deleteMediaWarningText'
         ];
 
         for (const k of optionalKeys) {
