@@ -137,8 +137,8 @@ jobs:
           echo "### Clang + Sanitizers + UI Tests Completed :white_check_mark:" >> $GITHUB_STEP_SUMMARY
           echo "- **Compiler:** Clang (\`clang++\`)" >> $GITHUB_STEP_SUMMARY
           echo "- **Sanitizers:** AddressSanitizer & UndefinedBehaviorSanitizer (Clean, 0 errors/leaks)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Unit Tests:** 64 unit tests passed under ASan & UBSan" >> $GITHUB_STEP_SUMMARY
-          echo "- **UI Tests:** 53 deterministic Playwright browser tests passed" >> $GITHUB_STEP_SUMMARY
+          echo "- **Unit Tests:** 118 unit tests passed under ASan & UBSan" >> $GITHUB_STEP_SUMMARY
+          echo "- **UI Tests:** 126 deterministic Playwright browser tests passed" >> $GITHUB_STEP_SUMMARY
 
   windows-msvc:
     name: Windows Build & Tests (MSVC)
@@ -189,5 +189,5 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Compiler:** MSVC (\`cl.exe\`)"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Build Type:** Release"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Dependencies:** vcpkg manifest mode (OpenSSL, Zlib)"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Unit Tests:** 102 unit tests passed"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Unit Tests:** 118 unit tests passed"
 

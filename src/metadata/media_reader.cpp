@@ -1,5 +1,6 @@
 #include "imagine/metadata/media_reader.hpp"
 #include "imagine/common/logger.hpp"
+#include "imagine/common/types.hpp"
 #include <fstream>
 #include <filesystem>
 #include <chrono>
@@ -48,7 +49,7 @@ uint32_t readLe32(const uint8_t* p) {
 }
 
 std::string getExtensionLower(const std::string& path) {
-    std::filesystem::path p(path);
+    std::filesystem::path p = pathFromUtf8(path);
     std::string ext = p.extension().string();
     for (char& c : ext) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -58,9 +59,9 @@ std::string getExtensionLower(const std::string& path) {
 
 int64_t getFileModifiedTime(const std::string& filePath) {
     std::error_code ec;
-    auto lwt = std::filesystem::last_write_time(filePath, ec);
+    auto lwt = std::filesystem::last_write_time(pathFromUtf8(filePath), ec);
     if (!ec) {
-        auto sctp = std::chrono::file_clock::to_sys(lwt);
+        auto sctp = std::chrono::clock_cast<std::chrono::system_clock>(lwt);
         return std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
     }
     return 0;
@@ -187,7 +188,7 @@ Result<MediaFileInfo> MediaReader::readMetadata(const std::string& filePath) {
 // --- MP4 / MOV / M4V / M4A Parser ---
 
 Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         return Status::ioError("Unable to open MP4 file: " + filePath);
     }
@@ -400,7 +401,7 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
 // --- WebM / MKV Parser ---
 
 Result<MediaFileInfo> MediaReader::readWebm(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         return Status::ioError("Unable to open WebM/MKV file: " + filePath);
     }
@@ -569,7 +570,7 @@ Result<MediaFileInfo> MediaReader::readWebm(const std::string& filePath) {
 // --- AVI Parser ---
 
 Result<MediaFileInfo> MediaReader::readAvi(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         return Status::ioError("Unable to open AVI file: " + filePath);
     }
@@ -620,7 +621,7 @@ Result<MediaFileInfo> MediaReader::readAvi(const std::string& filePath) {
 // --- MP3 Parser (ID3v2 & MPEG audio frame headers) ---
 
 Result<MediaFileInfo> MediaReader::readMp3(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         return Status::ioError("Unable to open MP3 file: " + filePath);
     }
@@ -768,7 +769,7 @@ Result<MediaFileInfo> MediaReader::readMp3(const std::string& filePath) {
 // --- FLAC Parser ---
 
 Result<MediaFileInfo> MediaReader::readFlac(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         return Status::ioError("Unable to open FLAC file: " + filePath);
     }
@@ -872,7 +873,7 @@ Result<MediaFileInfo> MediaReader::readFlac(const std::string& filePath) {
 // --- WAV Parser ---
 
 Result<MediaFileInfo> MediaReader::readWav(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         return Status::ioError("Unable to open WAV file: " + filePath);
     }
@@ -923,7 +924,7 @@ Result<MediaFileInfo> MediaReader::readWav(const std::string& filePath) {
 // --- OGG Parser ---
 
 Result<MediaFileInfo> MediaReader::readOgg(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         return Status::ioError("Unable to open OGG file: " + filePath);
     }

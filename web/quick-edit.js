@@ -23,6 +23,8 @@ export const quickEditState = {
   originalImage: null,
   workingCanvas: null,
   workingCtx: null,
+  hasCropped: false,
+  imageLoadedPromise: null,
   rotation: 0,
   cropActive: false,
   cropRatio: "original",
@@ -156,6 +158,7 @@ export function openQuickEdit() {
   quickEditState.photoId = item.id;
   quickEditState.rotation = 0;
   quickEditState.cropActive = false;
+  quickEditState.hasCropped = false;
   quickEditState.smartFixActive = false;
   quickEditState.smartFixIntensity = 100;
   quickEditState.isComparing = false;
@@ -169,29 +172,54 @@ export function openQuickEdit() {
 
   updateQuickEditToolbarUI();
 
-  const setupWithImage = (imageEl) => {
-    quickEditState.originalImage = imageEl;
-    initWorkingCanvas(imageEl);
-    renderQuickEditCanvas();
-  };
+  const w = item.width || (dom.loupeImg && dom.loupeImg.naturalWidth) || 800;
+  const h = item.height || (dom.loupeImg && dom.loupeImg.naturalHeight) || 600;
 
-  if (dom.quickEditCanvas && item.width && item.height) {
-    dom.quickEditCanvas.width = item.width;
-    dom.quickEditCanvas.height = item.height;
+  const initialCanvas = document.createElement("canvas");
+  initialCanvas.width = w;
+  initialCanvas.height = h;
+  const initialCtx = initialCanvas.getContext("2d");
+
+  const cardImg = document.querySelector(`.photo-card[data-id="${item.id}"] img`);
+  if (cardImg && cardImg.complete && cardImg.naturalWidth > 0) {
+    initialCtx.drawImage(cardImg, 0, 0, w, h);
+  } else if (dom.loupeImg && dom.loupeImg.complete && dom.loupeImg.naturalWidth > 0) {
+    initialCtx.drawImage(dom.loupeImg, 0, 0, w, h);
   }
 
+  quickEditState.originalImage = initialCanvas;
+  quickEditState.workingCanvas = initialCanvas;
+  quickEditState.workingCtx = initialCtx;
+
+  renderQuickEditCanvas();
+
+  let resolveImageLoaded;
+  quickEditState.imageLoadedPromise = new Promise((resolve) => {
+    resolveImageLoaded = resolve;
+  });
+
+  let fullImageLoaded = false;
+  const onImageReady = (loadedImg) => {
+    if (fullImageLoaded) return;
+    if (!quickEditState.isOpen || quickEditState.photoId !== item.id) return;
+    fullImageLoaded = true;
+    quickEditState.originalImage = loadedImg;
+    if (!quickEditState.hasCropped) {
+      initWorkingCanvas(loadedImg);
+    }
+    renderQuickEditCanvas();
+    if (resolveImageLoaded) resolveImageLoaded(loadedImg);
+  };
+
   if (dom.loupeImg && dom.loupeImg.complete && dom.loupeImg.naturalWidth > 0 && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`)) {
-    setupWithImage(dom.loupeImg);
+    onImageReady(dom.loupeImg);
+  } else if (dom.loupeImg && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`)) {
+    dom.loupeImg.addEventListener("load", () => onImageReady(dom.loupeImg), { once: true });
   }
 
   const img = new Image();
   img.crossOrigin = "anonymous";
-  img.onload = () => {
-    if (!quickEditState.isOpen) return;
-    if (!quickEditState.originalImage) {
-      setupWithImage(img);
-    }
-  };
+  img.onload = () => onImageReady(img);
   img.src = `/api/photos/${item.id}/original`;
 }
 
@@ -207,6 +235,8 @@ export function closeQuickEdit(promptIfDirty = true) {
   quickEditState.isOpen = false;
   quickEditState.isDirty = false;
   quickEditState.cropActive = false;
+  quickEditState.hasCropped = false;
+  quickEditState.imageLoadedPromise = null;
 
   if (dom.loupeModal) dom.loupeModal.classList.remove("is-quick-editing");
   if (dom.loupeQuickEditBtn) dom.loupeQuickEditBtn.classList.remove("active");
@@ -408,6 +438,7 @@ export function applyCrop() {
   quickEditState.workingCtx = croppedCtx;
   quickEditState.rotation = 0;
   quickEditState.cropActive = false;
+  quickEditState.hasCropped = true;
   quickEditState.isDirty = true;
   quickEditState.smartFixLUT = null;
 
@@ -459,6 +490,7 @@ export function resetAllEdits() {
   initWorkingCanvas(quickEditState.originalImage);
   quickEditState.rotation = 0;
   quickEditState.cropActive = false;
+  quickEditState.hasCropped = false;
   quickEditState.smartFixActive = false;
   quickEditState.smartFixIntensity = 100;
   quickEditState.isDirty = false;
@@ -533,6 +565,15 @@ export function renderQuickEditCanvas() {
 
 export async function saveEdits(mode = "overwrite") {
   if (!quickEditState.isOpen || !dom.quickEditCanvas) return;
+
+  if (quickEditState.imageLoadedPromise) {
+    try {
+      await Promise.race([
+        quickEditState.imageLoadedPromise,
+        new Promise((res) => setTimeout(res, 2000)),
+      ]);
+    } catch (_) {}
+  }
 
   const id = quickEditState.photoId;
   const canvas = dom.quickEditCanvas;
