@@ -297,6 +297,9 @@ TEST(TypesTest, AlbumJsonSerialization) {
 TEST(TypesTest, CatalogStatsAndTimelineJsonSerialization) {
     CatalogStats stats;
     stats.total_media = 500;
+    stats.total_picks = 120;
+    stats.total_rejects = 30;
+    stats.total_not_rejects = 470;
     stats.total_size_bytes = 104857600;
     stats.total_tags = 25;
     stats.total_albums = 4;
@@ -306,6 +309,9 @@ TEST(TypesTest, CatalogStatsAndTimelineJsonSerialization) {
     nlohmann::json js = stats;
     CatalogStats ds = js.get<CatalogStats>();
     EXPECT_EQ(ds.total_media, 500);
+    EXPECT_EQ(ds.total_picks, 120);
+    EXPECT_EQ(ds.total_rejects, 30);
+    EXPECT_EQ(ds.total_not_rejects, 470);
     EXPECT_EQ(ds.total_size_bytes, 104857600);
     EXPECT_EQ(ds.total_tags, 25);
     EXPECT_EQ(ds.total_albums, 4);
@@ -315,6 +321,9 @@ TEST(TypesTest, CatalogStatsAndTimelineJsonSerialization) {
     nlohmann::json emptyJs = nlohmann::json::object();
     CatalogStats dsEmpty = emptyJs.get<CatalogStats>();
     EXPECT_EQ(dsEmpty.total_media, 0);
+    EXPECT_EQ(dsEmpty.total_picks, 0);
+    EXPECT_EQ(dsEmpty.total_rejects, 0);
+    EXPECT_EQ(dsEmpty.total_not_rejects, 0);
 
     TimelineEntry entry;
     entry.year = 2026;

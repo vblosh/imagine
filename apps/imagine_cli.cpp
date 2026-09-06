@@ -349,6 +349,12 @@ int handleList(int argc, char** argv) {
             criteria.search_text = argv[++i];
         } else if (arg == "--gps") {
             criteria.has_gps = true;
+        } else if (arg == "--flag" && i + 1 < argc) {
+            criteria.flag = static_cast<imagine::FlagState>(std::stoi(argv[++i]));
+        } else if (arg == "--not-flag" && i + 1 < argc) {
+            criteria.not_flag = static_cast<imagine::FlagState>(std::stoi(argv[++i]));
+        } else if (arg == "--not-rejects") {
+            criteria.not_flag = imagine::FlagState::Reject;
         } else if (arg == "--limit" && i + 1 < argc) {
             criteria.limit = std::stoi(argv[++i]);
         } else if (arg == "--offset" && i + 1 < argc) {
@@ -467,7 +473,10 @@ int handleStats(int argc, char** argv) {
               << "  Total Items:        " << s.total_media << "\n"
               << "    Photos:           " << s.total_photos << "\n"
               << "    Videos:           " << s.total_videos << "\n"
-              << "    Audio:            " << s.total_audio << "\n";
+              << "    Audio:            " << s.total_audio << "\n"
+              << "    Picks:            " << s.total_picks << "\n"
+              << "    Rejects:          " << s.total_rejects << "\n"
+              << "    Not Rejects:      " << s.total_not_rejects << "\n";
     if (s.total_duration > 0) {
         int totalSec = static_cast<int>(s.total_duration);
         int hrs = totalSec / 3600;

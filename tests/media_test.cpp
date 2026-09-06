@@ -480,6 +480,9 @@ TEST(MediaTest, DatabaseV2CrudAndStats) {
     EXPECT_EQ(st.total_photos, 1);
     EXPECT_EQ(st.total_videos, 1);
     EXPECT_EQ(st.total_audio, 1);
+    EXPECT_EQ(st.total_picks, 0);
+    EXPECT_EQ(st.total_rejects, 0);
+    EXPECT_EQ(st.total_not_rejects, 3);
     EXPECT_NEAR(st.total_duration, 225.5, 0.1);
 }
 

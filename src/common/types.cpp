@@ -170,6 +170,9 @@ void to_json(nlohmann::json& j, const CatalogStats& s) {
         {"total_photos", s.total_photos},
         {"total_videos", s.total_videos},
         {"total_audio", s.total_audio},
+        {"total_picks", s.total_picks},
+        {"total_rejects", s.total_rejects},
+        {"total_not_rejects", s.total_not_rejects},
         {"total_duration", s.total_duration},
         {"total_size_bytes", s.total_size_bytes},
         {"total_tags", s.total_tags},
@@ -184,6 +187,9 @@ void from_json(const nlohmann::json& j, CatalogStats& s) {
     s.total_photos = j.value("total_photos", int64_t{0});
     s.total_videos = j.value("total_videos", int64_t{0});
     s.total_audio = j.value("total_audio", int64_t{0});
+    s.total_picks = j.value("total_picks", int64_t{0});
+    s.total_rejects = j.value("total_rejects", int64_t{0});
+    s.total_not_rejects = j.value("total_not_rejects", int64_t{0});
     s.total_duration = j.value("total_duration", 0.0);
     s.total_size_bytes = j.value("total_size_bytes", int64_t{0});
     s.total_tags = j.value("total_tags", int64_t{0});

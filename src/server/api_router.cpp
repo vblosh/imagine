@@ -369,6 +369,25 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
             criteria.flag = static_cast<FlagState>(val);
         }
+        if (req.has_param("not_flag")) {
+            int val = 0;
+            if (!parseInt(req.get_param_value("not_flag"), val) || val < -1 || val > 1) {
+                sendError(res, "Query parameter 'not_flag' must be -1, 0, or 1", 400);
+                return;
+            }
+            criteria.not_flag = static_cast<FlagState>(val);
+        }
+        if (req.has_param("exclude_rejects")) {
+            std::string ex = req.get_param_value("exclude_rejects");
+            if (ex == "1" || ex == "true") {
+                criteria.not_flag = FlagState::Reject;
+            }
+        }
+        if (criteria.flag.has_value() && criteria.not_flag.has_value() &&
+            criteria.flag == criteria.not_flag) {
+            sendError(res, "'flag' and 'not_flag' cannot have the same value", 400);
+            return;
+        }
         if (req.has_param("media_type")) {
             std::string mt = req.get_param_value("media_type");
             if (mt != "photo" && mt != "video" && mt != "audio") {

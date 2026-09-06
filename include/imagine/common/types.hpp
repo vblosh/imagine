@@ -166,6 +166,9 @@ struct CatalogStats {
     int64_t total_photos{0};
     int64_t total_videos{0};
     int64_t total_audio{0};
+    int64_t total_picks{0};
+    int64_t total_rejects{0};
+    int64_t total_not_rejects{0};
     double total_duration{0.0};
     int64_t total_size_bytes{0};
     int64_t total_tags{0};

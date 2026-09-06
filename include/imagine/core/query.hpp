@@ -16,6 +16,7 @@ struct QueryCriteria {
     std::optional<int32_t> min_rating{std::nullopt};
     std::optional<int32_t> max_rating{std::nullopt};
     std::optional<FlagState> flag{std::nullopt};
+    std::optional<FlagState> not_flag{std::nullopt};
     std::vector<TagId> tag_ids;
     std::optional<AlbumId> album_id{std::nullopt};
     std::string camera_make;
@@ -62,6 +63,7 @@ public:
     QueryBuilder& minRating(int32_t rating);
     QueryBuilder& maxRating(int32_t rating);
     QueryBuilder& flag(FlagState flag);
+    QueryBuilder& notFlag(FlagState flag);
     QueryBuilder& addTag(TagId tagId);
     QueryBuilder& setTags(std::vector<TagId> tagIds);
     QueryBuilder& album(AlbumId albumId);

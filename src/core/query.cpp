@@ -27,6 +27,9 @@ void to_json(nlohmann::json& j, const QueryCriteria& c) {
     if (c.flag.has_value()) {
         j["flag"] = static_cast<int8_t>(*c.flag);
     }
+    if (c.not_flag.has_value()) {
+        j["not_flag"] = static_cast<int8_t>(*c.not_flag);
+    }
     if (c.album_id.has_value()) {
         j["album_id"] = *c.album_id;
     }
@@ -99,6 +102,9 @@ void from_json(const nlohmann::json& j, QueryCriteria& c) {
     if (j.contains("flag") && j["flag"].is_number()) {
         c.flag = static_cast<FlagState>(j["flag"].get<int8_t>());
     }
+    if (j.contains("not_flag") && j["not_flag"].is_number()) {
+        c.not_flag = static_cast<FlagState>(j["not_flag"].get<int8_t>());
+    }
     if (j.contains("album_id") && j["album_id"].is_number()) {
         c.album_id = j["album_id"].get<AlbumId>();
     }
@@ -155,6 +161,11 @@ QueryBuilder& QueryBuilder::maxRating(int32_t rating) {
 
 QueryBuilder& QueryBuilder::flag(FlagState flag) {
     criteria_.flag = flag;
+    return *this;
+}
+
+QueryBuilder& QueryBuilder::notFlag(FlagState flag) {
+    criteria_.not_flag = flag;
     return *this;
 }
 
@@ -256,6 +267,11 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
     if (criteria_.flag.has_value()) {
         clauses.push_back("flag = ?");
         params.push_back(std::to_string(static_cast<int32_t>(*criteria_.flag)));
+    }
+
+    if (criteria_.not_flag.has_value()) {
+        clauses.push_back("flag != ?");
+        params.push_back(std::to_string(static_cast<int32_t>(*criteria_.not_flag)));
     }
 
     for (TagId tagId : criteria_.tag_ids) {

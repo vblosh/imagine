@@ -381,6 +381,32 @@ TEST_F(ServerTest, BatchRatingFlagTagsGps) {
     EXPECT_TRUE(get1["exif"]["has_gps"].get<bool>());
     EXPECT_NEAR(get1["exif"]["latitude"].get<double>(), 48.8566, 0.0001);
 
+    // 4b. Filter not_flag and stats
+    nlohmann::json singleFlag = {{"flag", -1}};
+    auto setRejectRes = client.Post("/api/media/" + std::to_string(id2) + "/flag", singleFlag.dump(), "application/json");
+    ASSERT_TRUE(setRejectRes);
+    EXPECT_EQ(setRejectRes->status, 200);
+
+    auto notRejectRes = client.Get("/api/media?not_flag=-1");
+    ASSERT_TRUE(notRejectRes);
+    EXPECT_EQ(notRejectRes->status, 200);
+    auto notRejectJson = nlohmann::json::parse(notRejectRes->body);
+    EXPECT_EQ(notRejectJson["total"].get<int>(), 1);
+    EXPECT_EQ(notRejectJson["items"][0]["id"].get<MediaId>(), id1);
+
+    auto exRejectRes = client.Get("/api/media?exclude_rejects=1");
+    ASSERT_TRUE(exRejectRes);
+    EXPECT_EQ(exRejectRes->status, 200);
+    auto exRejectJson = nlohmann::json::parse(exRejectRes->body);
+    EXPECT_EQ(exRejectJson["total"].get<int>(), 1);
+
+    auto statsRes = client.Get("/api/stats");
+    ASSERT_TRUE(statsRes);
+    auto statsJson = nlohmann::json::parse(statsRes->body);
+    EXPECT_EQ(statsJson["total_picks"].get<int>(), 1);
+    EXPECT_EQ(statsJson["total_rejects"].get<int>(), 1);
+    EXPECT_EQ(statsJson["total_not_rejects"].get<int>(), 1);
+
     // 5. Geocode route parameter validation
     auto geoNoQ = client.Get("/api/geocode");
     ASSERT_TRUE(geoNoQ);
@@ -992,6 +1018,9 @@ TEST_F(ServerTest, QueryParameterStrictValidation) {
     // Invalid flag query
     EXPECT_EQ(client.Get("/api/media?flag=5")->status, 400);
     EXPECT_EQ(client.Get("/api/media?flag=not_a_num")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?not_flag=5")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?not_flag=not_a_num")->status, 400);
+    EXPECT_EQ(client.Get("/api/media?flag=1&not_flag=1")->status, 400);
 }
 
 TEST_F(ServerTest, ApiTokenAuthentication) {

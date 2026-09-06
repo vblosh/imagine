@@ -99,6 +99,27 @@ TEST_F(QueryTest, FilterRatingAndFlag) {
     EXPECT_EQ(res.value().items[0].id, id1);
 }
 
+TEST_F(QueryTest, FilterNotFlag) {
+    // id1: Pick (1), id2: Unflagged (0), id3: Reject (-1)
+    // Filter not Reject (-1) should return id1 and id2
+    QueryCriteria criteria;
+    criteria.not_flag = FlagState::Reject;
+
+    auto res = QueryBuilder::execute(db, criteria);
+    ASSERT_TRUE(res.isOk());
+    EXPECT_EQ(res.value().total_count, 2);
+    EXPECT_EQ(res.value().items.size(), 2);
+    EXPECT_NE(res.value().items[0].id, id3);
+    EXPECT_NE(res.value().items[1].id, id3);
+
+    // Also test fluent builder
+    QueryBuilder builder;
+    builder.notFlag(FlagState::Reject);
+    auto resBuilder = builder.execute(db);
+    ASSERT_TRUE(resBuilder.isOk());
+    EXPECT_EQ(resBuilder.value().total_count, 2);
+}
+
 TEST_F(QueryTest, FilterTags) {
     QueryCriteria criteria;
     criteria.tag_ids = {tagNature, tagPortrait};

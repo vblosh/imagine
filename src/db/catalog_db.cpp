@@ -959,6 +959,21 @@ Result<CatalogStats> CatalogDb::getStats() {
                 }
             }
         }
+
+        auto flagRes = conn_.prepare("SELECT flag, COUNT(*) FROM media_items GROUP BY flag;");
+        if (flagRes.isOk()) {
+            auto fStmt = std::move(flagRes.value());
+            while (fStmt.step() == StepResult::Row) {
+                int64_t flagVal = fStmt.getInt64(0);
+                int64_t cnt = fStmt.getInt64(1);
+                if (flagVal == 1) {
+                    s.total_picks += cnt;
+                } else if (flagVal == -1) {
+                    s.total_rejects += cnt;
+                }
+            }
+        }
+        s.total_not_rejects = s.total_media - s.total_rejects;
     }
 
     // tags count
