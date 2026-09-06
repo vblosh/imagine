@@ -1,5 +1,6 @@
 {
   "dependencies": [
+    "libjpeg-turbo",
     "openssl",
     "zlib"
   ]
