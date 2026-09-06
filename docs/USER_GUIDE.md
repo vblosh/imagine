@@ -147,8 +147,9 @@ In the top right bar, slide the thumbnail zoom controller:
 ### The Left Navigation Sidebar
 - **Quick Filters**:
   - **All Media**: Resets all filters and shows the entire catalog.
-  - **Picks**: Displays only photos marked with the green Pick flag.
-  - **Rejects**: Displays photos marked with the red Reject flag (ideal for cleaning up bad shots).
+  - **Picks**: Displays only photos marked with the green Pick flag (includes live item count).
+  - **Rejects**: Displays photos marked with the red Reject flag (includes live item count, ideal for cleaning up bad shots).
+  - **Not Rejects**: Displays all items except rejected ones (`flag != -1`, includes live item count) — ideal for browsing working sets without deleted/rejected photos.
   - **Unrated**: Displays photos that haven't received star ratings yet.
 - **Albums**: Custom user collections. Click any album to view its contents.
 - **Keyword Tags**: Categorized tree of tags (People, Places, Events, Keywords). Click any tag to filter.

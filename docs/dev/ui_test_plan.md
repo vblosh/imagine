@@ -150,8 +150,9 @@ Helper utilities for programmatically creating:
 * **Features Covered**:
   - Quick filters in sidebar:
     - "All Media" (`#navAllMedia`)
-    - "Picks" (`#navPicks` - items with flag = 1)
-    - "Rejects" (`#navRejects` - items with flag = -1)
+    - "Picks" (`#navPicks` - items with flag = 1, with `#totalPicksCount`)
+    - "Rejects" (`#navRejects` - items with flag = -1, with `#totalRejectsCount`)
+    - "Not Rejects" (`#navNotRejects` - items with flag != -1, with `#totalNotRejectsCount`)
     - "Unrated" (`#navUnrated` - items with rating = 0)
   - View tabs in top bar:
     - "Media", "People", "Places", "Events".
