@@ -23,6 +23,7 @@ Options:
 import os
 import sys
 import time
+import struct
 import argparse
 import sqlite3
 import hashlib
@@ -127,6 +128,54 @@ CREATE TABLE IF NOT EXISTS album_media (
 
 CREATE INDEX IF NOT EXISTS idx_album_media_media ON album_media(media_id);
 """
+
+def get_exif_orientation(filepath):
+    try:
+        with open(filepath, 'rb') as f:
+            data = f.read(65536)
+            if not data or len(data) < 16:
+                return 1
+
+            idx = data.find(b'Exif\x00\x00')
+            if idx != -1:
+                tiff_start = idx + 6
+                byte_order = data[tiff_start:tiff_start+2]
+                endian = '<' if byte_order == b'II' else '>'
+                magic = struct.unpack(endian + 'H', data[tiff_start+2:tiff_start+4])[0]
+                if magic == 42:
+                    offset = struct.unpack(endian + 'I', data[tiff_start+4:tiff_start+8])[0]
+                    ifd_start = tiff_start + offset
+                    if ifd_start + 2 <= len(data):
+                        num_entries = struct.unpack(endian + 'H', data[ifd_start:ifd_start+2])[0]
+                        for i in range(num_entries):
+                            entry_offset = ifd_start + 2 + i * 12
+                            if entry_offset + 12 > len(data):
+                                break
+                            tag = struct.unpack(endian + 'H', data[entry_offset:entry_offset+2])[0]
+                            if tag == 0x0112:
+                                val = struct.unpack(endian + 'H', data[entry_offset+8:entry_offset+10])[0]
+                                if 1 <= val <= 8:
+                                    return val
+                                return 1
+
+            if data.startswith(b'II*\x00') or data.startswith(b'MM\x00*'):
+                endian = '<' if data[:2] == b'II' else '>'
+                offset = struct.unpack(endian + 'I', data[4:8])[0]
+                if offset + 2 <= len(data):
+                    num_entries = struct.unpack(endian + 'H', data[offset:offset+2])[0]
+                    for i in range(num_entries):
+                        entry_offset = offset + 2 + i * 12
+                        if entry_offset + 12 > len(data):
+                            break
+                        tag = struct.unpack(endian + 'H', data[entry_offset:entry_offset+2])[0]
+                        if tag == 0x0112:
+                            val = struct.unpack(endian + 'H', data[entry_offset+8:entry_offset+10])[0]
+                            if 1 <= val <= 8:
+                                return val
+                            return 1
+    except Exception:
+        pass
+    return 1
 
 def compute_file_sha256(filepath):
     try:
@@ -456,10 +505,12 @@ def run_migration():
     hash_t0 = time.time()
 
     def process_hash(item):
+        exif_o = get_exif_orientation(item['full_path'])
         if args.quick_hash:
-            return item['stored_path'], compute_quick_hash(item['full_path'], item['file_size'], item['mtime'])
+            chash = compute_quick_hash(item['full_path'], item['file_size'], item['mtime'])
         else:
-            return item['stored_path'], compute_file_sha256(item['full_path'])
+            chash = compute_file_sha256(item['full_path'])
+        return item['stored_path'], chash, exif_o
 
     hash_map = {}
     total_to_hash = len(items_to_process)
@@ -467,8 +518,8 @@ def run_migration():
     last_print = time.time()
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        for stored_p, chash in executor.map(process_hash, items_to_process, chunksize=100):
-            hash_map[stored_p] = chash
+        for stored_p, chash, exif_o in executor.map(process_hash, items_to_process, chunksize=100):
+            hash_map[stored_p] = (chash, exif_o)
             completed_hashes += 1
             if time.time() - last_print > 3.0 or completed_hashes == total_to_hash:
                 pct = (completed_hashes / max(total_to_hash, 1)) * 100
@@ -480,7 +531,9 @@ def run_migration():
     print(f"\n  Hashing completed in {time.time() - hash_t0:.2f} seconds.")
 
     for item in items_to_process:
-        item['content_hash'] = hash_map[item['stored_path']]
+        chash, exif_o = hash_map[item['stored_path']]
+        item['content_hash'] = chash
+        item['orientation'] = exif_o
 
     # Step 6: Write to Imagine Database
     if args.dry_run:
@@ -530,6 +583,7 @@ def run_migration():
             item['flag'],
             item['camera_make'],
             item['camera_model'],
+            item['orientation'],
             item['has_gps'],
             item['latitude'],
             item['longitude'],
@@ -542,11 +596,11 @@ def run_migration():
         INSERT INTO media_items (
             file_path, file_name, file_size, file_modified_time, content_hash,
             date_taken, date_taken_str, rating, flag, camera_make, camera_model,
-            has_gps, latitude, longitude, created_at, updated_at, caption
+            orientation, has_gps, latitude, longitude, created_at, updated_at, caption
         ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?, ?
         )
     """
     im_cur.executemany(insert_media_sql, media_batch)
