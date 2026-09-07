@@ -453,6 +453,42 @@ TEST_F(ServerTest, BatchRatingFlagTagsGps) {
     auto emptyArr = nlohmann::json::parse(geoEmptyQ->body);
     EXPECT_TRUE(emptyArr.is_array());
     EXPECT_EQ(emptyArr.size(), 0u);
+
+    // 6. Batch date
+    nlohmann::json batchDateBody = {{"ids", {id1, id2}}, {"date_taken", 1700000000}};
+    auto bDateRes = client.Post("/api/media/batch-date", batchDateBody.dump(), "application/json");
+    ASSERT_TRUE(bDateRes);
+    EXPECT_EQ(bDateRes->status, 200);
+    auto bDateJson = nlohmann::json::parse(bDateRes->body);
+    EXPECT_EQ(bDateJson["updated_count"].get<int>(), 2);
+
+    get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
+    get2 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id2))->body);
+    EXPECT_EQ(get1["date_taken"].get<int64_t>(), 1700000000);
+    EXPECT_EQ(get2["date_taken"].get<int64_t>(), 1700000000);
+
+    // Batch date shift
+    nlohmann::json shiftDateBody = {{"ids", {id1, id2}}, {"shift_seconds", 3600}};
+    auto sDateRes = client.Post("/api/media/batch-date", shiftDateBody.dump(), "application/json");
+    ASSERT_TRUE(sDateRes);
+    EXPECT_EQ(sDateRes->status, 200);
+    get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
+    get2 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id2))->body);
+    EXPECT_EQ(get1["date_taken"].get<int64_t>(), 1700003600);
+    EXPECT_EQ(get2["date_taken"].get<int64_t>(), 1700003600);
+
+    // Batch date with items array
+    nlohmann::json itemsDateBody = {{"items", {
+        {{"id", id1}, {"date_taken", 1700010000}},
+        {{"id", id2}, {"date_taken", 1700020000}}
+    }}};
+    auto iDateRes = client.Post("/api/media/batch-date", itemsDateBody.dump(), "application/json");
+    ASSERT_TRUE(iDateRes);
+    EXPECT_EQ(iDateRes->status, 200);
+    get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
+    get2 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id2))->body);
+    EXPECT_EQ(get1["date_taken"].get<int64_t>(), 1700010000);
+    EXPECT_EQ(get2["date_taken"].get<int64_t>(), 1700020000);
 }
 
 TEST_F(ServerTest, StaticFilesAndSpaRouting) {

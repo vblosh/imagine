@@ -678,11 +678,14 @@ export function handleCardSelection(id, event) {
 export function updateBatchBar() {
   if (!dom.batchActionBar) return;
   const count = state.selectedIds.size;
+  const sortSelector = document.querySelector('.sort-selector');
   if (count > 1) {
     dom.batchActionBar.style.display = 'flex';
     if (dom.batchSelectedCount) dom.batchSelectedCount.textContent = `${count} selected`;
+    if (sortSelector) sortSelector.style.display = 'none';
   } else {
     dom.batchActionBar.style.display = 'none';
+    if (sortSelector) sortSelector.style.display = '';
   }
 }
 
@@ -1169,4 +1172,46 @@ export function toggleFlagsForIds(ids, targetFlag) {
   const items = ids.map(id => state.mediaItems.find(m => m.id === id)).filter(Boolean);
   const allHave = items.length > 0 && items.every(m => m.flag === targetFlag);
   return batchUpdateFlags(ids, allHave ? 0 : targetFlag);
+}
+
+export async function batchUpdateDates(updates) {
+  if (!updates || updates.length === 0) return;
+  const prevDates = new Map();
+  updates.forEach(({ id, date_taken, date_taken_str }) => {
+    const item = state.mediaItems.find(m => m.id === id);
+    if (item) {
+      prevDates.set(id, {
+        date_taken: item.date_taken,
+        exif_date_taken: item.exif?.date_taken,
+        date_taken_str: item.exif?.date_taken_str
+      });
+      item.date_taken = date_taken;
+      if (item.exif) {
+        item.exif.date_taken = date_taken;
+        if (date_taken_str) item.exif.date_taken_str = date_taken_str;
+      }
+    }
+  });
+
+  try {
+    try {
+      await api.post('/api/media/batch-date', { items: updates });
+    } catch (batchErr) {
+      console.warn('Batch date API call failed, falling back to individual date calls:', batchErr);
+      await Promise.all(updates.map(u => api.post(`/api/media/${u.id}/date`, { date_taken: u.date_taken })));
+    }
+  } catch (err) {
+    console.error('Failed to batch update dates:', err);
+    prevDates.forEach((old, id) => {
+      const item = state.mediaItems.find(m => m.id === id);
+      if (item) {
+        item.date_taken = old.date_taken;
+        if (item.exif) {
+          item.exif.date_taken = old.exif_date_taken;
+          item.exif.date_taken_str = old.date_taken_str;
+        }
+      }
+    });
+    throw err;
+  }
 }

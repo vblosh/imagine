@@ -120,7 +120,16 @@ import {
   closeDeleteMediaModal,
   submitDeleteMedia,
   closeDeleteTagModal,
-  submitDeleteTag
+  submitDeleteTag,
+  openBatchDateModal,
+  closeBatchDateModal,
+  submitBatchDateChange,
+  onBatchDateInputChange,
+  onBatchDateShiftHoursChange,
+  adjustBatchDateShift,
+  onBatchDateTimezoneSelectChange,
+  onBatchDateTzCalcChange,
+  updateBatchDatePreview
 } from './modals.js';
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
 
@@ -710,6 +719,12 @@ export function setupEventListeners() {
     });
   }
 
+  if (dom.batchDateBtn) {
+    dom.batchDateBtn.addEventListener('click', () => {
+      openBatchDateModal(Array.from(state.selectedIds));
+    });
+  }
+
   if (dom.inspectorDeleteBtn) {
     dom.inspectorDeleteBtn.addEventListener('click', () => {
       if (state.selectedIds.size > 0) {
@@ -986,6 +1001,39 @@ export function setupEventListeners() {
   if (dom.cancelDeleteTagBtn) dom.cancelDeleteTagBtn.addEventListener('click', closeDeleteTagModal);
   if (dom.deleteTagBackdrop) dom.deleteTagBackdrop.addEventListener('click', closeDeleteTagModal);
   if (dom.confirmDeleteTagBtn) dom.confirmDeleteTagBtn.addEventListener('click', submitDeleteTag);
+
+  // Batch Change Date Modal
+  if (dom.closeBatchDateModalBtn) dom.closeBatchDateModalBtn.addEventListener('click', closeBatchDateModal);
+  if (dom.cancelBatchDateBtn) dom.cancelBatchDateBtn.addEventListener('click', closeBatchDateModal);
+  if (dom.batchDateBackdrop) dom.batchDateBackdrop.addEventListener('click', closeBatchDateModal);
+  if (dom.confirmBatchDateBtn) dom.confirmBatchDateBtn.addEventListener('click', submitBatchDateChange);
+
+  if (dom.batchDateInput) {
+    dom.batchDateInput.addEventListener('input', onBatchDateInputChange);
+  }
+  if (dom.batchDateShiftHours) {
+    dom.batchDateShiftHours.addEventListener('input', onBatchDateShiftHoursChange);
+  }
+  if (dom.shiftMinus24Btn) dom.shiftMinus24Btn.addEventListener('click', () => adjustBatchDateShift(-24));
+  if (dom.shiftMinus1Btn) dom.shiftMinus1Btn.addEventListener('click', () => adjustBatchDateShift(-1));
+  if (dom.shiftPlus1Btn) dom.shiftPlus1Btn.addEventListener('click', () => adjustBatchDateShift(1));
+  if (dom.shiftPlus24Btn) dom.shiftPlus24Btn.addEventListener('click', () => adjustBatchDateShift(24));
+
+  if (dom.batchDateTimezoneSelect) {
+    dom.batchDateTimezoneSelect.addEventListener('change', onBatchDateTimezoneSelectChange);
+  }
+  if (dom.batchDateTzFrom) {
+    dom.batchDateTzFrom.addEventListener('change', onBatchDateTzCalcChange);
+  }
+  if (dom.batchDateTzTo) {
+    dom.batchDateTzTo.addEventListener('change', onBatchDateTzCalcChange);
+  }
+  if (dom.batchDateModeShift) {
+    dom.batchDateModeShift.addEventListener('change', updateBatchDatePreview);
+  }
+  if (dom.batchDateModeExact) {
+    dom.batchDateModeExact.addEventListener('change', updateBatchDatePreview);
+  }
 
   setupResizablePanels();
   setupInspectorInlineEditing();

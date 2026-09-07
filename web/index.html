@@ -240,7 +240,8 @@
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> Delete
             </button>
             <button class="btn btn-sm" id="batchAddTagBtn">Add Tag</button>
-            <button class="btn btn-sm" id="batchAddAlbumBtn">Add to Album</button>
+            <button class="btn btn-sm" id="batchAddAlbumBtn">Album</button>
+            <button class="btn btn-sm" id="batchDateBtn">Date</button>
             <button class="btn btn-sm btn-secondary" id="batchClearBtn">Deselect</button>
           </div>
         </div>
@@ -1000,6 +1001,211 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" id="cancelDeleteTagBtn">Cancel</button>
           <button class="btn btn-danger" id="confirmDeleteTagBtn">Delete Tag</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Change Date Modal Dialog -->
+    <div class="modal" id="batchDateModal" style="display: none;">
+      <div class="modal-backdrop" id="batchDateBackdrop"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="16" y1="2" x2="16" y2="6"></line>
+              <line x1="8" y1="2" x2="8" y2="6"></line>
+              <line x1="3" y1="10" x2="21" y2="10"></line>
+            </svg>
+            <h3>Change Date</h3>
+          </div>
+          <button class="btn-icon-sm" id="closeBatchDateModalBtn" title="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="batchDateTargetCount" style="margin-bottom: 2px; font-size: 13px; color: var(--text-secondary);">
+            Adjust date &amp; time for selected photos.
+          </p>
+
+          <div id="batchDateRefInfo" class="batch-date-ref-box">
+            <div><span class="batch-date-label">Reference photo:</span> <span id="batchDateRefName" class="batch-date-val">-</span></div>
+            <div><span class="batch-date-label">Original date:</span> <span id="batchDateRefOriginal" class="batch-date-val">-</span></div>
+          </div>
+
+          <!-- Date / Time Input -->
+          <div class="form-group">
+            <label for="batchDateInput">Date &amp; Time (UTC):</label>
+            <input type="datetime-local" id="batchDateInput" class="form-control" />
+          </div>
+
+          <!-- Shift Hours Section -->
+          <div class="form-group">
+            <label for="batchDateShiftHours">Shift hours:</label>
+            <div class="batch-date-shift-row">
+              <input type="number" id="batchDateShiftHours" class="form-control" style="width: 90px;" step="any" value="0" />
+              <span class="batch-date-unit">hours</span>
+              <div class="batch-date-quick-btns">
+                <button type="button" class="btn btn-sm btn-secondary" id="shiftMinus24Btn" title="Shift -24 hours">-24h</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="shiftMinus1Btn" title="Shift -1 hour">-1h</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="shiftPlus1Btn" title="Shift +1 hour">+1h</button>
+                <button type="button" class="btn btn-sm btn-secondary" id="shiftPlus24Btn" title="Shift +24 hours">+24h</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Time Zone Adjust Section -->
+          <div class="form-group">
+            <label for="batchDateTimezoneSelect">Time Zone Adjust:</label>
+            <select id="batchDateTimezoneSelect" class="form-control">
+              <option value="0">No time zone adjustment (0 hours)</option>
+              <optgroup label="Positive Offsets (East / Ahead)">
+                <option value="1">+1 hour (UTC+1: London BST, Paris CET, Berlin, Rome)</option>
+                <option value="2">+2 hours (UTC+2: Paris CEST, Cairo, Athens, Helsinki, Kyiv)</option>
+                <option value="3">+3 hours (UTC+3: Moscow, Istanbul, Riyadh, Nairobi, Baghdad)</option>
+                <option value="3.5">+3:30 hours (UTC+3:30: Tehran)</option>
+                <option value="4">+4 hours (UTC+4: Dubai, Baku, Tbilisi, Yerevan)</option>
+                <option value="4.5">+4:30 hours (UTC+4:30: Kabul)</option>
+                <option value="5">+5 hours (UTC+5: Karachi, Tashkent, Yekaterinburg)</option>
+                <option value="5.5">+5:30 hours (UTC+5:30: India IST, Colombo)</option>
+                <option value="5.75">+5:45 hours (UTC+5:45: Kathmandu)</option>
+                <option value="6">+6 hours (UTC+6: Dhaka, Almaty, Omsk)</option>
+                <option value="6.5">+6:30 hours (UTC+6:30: Yangon)</option>
+                <option value="7">+7 hours (UTC+7: Bangkok, Hanoi, Jakarta, Novosibirsk)</option>
+                <option value="8">+8 hours (UTC+8: Beijing, Singapore, Hong Kong, Perth, Taipei)</option>
+                <option value="9">+9 hours (UTC+9: Tokyo, Seoul, Irkutsk)</option>
+                <option value="9.5">+9:30 hours (UTC+9:30: Adelaide, Darwin)</option>
+                <option value="10">+10 hours (UTC+10: Sydney, Melbourne, Brisbane, Vladivostok)</option>
+                <option value="11">+11 hours (UTC+11: Solomon Islands, Magadan)</option>
+                <option value="12">+12 hours (UTC+12: Auckland NZST, Fiji, Kamchatka)</option>
+                <option value="13">+13 hours (UTC+13: Samoa, Tonga)</option>
+                <option value="14">+14 hours (UTC+14: Kiritimati)</option>
+              </optgroup>
+              <optgroup label="Negative Offsets (West / Behind)">
+                <option value="-1">-1 hour (UTC-1: Azores, Cape Verde)</option>
+                <option value="-2">-2 hours (UTC-2: South Georgia, Fernando de Noronha)</option>
+                <option value="-3">-3 hours (UTC-3: São Paulo, Buenos Aires, Montevideo)</option>
+                <option value="-3.5">-3:30 hours (UTC-3:30: Newfoundland)</option>
+                <option value="-4">-4 hours (UTC-4: New York EDT, Santiago, Halifax, Caracas)</option>
+                <option value="-5">-5 hours (UTC-5: New York EST, Chicago CDT, Toronto, Bogota, Lima)</option>
+                <option value="-6">-6 hours (UTC-6: Chicago CST, Denver MDT, Mexico City)</option>
+                <option value="-7">-7 hours (UTC-7: Denver MST, Los Angeles PDT, Phoenix)</option>
+                <option value="-8">-8 hours (UTC-8: Los Angeles PST, Vancouver, Anchorage AKDT)</option>
+                <option value="-9">-9 hours (UTC-9: Anchorage AKST)</option>
+                <option value="-10">-10 hours (UTC-10: Honolulu HST)</option>
+                <option value="-11">-11 hours (UTC-11: American Samoa, Niue)</option>
+                <option value="-12">-12 hours (UTC-12: Baker Island)</option>
+              </optgroup>
+            </select>
+          </div>
+
+          <!-- Time Zone Calculator (From -> To) -->
+          <div class="batch-date-tz-calc">
+            <span class="batch-date-calc-title">Or calculate from time zones:</span>
+            <div class="batch-date-tz-row">
+              <div class="batch-date-tz-col">
+                <label for="batchDateTzFrom">Camera TZ:</label>
+                <select id="batchDateTzFrom" class="form-control batch-date-tz-mini">
+                  <option value="-12">UTC-12</option>
+                  <option value="-11">UTC-11</option>
+                  <option value="-10">UTC-10 (HST)</option>
+                  <option value="-9">UTC-9 (AKST)</option>
+                  <option value="-8">UTC-8 (PST)</option>
+                  <option value="-7">UTC-7 (MST)</option>
+                  <option value="-6">UTC-6 (CST)</option>
+                  <option value="-5">UTC-5 (EST)</option>
+                  <option value="-4">UTC-4 (EDT/AST)</option>
+                  <option value="-3">UTC-3 (ART/BRT)</option>
+                  <option value="-2">UTC-2</option>
+                  <option value="-1">UTC-1</option>
+                  <option value="0" selected>UTC+0 (GMT)</option>
+                  <option value="1">UTC+1 (CET/BST)</option>
+                  <option value="2">UTC+2 (CEST/EET)</option>
+                  <option value="3">UTC+3 (MSK)</option>
+                  <option value="3.5">UTC+3:30</option>
+                  <option value="4">UTC+4 (GST)</option>
+                  <option value="4.5">UTC+4:30</option>
+                  <option value="5">UTC+5 (PKT)</option>
+                  <option value="5.5">UTC+5:30 (IST)</option>
+                  <option value="5.75">UTC+5:45</option>
+                  <option value="6">UTC+6 (BST)</option>
+                  <option value="6.5">UTC+6:30</option>
+                  <option value="7">UTC+7 (ICT)</option>
+                  <option value="8">UTC+8 (CST/SGT)</option>
+                  <option value="9">UTC+9 (JST/KST)</option>
+                  <option value="9.5">UTC+9:30</option>
+                  <option value="10">UTC+10 (AEST)</option>
+                  <option value="11">UTC+11</option>
+                  <option value="12">UTC+12 (NZST)</option>
+                  <option value="13">UTC+13</option>
+                  <option value="14">UTC+14</option>
+                </select>
+              </div>
+              <div class="batch-date-tz-arrow">&rarr;</div>
+              <div class="batch-date-tz-col">
+                <label for="batchDateTzTo">Destination TZ:</label>
+                <select id="batchDateTzTo" class="form-control batch-date-tz-mini">
+                  <option value="-12">UTC-12</option>
+                  <option value="-11">UTC-11</option>
+                  <option value="-10">UTC-10 (HST)</option>
+                  <option value="-9">UTC-9 (AKST)</option>
+                  <option value="-8">UTC-8 (PST)</option>
+                  <option value="-7">UTC-7 (MST)</option>
+                  <option value="-6">UTC-6 (CST)</option>
+                  <option value="-5">UTC-5 (EST)</option>
+                  <option value="-4">UTC-4 (EDT/AST)</option>
+                  <option value="-3">UTC-3 (ART/BRT)</option>
+                  <option value="-2">UTC-2</option>
+                  <option value="-1">UTC-1</option>
+                  <option value="0" selected>UTC+0 (GMT)</option>
+                  <option value="1">UTC+1 (CET/BST)</option>
+                  <option value="2">UTC+2 (CEST/EET)</option>
+                  <option value="3">UTC+3 (MSK)</option>
+                  <option value="3.5">UTC+3:30</option>
+                  <option value="4">UTC+4 (GST)</option>
+                  <option value="4.5">UTC+4:30</option>
+                  <option value="5">UTC+5 (PKT)</option>
+                  <option value="5.5">UTC+5:30 (IST)</option>
+                  <option value="5.75">UTC+5:45</option>
+                  <option value="6">UTC+6 (BST)</option>
+                  <option value="6.5">UTC+6:30</option>
+                  <option value="7">UTC+7 (ICT)</option>
+                  <option value="8">UTC+8 (CST/SGT)</option>
+                  <option value="9">UTC+9 (JST/KST)</option>
+                  <option value="9.5">UTC+9:30</option>
+                  <option value="10">UTC+10 (AEST)</option>
+                  <option value="11">UTC+11</option>
+                  <option value="12">UTC+12 (NZST)</option>
+                  <option value="13">UTC+13</option>
+                  <option value="14">UTC+14</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Application Mode -->
+          <div class="form-group" style="margin-top: 4px;">
+            <label style="margin-bottom: 6px;">Application Mode:</label>
+            <div class="form-checkbox" style="margin-bottom: 6px;">
+              <label>
+                <input type="radio" name="batchDateMode" id="batchDateModeShift" value="shift" checked>
+                Shift each photo relatively (preserve time intervals)
+              </label>
+            </div>
+            <div class="form-checkbox">
+              <label>
+                <input type="radio" name="batchDateMode" id="batchDateModeExact" value="exact">
+                Set all selected photos to the exact same date &amp; time
+              </label>
+            </div>
+          </div>
+
+          <!-- Preview -->
+          <div id="batchDatePreview" class="batch-date-preview-box">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelBatchDateBtn">Cancel</button>
+          <button class="btn btn-primary" id="confirmBatchDateBtn">Apply Date Change</button>
         </div>
       </div>
     </div>

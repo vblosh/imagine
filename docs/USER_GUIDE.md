@@ -217,7 +217,10 @@ To organize multiple photos simultaneously:
 2. The **Batch Action Bar** will slide down above the grid:
    - **Rate**: Click any star to apply ratings to all selected photos.
    - **Pick / Reject**: Flag all selected photos with a single click.
+   - **Delete**: Remove selected photos from catalog (and optionally disk).
    - **Add Tag**: Attach a tag to all selected photos at once.
+   - **Album**: Add selected photos to an album.
+   - **Date**: Open Change Date dialog to shift timestamps by hours, adjust time zones, or set a specified date & time.
    - **Deselect**: Clear current selection.
 
 ---

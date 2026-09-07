@@ -7,13 +7,14 @@ import {
   api,
   escapeHtml,
   formatDate,
+  formatDateTime,
   formatBytes,
   normalizeImportProgress,
   getOriginalMediaUrl
 } from './api.js';
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
-import { loadMetadata, loadMedia, updateBatchBar } from './media-grid.js';
+import { loadMetadata, loadMedia, updateBatchBar, batchUpdateDates, renderGrid } from './media-grid.js';
 import { updateInspector } from './inspector.js';
 import { closeLoupe } from './loupe.js';
 
@@ -679,6 +680,253 @@ export async function submitDeleteTag() {
   } catch (err) {
     console.error('Failed to delete tag:', err);
     showToast('Failed to delete tag: ' + (err.message || 'Server error'), 'error');
+  }
+}
+
+// --- Change Date (Batch Date) Modal Dialog ---
+let pendingBatchDateIds = [];
+let batchDateRefTs = null;
+
+export function formatUtcToDatetimeLocal(timestamp) {
+  if (!timestamp || timestamp <= 0) return '';
+  const d = new Date(timestamp * 1000);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const min = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+}
+
+export function parseDatetimeLocalToUtc(val) {
+  if (!val) return null;
+  const parts = val.split('T');
+  if (parts.length < 1 || !parts[0]) return null;
+  const dateParts = parts[0].split('-').map(Number);
+  const timeParts = (parts[1] || '00:00').split(':').map(Number);
+  const y = dateParts[0];
+  const m = dateParts[1];
+  const d = dateParts[2];
+  const hh = timeParts[0] || 0;
+  const min = timeParts[1] || 0;
+  const sec = timeParts[2] || 0;
+  const ts = Math.floor(Date.UTC(y, m - 1, d, hh, min, sec) / 1000);
+  return isNaN(ts) ? null : ts;
+}
+
+export function updateBatchDatePreview() {
+  if (!dom.batchDatePreview) return;
+  const isShiftMode = dom.batchDateModeShift ? dom.batchDateModeShift.checked : true;
+  const shiftHours = dom.batchDateShiftHours ? parseFloat(dom.batchDateShiftHours.value) || 0 : 0;
+  const inputTs = dom.batchDateInput ? parseDatetimeLocalToUtc(dom.batchDateInput.value) : null;
+  const count = pendingBatchDateIds.length;
+
+  if (isShiftMode) {
+    const sign = shiftHours > 0 ? '+' : '';
+    const formattedShift = `${sign}${shiftHours} hour${Math.abs(shiftHours) === 1 ? '' : 's'}`;
+    const newRefTs = batchDateRefTs ? (batchDateRefTs + Math.round(shiftHours * 3600)) : inputTs;
+    const newDateStr = newRefTs ? formatDateTime(newRefTs) : '-';
+
+    if (Math.abs(shiftHours) < 0.001) {
+      dom.batchDatePreview.innerHTML = `<strong>Preview:</strong> No time shift (dates unchanged). Affects ${count} photo${count > 1 ? 's' : ''}.`;
+    } else {
+      dom.batchDatePreview.innerHTML = `<strong>Preview:</strong> First photo will be adjusted to <strong>${newDateStr}</strong> (${formattedShift}). All ${count} photo${count > 1 ? 's' : ''} will shift by ${formattedShift}.`;
+    }
+  } else {
+    const targetDateStr = inputTs ? formatDateTime(inputTs) : 'Unknown Date';
+    dom.batchDatePreview.innerHTML = `<strong>Preview:</strong> All ${count} photo${count > 1 ? 's' : ''} will be set to exact date: <strong>${targetDateStr}</strong>.`;
+  }
+}
+
+export function onBatchDateInputChange() {
+  if (!batchDateRefTs || !dom.batchDateInput) return;
+  const newTs = parseDatetimeLocalToUtc(dom.batchDateInput.value);
+  if (newTs !== null) {
+    const diffHours = (newTs - batchDateRefTs) / 3600;
+    if (dom.batchDateShiftHours) {
+      dom.batchDateShiftHours.value = (Math.round(diffHours * 100) / 100).toString();
+    }
+    if (dom.batchDateTimezoneSelect) {
+      const match = Array.from(dom.batchDateTimezoneSelect.options).find(opt => parseFloat(opt.value) === diffHours);
+      dom.batchDateTimezoneSelect.value = match ? match.value : '0';
+    }
+  }
+  updateBatchDatePreview();
+}
+
+export function onBatchDateShiftHoursChange() {
+  if (!batchDateRefTs || !dom.batchDateShiftHours) return;
+  const shiftHours = parseFloat(dom.batchDateShiftHours.value) || 0;
+  const newTs = batchDateRefTs + Math.round(shiftHours * 3600);
+  if (dom.batchDateInput) {
+    dom.batchDateInput.value = formatUtcToDatetimeLocal(newTs);
+  }
+  if (dom.batchDateTimezoneSelect) {
+    const match = Array.from(dom.batchDateTimezoneSelect.options).find(opt => parseFloat(opt.value) === shiftHours);
+    dom.batchDateTimezoneSelect.value = match ? match.value : '0';
+  }
+  updateBatchDatePreview();
+}
+
+export function adjustBatchDateShift(deltaHours) {
+  if (!dom.batchDateShiftHours) return;
+  const current = parseFloat(dom.batchDateShiftHours.value) || 0;
+  dom.batchDateShiftHours.value = (Math.round((current + deltaHours) * 100) / 100).toString();
+  onBatchDateShiftHoursChange();
+}
+
+export function onBatchDateTimezoneSelectChange() {
+  if (!dom.batchDateTimezoneSelect || !dom.batchDateShiftHours) return;
+  const offsetHours = parseFloat(dom.batchDateTimezoneSelect.value) || 0;
+  dom.batchDateShiftHours.value = offsetHours.toString();
+  onBatchDateShiftHoursChange();
+}
+
+export function onBatchDateTzCalcChange() {
+  if (!dom.batchDateTzFrom || !dom.batchDateTzTo || !dom.batchDateShiftHours) return;
+  const fromTz = parseFloat(dom.batchDateTzFrom.value) || 0;
+  const toTz = parseFloat(dom.batchDateTzTo.value) || 0;
+  const diffHours = toTz - fromTz;
+  dom.batchDateShiftHours.value = diffHours.toString();
+  if (dom.batchDateTimezoneSelect) {
+    const match = Array.from(dom.batchDateTimezoneSelect.options).find(opt => parseFloat(opt.value) === diffHours);
+    dom.batchDateTimezoneSelect.value = match ? match.value : '0';
+  }
+  onBatchDateShiftHoursChange();
+}
+
+export function openBatchDateModal(mediaIds = null) {
+  if (!dom.batchDateModal) return;
+
+  const ids = (mediaIds && mediaIds.length > 0)
+    ? mediaIds
+    : Array.from(state.selectedIds);
+
+  if (ids.length === 0) {
+    showToast('No photos selected', 'info');
+    return;
+  }
+
+  const selectedItems = state.mediaItems.filter(m => ids.includes(m.id));
+  if (selectedItems.length === 0) {
+    pendingBatchDateIds = ids;
+  } else {
+    pendingBatchDateIds = selectedItems.map(m => m.id);
+  }
+
+  const count = pendingBatchDateIds.length;
+  if (dom.batchDateTargetCount) {
+    dom.batchDateTargetCount.textContent = `Adjust date & time for ${count} selected photo${count > 1 ? 's' : ''}.`;
+  }
+
+  const firstItem = selectedItems[0] || state.mediaItems.find(m => m.id === pendingBatchDateIds[0]);
+  const initialTs = (firstItem && firstItem.date_taken && firstItem.date_taken > 0)
+    ? firstItem.date_taken
+    : null;
+
+  if (dom.batchDateRefName) {
+    dom.batchDateRefName.textContent = firstItem ? (firstItem.file_name || `ID #${firstItem.id}`) : `Photo #${pendingBatchDateIds[0]}`;
+  }
+  if (dom.batchDateRefOriginal) {
+    dom.batchDateRefOriginal.textContent = initialTs ? formatDateTime(initialTs) : 'No date set';
+  }
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  batchDateRefTs = initialTs || nowSec;
+
+  if (dom.batchDateInput) {
+    dom.batchDateInput.value = formatUtcToDatetimeLocal(batchDateRefTs);
+  }
+  if (dom.batchDateShiftHours) {
+    dom.batchDateShiftHours.value = '0';
+  }
+  if (dom.batchDateTimezoneSelect) {
+    dom.batchDateTimezoneSelect.value = '0';
+  }
+  if (dom.batchDateTzFrom) {
+    dom.batchDateTzFrom.value = '0';
+  }
+  if (dom.batchDateTzTo) {
+    dom.batchDateTzTo.value = '0';
+  }
+  if (dom.batchDateModeShift) {
+    dom.batchDateModeShift.checked = true;
+  }
+
+  updateBatchDatePreview();
+  dom.batchDateModal.style.display = 'flex';
+}
+
+export function closeBatchDateModal() {
+  if (dom.batchDateModal) {
+    dom.batchDateModal.style.display = 'none';
+  }
+  pendingBatchDateIds = [];
+  batchDateRefTs = null;
+}
+
+export async function submitBatchDateChange() {
+  if (!pendingBatchDateIds || pendingBatchDateIds.length === 0) {
+    closeBatchDateModal();
+    return;
+  }
+
+  const isShiftMode = dom.batchDateModeShift ? dom.batchDateModeShift.checked : true;
+  const shiftHours = dom.batchDateShiftHours ? parseFloat(dom.batchDateShiftHours.value) || 0 : 0;
+  const shiftSeconds = Math.round(shiftHours * 3600);
+
+  const inputTs = dom.batchDateInput ? parseDatetimeLocalToUtc(dom.batchDateInput.value) : null;
+  if (inputTs === null || inputTs <= 0) {
+    showToast('Please specify a valid date and time', 'error');
+    return;
+  }
+
+  if (dom.confirmBatchDateBtn) dom.confirmBatchDateBtn.disabled = true;
+
+  try {
+    const updates = [];
+    for (const id of pendingBatchDateIds) {
+      const item = state.mediaItems.find(m => m.id === id);
+      let targetTs = inputTs;
+      if (isShiftMode) {
+        if (item && item.date_taken && item.date_taken > 0) {
+          targetTs = item.date_taken + shiftSeconds;
+        } else {
+          targetTs = inputTs;
+        }
+      }
+      updates.push({ id, date_taken: targetTs });
+    }
+
+    await batchUpdateDates(updates);
+
+    if (state.sortBy === 'date_taken') {
+      state.mediaItems.sort((a, b) => {
+        const da = (a.date_taken !== undefined && a.date_taken !== null) ? a.date_taken : 0;
+        const db = (b.date_taken !== undefined && b.date_taken !== null) ? b.date_taken : 0;
+        if (da !== db) {
+          return state.sortDesc ? (db - da) : (da - db);
+        }
+        const idA = a.id || 0;
+        const idB = b.id || 0;
+        return state.sortDesc ? (idB - idA) : (idA - idB);
+      });
+    }
+
+    const prevScroll = dom.gridScrollContainer ? dom.gridScrollContainer.scrollTop : 0;
+    renderGrid();
+    if (dom.gridScrollContainer) dom.gridScrollContainer.scrollTop = prevScroll;
+
+    await loadMetadata();
+    updateInspector();
+
+    showToast(`Updated date for ${updates.length} photo${updates.length > 1 ? 's' : ''}`, 'success');
+    closeBatchDateModal();
+  } catch (err) {
+    console.error('Failed to change dates:', err);
+    showToast('Failed to change dates: ' + (err.message || 'Server error'), 'error');
+  } finally {
+    if (dom.confirmBatchDateBtn) dom.confirmBatchDateBtn.disabled = false;
   }
 }
 

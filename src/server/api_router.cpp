@@ -1337,6 +1337,135 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }
     });
+
+    // POST /api/media/batch-date
+    server.Post("/api/media/batch-date", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::vector<std::pair<MediaId, int64_t>> updates;
+            std::unordered_map<MediaId, std::string> customStrs;
+
+            if (body.contains("items") && body["items"].is_array()) {
+                auto itemsJson = body["items"];
+                if (itemsJson.size() > kMaxBatchSize) {
+                    sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                    return;
+                }
+                for (const auto& itm : itemsJson) {
+                    if (!itm.contains("id")) continue;
+                    MediaId id = itm["id"].get<MediaId>();
+                    int64_t ts = 0;
+                    std::string strVal;
+                    if (itm.contains("date_taken")) {
+                        if (itm["date_taken"].is_number_integer()) {
+                            ts = itm["date_taken"].get<int64_t>();
+                        } else if (itm["date_taken"].is_string()) {
+                            strVal = itm["date_taken"].get<std::string>();
+                            ts = parseDateStringToTimestamp(strVal);
+                        }
+                    }
+                    if (itm.contains("date_taken_str") && itm["date_taken_str"].is_string()) {
+                        std::string custom = itm["date_taken_str"].get<std::string>();
+                        if (!custom.empty()) {
+                            strVal = custom;
+                            if (ts <= 0) ts = parseDateStringToTimestamp(strVal);
+                        }
+                    }
+                    updates.emplace_back(id, ts);
+                    if (!strVal.empty()) {
+                        customStrs[id] = strVal;
+                    }
+                }
+            } else if (body.contains("ids") && body["ids"].is_array()) {
+                std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+                if (ids.size() > kMaxBatchSize) {
+                    sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                    return;
+                }
+
+                if (body.contains("shift_seconds")) {
+                    int64_t shiftSec = body["shift_seconds"].get<int64_t>();
+                    for (MediaId id : ids) {
+                        auto mRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
+                        if (mRes.isOk()) {
+                            int64_t origTs = mRes.value().date_taken;
+                            int64_t newTs = (origTs > 0) ? (origTs + shiftSec) : 0;
+                            updates.emplace_back(id, newTs);
+                        }
+                    }
+                } else if (body.contains("date_taken")) {
+                    int64_t ts = 0;
+                    std::string strVal;
+                    if (body["date_taken"].is_number_integer()) {
+                        ts = body["date_taken"].get<int64_t>();
+                    } else if (body["date_taken"].is_string()) {
+                        strVal = body["date_taken"].get<std::string>();
+                        ts = parseDateStringToTimestamp(strVal);
+                    }
+                    if (body.contains("date_taken_str") && body["date_taken_str"].is_string()) {
+                        std::string custom = body["date_taken_str"].get<std::string>();
+                        if (!custom.empty()) strVal = custom;
+                    }
+                    for (MediaId id : ids) {
+                        updates.emplace_back(id, ts);
+                        if (!strVal.empty()) customStrs[id] = strVal;
+                    }
+                } else {
+                    sendError(res, "Missing date_taken, shift_seconds, or items array");
+                    return;
+                }
+            } else {
+                sendError(res, "Missing or invalid 'ids' or 'items' array");
+                return;
+            }
+
+            int updatedCount = 0;
+            std::vector<MediaId> failedIds;
+            nlohmann::json updatedItems = nlohmann::json::array();
+
+            for (const auto& [id, dateTaken] : updates) {
+                std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
+                if (dateTakenStr.empty() && dateTaken > 0) {
+                    std::time_t tt = static_cast<std::time_t>(dateTaken);
+                    std::tm tm{};
+#if defined(_WIN32)
+                    gmtime_s(&tm, &tt);
+#else
+                    gmtime_r(&tt, &tm);
+#endif
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "%04d:%02d:%02d %02d:%02d:%02d",
+                                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                                  tm.tm_hour, tm.tm_min, tm.tm_sec);
+                    dateTakenStr = buf;
+                }
+
+                Status s = catalog_
+                    ? catalog_->setDateTaken(id, dateTaken, dateTakenStr)
+                    : db().updateDateTaken(id, dateTaken, dateTakenStr);
+                if (s.isOk()) {
+                    updatedCount++;
+                    updatedItems.push_back({
+                        {"id", id},
+                        {"date_taken", dateTaken},
+                        {"date_taken_str", dateTakenStr}
+                    });
+                } else {
+                    failedIds.push_back(id);
+                }
+            }
+
+            sendJson(res, {
+                {"status", failedIds.empty() ? "ok" : "partial"},
+                {"updated_count", updatedCount},
+                {"items", updatedItems},
+                {"failed_ids", failedIds}
+            });
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
 }
 
 void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {

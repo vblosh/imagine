@@ -79,6 +79,7 @@ export const dom = {
   batchDeleteBtn: document.getElementById('batchDeleteBtn'),
   batchAddTagBtn: document.getElementById('batchAddTagBtn'),
   batchAddAlbumBtn: document.getElementById('batchAddAlbumBtn'),
+  batchDateBtn: document.getElementById('batchDateBtn'),
   batchClearBtn: document.getElementById('batchClearBtn'),
   timelineContainer: document.getElementById('timelineContainer'),
   resetTimelineBtn: document.getElementById('resetTimelineBtn'),
@@ -270,7 +271,28 @@ export const dom = {
   cancelDeleteTagBtn: document.getElementById('cancelDeleteTagBtn'),
   confirmDeleteTagBtn: document.getElementById('confirmDeleteTagBtn'),
   deleteTagPromptText: document.getElementById('deleteTagPromptText'),
-  deleteTagWarningText: document.getElementById('deleteTagWarningText')
+  deleteTagWarningText: document.getElementById('deleteTagWarningText'),
+  batchDateModal: document.getElementById('batchDateModal'),
+  batchDateBackdrop: document.getElementById('batchDateBackdrop'),
+  closeBatchDateModalBtn: document.getElementById('closeBatchDateModalBtn'),
+  cancelBatchDateBtn: document.getElementById('cancelBatchDateBtn'),
+  confirmBatchDateBtn: document.getElementById('confirmBatchDateBtn'),
+  batchDateTargetCount: document.getElementById('batchDateTargetCount'),
+  batchDateRefInfo: document.getElementById('batchDateRefInfo'),
+  batchDateRefName: document.getElementById('batchDateRefName'),
+  batchDateRefOriginal: document.getElementById('batchDateRefOriginal'),
+  batchDateInput: document.getElementById('batchDateInput'),
+  batchDateShiftHours: document.getElementById('batchDateShiftHours'),
+  shiftMinus24Btn: document.getElementById('shiftMinus24Btn'),
+  shiftMinus1Btn: document.getElementById('shiftMinus1Btn'),
+  shiftPlus1Btn: document.getElementById('shiftPlus1Btn'),
+  shiftPlus24Btn: document.getElementById('shiftPlus24Btn'),
+  batchDateTimezoneSelect: document.getElementById('batchDateTimezoneSelect'),
+  batchDateTzFrom: document.getElementById('batchDateTzFrom'),
+  batchDateTzTo: document.getElementById('batchDateTzTo'),
+  batchDateModeShift: document.getElementById('batchDateModeShift'),
+  batchDateModeExact: document.getElementById('batchDateModeExact'),
+  batchDatePreview: document.getElementById('batchDatePreview')
 };
 
 export function refreshDomReferences() {

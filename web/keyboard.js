@@ -28,6 +28,7 @@ import {
   closeAlbumModal,
   closeTagModal,
   closeAddToAlbumModal,
+  closeBatchDateModal,
   openDeleteMediaModal
 } from './modals.js';
 import {
@@ -84,6 +85,11 @@ export function handleEscapeKey() {
   if (dom.addToAlbumModal && dom.addToAlbumModal.style.display === 'flex') {
     if (document.activeElement?.blur) document.activeElement.blur();
     closeAddToAlbumModal();
+    return true;
+  }
+  if (dom.batchDateModal && dom.batchDateModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeBatchDateModal();
     return true;
   }
 
