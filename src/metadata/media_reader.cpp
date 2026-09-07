@@ -125,12 +125,16 @@ bool MediaReader::isImageExtension(const std::string& ext) {
 
 bool MediaReader::isVideoExtension(const std::string& ext) {
     return ext == ".mp4" || ext == ".m4v" || ext == ".mov" ||
-           ext == ".webm" || ext == ".mkv" || ext == ".avi";
+           ext == ".webm" || ext == ".mkv" || ext == ".avi" ||
+           ext == ".mts" || ext == ".m2ts" || ext == ".m2t" ||
+           ext == ".mpg" || ext == ".mpeg" || ext == ".wmv" ||
+           ext == ".flv" || ext == ".3gp";
 }
 
 bool MediaReader::isAudioExtension(const std::string& ext) {
     return ext == ".mp3" || ext == ".wav" || ext == ".flac" ||
-           ext == ".ogg" || ext == ".m4a" || ext == ".aac";
+           ext == ".ogg" || ext == ".m4a" || ext == ".aac" ||
+           ext == ".wma";
 }
 
 bool MediaReader::isSupportedExtension(const std::string& path) {
@@ -217,8 +221,18 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
         return true;
     };
 
-    std::function<void(uint64_t, uint64_t)> parseContainer;
-    parseContainer = [&](uint64_t startPos, uint64_t endPos) {
+    struct TrackContext {
+        std::string handlerType;
+        int32_t width{0};
+        int32_t height{0};
+        int orientation{1};
+        std::string codec;
+        int channels{0};
+        int sample_rate{0};
+    };
+
+    std::function<void(uint64_t, uint64_t, TrackContext*)> parseContainer;
+    parseContainer = [&](uint64_t startPos, uint64_t endPos, TrackContext* trackCtx) {
         file.seekg(startPos, std::ios::beg);
         while (static_cast<uint64_t>(file.tellg()) < endPos && file.good()) {
             uint64_t currentBoxPos = file.tellg();
@@ -230,9 +244,33 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
             uint64_t dataPos = file.tellg();
             uint64_t nextBoxPos = currentBoxPos + boxSize;
 
-            if (boxType == "moov" || boxType == "trak" || boxType == "mdia" ||
-                boxType == "minf" || boxType == "stbl" || boxType == "udta") {
-                parseContainer(dataPos, std::min(nextBoxPos, endPos));
+            if (boxType == "moov") {
+                parseContainer(dataPos, std::min(nextBoxPos, endPos), nullptr);
+            } else if (boxType == "trak") {
+                TrackContext ctx;
+                parseContainer(dataPos, std::min(nextBoxPos, endPos), &ctx);
+                if ((ctx.handlerType == "vide" || (ctx.handlerType.empty() && ctx.width > 0)) && info.media_type == "video") {
+                    if (info.width == 0 && ctx.width > 0) {
+                        info.width = ctx.width;
+                        info.height = ctx.height;
+                    }
+                    if (ctx.orientation != 1) {
+                        info.orientation = ctx.orientation;
+                    }
+                    if (!ctx.codec.empty()) {
+                        info.codec = ctx.codec;
+                    }
+                } else if (ctx.handlerType == "soun") {
+                    if (info.channels == 0 && ctx.channels > 0) {
+                        info.channels = ctx.channels;
+                        info.sample_rate = ctx.sample_rate;
+                    }
+                    if (info.media_type == "audio" && !ctx.codec.empty()) {
+                        info.codec = ctx.codec;
+                    }
+                }
+            } else if (boxType == "mdia" || boxType == "minf" || boxType == "stbl" || boxType == "udta") {
+                parseContainer(dataPos, std::min(nextBoxPos, endPos), trackCtx);
             } else if (boxType == "mvhd") {
                 uint8_t ver = file.get();
                 file.seekg(3, std::ios::cur); // flags
@@ -271,20 +309,28 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                 if (file.read(reinterpret_cast<char*>(matrixBuf), 36)) {
                     int32_t b = static_cast<int32_t>(readBe32(matrixBuf + 4));
                     int32_t c = static_cast<int32_t>(readBe32(matrixBuf + 12));
+                    int orient = 1;
                     if (b > 0 && c < 0) {
-                        info.orientation = 6; // 90 CW
+                        orient = 6; // 90 CW
                     } else if (b < 0 && c > 0) {
-                        info.orientation = 8; // 270 CW
+                        orient = 8; // 270 CW
                     }
+                    if (trackCtx) trackCtx->orientation = orient;
+                    else if (orient != 1) info.orientation = orient;
                 }
 
                 uint8_t dimBuf[8];
                 if (file.read(reinterpret_cast<char*>(dimBuf), 8)) {
                     uint32_t w = readBe32(dimBuf) >> 16;
                     uint32_t h = readBe32(dimBuf + 4) >> 16;
-                    if (w > 0 && h > 0 && info.width == 0) {
-                        info.width = static_cast<int32_t>(w);
-                        info.height = static_cast<int32_t>(h);
+                    if (w > 0 && h > 0) {
+                        if (trackCtx) {
+                            trackCtx->width = static_cast<int32_t>(w);
+                            trackCtx->height = static_cast<int32_t>(h);
+                        } else if (info.width == 0) {
+                            info.width = static_cast<int32_t>(w);
+                            info.height = static_cast<int32_t>(h);
+                        }
                     }
                 }
             } else if (boxType == "hdlr") {
@@ -292,9 +338,10 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                 char hType[4];
                 if (file.read(hType, 4)) {
                     if (std::memcmp(hType, "vide", 4) == 0) {
-                        info.media_type = "video";
-                    } else if (std::memcmp(hType, "soun", 4) == 0 && ext == ".m4a") {
-                        info.media_type = "audio";
+                        if (trackCtx) trackCtx->handlerType = "vide";
+                    } else if (std::memcmp(hType, "soun", 4) == 0) {
+                        if (trackCtx) trackCtx->handlerType = "soun";
+                        if (ext == ".m4a") info.media_type = "audio";
                     }
                 }
             } else if (boxType == "stsd") {
@@ -302,36 +349,61 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                 uint64_t entrySize = 0;
                 std::string entryType;
                 if (readBoxHeader(entrySize, entryType) && entrySize >= 16) {
-                    if (entryType == "avc1") info.codec = "h264";
-                    else if (entryType == "hvc1" || entryType == "hev1") info.codec = "h265";
-                    else if (entryType == "vp09") info.codec = "vp9";
-                    else if (entryType == "av01") info.codec = "av1";
-                    else if (entryType == "mp4a") info.codec = "aac";
+                    std::string codecStr;
+                    if (entryType == "avc1") codecStr = "h264";
+                    else if (entryType == "hvc1" || entryType == "hev1") codecStr = "h265";
+                    else if (entryType == "vp09") codecStr = "vp9";
+                    else if (entryType == "av01") codecStr = "av1";
+                    else if (entryType == "mp4a") codecStr = "aac";
+                    else if (entryType == "alac") codecStr = "alac";
+                    else if (entryType == "jpeg" || entryType == "mjpg") codecStr = "mjpeg";
 
-                    // Sample entry header
-                    if (info.media_type == "video" && entrySize >= 36) {
-                        file.seekg(16, std::ios::cur); // skip reserved, data_reference_index, pre_defined
+                    if (trackCtx && !codecStr.empty()) {
+                        trackCtx->codec = codecStr;
+                    }
+
+                    bool isVideoTrack = trackCtx ? (trackCtx->handlerType == "vide" || (trackCtx->handlerType.empty() && !codecStr.empty() && codecStr != "aac" && codecStr != "alac"))
+                                                 : (info.media_type == "video");
+                    bool isAudioTrack = trackCtx ? (trackCtx->handlerType == "soun" || (trackCtx->handlerType.empty() && (codecStr == "aac" || codecStr == "alac")))
+                                                 : (info.media_type == "audio");
+
+                    // Visual sample entry header: skip 24 bytes (reserved(6) + data_ref_idx(2) + pre_defined(2) + reserved(2) + pre_defined(12) = 24)
+                    if (isVideoTrack && entrySize >= 36) {
+                        file.seekg(24, std::ios::cur);
                         uint8_t videoDimBuf[4];
                         if (file.read(reinterpret_cast<char*>(videoDimBuf), 4)) {
                             int w = readBe16(videoDimBuf);
                             int h = readBe16(videoDimBuf + 2);
                             if (w > 0 && h > 0) {
-                                info.width = w;
-                                info.height = h;
+                                if (trackCtx && trackCtx->width == 0) {
+                                    trackCtx->width = w;
+                                    trackCtx->height = h;
+                                } else if (!trackCtx && info.width == 0) {
+                                    info.width = w;
+                                    info.height = h;
+                                }
                             }
                         }
-                    } else if (info.media_type == "audio" && entrySize >= 36) {
+                    } else if (isAudioTrack && entrySize >= 28) {
+                        // Audio sample entry: skip 16 bytes (reserved(6) + data_ref_idx(2) + reserved(8) = 16)
                         file.seekg(16, std::ios::cur);
                         uint8_t audioBuf[8];
                         if (file.read(reinterpret_cast<char*>(audioBuf), 8)) {
-                            info.channels = readBe16(audioBuf);
-                            info.sample_rate = readBe16(audioBuf + 6);
+                            int ch = readBe16(audioBuf);
+                            int sr = readBe16(audioBuf + 6);
+                            if (trackCtx) {
+                                trackCtx->channels = ch;
+                                trackCtx->sample_rate = sr;
+                            } else {
+                                info.channels = ch;
+                                info.sample_rate = sr;
+                            }
                         }
                     }
                 }
             } else if (boxType == "meta") {
                 file.seekg(4, std::ios::cur); // skip version & flags
-                parseContainer(file.tellg(), std::min(nextBoxPos, endPos));
+                parseContainer(file.tellg(), std::min(nextBoxPos, endPos), trackCtx);
             } else if (boxType == "ilst") {
                 // Parse iTunes style metadata atoms
                 while (static_cast<uint64_t>(file.tellg()) < nextBoxPos && file.good()) {
@@ -389,7 +461,11 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
         }
     };
 
-    parseContainer(0, fileSize);
+    parseContainer(0, fileSize, nullptr);
+
+    if (info.codec.empty()) {
+        info.codec = (info.media_type == "audio") ? "aac" : "h264";
+    }
 
     if (fileSize > 0 && info.duration > 0) {
         info.bitrate = static_cast<int32_t>((fileSize * 8) / info.duration);
@@ -590,7 +666,7 @@ Result<MediaFileInfo> MediaReader::readAvi(const std::string& filePath) {
     while (file.read(reinterpret_cast<char*>(chunkHdr), 8)) {
         std::string chunkId(reinterpret_cast<char*>(chunkHdr), 4);
         uint32_t chunkSize = readLe32(chunkHdr + 4);
-        uint64_t nextChunk = static_cast<uint64_t>(file.tellg()) + chunkSize;
+        uint64_t nextChunk = static_cast<uint64_t>(file.tellg()) + ((chunkSize + 1) & ~1ULL);
 
         if (chunkId == "avih" && chunkSize >= 40) {
             uint8_t avih[40];

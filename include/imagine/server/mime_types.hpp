@@ -31,12 +31,18 @@ inline std::string getMimeType(std::string_view path) {
     if (ext == ".webm") return "video/webm";
     if (ext == ".mkv") return "video/x-matroska";
     if (ext == ".avi") return "video/x-msvideo";
+    if (ext == ".mts" || ext == ".m2ts" || ext == ".m2t") return "video/mp2t";
+    if (ext == ".mpg" || ext == ".mpeg") return "video/mpeg";
+    if (ext == ".wmv") return "video/x-ms-wmv";
+    if (ext == ".flv") return "video/x-flv";
+    if (ext == ".3gp") return "video/3gpp";
     if (ext == ".mp3") return "audio/mpeg";
     if (ext == ".wav") return "audio/wav";
     if (ext == ".flac") return "audio/flac";
     if (ext == ".ogg") return "audio/ogg";
     if (ext == ".m4a") return "audio/mp4";
     if (ext == ".aac") return "audio/aac";
+    if (ext == ".wma") return "audio/x-ms-wma";
     if (ext == ".json") return "application/json";
     if (ext == ".woff") return "font/woff";
     if (ext == ".woff2") return "font/woff2";

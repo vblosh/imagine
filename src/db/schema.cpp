@@ -150,6 +150,67 @@ Status Schema::applyMigrationV3(Connection& conn) {
     return tx.commit();
 }
 
+Status Schema::applyMigrationV4(Connection& conn) {
+    const char* v4_sql = R"SQL(
+        UPDATE media_items SET
+            media_type = 'video',
+            thumb_small = CASE WHEN (thumb_small = '' OR thumb_small IS NULL)
+                          THEN substr(content_hash, 1, 2) || '/' || substr(content_hash, 3, 2) || '/' || content_hash || '_256.jpg'
+                          ELSE thumb_small END,
+            thumb_large = CASE WHEN (thumb_large = '' OR thumb_large IS NULL)
+                          THEN substr(content_hash, 1, 2) || '/' || substr(content_hash, 3, 2) || '/' || content_hash || '_1024.jpg'
+                          ELSE thumb_large END
+        WHERE media_type = 'photo' AND (
+            lower(file_name) LIKE '%.mp4' OR
+            lower(file_name) LIKE '%.mov' OR
+            lower(file_name) LIKE '%.avi' OR
+            lower(file_name) LIKE '%.mkv' OR
+            lower(file_name) LIKE '%.webm' OR
+            lower(file_name) LIKE '%.m4v' OR
+            lower(file_name) LIKE '%.mts' OR
+            lower(file_name) LIKE '%.m2ts' OR
+            lower(file_name) LIKE '%.m2t' OR
+            lower(file_name) LIKE '%.mpg' OR
+            lower(file_name) LIKE '%.mpeg' OR
+            lower(file_name) LIKE '%.wmv' OR
+            lower(file_name) LIKE '%.flv' OR
+            lower(file_name) LIKE '%.3gp'
+        );
+
+        UPDATE media_items SET
+            media_type = 'audio',
+            thumb_small = CASE WHEN (thumb_small = '' OR thumb_small IS NULL)
+                          THEN substr(content_hash, 1, 2) || '/' || substr(content_hash, 3, 2) || '/' || content_hash || '_256.jpg'
+                          ELSE thumb_small END,
+            thumb_large = CASE WHEN (thumb_large = '' OR thumb_large IS NULL)
+                          THEN substr(content_hash, 1, 2) || '/' || substr(content_hash, 3, 2) || '/' || content_hash || '_1024.jpg'
+                          ELSE thumb_large END
+        WHERE media_type = 'photo' AND (
+            lower(file_name) LIKE '%.mp3' OR
+            lower(file_name) LIKE '%.wav' OR
+            lower(file_name) LIKE '%.flac' OR
+            lower(file_name) LIKE '%.ogg' OR
+            lower(file_name) LIKE '%.m4a' OR
+            lower(file_name) LIKE '%.aac' OR
+            lower(file_name) LIKE '%.wma'
+        );
+
+        UPDATE media_items SET
+            thumb_small = substr(content_hash, 1, 2) || '/' || substr(content_hash, 3, 2) || '/' || content_hash || '_256.jpg',
+            thumb_large = substr(content_hash, 1, 2) || '/' || substr(content_hash, 3, 2) || '/' || content_hash || '_1024.jpg'
+        WHERE media_type IN ('video', 'audio') AND (thumb_small = '' OR thumb_small IS NULL);
+    )SQL";
+
+    Transaction tx(conn);
+    Status s = conn.execute(v4_sql);
+    if (!s.isOk()) return s;
+
+    s = conn.execute("INSERT INTO schema_version (version) VALUES (4);");
+    if (!s.isOk()) return s;
+
+    return tx.commit();
+}
+
 Status Schema::migrate(Connection& conn) {
     auto verResult = getCurrentVersion(conn);
     if (!verResult.isOk()) {
@@ -174,6 +235,12 @@ Status Schema::migrate(Connection& conn) {
         Status s = applyMigrationV3(conn);
         if (!s.isOk()) return s;
         current = 3;
+    }
+    if (current < 4) {
+        IMAGINE_LOG_INFO("Applying database migration v4...");
+        Status s = applyMigrationV4(conn);
+        if (!s.isOk()) return s;
+        current = 4;
     }
 
     IMAGINE_LOG_INFO("Database schema up to date at version " + std::to_string(current));

@@ -228,7 +228,8 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     bool isUpdate = existingRes.isOk();
     if (isUpdate) {
         const auto& existing = existingRes.value();
-        if (existing.file_modified_time == modifiedTime && existing.file_size == static_cast<int64_t>(fsize)) {
+        if (existing.file_modified_time == modifiedTime && existing.file_size == static_cast<int64_t>(fsize)
+            && existing.media_type == mediaType) {
             if (outItem) {
                 *outItem = existing;
             }
