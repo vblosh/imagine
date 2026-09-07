@@ -377,7 +377,19 @@
               <div class="resizable-panel-body" id="fileInfoBody">
                 <dl class="prop-list">
                   <dt>Name</dt>
-                  <dd id="infoFileName">-</dd>
+                  <dd class="prop-editable-row" id="infoFileNameRow">
+                    <span id="infoFileName" class="editable-text" title="Click to rename">-</span>
+                    <button class="btn-inline-edit" id="renameFileBtn" title="Rename file" aria-label="Rename file">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path><path d="M15 5l4 4"></path></svg>
+                    </button>
+                    <div class="inline-edit-form" id="renameFileForm" style="display: none;">
+                      <input type="text" class="inline-edit-input" id="renameFileInput" autocomplete="off" spellcheck="false" />
+                      <div class="inline-edit-actions">
+                        <button class="btn-inline-act btn-inline-save" id="saveRenameBtn" title="Save (Enter)">✓</button>
+                        <button class="btn-inline-act btn-inline-cancel" id="cancelRenameBtn" title="Cancel (Esc)">✕</button>
+                      </div>
+                    </div>
+                  </dd>
                   <dt>Type</dt>
                   <dd id="infoMediaType">-</dd>
                   <dt>Dimensions</dt>
@@ -385,9 +397,33 @@
                   <dt>File Size</dt>
                   <dd id="infoFileSize">-</dd>
                   <dt>Date Taken</dt>
-                  <dd id="infoDateTaken">-</dd>
+                  <dd class="prop-editable-row" id="infoDateTakenRow">
+                    <span id="infoDateTaken" class="editable-text" title="Click to change date">-</span>
+                    <button class="btn-inline-edit" id="editDateTakenBtn" title="Change date" aria-label="Change date">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path><path d="M15 5l4 4"></path></svg>
+                    </button>
+                    <div class="inline-edit-form" id="editDateTakenForm" style="display: none;">
+                      <input type="datetime-local" class="inline-edit-input" id="editDateTakenInput" />
+                      <div class="inline-edit-actions">
+                        <button class="btn-inline-act btn-inline-save" id="saveDateTakenBtn" title="Save (Enter)">✓</button>
+                        <button class="btn-inline-act btn-inline-cancel" id="cancelDateTakenBtn" title="Cancel (Esc)">✕</button>
+                      </div>
+                    </div>
+                  </dd>
                   <dt>Caption</dt>
-                  <dd id="infoCaption" class="break-all">-</dd>
+                  <dd class="prop-editable-row" id="infoCaptionRow">
+                    <span id="infoCaption" class="break-all editable-text" title="Click to edit caption">-</span>
+                    <button class="btn-inline-edit" id="editCaptionBtn" title="Change caption" aria-label="Change caption">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path><path d="M15 5l4 4"></path></svg>
+                    </button>
+                    <div class="inline-edit-form" id="editCaptionForm" style="display: none;">
+                      <input type="text" class="inline-edit-input" id="editCaptionInput" placeholder="Add caption..." autocomplete="off" />
+                      <div class="inline-edit-actions">
+                        <button class="btn-inline-act btn-inline-save" id="saveCaptionBtn" title="Save (Enter)">✓</button>
+                        <button class="btn-inline-act btn-inline-cancel" id="cancelCaptionBtn" title="Cancel (Esc)">✕</button>
+                      </div>
+                    </div>
+                  </dd>
                   <dt>Path</dt>
                   <dd id="infoFilePath" class="break-all">-</dd>
                 </dl>

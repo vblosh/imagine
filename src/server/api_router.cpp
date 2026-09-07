@@ -13,6 +13,8 @@
 #include <thread>
 #include <mutex>
 #include <chrono>
+#include <ctime>
+#include <cstdio>
 #include <unordered_set>
 #include <unordered_map>
 #include <cstdlib>
@@ -61,6 +63,39 @@ std::vector<uint8_t> base64Decode(const std::string& input) {
         }
     }
     return out;
+}
+
+int64_t parseDateStringToTimestamp(const std::string& dateStr) {
+    if (dateStr.empty()) return 0;
+    int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
+    char sep1 = 0, sep2 = 0, sep3 = 0, sep4 = 0, sep5 = 0;
+    if (std::sscanf(dateStr.c_str(), "%d%c%d%c%d%c%d%c%d%c%d",
+                    &year, &sep1, &month, &sep2, &day, &sep3, &hour, &sep4, &min, &sep5, &sec) >= 9) {
+        // Parsed at least year, month, day, hour, min
+    } else if (std::sscanf(dateStr.c_str(), "%d%c%d%c%d", &year, &sep1, &month, &sep2, &day) == 5) {
+        hour = 0; min = 0; sec = 0;
+    } else {
+        return 0;
+    }
+
+    if (year < 1970 || month < 1 || month > 12 || day < 1 || day > 31) {
+        return 0;
+    }
+
+    std::tm tm{};
+    tm.tm_year = year - 1900;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = hour;
+    tm.tm_min = min;
+    tm.tm_sec = sec;
+    tm.tm_isdst = 0;
+#if defined(_WIN32)
+    time_t t = _mkgmtime(&tm);
+#else
+    time_t t = timegm(&tm);
+#endif
+    return t < 0 ? 0 : static_cast<int64_t>(t);
 }
 
 constexpr size_t kMaxBatchSize = 1000;
@@ -701,6 +736,182 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }
     });
+
+    // POST /api/media/:id/rename
+    server.Post(R"(/api/media/(\d+)/rename)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        MediaId id = std::stoll(req.matches[1]);
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string newName;
+            if (body.contains("file_name") && body["file_name"].is_string()) {
+                newName = body["file_name"].get<std::string>();
+            } else if (body.contains("name") && body["name"].is_string()) {
+                newName = body["name"].get<std::string>();
+            } else {
+                sendError(res, "Missing or invalid 'name' or 'file_name' field: must be a non-empty string");
+                return;
+            }
+
+            newName.erase(0, newName.find_first_not_of(" \t\r\n"));
+            auto lastNonWs = newName.find_last_not_of(" \t\r\n");
+            if (lastNonWs != std::string::npos) {
+                newName.erase(lastNonWs + 1);
+            }
+
+            if (newName.empty() || newName.size() > kMaxNameLength) {
+                sendError(res, "File name cannot be empty and must be at most " + std::to_string(kMaxNameLength) + " characters", 400);
+                return;
+            }
+            if (newName.find('/') != std::string::npos ||
+                newName.find('\\') != std::string::npos ||
+                newName.find(':') != std::string::npos ||
+                newName == "." || newName == "..") {
+                sendError(res, "Invalid file name: cannot contain path separators or illegal characters", 400);
+                return;
+            }
+
+            std::string newPath;
+            std::string finalName = newName;
+            Status s;
+            if (catalog_) {
+                s = catalog_->renameMedia(id, newName, &newPath, &finalName);
+            } else {
+                auto itemRes = db().getMediaById(id);
+                if (!itemRes.isOk()) {
+                    sendStatusError(res, itemRes.status());
+                    return;
+                }
+                const auto& item = itemRes.value();
+
+                std::filesystem::path curFileP(item.file_name);
+                std::filesystem::path newFileP(newName);
+                if (!newFileP.has_extension() && curFileP.has_extension()) {
+                    finalName += curFileP.extension().string();
+                }
+
+                if (item.file_name == finalName) {
+                    sendJson(res, {{"status", "ok"}, {"id", id}, {"file_name", finalName}, {"file_path", item.file_path}});
+                    return;
+                }
+
+                std::filesystem::path currentPath(item.file_path);
+                std::filesystem::path parent = currentPath.parent_path();
+                std::filesystem::path pNew = parent.empty() ? std::filesystem::path(finalName) : (parent / finalName);
+                newPath = pNew.generic_string();
+
+                auto existingRes = db().getMediaByPath(newPath);
+                if (existingRes.isOk() && existingRes.value().id != id) {
+                    sendError(res, "A media item with path already exists in the catalog: " + newPath, 409);
+                    return;
+                }
+
+                std::string oldDiskPath = resolvePhotoPath(item.file_path);
+                std::error_code ec;
+                bool diskRenamed = false;
+                std::filesystem::path oldFs;
+                std::filesystem::path newFs;
+                if (!oldDiskPath.empty()) {
+                    oldFs = pathFromUtf8(oldDiskPath);
+                    if (std::filesystem::exists(oldFs, ec) && std::filesystem::is_regular_file(oldFs, ec)) {
+                        newFs = oldFs.parent_path() / pathFromUtf8(finalName);
+                        if (std::filesystem::exists(newFs, ec) && newFs != oldFs) {
+                            sendError(res, "File already exists on disk: " + pathToUtf8(newFs), 409);
+                            return;
+                        }
+                        std::filesystem::rename(oldFs, newFs, ec);
+                        if (ec) {
+                            sendError(res, "Failed to rename file on disk: " + ec.message(), 500);
+                            return;
+                        }
+                        diskRenamed = true;
+                    }
+                }
+                s = db().updateFileNameAndPath(id, finalName, newPath);
+                if (!s.isOk() && diskRenamed) {
+                    std::error_code ecRollback;
+                    std::filesystem::rename(newFs, oldFs, ecRollback);
+                }
+            }
+
+            if (!s.isOk()) {
+                sendStatusError(res, s);
+                return;
+            }
+
+            sendJson(res, {
+                {"status", "ok"},
+                {"id", id},
+                {"file_name", finalName},
+                {"file_path", newPath}
+            });
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
+    // POST /api/media/:id/date
+    server.Post(R"(/api/media/(\d+)/date)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        MediaId id = std::stoll(req.matches[1]);
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            int64_t dateTaken = 0;
+            std::string dateTakenStr;
+
+            if (body.contains("date_taken")) {
+                if (body["date_taken"].is_number_integer()) {
+                    dateTaken = body["date_taken"].get<int64_t>();
+                } else if (body["date_taken"].is_string()) {
+                    dateTakenStr = body["date_taken"].get<std::string>();
+                    dateTaken = parseDateStringToTimestamp(dateTakenStr);
+                }
+            }
+            if (body.contains("date_taken_str") && body["date_taken_str"].is_string()) {
+                std::string customStr = body["date_taken_str"].get<std::string>();
+                if (!customStr.empty()) {
+                    dateTakenStr = customStr;
+                    if (dateTaken <= 0) {
+                        dateTaken = parseDateStringToTimestamp(dateTakenStr);
+                    }
+                }
+            }
+
+            if (dateTakenStr.empty() && dateTaken > 0) {
+                std::time_t tt = static_cast<std::time_t>(dateTaken);
+                std::tm tm{};
+#if defined(_WIN32)
+                gmtime_s(&tm, &tt);
+#else
+                gmtime_r(&tt, &tm);
+#endif
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%04d:%02d:%02d %02d:%02d:%02d",
+                              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                              tm.tm_hour, tm.tm_min, tm.tm_sec);
+                dateTakenStr = buf;
+            }
+
+            Status s = catalog_
+                ? catalog_->setDateTaken(id, dateTaken, dateTakenStr)
+                : db().updateDateTaken(id, dateTaken, dateTakenStr);
+
+            if (!s.isOk()) {
+                sendStatusError(res, s);
+                return;
+            }
+
+            sendJson(res, {
+                {"status", "ok"},
+                {"id", id},
+                {"date_taken", dateTaken},
+                {"date_taken_str", dateTakenStr}
+            });
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
 
     // POST /api/media/:id/gps
     server.Post(R"(/api/media/(\d+)/gps)", [this](const httplib::Request& req, httplib::Response& res) {

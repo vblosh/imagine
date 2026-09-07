@@ -57,6 +57,8 @@ public:
     Status setRating(MediaId id, int32_t rating);
     Status setFlag(MediaId id, FlagState flag);
     Status setCaption(MediaId id, const std::string& caption);
+    Status renameMedia(MediaId id, const std::string& newFileName, std::string* outNewFilePath = nullptr, std::string* outNewFileName = nullptr);
+    Status setDateTaken(MediaId id, int64_t dateTaken, const std::string& dateTakenStr = "");
     Status setGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
     Status deleteMedia(MediaId id, bool deleteFromDisk = false);
 

@@ -264,8 +264,43 @@ TEST_F(ServerTest, MediaItemCrudAndRatings) {
 
     // Verify tag removed
     auto noTagRes = client.Get("/api/media/" + std::to_string(mid));
+    ASSERT_TRUE(noTagRes);
     auto noTag = nlohmann::json::parse(noTagRes->body);
     EXPECT_EQ(noTag["tags"].size(), 0u);
+
+    // POST /api/media/:id/caption
+    nlohmann::json captionBody = {{"caption", "Beautiful Sunset in Alps"}};
+    auto capRes = client.Post("/api/media/" + std::to_string(mid) + "/caption", captionBody.dump(), "application/json");
+    ASSERT_TRUE(capRes);
+    EXPECT_EQ(capRes->status, 200);
+
+    // POST /api/media/:id/date
+    nlohmann::json dateBody = {{"date_taken", 1720000000}};
+    auto dateRes = client.Post("/api/media/" + std::to_string(mid) + "/date", dateBody.dump(), "application/json");
+    ASSERT_TRUE(dateRes);
+    EXPECT_EQ(dateRes->status, 200);
+
+    // POST /api/media/:id/rename (invalid name)
+    nlohmann::json badRenameBody = {{"name", "sub/folder/bad.jpg"}};
+    auto badRenameRes = client.Post("/api/media/" + std::to_string(mid) + "/rename", badRenameBody.dump(), "application/json");
+    ASSERT_TRUE(badRenameRes);
+    EXPECT_EQ(badRenameRes->status, 400);
+
+    // POST /api/media/:id/rename (valid name)
+    nlohmann::json renameBody = {{"name", "photo1_renamed.jpg"}};
+    auto renameRes = client.Post("/api/media/" + std::to_string(mid) + "/rename", renameBody.dump(), "application/json");
+    ASSERT_TRUE(renameRes);
+    EXPECT_EQ(renameRes->status, 200);
+    auto renameJson = nlohmann::json::parse(renameRes->body);
+    EXPECT_EQ(renameJson["file_name"].get<std::string>(), "photo1_renamed.jpg");
+
+    // Verify all fields updated
+    auto verifyAllRes = client.Get("/api/media/" + std::to_string(mid));
+    ASSERT_TRUE(verifyAllRes);
+    auto allJson = nlohmann::json::parse(verifyAllRes->body);
+    EXPECT_EQ(allJson["caption"].get<std::string>(), "Beautiful Sunset in Alps");
+    EXPECT_EQ(allJson["date_taken"].get<int64_t>(), 1720000000);
+    EXPECT_EQ(allJson["file_name"].get<std::string>(), "photo1_renamed.jpg");
 
     // DELETE /api/media/:id
     auto delMediaRes = client.Delete("/api/media/" + std::to_string(mid));

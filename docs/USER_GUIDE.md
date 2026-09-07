@@ -266,13 +266,15 @@ Double-click any photo card or click the expand icon in the Inspector to enter *
 
 The right-hand **Inspector Panel** provides an exhaustive breakdown of the technical and camera properties for the active photo.
 
-### Information Displayed
+### Information Displayed & Editable Metadata
 - **File Properties**:
-  - File Name
-  - Image Dimensions (Width × Height in pixels)
-  - File Size (formatted in KB or MB)
-  - Date & Time Taken
-  - Full absolute filesystem path
+  - **File Name**: Click the filename or the edit button (✏️) to rename the file. This renames the physical file on disk (if present) and updates the catalog database and UI in real time.
+  - **Type**: Media type (Photo, Video, Audio).
+  - **Image Dimensions**: Width × Height in pixels.
+  - **File Size**: Formatted in KB or MB.
+  - **Date & Time Taken**: Click the date taken or the edit button (✏️) to modify the date and time via the inline date picker.
+  - **Caption**: Click the caption or the edit button (✏️) to add or modify descriptive text notes for the photo.
+  - **Path**: Full filesystem path (automatically updated when renaming).
 - **Camera & Exposure (EXIF)**:
   - Camera Make & Model (e.g., *Sony ILCE-7M4*, *Canon EOS R5*)
   - Lens Model (e.g., *FE 24-70mm F2.8 GM II*)

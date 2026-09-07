@@ -198,3 +198,44 @@ TEST_F(CatalogClassTest, DeleteMediaWithDiskDeletion) {
     EXPECT_FALSE(cat.getMedia(mid).isOk());
     EXPECT_FALSE(std::filesystem::exists(sampleImg));
 }
+
+TEST_F(CatalogClassTest, RenameMediaAndDateTaken) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+
+    auto impRes = cat.importFile(sampleImg);
+    ASSERT_TRUE(impRes.isOk());
+    MediaId mid = impRes.value().id;
+
+    // Test invalid rename
+    EXPECT_FALSE(cat.renameMedia(mid, "").isOk());
+    EXPECT_FALSE(cat.renameMedia(mid, "../escape.jpg").isOk());
+    EXPECT_FALSE(cat.renameMedia(mid, "dir/name.jpg").isOk());
+
+    // Successful rename without extension (preserves extension)
+    std::string newPath;
+    std::string newName;
+    EXPECT_TRUE(cat.renameMedia(mid, "renamed_photo", &newPath, &newName).isOk());
+    EXPECT_EQ(newName, "renamed_photo.jpg");
+
+    // Verify on disk and in database
+    auto mediaRes = cat.getMedia(mid);
+    ASSERT_TRUE(mediaRes.isOk());
+    EXPECT_EQ(mediaRes.value().file_name, "renamed_photo.jpg");
+    EXPECT_FALSE(std::filesystem::exists(sampleImg));
+    EXPECT_TRUE(std::filesystem::exists(testDir / "renamed_photo.jpg"));
+
+    // Rename with explicit extension
+    EXPECT_TRUE(cat.renameMedia(mid, "landscape.jpg", &newPath, &newName).isOk());
+    EXPECT_EQ(newName, "landscape.jpg");
+    EXPECT_TRUE(std::filesystem::exists(testDir / "landscape.jpg"));
+
+    // Test setDateTaken
+    int64_t newTs = 1718000000;
+    EXPECT_TRUE(cat.setDateTaken(mid, newTs).isOk());
+    auto mediaRes2 = cat.getMedia(mid);
+    ASSERT_TRUE(mediaRes2.isOk());
+    EXPECT_EQ(mediaRes2.value().date_taken, newTs);
+    EXPECT_FALSE(mediaRes2.value().exif.date_taken_str.empty());
+}
+

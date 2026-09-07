@@ -1,5 +1,7 @@
 #include "imagine/core/catalog.hpp"
 #include "imagine/common/logger.hpp"
+#include <ctime>
+#include <cstdio>
 
 namespace imagine::core {
 
@@ -288,6 +290,115 @@ Status Catalog::setCaption(MediaId id, const std::string& caption) {
         return Status::internal("Catalog is not open");
     }
     return db_->updateCaption(id, caption);
+}
+
+Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::string* outNewFilePath, std::string* outNewFileName) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+
+    if (newFileName.empty()) {
+        return Status::invalidArgument("File name cannot be empty");
+    }
+    if (newFileName.find('/') != std::string::npos ||
+        newFileName.find('\\') != std::string::npos ||
+        newFileName.find(':') != std::string::npos ||
+        newFileName == "." || newFileName == "..") {
+        return Status::invalidArgument("Invalid file name: cannot contain path separators or illegal characters");
+    }
+
+    auto itemRes = db_->getMediaById(id);
+    if (!itemRes.isOk()) {
+        return itemRes.status();
+    }
+    const auto& item = itemRes.value();
+
+    std::string actualNewFileName = newFileName;
+    std::filesystem::path curFileP(item.file_name);
+    std::filesystem::path newFileP(actualNewFileName);
+    if (!newFileP.has_extension() && curFileP.has_extension()) {
+        actualNewFileName += curFileP.extension().string();
+    }
+
+    if (item.file_name == actualNewFileName) {
+        if (outNewFilePath) *outNewFilePath = item.file_path;
+        if (outNewFileName) *outNewFileName = item.file_name;
+        return Status::ok();
+    }
+
+    std::filesystem::path currentPath(item.file_path);
+    std::filesystem::path parent = currentPath.parent_path();
+    std::filesystem::path newPath = parent.empty() ? std::filesystem::path(actualNewFileName) : (parent / actualNewFileName);
+    std::string newPathStr = newPath.generic_string();
+
+    auto existingRes = db_->getMediaByPath(newPathStr);
+    if (existingRes.isOk() && existingRes.value().id != id) {
+        return Status::alreadyExists("A media item with path already exists in the catalog: " + newPathStr);
+    }
+
+    std::string oldDiskPath = resolvePhotoPath(item.file_path);
+    std::error_code ec;
+    bool diskRenamed = false;
+    std::filesystem::path oldDiskFs;
+    std::filesystem::path newDiskFs;
+
+    if (!oldDiskPath.empty()) {
+        oldDiskFs = pathFromUtf8(oldDiskPath);
+        if (std::filesystem::exists(oldDiskFs, ec) && std::filesystem::is_regular_file(oldDiskFs, ec)) {
+            newDiskFs = oldDiskFs.parent_path() / pathFromUtf8(actualNewFileName);
+            if (std::filesystem::exists(newDiskFs, ec) && newDiskFs != oldDiskFs) {
+                return Status::alreadyExists("A file with this name already exists on disk: " + pathToUtf8(newDiskFs));
+            }
+            std::filesystem::rename(oldDiskFs, newDiskFs, ec);
+            if (ec) {
+                return Status::ioError("Failed to rename file on disk: " + ec.message());
+            }
+            diskRenamed = true;
+        }
+    }
+
+    Status dbStatus = db_->updateFileNameAndPath(id, actualNewFileName, newPathStr);
+    if (!dbStatus.isOk()) {
+        if (diskRenamed) {
+            std::error_code ecRollback;
+            std::filesystem::rename(newDiskFs, oldDiskFs, ecRollback);
+        }
+        return dbStatus;
+    }
+
+    if (outNewFilePath) {
+        *outNewFilePath = newPathStr;
+    }
+    if (outNewFileName) {
+        *outNewFileName = actualNewFileName;
+    }
+    return Status::ok();
+}
+
+Status Catalog::setDateTaken(MediaId id, int64_t dateTaken, const std::string& dateTakenStr) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+
+    std::string formattedStr = dateTakenStr;
+    if (formattedStr.empty() && dateTaken > 0) {
+        std::time_t tt = static_cast<std::time_t>(dateTaken);
+        std::tm tm{};
+#if defined(_WIN32)
+        gmtime_s(&tm, &tt);
+#else
+        gmtime_r(&tt, &tm);
+#endif
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%04d:%02d:%02d %02d:%02d:%02d",
+                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                      tm.tm_hour, tm.tm_min, tm.tm_sec);
+        formattedStr = buf;
+    }
+
+    return db_->updateDateTaken(id, dateTaken, formattedStr);
 }
 
 Status Catalog::setFlag(MediaId id, FlagState flag) {

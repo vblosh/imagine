@@ -48,7 +48,8 @@ import {
   updateInspector,
   openInspector,
   renderStarWidget,
-  setupResizablePanels
+  setupResizablePanels,
+  setupInspectorInlineEditing
 } from './inspector.js';
 import {
   switchViewMode,
@@ -987,6 +988,7 @@ export function setupEventListeners() {
   if (dom.confirmDeleteTagBtn) dom.confirmDeleteTagBtn.addEventListener('click', submitDeleteTag);
 
   setupResizablePanels();
+  setupInspectorInlineEditing();
   setupKeyboardShortcuts();
 }
 

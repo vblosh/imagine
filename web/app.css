@@ -1159,6 +1159,121 @@ body.resizing-horizontal * {
   word-break: break-all;
 }
 
+/* Editable Property Rows in Inspector */
+.prop-editable-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  position: relative;
+}
+
+.prop-editable-row .editable-text {
+  cursor: pointer;
+  word-break: break-all;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.prop-editable-row .editable-text:hover {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
+.btn-inline-edit {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+  transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.prop-editable-row:hover .btn-inline-edit {
+  opacity: 1;
+}
+
+.btn-inline-edit:hover {
+  color: var(--accent-color, #007acc);
+  background-color: var(--border-color, #333333);
+}
+
+.inline-edit-form {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  margin-top: 3px;
+  margin-bottom: 2px;
+}
+
+.inline-edit-input {
+  flex: 1;
+  min-width: 0;
+  background-color: var(--bg-primary, #1e1e1e);
+  color: var(--text-primary, #ffffff);
+  border: 1px solid var(--accent-color, #007acc);
+  border-radius: 3px;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.inline-edit-input:focus {
+  box-shadow: 0 0 0 1px var(--accent-color, #007acc);
+}
+
+.inline-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.btn-inline-act {
+  border: none;
+  border-radius: 3px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-inline-save {
+  background-color: var(--accent-color, #007acc);
+  color: #ffffff;
+}
+
+.btn-inline-save:hover {
+  background-color: var(--accent-hover, #005999);
+}
+
+.btn-inline-cancel {
+  background-color: var(--border-color, #3a3a3a);
+  color: var(--text-secondary, #cccccc);
+}
+
+.btn-inline-cancel:hover {
+  background-color: #555555;
+  color: #ffffff;
+}
+
 /* Tags in Inspector */
 .tags-container {
   display: flex;

@@ -419,6 +419,44 @@ Status CatalogDb::updateCaption(MediaId id, const std::string& caption) {
     return Status::ok();
 }
 
+Status CatalogDb::updateFileNameAndPath(MediaId id, const std::string& newFileName, const std::string& newFilePath) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto stmtRes = conn_.prepare("UPDATE media_items SET file_name = ?, file_path = ?, updated_at = ? WHERE id = ?;");
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+    stmt.bind(1, newFileName);
+    stmt.bind(2, newFilePath);
+    stmt.bind(3, currentUnixTime());
+    stmt.bind(4, id);
+
+    if (stmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to update file name and path: " + conn_.lastErrorMessage());
+    }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Media item not found: " + std::to_string(id));
+    }
+    return Status::ok();
+}
+
+Status CatalogDb::updateDateTaken(MediaId id, int64_t dateTaken, const std::string& dateTakenStr) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto stmtRes = conn_.prepare("UPDATE media_items SET date_taken = ?, date_taken_str = ?, updated_at = ? WHERE id = ?;");
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+    stmt.bind(1, dateTaken);
+    stmt.bind(2, dateTakenStr);
+    stmt.bind(3, currentUnixTime());
+    stmt.bind(4, id);
+
+    if (stmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to update date taken: " + conn_.lastErrorMessage());
+    }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Media item not found: " + std::to_string(id));
+    }
+    return Status::ok();
+}
+
 
 Result<MediaItem> CatalogDb::getMediaById(MediaId id) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);

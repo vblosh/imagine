@@ -32,6 +32,8 @@ public:
     Status updateRating(MediaId id, int32_t rating);
     Status updateFlag(MediaId id, FlagState flag);
     Status updateCaption(MediaId id, const std::string& caption);
+    Status updateFileNameAndPath(MediaId id, const std::string& newFileName, const std::string& newFilePath);
+    Status updateDateTaken(MediaId id, int64_t dateTaken, const std::string& dateTakenStr);
     Status updateThumbnails(MediaId id, const std::string& smallPath, const std::string& largePath);
     Status updateGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
     Status deleteMedia(MediaId id);

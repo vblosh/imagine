@@ -327,3 +327,101 @@ def test_panel_resize_persistence_across_page_reloads(server, page: Page):
     assert reloaded_bb is not None
     assert abs(reloaded_bb["height"] - expected_height) < 2
 
+
+def test_inspector_rename_file(server, page: Page):
+    """Test renaming a file via inspector inline form and persistence."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="sunset.bmp")
+    card.click()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+    expect(page.locator("#infoFileName")).to_have_text("sunset.bmp")
+
+    # Cancel rename test
+    page.locator("#renameFileBtn").click()
+    expect(page.locator("#renameFileForm")).to_be_visible()
+    expect(page.locator("#renameFileInput")).to_have_value("sunset.bmp")
+    page.locator("#cancelRenameBtn").click()
+    expect(page.locator("#renameFileForm")).to_be_hidden()
+    expect(page.locator("#infoFileName")).to_have_text("sunset.bmp")
+
+    # Perform rename
+    page.locator("#renameFileBtn").click()
+    expect(page.locator("#renameFileForm")).to_be_visible()
+    page.locator("#renameFileInput").fill("sunset_evening.bmp")
+    page.locator("#saveRenameBtn").click()
+
+    # Verify updated in inspector and on photo card
+    expect(page.locator("#renameFileForm")).to_be_hidden()
+    expect(page.locator("#infoFileName")).to_have_text("sunset_evening.bmp")
+    expect(page.locator("#infoFilePath")).to_contain_text("sunset_evening.bmp")
+    expect(page.locator(".photo-card", has_text="sunset_evening.bmp")).to_be_visible()
+
+    # Reload page to verify persistence in database
+    page.reload()
+    reloaded_card = page.locator(".photo-card", has_text="sunset_evening.bmp")
+    expect(reloaded_card).to_be_visible()
+    reloaded_card.click()
+    expect(page.locator("#infoFileName")).to_have_text("sunset_evening.bmp")
+
+
+def test_inspector_change_date(server, page: Page):
+    """Test changing date taken in inspector and verifying grid date group update and display."""
+    page.goto(server["url"])
+
+    # Initially mountain.bmp is in February 2026 date group
+    expect(page.locator(".date-group[data-group-key='February 2026'] .photo-card", has_text="mountain.bmp")).to_be_visible()
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.click()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+
+    # Click edit date button
+    page.locator("#editDateTakenBtn").click()
+    expect(page.locator("#editDateTakenForm")).to_be_visible()
+
+    # Fill new date: 2024-05-20T10:30
+    page.locator("#editDateTakenInput").fill("2024-05-20T10:30")
+    page.locator("#saveDateTakenBtn").click()
+
+    expect(page.locator("#editDateTakenForm")).to_be_hidden()
+    expect(page.locator("#infoDateTaken")).to_contain_text("2024")
+    expect(page.locator("#infoDateTaken")).to_contain_text("May 20")
+
+    # Grid must immediately move the thumbnail into May 2024 date group and remove from February 2026
+    expect(page.locator(".date-group[data-group-key='May 2024'] .photo-card", has_text="mountain.bmp")).to_be_visible()
+    expect(page.locator(".date-group[data-group-key='February 2026'] .photo-card", has_text="mountain.bmp")).to_have_count(0)
+
+    # Reload page to verify persistence in database and grid
+    page.reload()
+    expect(page.locator(".date-group[data-group-key='May 2024'] .photo-card", has_text="mountain.bmp")).to_be_visible()
+    expect(page.locator(".date-group[data-group-key='February 2026'] .photo-card", has_text="mountain.bmp")).to_have_count(0)
+    page.locator(".photo-card", has_text="mountain.bmp").click()
+    expect(page.locator("#infoDateTaken")).to_contain_text("2024")
+    expect(page.locator("#infoDateTaken")).to_contain_text("May 20")
+
+
+def test_inspector_change_caption(server, page: Page):
+    """Test editing photo caption in inspector."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.click()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+
+    # Click edit caption button
+    page.locator("#editCaptionBtn").click()
+    expect(page.locator("#editCaptionForm")).to_be_visible()
+
+    page.locator("#editCaptionInput").fill("Majestic snow capped peak")
+    page.locator("#saveCaptionBtn").click()
+
+    expect(page.locator("#editCaptionForm")).to_be_hidden()
+    expect(page.locator("#infoCaption")).to_have_text("Majestic snow capped peak")
+
+    # Reload page to verify persistence
+    page.reload()
+    page.locator(".photo-card", has_text="mountain.bmp").click()
+    expect(page.locator("#infoCaption")).to_have_text("Majestic snow capped peak")
+
+

@@ -8,6 +8,7 @@ import {
   escapeHtml,
   formatBytes,
   formatDateTime,
+  formatDate,
   formatDuration,
   formatExposureTime,
   numeric,
@@ -16,12 +17,14 @@ import {
   getOriginalMediaUrl
 } from './api.js';
 import { state } from './state.js';
-import { dom } from './dom.js';
-import { updateItemRating, loadMetadata } from './media-grid.js';
+import { dom, showToast } from './dom.js';
+import { updateItemRating, loadMetadata, renderGrid, loadMedia } from './media-grid.js';
 
 let currentInspectorFetchId = 0;
 let inspectorAbortController = null;
 let activeResizeObservers = [];
+let currentInspectorItem = null;
+let inlineEditingInitialized = false;
 
 export function openInspector() {
   if (dom.rightInspector && dom.rightInspector.classList.contains('collapsed')) {
@@ -51,6 +54,8 @@ export function patchInspectorRatingAndFlag(item) {
 
 export function renderInspectorContent(item) {
   if (!item) return;
+  currentInspectorItem = item;
+  closeAllInlineEditors();
   if (dom.inspectorNoSelection) dom.inspectorNoSelection.style.display = 'none';
   if (dom.inspectorSelection) dom.inspectorSelection.style.display = 'block';
 
@@ -156,6 +161,8 @@ export function renderInspectorContent(item) {
 
 export async function updateInspector() {
   if (state.selectedIds.size === 0) {
+    currentInspectorItem = null;
+    closeAllInlineEditors();
     if (inspectorAbortController) {
       inspectorAbortController.abort();
       inspectorAbortController = null;
@@ -510,3 +517,403 @@ export function setupResizablePanels() {
     });
   }
 }
+
+export function closeAllInlineEditors() {
+  closeRenameForm();
+  closeDateTakenForm();
+  closeCaptionForm();
+}
+
+export function closeRenameForm() {
+  if (dom.renameFileForm) dom.renameFileForm.style.display = 'none';
+  if (dom.infoFileName) dom.infoFileName.style.display = '';
+  if (dom.renameFileBtn) dom.renameFileBtn.style.display = '';
+}
+
+export function closeDateTakenForm() {
+  if (dom.editDateTakenForm) dom.editDateTakenForm.style.display = 'none';
+  if (dom.infoDateTaken) dom.infoDateTaken.style.display = '';
+  if (dom.editDateTakenBtn) dom.editDateTakenBtn.style.display = '';
+}
+
+export function closeCaptionForm() {
+  if (dom.editCaptionForm) dom.editCaptionForm.style.display = 'none';
+  if (dom.infoCaption) dom.infoCaption.style.display = '';
+  if (dom.editCaptionBtn) dom.editCaptionBtn.style.display = '';
+}
+
+export function openRenameForm() {
+  if (!currentInspectorItem) return;
+  closeDateTakenForm();
+  closeCaptionForm();
+
+  if (dom.infoFileName) dom.infoFileName.style.display = 'none';
+  if (dom.renameFileBtn) dom.renameFileBtn.style.display = 'none';
+  if (dom.renameFileForm) {
+    dom.renameFileForm.style.display = 'flex';
+    if (dom.renameFileInput) {
+      dom.renameFileInput.value = currentInspectorItem.file_name || '';
+      dom.renameFileInput.focus();
+      const dotIdx = dom.renameFileInput.value.lastIndexOf('.');
+      if (dotIdx > 0) {
+        dom.renameFileInput.setSelectionRange(0, dotIdx);
+      } else {
+        dom.renameFileInput.select();
+      }
+    }
+  }
+}
+
+export async function handleSaveRename() {
+  if (!currentInspectorItem || !dom.renameFileInput) return;
+  const rawInput = dom.renameFileInput.value.trim();
+  if (!rawInput) {
+    showToast('File name cannot be empty', 'error');
+    return;
+  }
+  if (rawInput === currentInspectorItem.file_name) {
+    closeRenameForm();
+    return;
+  }
+  if (/[\\/:*?"<>|]/.test(rawInput)) {
+    showToast('File name cannot contain / \\ : * ? " < > |', 'error');
+    return;
+  }
+
+  let finalName = rawInput;
+  if (!finalName.includes('.') && currentInspectorItem.file_name && currentInspectorItem.file_name.includes('.')) {
+    const ext = currentInspectorItem.file_name.substring(currentInspectorItem.file_name.lastIndexOf('.'));
+    finalName += ext;
+  }
+
+  try {
+    const res = await api.post(`/api/media/${currentInspectorItem.id}/rename`, { name: finalName });
+    if (res && res.file_name) {
+      currentInspectorItem.file_name = res.file_name;
+      if (res.file_path) currentInspectorItem.file_path = res.file_path;
+
+      const idx = state.mediaItems.findIndex(m => m.id === currentInspectorItem.id);
+      if (idx !== -1) {
+        state.mediaItems[idx].file_name = res.file_name;
+        if (res.file_path) state.mediaItems[idx].file_path = res.file_path;
+      }
+
+      if (dom.infoFileName) dom.infoFileName.textContent = res.file_name;
+      if (dom.infoFilePath) dom.infoFilePath.textContent = res.file_path || currentInspectorItem.file_path || '-';
+
+      const grid = dom.mediaGrid || document.getElementById('mediaGrid');
+      if (grid) {
+        const card = grid.querySelector(`.photo-card[data-id="${CSS.escape(String(currentInspectorItem.id))}"]`);
+        if (card) {
+          const fnEl = card.querySelector('.card-filename');
+          if (fnEl) {
+            fnEl.textContent = res.file_name;
+            fnEl.title = res.file_name;
+          }
+        }
+      }
+
+      if (state.sortBy === 'file_name') {
+        state.mediaItems.sort((a, b) => {
+          const fa = (a.file_name || '').toLowerCase();
+          const fb = (b.file_name || '').toLowerCase();
+          if (fa !== fb) {
+            return state.sortDesc ? fb.localeCompare(fa) : fa.localeCompare(fb);
+          }
+          const idA = a.id || 0;
+          const idB = b.id || 0;
+          return state.sortDesc ? (idB - idA) : (idA - idB);
+        });
+        const prevScroll = dom.gridScrollContainer ? dom.gridScrollContainer.scrollTop : 0;
+        renderGrid();
+        if (dom.gridScrollContainer) dom.gridScrollContainer.scrollTop = prevScroll;
+      }
+
+      closeRenameForm();
+      showToast(`File renamed to ${res.file_name}`, 'success');
+    }
+  } catch (err) {
+    showToast('Failed to rename file: ' + (err.message || 'Error'), 'error');
+  }
+}
+
+export function openDateTakenForm() {
+  if (!currentInspectorItem) return;
+  closeRenameForm();
+  closeCaptionForm();
+
+  if (dom.infoDateTaken) dom.infoDateTaken.style.display = 'none';
+  if (dom.editDateTakenBtn) dom.editDateTakenBtn.style.display = 'none';
+  if (dom.editDateTakenForm) {
+    dom.editDateTakenForm.style.display = 'flex';
+    if (dom.editDateTakenInput) {
+      if (currentInspectorItem.date_taken && currentInspectorItem.date_taken > 0) {
+        const d = new Date(currentInspectorItem.date_taken * 1000);
+        const yyyy = d.getUTCFullYear();
+        const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const dd = String(d.getUTCDate()).padStart(2, '0');
+        const hh = String(d.getUTCHours()).padStart(2, '0');
+        const min = String(d.getUTCMinutes()).padStart(2, '0');
+        dom.editDateTakenInput.value = `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+      } else {
+        dom.editDateTakenInput.value = '';
+      }
+      dom.editDateTakenInput.focus();
+    }
+  }
+}
+
+export async function handleSaveDateTaken() {
+  if (!currentInspectorItem || !dom.editDateTakenInput) return;
+  const val = dom.editDateTakenInput.value;
+  if (!val) {
+    showToast('Please enter a date and time', 'error');
+    return;
+  }
+
+  const parts = val.split('T');
+  if (parts.length < 1 || !parts[0]) {
+    showToast('Invalid date format', 'error');
+    return;
+  }
+  const dateParts = parts[0].split('-').map(Number);
+  const timeParts = (parts[1] || '00:00:00').split(':').map(Number);
+  const y = dateParts[0];
+  const m = dateParts[1];
+  const d = dateParts[2];
+  const hh = timeParts[0] || 0;
+  const min = timeParts[1] || 0;
+  const sec = timeParts[2] || 0;
+  const ts = Math.floor(Date.UTC(y, m - 1, d, hh, min, sec) / 1000);
+
+  if (isNaN(ts) || ts <= 0) {
+    showToast('Invalid date and time', 'error');
+    return;
+  }
+
+  try {
+    const res = await api.post(`/api/media/${currentInspectorItem.id}/date`, { date_taken: ts });
+    if (res && res.date_taken !== undefined) {
+      currentInspectorItem.date_taken = res.date_taken;
+      if (currentInspectorItem.exif) {
+        currentInspectorItem.exif.date_taken = res.date_taken;
+        if (res.date_taken_str) currentInspectorItem.exif.date_taken_str = res.date_taken_str;
+      }
+
+      const idx = state.mediaItems.findIndex(m => m.id === currentInspectorItem.id);
+      if (idx !== -1) {
+        state.mediaItems[idx].date_taken = res.date_taken;
+        if (state.mediaItems[idx].exif) {
+          state.mediaItems[idx].exif.date_taken = res.date_taken;
+          if (res.date_taken_str) state.mediaItems[idx].exif.date_taken_str = res.date_taken_str;
+        }
+      }
+
+      if (dom.infoDateTaken) dom.infoDateTaken.textContent = formatDateTime(res.date_taken);
+
+      // If active timeline filter is set and item moved outside the period, reload media
+      if (state.activeTimelinePeriod) {
+        const itemDate = new Date(res.date_taken * 1000);
+        const itemYear = itemDate.getUTCFullYear();
+        const itemMonth = itemDate.getUTCMonth() + 1;
+        if (itemYear !== state.activeTimelinePeriod.year || itemMonth !== state.activeTimelinePeriod.month) {
+          closeDateTakenForm();
+          showToast('Date updated', 'success');
+          await loadMedia();
+          await loadMetadata();
+          return;
+        }
+      }
+
+      // Re-sort media items if sorted by date_taken (default)
+      if (state.sortBy === 'date_taken') {
+        state.mediaItems.sort((a, b) => {
+          const da = (a.date_taken !== undefined && a.date_taken !== null) ? a.date_taken : 0;
+          const db = (b.date_taken !== undefined && b.date_taken !== null) ? b.date_taken : 0;
+          if (da !== db) {
+            return state.sortDesc ? (db - da) : (da - db);
+          }
+          const idA = a.id || 0;
+          const idB = b.id || 0;
+          return state.sortDesc ? (idB - idA) : (idA - idB);
+        });
+      }
+
+      if (state.loupeIndex >= 0 && currentInspectorItem) {
+        state.loupeIndex = state.mediaItems.findIndex(m => m.id === currentInspectorItem.id);
+      }
+
+      const prevScroll = dom.gridScrollContainer ? dom.gridScrollContainer.scrollTop : 0;
+      renderGrid();
+      if (dom.gridScrollContainer) dom.gridScrollContainer.scrollTop = prevScroll;
+
+      loadMetadata();
+
+      closeDateTakenForm();
+      showToast('Date updated', 'success');
+    }
+  } catch (err) {
+    showToast('Failed to update date: ' + (err.message || 'Error'), 'error');
+  }
+}
+
+export function openCaptionForm() {
+  if (!currentInspectorItem) return;
+  closeRenameForm();
+  closeDateTakenForm();
+
+  if (dom.infoCaption) dom.infoCaption.style.display = 'none';
+  if (dom.editCaptionBtn) dom.editCaptionBtn.style.display = 'none';
+  if (dom.editCaptionForm) {
+    dom.editCaptionForm.style.display = 'flex';
+    if (dom.editCaptionInput) {
+      dom.editCaptionInput.value = currentInspectorItem.caption || '';
+      dom.editCaptionInput.focus();
+      dom.editCaptionInput.select();
+    }
+  }
+}
+
+export async function handleSaveCaption() {
+  if (!currentInspectorItem || !dom.editCaptionInput) return;
+  const newCaption = dom.editCaptionInput.value.trim();
+
+  try {
+    const res = await api.post(`/api/media/${currentInspectorItem.id}/caption`, { caption: newCaption });
+    if (res) {
+      currentInspectorItem.caption = newCaption;
+
+      const idx = state.mediaItems.findIndex(m => m.id === currentInspectorItem.id);
+      if (idx !== -1) {
+        state.mediaItems[idx].caption = newCaption;
+      }
+
+      if (dom.infoCaption) dom.infoCaption.textContent = newCaption || '-';
+
+      closeCaptionForm();
+      showToast('Caption updated', 'success');
+    }
+  } catch (err) {
+    showToast('Failed to update caption: ' + (err.message || 'Error'), 'error');
+  }
+}
+
+export function setupInspectorInlineEditing() {
+  if (inlineEditingInitialized) return;
+  inlineEditingInitialized = true;
+
+  // Rename File
+  if (dom.renameFileBtn) {
+    dom.renameFileBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRenameForm();
+    });
+  }
+  if (dom.infoFileName) {
+    dom.infoFileName.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openRenameForm();
+    });
+  }
+  if (dom.saveRenameBtn) {
+    dom.saveRenameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleSaveRename();
+    });
+  }
+  if (dom.cancelRenameBtn) {
+    dom.cancelRenameBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeRenameForm();
+    });
+  }
+  if (dom.renameFileInput) {
+    dom.renameFileInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSaveRename();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeRenameForm();
+      }
+    });
+  }
+
+  // Date Taken
+  if (dom.editDateTakenBtn) {
+    dom.editDateTakenBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openDateTakenForm();
+    });
+  }
+  if (dom.infoDateTaken) {
+    dom.infoDateTaken.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openDateTakenForm();
+    });
+  }
+  if (dom.saveDateTakenBtn) {
+    dom.saveDateTakenBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleSaveDateTaken();
+    });
+  }
+  if (dom.cancelDateTakenBtn) {
+    dom.cancelDateTakenBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeDateTakenForm();
+    });
+  }
+  if (dom.editDateTakenInput) {
+    dom.editDateTakenInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSaveDateTaken();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeDateTakenForm();
+      }
+    });
+  }
+
+  // Caption
+  if (dom.editCaptionBtn) {
+    dom.editCaptionBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openCaptionForm();
+    });
+  }
+  if (dom.infoCaption) {
+    dom.infoCaption.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openCaptionForm();
+    });
+  }
+  if (dom.saveCaptionBtn) {
+    dom.saveCaptionBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleSaveCaption();
+    });
+  }
+  if (dom.cancelCaptionBtn) {
+    dom.cancelCaptionBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeCaptionForm();
+    });
+  }
+  if (dom.editCaptionInput) {
+    dom.editCaptionInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSaveCaption();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeCaptionForm();
+      }
+    });
+  }
+}
+
