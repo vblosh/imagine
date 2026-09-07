@@ -364,8 +364,27 @@ Status ApiRouter::moveMedia(MediaId id, const std::string& destinationPath, std:
 
     bool isAbs = false;
     std::filesystem::path destFs = pathFromUtf8(destClean);
-    if (destFs.is_absolute() || destFs.has_root_name()) {
+    if (destFs.has_root_name()) {
         isAbs = true;
+    } else if (destFs.is_absolute() && destClean != "/" && destClean != "\\") {
+        // On POSIX, a leading '/' can either denote an absolute host path (e.g. /tmp/outside or /var/...)
+        // or a catalog-relative path with a leading slash (e.g. /winter or /vacation/summer).
+        // If it targets within photosDirFs, or points to an existing directory/ancestor outside photosDirFs,
+        // treat it as an absolute host path. Otherwise, treat it as relative to the photos root.
+        std::error_code ecCheck;
+        std::filesystem::path normTargetCheck = stripExtendedPrefix(destFs).lexically_normal();
+        std::filesystem::path normRootCheck = stripExtendedPrefix(photosDirFs).lexically_normal();
+        if (!normRootCheck.empty() && (normTargetCheck == normRootCheck || core::Importer::isInsideRootDir(normTargetCheck, normRootCheck))) {
+            isAbs = true;
+        } else if (!normRootCheck.empty() && normRootCheck.has_parent_path() && normRootCheck.parent_path() != "/" &&
+                   (normTargetCheck == normRootCheck.parent_path() || core::Importer::isInsideRootDir(normTargetCheck, normRootCheck.parent_path()))) {
+            isAbs = true;
+        } else if (std::filesystem::exists(destFs, ecCheck)) {
+            isAbs = true;
+        } else if (destFs.has_parent_path() && destFs.parent_path() != "/" &&
+                   std::filesystem::exists(destFs.parent_path(), ecCheck)) {
+            isAbs = true;
+        }
     }
     if (!isAbs) {
         while (!destClean.empty() && (destClean.front() == '/' || destClean.front() == '\\')) {
@@ -422,9 +441,9 @@ Status ApiRouter::moveMedia(MediaId id, const std::string& destinationPath, std:
     }
 
     std::filesystem::path newDiskFs = targetDirFs / pathFromUtf8(item.file_name);
-    std::string newStoredPath = (destFs.is_absolute() || std::filesystem::path(item.file_path).is_absolute())
+    std::string newStoredPath = (isAbs || std::filesystem::path(item.file_path).is_absolute())
         ? newDiskFs.generic_string()
-        : (destFs / pathFromUtf8(item.file_name)).generic_string();
+        : core::Importer::toRelativePath(newDiskFs, photosDirFs);
 
     std::string itemNorm = item.file_path;
     std::replace(itemNorm.begin(), itemNorm.end(), '\\', '/');

@@ -284,6 +284,16 @@ TEST_F(CatalogClassTest, MoveMediaToNewPath) {
     EXPECT_EQ(newPath, "winter/photo.jpg");
     EXPECT_TRUE(std::filesystem::exists(testDir / "winter" / "photo.jpg"));
 
+    // Moving with leading slash multi-level
+    EXPECT_TRUE(cat.moveMedia(mid, "/spring/blossom", &newPath).isOk());
+    EXPECT_EQ(newPath, "spring/blossom/photo.jpg");
+    EXPECT_TRUE(std::filesystem::exists(testDir / "spring" / "blossom" / "photo.jpg"));
+
+    // Moving with root slash "/" should move back to root
+    EXPECT_TRUE(cat.moveMedia(mid, "/", &newPath).isOk());
+    EXPECT_EQ(newPath, "photo.jpg");
+    EXPECT_TRUE(std::filesystem::exists(testDir / "photo.jpg"));
+
     // Moving back to root folder via "."
     EXPECT_TRUE(cat.moveMedia(mid, ".", &newPath).isOk());
     EXPECT_EQ(newPath, "photo.jpg");
