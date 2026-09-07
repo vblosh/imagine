@@ -76,14 +76,29 @@ bool Importer::isInsideRootDir(const std::filesystem::path& target, const std::f
     if (ec) canRoot = stripExtendedPrefix(rootDir).lexically_normal();
 
     rel = std::filesystem::relative(canTarget, canRoot, ec);
-    if (ec || rel.empty()) {
-        return false;
+    if (!ec && !rel.empty()) {
+        std::string relStr = rel.generic_string();
+        if (!relStr.empty() && relStr != "." && relStr != ".." && relStr.rfind("../", 0) != 0) {
+            return true;
+        }
     }
-    std::string relStr = rel.generic_string();
-    if (relStr.empty() || relStr == "." || relStr == ".." || relStr.rfind("../", 0) == 0) {
-        return false;
+
+#if defined(_WIN32)
+    std::string sTarget = canTarget.generic_string();
+    std::string sRoot = canRoot.generic_string();
+    while (sTarget.size() > 1 && sTarget.back() == '/') sTarget.pop_back();
+    while (sRoot.size() > 1 && sRoot.back() == '/') sRoot.pop_back();
+    auto toLower = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    std::string lTarget = toLower(sTarget);
+    std::string lRoot = toLower(sRoot);
+    if (lTarget.size() > lRoot.size() && lTarget.rfind(lRoot + "/", 0) == 0) {
+        return true;
     }
-    return true;
+#endif
+    return false;
 }
 
 std::string Importer::toRelativePath(const std::filesystem::path& fullPath, const std::filesystem::path& baseDir) {
@@ -114,14 +129,29 @@ std::string Importer::toRelativePath(const std::filesystem::path& fullPath, cons
     if (ec) canRoot = stripExtendedPrefix(baseDir).lexically_normal();
 
     rel = std::filesystem::relative(canTarget, canRoot, ec);
-    if (ec || rel.empty()) {
-        return toGeneric(fullPath);
+    if (!ec && !rel.empty()) {
+        std::string relStr = rel.generic_string();
+        if (relStr.rfind("../", 0) != 0 && relStr != "..") {
+            return relStr;
+        }
     }
-    std::string relStr = rel.generic_string();
-    if (relStr.rfind("../", 0) == 0 || relStr == "..") {
-        return toGeneric(fullPath);
+
+#if defined(_WIN32)
+    std::string sTarget = canTarget.generic_string();
+    std::string sRoot = canRoot.generic_string();
+    while (sRoot.size() > 1 && sRoot.back() == '/') sRoot.pop_back();
+    auto toLower = [](std::string s) {
+        for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    std::string lTarget = toLower(sTarget);
+    std::string lRoot = toLower(sRoot);
+    if (lTarget.size() > lRoot.size() && lTarget.rfind(lRoot + "/", 0) == 0) {
+        return sTarget.substr(sRoot.size() + 1);
     }
-    return relStr;
+#endif
+
+    return toGeneric(fullPath);
 }
 
 bool Importer::isSupportedExtension(const std::string& path) {

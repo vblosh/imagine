@@ -221,6 +221,7 @@ To organize multiple photos simultaneously:
    - **Add Tag**: Attach a tag to all selected photos at once.
    - **Album**: Add selected photos to an album.
    - **Date**: Open Change Date dialog to shift timestamps by hours, adjust time zones, or set a specified date & time.
+   - **Move**: Open Move Media dialog to prompt for a destination folder inside the photos directory, physically move files on disk, and update catalog database records. Moving outside the photos directory is strictly prohibited.
    - **Deselect**: Clear current selection.
 
 ---
@@ -277,7 +278,10 @@ The right-hand **Inspector Panel** provides an exhaustive breakdown of the techn
   - **File Size**: Formatted in KB or MB.
   - **Date & Time Taken**: Click the date taken or the edit button (✏️) to modify the date and time via the inline date picker.
   - **Caption**: Click the caption or the edit button (✏️) to add or modify descriptive text notes for the photo.
-  - **Path**: Full filesystem path (automatically updated when renaming).
+  - **Path**: Full filesystem path (automatically updated when renaming or moving). Includes an inline Move button (📁) to move the photo to another folder inside the photos directory.
+- **Actions**:
+  - **Move...**: Move the active photo to another subfolder inside the photos directory with validation preventing navigation outside the library root.
+  - **Delete from Catalog**: Remove the active photo from catalog records (and optionally delete from disk).
 - **Camera & Exposure (EXIF)**:
   - Camera Make & Model (e.g., *Sony ILCE-7M4*, *Canon EOS R5*)
   - Lens Model (e.g., *FE 24-70mm F2.8 GM II*)

@@ -23,6 +23,7 @@ let pendingAddToAlbumIds = [];
 let pendingTagTargetMediaIds = [];
 let pendingDeleteMediaIds = [];
 let pendingDeleteTag = null;
+let pendingBatchMoveIds = [];
 
 // --- Import Modal & Workflow ---
 export function openImportModal() {
@@ -927,6 +928,117 @@ export async function submitBatchDateChange() {
     showToast('Failed to change dates: ' + (err.message || 'Server error'), 'error');
   } finally {
     if (dom.confirmBatchDateBtn) dom.confirmBatchDateBtn.disabled = false;
+  }
+}
+
+// --- Move Media Modal Dialog ---
+export function openBatchMoveModal(mediaIds = null) {
+  if (!dom.batchMoveModal) return;
+
+  const ids = (mediaIds && mediaIds.length > 0)
+    ? mediaIds
+    : Array.from(state.selectedIds);
+
+  if (ids.length === 0) {
+    if (state.lastSelectedId) {
+      ids.push(state.lastSelectedId);
+    } else {
+      showToast('No photos selected', 'info');
+      return;
+    }
+  }
+
+  pendingBatchMoveIds = ids;
+  const count = ids.length;
+  if (dom.batchMoveTargetCount) {
+    dom.batchMoveTargetCount.textContent = count === 1
+      ? 'Move 1 selected photo to a folder inside the photos directory:'
+      : `Move ${count} selected photos to a folder inside the photos directory:`;
+  }
+  if (dom.batchMoveModalTitle) {
+    dom.batchMoveModalTitle.textContent = count === 1 ? 'Move Photo' : 'Move Photos';
+  }
+
+  if (dom.batchMoveFolderSuggestions && state.allFolders) {
+    dom.batchMoveFolderSuggestions.innerHTML = Array.from(state.allFolders)
+      .filter(Boolean)
+      .map(f => `<option value="${escapeHtml(f)}">`)
+      .join('');
+  }
+
+  if (dom.batchMovePathInput) {
+    dom.batchMovePathInput.value = '';
+  }
+
+  dom.batchMoveModal.style.display = 'flex';
+  if (dom.batchMovePathInput) {
+    setTimeout(() => dom.batchMovePathInput.focus(), 50);
+  }
+}
+
+export function closeBatchMoveModal() {
+  if (dom.batchMoveModal) {
+    dom.batchMoveModal.style.display = 'none';
+  }
+  pendingBatchMoveIds = [];
+}
+
+export async function submitBatchMove() {
+  if (!pendingBatchMoveIds || pendingBatchMoveIds.length === 0) {
+    closeBatchMoveModal();
+    return;
+  }
+
+  const destPath = dom.batchMovePathInput ? dom.batchMovePathInput.value.trim() : '';
+  if (!destPath) {
+    showToast('Destination path is required', 'error');
+    if (dom.batchMovePathInput) dom.batchMovePathInput.focus();
+    return;
+  }
+
+  if (dom.confirmBatchMoveBtn) dom.confirmBatchMoveBtn.disabled = true;
+
+  try {
+    const res = await api.post('/api/media/batch-move', {
+      ids: pendingBatchMoveIds,
+      destination_path: destPath
+    });
+
+    const movedCount = res.moved_count !== undefined ? res.moved_count : 0;
+    const failedIds = Array.isArray(res.failed_ids) ? res.failed_ids : [];
+
+    if (movedCount === 0 && failedIds.length > 0) {
+      // Move failed: keep modal open, do not reload media, do not clear selection
+      const errMsg = (res.errors && res.errors.length > 0) ? `: ${res.errors[0]}` : '';
+      showToast(`Failed to move photo${failedIds.length > 1 ? 's' : ''}${errMsg}`, 'error');
+      if (dom.batchMovePathInput) {
+        dom.batchMovePathInput.focus();
+        dom.batchMovePathInput.select();
+      }
+      return;
+    }
+
+    closeBatchMoveModal();
+
+    const prevScroll = dom.gridScrollContainer ? dom.gridScrollContainer.scrollTop : 0;
+    await loadMetadata();
+    await loadMedia();
+    if (dom.gridScrollContainer) dom.gridScrollContainer.scrollTop = prevScroll;
+    updateInspector();
+
+    if (movedCount > 0) {
+      showToast(`Moved ${movedCount} photo${movedCount !== 1 ? 's' : ''} to ${destPath}`, 'success');
+    }
+
+    if (failedIds.length > 0) {
+      const errMsg = (res.errors && res.errors.length > 0) ? `: ${res.errors[0]}` : '';
+      showToast(`Failed to move ${failedIds.length} photo${failedIds.length !== 1 ? 's' : ''}${errMsg}`, 'error');
+    }
+  } catch (err) {
+    console.error('Failed to move media:', err);
+    showToast('Failed to move photos: ' + (err.message || 'Server error'), 'error');
+  } finally {
+    if (dom.confirmBatchMoveBtn) dom.confirmBatchMoveBtn.disabled = false;
   }
 }
 

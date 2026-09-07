@@ -26,12 +26,14 @@ Status Catalog::open(const std::string& dbPath, const std::string& cacheDir, con
     }
 
     photosDir_ = photosDir;
+    dbPath_ = dbPath;
+
     cache_ = std::make_unique<thumbnail::Cache>(cacheDir);
     threadPool_ = std::make_unique<concurrency::ThreadPool>(threadCount_);
     importer_ = std::make_unique<Importer>(*db_, *cache_, threadPool_.get(), photosDir_);
 
     isOpen_ = true;
-    IMAGINE_LOG_INFO("Catalog opened successfully with DB: " + dbPath);
+    IMAGINE_LOG_INFO("Catalog opened successfully with DB: " + dbPath + ", photosDir: " + photosDir_);
     return Status::ok();
 }
 
@@ -102,6 +104,18 @@ std::string Catalog::resolvePhotoPath(const std::string& recordedPath) const {
         std::shared_lock<std::shared_mutex> lock(rwMutex_);
         if (!photosDir_.empty()) {
             return (std::filesystem::path(photosDir_) / recPath).string();
+        }
+        if (!dbPath_.empty()) {
+            std::filesystem::path dbDir = std::filesystem::path(dbPath_).parent_path();
+            if (std::filesystem::exists(dbDir / "photos" / recPath, ec) && std::filesystem::is_regular_file(dbDir / "photos" / recPath, ec)) {
+                return (dbDir / "photos" / recPath).string();
+            }
+            if (std::filesystem::exists(dbDir / recPath, ec) && std::filesystem::is_regular_file(dbDir / recPath, ec)) {
+                return (dbDir / recPath).string();
+            }
+            if (!dbDir.parent_path().empty() && std::filesystem::exists(dbDir.parent_path() / recPath, ec) && std::filesystem::is_regular_file(dbDir.parent_path() / recPath, ec)) {
+                return (dbDir.parent_path() / recPath).string();
+            }
         }
         return recordedPath;
     }
@@ -372,6 +386,228 @@ Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::str
     }
     if (outNewFileName) {
         *outNewFileName = actualNewFileName;
+    }
+    return Status::ok();
+}
+
+Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::string* outNewFilePath) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+
+    std::string destClean = destinationPath;
+    destClean.erase(0, destClean.find_first_not_of(" \t\r\n"));
+    auto lastNonWs = destClean.find_last_not_of(" \t\r\n");
+    if (lastNonWs != std::string::npos) {
+        destClean.erase(lastNonWs + 1);
+    }
+    if (destClean.empty()) {
+        return Status::invalidArgument("Destination path cannot be empty");
+    }
+
+    std::replace(destClean.begin(), destClean.end(), '\\', '/');
+    while (destClean.size() > 1 && destClean.back() == '/') {
+        destClean.pop_back();
+    }
+
+    auto itemRes = db_->getMediaById(id);
+    if (!itemRes.isOk()) {
+        return itemRes.status();
+    }
+    const auto& item = itemRes.value();
+
+    std::string oldDiskPath = resolvePhotoPath(item.file_path);
+    std::error_code ec;
+    std::filesystem::path oldDiskFs;
+    if (!oldDiskPath.empty()) {
+        oldDiskFs = pathFromUtf8(oldDiskPath);
+    }
+    if (oldDiskPath.empty() || !std::filesystem::exists(oldDiskFs, ec) || !std::filesystem::is_regular_file(oldDiskFs, ec)) {
+        return Status::notFound("Source file does not exist on disk: " + (oldDiskPath.empty() ? item.file_path : oldDiskPath));
+    }
+
+    std::filesystem::path targetDirFs;
+    std::string effPhotosDir = photosDir_;
+    if (effPhotosDir.empty() && importer_) {
+        effPhotosDir = importer_->photosDir();
+    }
+
+    std::filesystem::path photosDirFs;
+    if (!effPhotosDir.empty()) {
+        photosDirFs = pathFromUtf8(effPhotosDir);
+    } else {
+        std::filesystem::path itemRelFs = pathFromUtf8(item.file_path);
+        if (itemRelFs.is_relative()) {
+            auto cur = oldDiskFs.parent_path();
+            auto relParent = itemRelFs.parent_path();
+            while (!relParent.empty() && relParent != "." && !cur.empty()) {
+                cur = cur.parent_path();
+                relParent = relParent.parent_path();
+            }
+            photosDirFs = cur;
+        } else {
+            bool foundRoot = false;
+            if (!dbPath_.empty()) {
+                std::filesystem::path dbFs = pathFromUtf8(dbPath_);
+                std::filesystem::path dbDir = dbFs.parent_path();
+                std::filesystem::path baseDir = dbDir;
+                if ((dbDir.filename() == "imagine" || dbDir.filename() == ".imagine") && !dbDir.parent_path().empty()) {
+                    baseDir = dbDir.parent_path();
+                }
+                std::filesystem::path photosSub = baseDir / "photos";
+                std::error_code ecSub;
+                if (std::filesystem::exists(photosSub, ecSub) && std::filesystem::is_directory(photosSub, ecSub) &&
+                    Importer::isInsideRootDir(oldDiskFs, photosSub)) {
+                    photosDirFs = photosSub;
+                    foundRoot = true;
+                } else if (Importer::isInsideRootDir(oldDiskFs, baseDir)) {
+                    photosDirFs = baseDir;
+                    foundRoot = true;
+                }
+            }
+            if (!foundRoot) {
+                auto oldParent = oldDiskFs.parent_path();
+                if (!oldParent.empty() && !oldParent.parent_path().empty() && oldParent != oldParent.parent_path()) {
+                    photosDirFs = oldParent.parent_path();
+                } else {
+                    photosDirFs = oldParent;
+                }
+            }
+        }
+    }
+
+    bool isAbs = false;
+    std::filesystem::path destFs = pathFromUtf8(destClean);
+    if (destFs.is_absolute() || destFs.has_root_name()) {
+        isAbs = true;
+    }
+    if (!isAbs) {
+        while (!destClean.empty() && (destClean.front() == '/' || destClean.front() == '\\')) {
+            destClean.erase(0, 1);
+        }
+    }
+
+    if (!isAbs && (destClean.empty() || destClean == ".")) {
+        targetDirFs = photosDirFs;
+    } else if (!isAbs) {
+        targetDirFs = photosDirFs / pathFromUtf8(destClean);
+    } else {
+        targetDirFs = destFs;
+    }
+
+    // Enforce that move destination must reside inside the photos root directory
+    std::filesystem::path normTarget = stripExtendedPrefix(targetDirFs).lexically_normal();
+    std::filesystem::path normRoot = stripExtendedPrefix(photosDirFs).lexically_normal();
+
+    bool isSameDir = false;
+    std::error_code ecEq;
+    if (std::filesystem::equivalent(normTarget, normRoot, ecEq) && !ecEq) {
+        isSameDir = true;
+    }
+    if (!isSameDir) {
+        std::string sTarget = normTarget.generic_string();
+        std::string sRoot = normRoot.generic_string();
+        while (sTarget.size() > 1 && sTarget.back() == '/') sTarget.pop_back();
+        while (sRoot.size() > 1 && sRoot.back() == '/') sRoot.pop_back();
+#if defined(_WIN32)
+        auto toLower = [](std::string s) {
+            for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+        isSameDir = (toLower(sTarget) == toLower(sRoot));
+#else
+        isSameDir = (sTarget == sRoot);
+#endif
+    }
+
+    bool insidePhotosDir = isSameDir || Importer::isInsideRootDir(normTarget, normRoot);
+    if (!insidePhotosDir) {
+        std::error_code ecCan;
+        std::filesystem::path canTarget = stripExtendedPrefix(std::filesystem::weakly_canonical(targetDirFs, ecCan));
+        std::filesystem::path canRoot = stripExtendedPrefix(std::filesystem::weakly_canonical(photosDirFs, ecCan));
+        if (canTarget == canRoot || Importer::isInsideRootDir(canTarget, canRoot)) {
+            insidePhotosDir = true;
+        }
+    }
+
+    if (!insidePhotosDir) {
+        return Status::invalidArgument("Move destination must be inside the photos directory (" +
+                                      pathToUtf8(normRoot) + "): " + pathToUtf8(normTarget));
+    }
+
+
+    std::filesystem::path newDiskFs = targetDirFs / pathFromUtf8(item.file_name);
+
+    std::string newStoredPath;
+    if (!effPhotosDir.empty()) {
+        newStoredPath = Importer::toRelativePath(newDiskFs, effPhotosDir);
+    } else {
+        if (destFs.is_absolute() || std::filesystem::path(item.file_path).is_absolute()) {
+            newStoredPath = newDiskFs.generic_string();
+        } else {
+            newStoredPath = Importer::toRelativePath(newDiskFs, photosDirFs);
+        }
+    }
+
+    std::string itemNorm = item.file_path;
+    std::replace(itemNorm.begin(), itemNorm.end(), '\\', '/');
+    std::string newNorm = newStoredPath;
+    std::replace(newNorm.begin(), newNorm.end(), '\\', '/');
+    if (itemNorm == newNorm) {
+        if (outNewFilePath) *outNewFilePath = item.file_path;
+        return Status::ok();
+    }
+
+    auto existingRes = db_->getMediaByPath(newStoredPath);
+    if (existingRes.isOk() && existingRes.value().id != id) {
+        return Status::alreadyExists("A media item with path already exists in the catalog: " + newStoredPath);
+    }
+
+    bool diskMoved = false;
+
+    if (!oldDiskPath.empty()) {
+        oldDiskFs = pathFromUtf8(oldDiskPath);
+        if (std::filesystem::exists(oldDiskFs, ec) && std::filesystem::is_regular_file(oldDiskFs, ec)) {
+            std::filesystem::create_directories(targetDirFs, ec);
+            if (ec) {
+                return Status::ioError("Failed to create destination directory: " + ec.message());
+            }
+
+            if (std::filesystem::exists(newDiskFs, ec)) {
+                std::error_code eqEc;
+                if (!std::filesystem::equivalent(oldDiskFs, newDiskFs, eqEc)) {
+                    return Status::alreadyExists("A file already exists at destination on disk: " + pathToUtf8(newDiskFs));
+                }
+            } else {
+                std::filesystem::rename(oldDiskFs, newDiskFs, ec);
+                if (ec) {
+                    ec.clear();
+                    std::filesystem::copy_file(oldDiskFs, newDiskFs, std::filesystem::copy_options::overwrite_existing, ec);
+                    if (!ec) {
+                        std::filesystem::remove(oldDiskFs, ec);
+                        diskMoved = true;
+                    } else {
+                        return Status::ioError("Failed to move file on disk: " + ec.message());
+                    }
+                } else {
+                    diskMoved = true;
+                }
+            }
+        }
+    }
+
+    Status dbStatus = db_->updateFileNameAndPath(id, item.file_name, newStoredPath);
+    if (!dbStatus.isOk()) {
+        if (diskMoved) {
+            std::error_code ecRollback;
+            std::filesystem::rename(newDiskFs, oldDiskFs, ecRollback);
+        }
+        return dbStatus;
+    }
+
+    if (outNewFilePath) {
+        *outNewFilePath = newStoredPath;
     }
     return Status::ok();
 }

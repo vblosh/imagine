@@ -239,3 +239,68 @@ TEST_F(CatalogClassTest, RenameMediaAndDateTaken) {
     EXPECT_FALSE(mediaRes2.value().exif.date_taken_str.empty());
 }
 
+TEST_F(CatalogClassTest, MoveMediaToNewPath) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+
+    auto impRes = cat.importFile(sampleImg);
+    ASSERT_TRUE(impRes.isOk());
+    MediaId mid = impRes.value().id;
+
+    // Invalid destination path
+    EXPECT_FALSE(cat.moveMedia(mid, "").isOk());
+
+    // Move to subfolder
+    std::string newPath;
+    EXPECT_TRUE(cat.moveMedia(mid, "vacation/summer", &newPath).isOk());
+    EXPECT_EQ(newPath, "vacation/summer/photo.jpg");
+
+    // Verify on disk
+    EXPECT_FALSE(std::filesystem::exists(sampleImg));
+    std::filesystem::path expectedDiskPath = testDir / "vacation" / "summer" / "photo.jpg";
+    EXPECT_TRUE(std::filesystem::exists(expectedDiskPath));
+
+    // Verify in catalog database
+    auto mediaRes = cat.getMedia(mid);
+    ASSERT_TRUE(mediaRes.isOk());
+    EXPECT_EQ(mediaRes.value().file_path, "vacation/summer/photo.jpg");
+    EXPECT_EQ(mediaRes.value().file_name, "photo.jpg");
+
+    // Folders list should include the new folder
+    auto foldersRes = cat.getFolders();
+    ASSERT_TRUE(foldersRes.isOk());
+    bool foundFolder = false;
+    for (const auto& f : foldersRes.value()) {
+        if (f == "vacation/summer") foundFolder = true;
+    }
+    EXPECT_TRUE(foundFolder);
+
+    // Moving to same path is ok (no-op)
+    EXPECT_TRUE(cat.moveMedia(mid, "vacation/summer", &newPath).isOk());
+    EXPECT_EQ(newPath, "vacation/summer/photo.jpg");
+
+    // Moving with leading slash should treat it as relative to photos root
+    EXPECT_TRUE(cat.moveMedia(mid, "/winter", &newPath).isOk());
+    EXPECT_EQ(newPath, "winter/photo.jpg");
+    EXPECT_TRUE(std::filesystem::exists(testDir / "winter" / "photo.jpg"));
+
+    // Moving back to root folder via "."
+    EXPECT_TRUE(cat.moveMedia(mid, ".", &newPath).isOk());
+    EXPECT_EQ(newPath, "photo.jpg");
+    EXPECT_TRUE(std::filesystem::exists(testDir / "photo.jpg"));
+
+    // Moving outside photos directory is strictly rejected
+    EXPECT_FALSE(cat.moveMedia(mid, "../outside_folder").isOk());
+    EXPECT_FALSE(cat.moveMedia(mid, "../../outside_folder").isOk());
+    std::filesystem::path outsideDir = testDir.parent_path() / "unauthorized_outside";
+    EXPECT_FALSE(cat.moveMedia(mid, outsideDir.string()).isOk());
+
+    // Moving when source file does not exist on disk fails and does NOT corrupt DB
+    std::filesystem::remove(testDir / "photo.jpg");
+    EXPECT_FALSE(cat.moveMedia(mid, "somewhere").isOk());
+    auto mediaAfterMissing = cat.getMedia(mid);
+    ASSERT_TRUE(mediaAfterMissing.isOk());
+    EXPECT_EQ(mediaAfterMissing.value().file_path, "photo.jpg"); // untouched
+}
+
+

@@ -425,3 +425,59 @@ def test_inspector_change_caption(server, page: Page):
     expect(page.locator("#infoCaption")).to_have_text("Majestic snow capped peak")
 
 
+def test_inspector_move_button_and_outside_rejection(server, page: Page):
+    """Test Move button in inspector panel moves photo within photos-dir and rejects moving outside."""
+    import os
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.click()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+
+    # Move button in actions section and inline move button next to Path are both present
+    move_btn = page.locator("#inspectorMoveBtn")
+    expect(move_btn).to_be_visible()
+    move_path_btn = page.locator("#inspectorMovePathBtn")
+    expect(move_path_btn).to_be_visible()
+
+    # 1. Attempting to move outside photo-dir is rejected
+    move_btn.click()
+    modal = page.locator("#batchMoveModal")
+    expect(modal).to_be_visible()
+    expect(page.locator("#batchMoveModalTitle")).to_have_text("Move Photo")
+    expect(page.locator("#batchMoveTargetCount")).to_contain_text("1 selected photo")
+
+    page.locator("#batchMovePathInput").fill("../outside_library")
+    page.locator("#confirmBatchMoveBtn").click()
+
+    expect(page.locator(".toast-error")).to_be_visible()
+    expect(page.locator(".toast-error")).to_contain_text("inside the photos directory")
+    # Modal stays open so user can correct destination or cancel without losing context
+    expect(modal).to_be_visible()
+    # Cards and inspector selection remain intact (photos do not disappear)
+    expect(card).to_have_class(re.compile(r"\bselected\b"))
+    expect(page.locator("#infoFileName")).to_have_text("mountain.bmp")
+    page.locator("#cancelBatchMoveBtn").click()
+    expect(modal).to_be_hidden()
+
+    # 2. Reopen via inline move button next to Path and move to valid folder inside photos directory
+    move_path_btn.click()
+    expect(modal).to_be_visible()
+    page.locator("#batchMovePathInput").fill("nature/alpine")
+    page.locator("#confirmBatchMoveBtn").click()
+    expect(modal).to_be_hidden()
+
+    expect(page.locator(".toast-success")).to_be_visible()
+    expect(page.locator(".toast-success")).to_contain_text("Moved 1 photo to nature/alpine")
+
+    # Path in inspector updates to new folder
+    page.wait_for_timeout(500)
+    expect(page.locator("#infoFilePath")).to_contain_text("alpine")
+
+    # Verify file moved on disk
+    photos_dir = server["env"]["photos_dir"]
+    assert os.path.isfile(os.path.join(photos_dir, "nature", "alpine", "mountain.bmp"))
+    assert not os.path.exists(os.path.join(photos_dir, "nature", "mountain.bmp"))
+
+
+

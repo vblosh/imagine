@@ -124,6 +124,9 @@ import {
   openBatchDateModal,
   closeBatchDateModal,
   submitBatchDateChange,
+  openBatchMoveModal,
+  closeBatchMoveModal,
+  submitBatchMove,
   onBatchDateInputChange,
   onBatchDateShiftHoursChange,
   adjustBatchDateShift,
@@ -725,6 +728,30 @@ export function setupEventListeners() {
     });
   }
 
+  if (dom.batchMoveBtn) {
+    dom.batchMoveBtn.addEventListener('click', () => {
+      openBatchMoveModal(Array.from(state.selectedIds));
+    });
+  }
+
+  const handleInspectorMove = () => {
+    if (state.selectedIds.size > 0) {
+      openBatchMoveModal(Array.from(state.selectedIds));
+    } else if (state.lastSelectedId) {
+      openBatchMoveModal([state.lastSelectedId]);
+    } else if (state.loupeIndex >= 0 && state.mediaItems[state.loupeIndex]) {
+      openBatchMoveModal([state.mediaItems[state.loupeIndex].id]);
+    }
+  };
+
+  if (dom.inspectorMoveBtn) {
+    dom.inspectorMoveBtn.addEventListener('click', handleInspectorMove);
+  }
+
+  if (dom.inspectorMovePathBtn) {
+    dom.inspectorMovePathBtn.addEventListener('click', handleInspectorMove);
+  }
+
   if (dom.inspectorDeleteBtn) {
     dom.inspectorDeleteBtn.addEventListener('click', () => {
       if (state.selectedIds.size > 0) {
@@ -1035,6 +1062,27 @@ export function setupEventListeners() {
     dom.batchDateModeExact.addEventListener('change', updateBatchDatePreview);
   }
 
+  if (dom.closeBatchMoveModalBtn) {
+    dom.closeBatchMoveModalBtn.addEventListener('click', closeBatchMoveModal);
+  }
+  if (dom.cancelBatchMoveBtn) {
+    dom.cancelBatchMoveBtn.addEventListener('click', closeBatchMoveModal);
+  }
+  if (dom.batchMoveBackdrop) {
+    dom.batchMoveBackdrop.addEventListener('click', closeBatchMoveModal);
+  }
+  if (dom.confirmBatchMoveBtn) {
+    dom.confirmBatchMoveBtn.addEventListener('click', submitBatchMove);
+  }
+  if (dom.batchMovePathInput) {
+    dom.batchMovePathInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitBatchMove();
+      }
+    });
+  }
+
   setupResizablePanels();
   setupInspectorInlineEditing();
   setupKeyboardShortcuts();
@@ -1086,6 +1134,9 @@ window._imagineApp = {
   updateItemFlag,
   batchUpdateRatings,
   batchUpdateFlags,
+  openBatchMoveModal,
+  closeBatchMoveModal,
+  submitBatchMove,
   renderTimeline,
   renderUnmappedTray,
   updateLoupeView,

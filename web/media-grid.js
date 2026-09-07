@@ -324,6 +324,9 @@ export async function loadMetadata() {
     state.tags = Array.isArray(tags) ? tags.map(normalizeTag).filter(Boolean) : [];
     state.albums = Array.isArray(albums) ? albums.map(normalizeAlbum).filter(Boolean) : [];
     state.allFolders = new Set(Array.isArray(folders) ? folders.filter(Boolean) : []);
+    if (state.activeFolder && !state.allFolders.has(state.activeFolder)) {
+      state.activeFolder = null;
+    }
     state.timelineData = Array.isArray(timeline) ? timeline.map(normalizeTimelineEntry).filter(Boolean) : [];
     state.stats = normalizeCatalogStats(stats);
 

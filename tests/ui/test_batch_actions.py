@@ -2,6 +2,8 @@
 Deterministic UI tests for Batch Actions.
 """
 
+import os
+import re
 from playwright.sync_api import Page, expect
 
 
@@ -147,4 +149,119 @@ def test_batch_operations_single_http_call(server, page: Page):
     tag_calls = [url for url in api_calls if "batch-tags" in url]
     assert len(tag_calls) == 1
     assert "/api/media/batch-tags" in tag_calls[0]
+
+
+def test_batch_move_dialog_open_and_cancel(server, page: Page):
+    """Batch Move button opens dialog asking user for path and can be closed/cancelled."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # Select 2 cards
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=["Control"])
+    expect(page.locator("#batchActionBar")).to_be_visible()
+
+    # Move button is in the batch toolbar
+    move_btn = page.locator("#batchMoveBtn")
+    expect(move_btn).to_be_visible()
+
+    # Click Move -> opens dialog
+    move_btn.click()
+    modal = page.locator("#batchMoveModal")
+    expect(modal).to_be_visible()
+    expect(page.locator("#batchMoveTargetCount")).to_contain_text("2 selected photos")
+
+    # Cancel button closes dialog
+    page.locator("#cancelBatchMoveBtn").click()
+    expect(modal).to_be_hidden()
+
+    # Reopen and test Escape key closes dialog
+    move_btn.click()
+    expect(modal).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(modal).to_be_hidden()
+
+
+def test_batch_move_photos_to_new_path(server, page: Page):
+    """Batch move asks user for path and moves media to new path, updating catalog."""
+    page.goto(server["url"])
+
+    card1 = page.locator(".photo-card", has_text="sunset.bmp")
+    card2 = page.locator(".photo-card", has_text="mountain.bmp")
+
+    # Select both cards
+    card1.click()
+    card2.click(modifiers=["Control"])
+    expect(page.locator("#batchActionBar")).to_be_visible()
+
+    # Click Move button
+    page.locator("#batchMoveBtn").click()
+    modal = page.locator("#batchMoveModal")
+    expect(modal).to_be_visible()
+
+    # Enter new destination path
+    page.locator("#batchMovePathInput").fill("nature/vacation")
+    with page.expect_response(lambda r: "/api/media/batch-move" in r.url) as response_info:
+        page.locator("#confirmBatchMoveBtn").click()
+    response = response_info.value
+    expect(modal).to_be_hidden()
+
+    # Wait for completion and verify toast or update
+    expect(page.locator(".toast-success")).to_be_visible()
+    expect(page.locator(".toast-success")).to_contain_text("Moved 2 photos to nature/vacation")
+
+    # Folders sidebar should now list the new folder
+    page.wait_for_timeout(500)
+    expect(page.locator("#foldersTree")).to_contain_text("vacation")
+
+    # Verify files moved on disk within test environment photos directory
+    photos_dir = server["env"]["photos_dir"]
+    assert os.path.isfile(os.path.join(photos_dir, "nature", "vacation", "mountain.bmp"))
+    assert os.path.isfile(os.path.join(photos_dir, "nature", "vacation", "sunset.bmp"))
+    assert not os.path.exists(os.path.join(photos_dir, "nature", "mountain.bmp"))
+    assert not os.path.exists(os.path.join(photos_dir, "nature", "sunset.bmp"))
+
+
+def test_batch_move_outside_photos_dir_is_rejected(server, page: Page):
+    """Batch move rejects paths outside the photos directory."""
+    page.goto(server["url"])
+
+    card1 = page.locator(".photo-card", has_text="sunset.bmp")
+    card2 = page.locator(".photo-card", has_text="mountain.bmp")
+
+    card1.click()
+    card2.click(modifiers=["Control"])
+    expect(page.locator("#batchActionBar")).to_be_visible()
+
+    page.locator("#batchMoveBtn").click()
+    modal = page.locator("#batchMoveModal")
+    expect(modal).to_be_visible()
+
+    # Enter path that navigates outside photos directory
+    page.locator("#batchMovePathInput").fill("../../outside_dir")
+    page.locator("#confirmBatchMoveBtn").click()
+
+    expect(page.locator(".toast-error")).to_be_visible()
+    expect(page.locator(".toast-error")).to_contain_text("inside the photos directory")
+
+    # Modal stays open so user can fix the input without losing their work
+    expect(modal).to_be_visible()
+
+    # Photos do not disappear from media grid
+    expect(page.locator(".photo-card")).to_have_count(6)
+    expect(card1).to_have_class(re.compile(r"\bselected\b"))
+    expect(card2).to_have_class(re.compile(r"\bselected\b"))
+    expect(page.locator("#batchSelectedCount")).to_have_text("2 selected")
+
+    # User can cancel the modal and the selection is fully preserved
+    page.locator("#cancelBatchMoveBtn").click()
+    expect(modal).to_be_hidden()
+    expect(page.locator(".photo-card")).to_have_count(6)
+    expect(card1).to_have_class(re.compile(r"\bselected\b"))
+    expect(card2).to_have_class(re.compile(r"\bselected\b"))
+
+
+
 

@@ -58,6 +58,7 @@ public:
     Status setFlag(MediaId id, FlagState flag);
     Status setCaption(MediaId id, const std::string& caption);
     Status renameMedia(MediaId id, const std::string& newFileName, std::string* outNewFilePath = nullptr, std::string* outNewFileName = nullptr);
+    Status moveMedia(MediaId id, const std::string& destinationPath, std::string* outNewFilePath = nullptr);
     Status setDateTaken(MediaId id, int64_t dateTaken, const std::string& dateTakenStr = "");
     Status setGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
     Status deleteMedia(MediaId id, bool deleteFromDisk = false);
@@ -103,6 +104,7 @@ private:
     std::unique_ptr<concurrency::ThreadPool> threadPool_;
     std::unique_ptr<Importer> importer_;
     std::string photosDir_;
+    std::string dbPath_;
     bool isOpen_{false};
     mutable std::shared_mutex rwMutex_;
 };

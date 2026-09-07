@@ -491,6 +491,95 @@ TEST_F(ServerTest, BatchRatingFlagTagsGps) {
     EXPECT_EQ(get2["date_taken"].get<int64_t>(), 1700020000);
 }
 
+TEST_F(ServerTest, MoveMediaSingleAndBatch) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // Create test files on disk
+    std::filesystem::path f1 = testDir_ / "move1.jpg";
+    std::filesystem::path f2 = testDir_ / "move2.jpg";
+    {
+        std::ofstream(f1) << "img1";
+        std::ofstream(f2) << "img2";
+    }
+
+    MediaItem it1, it2;
+    it1.file_path = f1.string();
+    it1.file_name = "move1.jpg";
+    it1.file_size = 4;
+    it1.content_hash = "h_m1";
+    it1.date_taken = 1000;
+
+    it2.file_path = f2.string();
+    it2.file_name = "move2.jpg";
+    it2.file_size = 4;
+    it2.content_hash = "h_m2";
+    it2.date_taken = 1000;
+
+    MediaId id1 = catalog_->db().insertMedia(it1).value();
+    MediaId id2 = catalog_->db().insertMedia(it2).value();
+
+    // 1. Single move endpoint POST /api/media/:id/move
+    nlohmann::json singleMoveBody = {{"destination_path", (testDir_ / "archive").string()}};
+    auto singleRes = client.Post("/api/media/" + std::to_string(id1) + "/move", singleMoveBody.dump(), "application/json");
+    ASSERT_TRUE(singleRes);
+    EXPECT_EQ(singleRes->status, 200);
+    auto singleJson = nlohmann::json::parse(singleRes->body);
+    EXPECT_EQ(singleJson["status"].get<std::string>(), "ok");
+    EXPECT_FALSE(std::filesystem::exists(f1));
+    EXPECT_TRUE(std::filesystem::exists(testDir_ / "archive" / "move1.jpg"));
+
+    // Check catalog media updated
+    auto check1 = client.Get("/api/media/" + std::to_string(id1));
+    ASSERT_TRUE(check1);
+    auto cJson1 = nlohmann::json::parse(check1->body);
+    EXPECT_TRUE(cJson1["file_path"].get<std::string>() == "archive/move1.jpg" ||
+                cJson1["file_path"].get<std::string>() == (testDir_ / "archive" / "move1.jpg").generic_string());
+
+    // 2. Batch move endpoint POST /api/media/batch-move
+    nlohmann::json batchMoveBody = {
+        {"ids", {id1, id2}},
+        {"destination_path", (testDir_ / "trips" / "summer").string()}
+    };
+    auto batchRes = client.Post("/api/media/batch-move", batchMoveBody.dump(), "application/json");
+    ASSERT_TRUE(batchRes);
+    EXPECT_EQ(batchRes->status, 200);
+    auto batchJson = nlohmann::json::parse(batchRes->body);
+    EXPECT_EQ(batchJson["status"].get<std::string>(), "ok");
+    EXPECT_EQ(batchJson["moved_count"].get<int>(), 2);
+    EXPECT_TRUE(batchJson["failed_ids"].empty());
+
+    // Verify files on disk
+    EXPECT_FALSE(std::filesystem::exists(testDir_ / "archive" / "move1.jpg"));
+    EXPECT_FALSE(std::filesystem::exists(f2));
+    EXPECT_TRUE(std::filesystem::exists(testDir_ / "trips" / "summer" / "move1.jpg"));
+    EXPECT_TRUE(std::filesystem::exists(testDir_ / "trips" / "summer" / "move2.jpg"));
+
+    // 3. Validation errors
+    nlohmann::json invalidBody = {{"ids", {id1}}, {"destination_path", ""}};
+    auto errRes = client.Post("/api/media/batch-move", invalidBody.dump(), "application/json");
+    ASSERT_TRUE(errRes);
+    EXPECT_EQ(errRes->status, 400);
+
+    // 4. Moving outside photos directory is rejected
+    nlohmann::json outsideBody = {
+        {"destination_path", (testDir_.parent_path() / "outside").string()}
+    };
+    auto outSingleRes = client.Post("/api/media/" + std::to_string(id1) + "/move", outsideBody.dump(), "application/json");
+    ASSERT_TRUE(outSingleRes);
+    EXPECT_EQ(outSingleRes->status, 400);
+
+    nlohmann::json outsideBatchBody = {
+        {"ids", {id1}},
+        {"destination_path", "../outside"}
+    };
+    auto outBatchRes = client.Post("/api/media/batch-move", outsideBatchBody.dump(), "application/json");
+    ASSERT_TRUE(outBatchRes);
+    auto outBatchJson = nlohmann::json::parse(outBatchRes->body);
+    EXPECT_EQ(outBatchJson["status"].get<std::string>(), "error");
+    EXPECT_EQ(outBatchJson["moved_count"].get<int>(), 0);
+    EXPECT_FALSE(outBatchJson["failed_ids"].empty());
+}
+
 TEST_F(ServerTest, StaticFilesAndSpaRouting) {
     httplib::Client client("127.0.0.1", port_);
 

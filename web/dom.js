@@ -80,6 +80,7 @@ export const dom = {
   batchAddTagBtn: document.getElementById('batchAddTagBtn'),
   batchAddAlbumBtn: document.getElementById('batchAddAlbumBtn'),
   batchDateBtn: document.getElementById('batchDateBtn'),
+  batchMoveBtn: document.getElementById('batchMoveBtn'),
   batchClearBtn: document.getElementById('batchClearBtn'),
   timelineContainer: document.getElementById('timelineContainer'),
   resetTimelineBtn: document.getElementById('resetTimelineBtn'),
@@ -92,6 +93,7 @@ export const dom = {
   inspectorImg: document.getElementById('inspectorImg'),
   openLoupeFromInspector: document.getElementById('openLoupeFromInspector'),
   inspectorAddToAlbumBtn: document.getElementById('inspectorAddToAlbumBtn'),
+  inspectorMoveBtn: document.getElementById('inspectorMoveBtn'),
   inspectorDeleteBtn: document.getElementById('inspectorDeleteBtn'),
   inspectorRating: document.getElementById('inspectorRating'),
   inspectorFlag: document.getElementById('inspectorFlag'),
@@ -123,6 +125,8 @@ export const dom = {
   saveCaptionBtn: document.getElementById('saveCaptionBtn'),
   cancelCaptionBtn: document.getElementById('cancelCaptionBtn'),
   infoFilePath: document.getElementById('infoFilePath'),
+  infoFilePathRow: document.getElementById('infoFilePathRow'),
+  inspectorMovePathBtn: document.getElementById('inspectorMovePathBtn'),
   avSection: document.getElementById('avSection'),
   avBody: document.getElementById('avBody'),
   avResizer: document.getElementById('avResizer'),
@@ -292,7 +296,16 @@ export const dom = {
   batchDateTzTo: document.getElementById('batchDateTzTo'),
   batchDateModeShift: document.getElementById('batchDateModeShift'),
   batchDateModeExact: document.getElementById('batchDateModeExact'),
-  batchDatePreview: document.getElementById('batchDatePreview')
+  batchDatePreview: document.getElementById('batchDatePreview'),
+  batchMoveModal: document.getElementById('batchMoveModal'),
+  batchMoveBackdrop: document.getElementById('batchMoveBackdrop'),
+  closeBatchMoveModalBtn: document.getElementById('closeBatchMoveModalBtn'),
+  cancelBatchMoveBtn: document.getElementById('cancelBatchMoveBtn'),
+  confirmBatchMoveBtn: document.getElementById('confirmBatchMoveBtn'),
+  batchMoveModalTitle: document.getElementById('batchMoveModalTitle'),
+  batchMoveTargetCount: document.getElementById('batchMoveTargetCount'),
+  batchMovePathInput: document.getElementById('batchMovePathInput'),
+  batchMoveFolderSuggestions: document.getElementById('batchMoveFolderSuggestions')
 };
 
 export function refreshDomReferences() {

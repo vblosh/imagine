@@ -301,6 +301,193 @@ std::string ApiRouter::resolvePhotoPath(const std::string& recordedPath) const {
     return recordedPath;
 }
 
+Status ApiRouter::moveMedia(MediaId id, const std::string& destinationPath, std::string* outNewFilePath) {
+    if (catalog_) {
+        return catalog_->moveMedia(id, destinationPath, outNewFilePath);
+    }
+
+    std::string destClean = destinationPath;
+    destClean.erase(0, destClean.find_first_not_of(" \t\r\n"));
+    auto lastNonWs = destClean.find_last_not_of(" \t\r\n");
+    if (lastNonWs != std::string::npos) {
+        destClean.erase(lastNonWs + 1);
+    }
+    if (destClean.empty()) {
+        return Status::invalidArgument("Destination path cannot be empty");
+    }
+
+    std::replace(destClean.begin(), destClean.end(), '\\', '/');
+    while (destClean.size() > 1 && destClean.back() == '/') {
+        destClean.pop_back();
+    }
+
+    auto itemRes = db().getMediaById(id);
+    if (!itemRes.isOk()) {
+        return itemRes.status();
+    }
+    const auto& item = itemRes.value();
+
+    std::string oldDiskPath = resolvePhotoPath(item.file_path);
+    std::error_code ec;
+    std::filesystem::path oldDiskFs;
+    if (!oldDiskPath.empty()) {
+        oldDiskFs = pathFromUtf8(oldDiskPath);
+    }
+    if (oldDiskPath.empty() || !std::filesystem::exists(oldDiskFs, ec) || !std::filesystem::is_regular_file(oldDiskFs, ec)) {
+        return Status::notFound("Source file does not exist on disk: " + (oldDiskPath.empty() ? item.file_path : oldDiskPath));
+    }
+
+    std::filesystem::path targetDirFs;
+    std::filesystem::path photosDirFs;
+    if (!oldDiskPath.empty() && std::filesystem::exists(oldDiskFs, ec)) {
+        std::filesystem::path itemRelFs = pathFromUtf8(item.file_path);
+        if (itemRelFs.is_relative()) {
+            auto cur = oldDiskFs.parent_path();
+            auto relParent = itemRelFs.parent_path();
+            while (!relParent.empty() && relParent != "." && !cur.empty()) {
+                cur = cur.parent_path();
+                relParent = relParent.parent_path();
+            }
+            photosDirFs = cur;
+        } else {
+            auto oldParent = oldDiskFs.parent_path();
+            if (!oldParent.empty() && !oldParent.parent_path().empty() && oldParent != oldParent.parent_path()) {
+                photosDirFs = oldParent.parent_path();
+            } else {
+                photosDirFs = oldParent;
+            }
+        }
+    } else {
+        std::error_code ecCur;
+        photosDirFs = std::filesystem::current_path(ecCur);
+    }
+
+    bool isAbs = false;
+    std::filesystem::path destFs = pathFromUtf8(destClean);
+    if (destFs.is_absolute() || destFs.has_root_name()) {
+        isAbs = true;
+    }
+    if (!isAbs) {
+        while (!destClean.empty() && (destClean.front() == '/' || destClean.front() == '\\')) {
+            destClean.erase(0, 1);
+        }
+    }
+
+    if (!isAbs && (destClean.empty() || destClean == ".")) {
+        targetDirFs = photosDirFs;
+    } else if (!isAbs) {
+        targetDirFs = photosDirFs / pathFromUtf8(destClean);
+    } else {
+        targetDirFs = destFs;
+    }
+
+    // Enforce that move destination must reside inside the photos root directory
+    std::filesystem::path normTarget = stripExtendedPrefix(targetDirFs).lexically_normal();
+    std::filesystem::path normRoot = stripExtendedPrefix(photosDirFs).lexically_normal();
+
+    bool isSameDir = false;
+    std::error_code ecEq;
+    if (std::filesystem::equivalent(normTarget, normRoot, ecEq) && !ecEq) {
+        isSameDir = true;
+    }
+    if (!isSameDir) {
+        std::string sTarget = normTarget.generic_string();
+        std::string sRoot = normRoot.generic_string();
+        while (sTarget.size() > 1 && sTarget.back() == '/') sTarget.pop_back();
+        while (sRoot.size() > 1 && sRoot.back() == '/') sRoot.pop_back();
+#if defined(_WIN32)
+        auto toLower = [](std::string s) {
+            for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return s;
+        };
+        isSameDir = (toLower(sTarget) == toLower(sRoot));
+#else
+        isSameDir = (sTarget == sRoot);
+#endif
+    }
+
+    bool insidePhotosDir = isSameDir || core::Importer::isInsideRootDir(normTarget, normRoot);
+    if (!insidePhotosDir) {
+        std::error_code ecCan;
+        std::filesystem::path canTarget = stripExtendedPrefix(std::filesystem::weakly_canonical(targetDirFs, ecCan));
+        std::filesystem::path canRoot = stripExtendedPrefix(std::filesystem::weakly_canonical(photosDirFs, ecCan));
+        if (canTarget == canRoot || core::Importer::isInsideRootDir(canTarget, canRoot)) {
+            insidePhotosDir = true;
+        }
+    }
+
+    if (!insidePhotosDir) {
+        return Status::invalidArgument("Move destination must be inside the photos directory (" +
+                                      pathToUtf8(normRoot) + "): " + pathToUtf8(normTarget));
+    }
+
+    std::filesystem::path newDiskFs = targetDirFs / pathFromUtf8(item.file_name);
+    std::string newStoredPath = (destFs.is_absolute() || std::filesystem::path(item.file_path).is_absolute())
+        ? newDiskFs.generic_string()
+        : (destFs / pathFromUtf8(item.file_name)).generic_string();
+
+    std::string itemNorm = item.file_path;
+    std::replace(itemNorm.begin(), itemNorm.end(), '\\', '/');
+    std::string newNorm = newStoredPath;
+    std::replace(newNorm.begin(), newNorm.end(), '\\', '/');
+    if (itemNorm == newNorm) {
+        if (outNewFilePath) *outNewFilePath = item.file_path;
+        return Status::ok();
+    }
+
+    auto existingRes = db().getMediaByPath(newStoredPath);
+    if (existingRes.isOk() && existingRes.value().id != id) {
+        return Status::alreadyExists("A media item with path already exists in the catalog: " + newStoredPath);
+    }
+
+    bool diskMoved = false;
+
+    if (!oldDiskPath.empty()) {
+        oldDiskFs = pathFromUtf8(oldDiskPath);
+        if (std::filesystem::exists(oldDiskFs, ec) && std::filesystem::is_regular_file(oldDiskFs, ec)) {
+            std::filesystem::create_directories(targetDirFs, ec);
+            if (ec) {
+                return Status::ioError("Failed to create destination directory: " + ec.message());
+            }
+
+            if (std::filesystem::exists(newDiskFs, ec)) {
+                std::error_code eqEc;
+                if (!std::filesystem::equivalent(oldDiskFs, newDiskFs, eqEc)) {
+                    return Status::alreadyExists("A file already exists at destination on disk: " + pathToUtf8(newDiskFs));
+                }
+            } else {
+                std::filesystem::rename(oldDiskFs, newDiskFs, ec);
+                if (ec) {
+                    ec.clear();
+                    std::filesystem::copy_file(oldDiskFs, newDiskFs, std::filesystem::copy_options::overwrite_existing, ec);
+                    if (!ec) {
+                        std::filesystem::remove(oldDiskFs, ec);
+                        diskMoved = true;
+                    } else {
+                        return Status::ioError("Failed to move file on disk: " + ec.message());
+                    }
+                } else {
+                    diskMoved = true;
+                }
+            }
+        }
+    }
+
+    Status dbStatus = db().updateFileNameAndPath(id, item.file_name, newStoredPath);
+    if (!dbStatus.isOk()) {
+        if (diskMoved) {
+            std::error_code ecRollback;
+            std::filesystem::rename(newDiskFs, oldDiskFs, ecRollback);
+        }
+        return dbStatus;
+    }
+
+    if (outNewFilePath) {
+        *outNewFilePath = newStoredPath;
+    }
+    return Status::ok();
+}
+
 void ApiRouter::registerRoutes(httplib::Server& server) {
     registerCorsHandler(server);
     registerMediaRoutes(server);
@@ -850,6 +1037,51 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
         }
     });
 
+    // POST /api/media/:id/move
+    server.Post(R"(/api/media/(\d+)/move)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        MediaId id = std::stoll(req.matches[1]);
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string destPath;
+            if (body.contains("destination_path") && body["destination_path"].is_string()) {
+                destPath = body["destination_path"].get<std::string>();
+            } else if (body.contains("destination") && body["destination"].is_string()) {
+                destPath = body["destination"].get<std::string>();
+            } else if (body.contains("path") && body["path"].is_string()) {
+                destPath = body["path"].get<std::string>();
+            } else {
+                sendError(res, "Missing or invalid 'destination_path' field: must be a non-empty string", 400);
+                return;
+            }
+
+            destPath.erase(0, destPath.find_first_not_of(" \t\r\n"));
+            auto lastNonWs = destPath.find_last_not_of(" \t\r\n");
+            if (lastNonWs != std::string::npos) {
+                destPath.erase(lastNonWs + 1);
+            }
+            if (destPath.empty()) {
+                sendError(res, "Destination path cannot be empty", 400);
+                return;
+            }
+
+            std::string newPath;
+            Status s = moveMedia(id, destPath, &newPath);
+            if (!s.isOk()) {
+                sendStatusError(res, s);
+                return;
+            }
+
+            sendJson(res, {
+                {"status", "ok"},
+                {"id", id},
+                {"file_path", newPath}
+            });
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what(), 400);
+        }
+    });
+
     // POST /api/media/:id/date
     server.Post(R"(/api/media/(\d+)/date)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
@@ -1335,6 +1567,74 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
+    // POST /api/media/batch-move
+    server.Post("/api/media/batch-move", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.contains("ids") || !body["ids"].is_array()) {
+                sendError(res, "Missing or invalid 'ids' array", 400);
+                return;
+            }
+            std::string destPath;
+            if (body.contains("destination_path") && body["destination_path"].is_string()) {
+                destPath = body["destination_path"].get<std::string>();
+            } else if (body.contains("destination") && body["destination"].is_string()) {
+                destPath = body["destination"].get<std::string>();
+            } else if (body.contains("path") && body["path"].is_string()) {
+                destPath = body["path"].get<std::string>();
+            } else {
+                sendError(res, "Missing or invalid 'destination_path' field: must be a non-empty string", 400);
+                return;
+            }
+
+            destPath.erase(0, destPath.find_first_not_of(" \t\r\n"));
+            auto lastNonWs = destPath.find_last_not_of(" \t\r\n");
+            if (lastNonWs != std::string::npos) {
+                destPath.erase(lastNonWs + 1);
+            }
+            if (destPath.empty()) {
+                sendError(res, "Destination path cannot be empty", 400);
+                return;
+            }
+
+            std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+            if (ids.size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
+
+            int movedCount = 0;
+            std::vector<MediaId> failedIds;
+            std::vector<std::string> errors;
+            nlohmann::json items = nlohmann::json::array();
+
+            for (MediaId id : ids) {
+                std::string newPath;
+                Status s = moveMedia(id, destPath, &newPath);
+                if (s.isOk()) {
+                    movedCount++;
+                    items.push_back({{"id", id}, {"file_path", newPath}});
+                } else {
+                    IMAGINE_LOG_WARN("batch-move failed for id " + std::to_string(id) + ": " + s.message());
+                    failedIds.push_back(id);
+                    errors.push_back(s.message());
+                }
+            }
+
+            sendJson(res, {
+                {"status", failedIds.empty() ? "ok" : (movedCount > 0 ? "partial" : "error")},
+                {"moved_count", movedCount},
+                {"failed_ids", failedIds},
+                {"errors", errors},
+                {"destination_path", destPath},
+                {"items", items}
+            });
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what(), 400);
         }
     });
 

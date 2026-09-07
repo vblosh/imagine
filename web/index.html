@@ -242,6 +242,9 @@
             <button class="btn btn-sm" id="batchAddTagBtn">Add Tag</button>
             <button class="btn btn-sm" id="batchAddAlbumBtn">Album</button>
             <button class="btn btn-sm" id="batchDateBtn">Date</button>
+            <button class="btn btn-sm" id="batchMoveBtn" title="Move selected photos to another folder">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg> Move
+            </button>
             <button class="btn btn-sm btn-secondary" id="batchClearBtn">Deselect</button>
           </div>
         </div>
@@ -426,7 +429,12 @@
                     </div>
                   </dd>
                   <dt>Path</dt>
-                  <dd id="infoFilePath" class="break-all">-</dd>
+                  <dd class="prop-editable-row" id="infoFilePathRow">
+                    <span id="infoFilePath" class="break-all">-</span>
+                    <button class="btn-inline-edit" id="inspectorMovePathBtn" title="Move to folder" aria-label="Move file">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg>
+                    </button>
+                  </dd>
                 </dl>
               </div>
               <div class="panel-resizer" id="fileInfoResizer" data-target="fileInfoSection" role="separator" aria-orientation="horizontal" tabindex="0" title="Drag to resize File Information panel (double-click to reset)">
@@ -542,7 +550,11 @@
             </div>
 
             <!-- Actions Section -->
-            <div class="inspector-section">
+            <div class="inspector-section" style="display: flex; flex-direction: column; gap: 6px;">
+              <button class="btn btn-sm btn-secondary" id="inspectorMoveBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Move to folder">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg>
+                Move...
+              </button>
               <button class="btn btn-sm btn-danger-outline" id="inspectorDeleteBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
                 Delete from Catalog
@@ -1210,9 +1222,44 @@
       </div>
     </div>
 
+    <!-- Move Media Modal Dialog -->
+    <div class="modal" id="batchMoveModal" style="display: none;">
+      <div class="modal-backdrop" id="batchMoveBackdrop"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              <polyline points="12 11 16 14 12 17"></polyline>
+            </svg>
+            <h3 id="batchMoveModalTitle">Move to Folder</h3>
+          </div>
+          <button class="btn-icon-sm" id="closeBatchMoveModalBtn" title="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="batchMoveTargetCount" style="margin-bottom: 12px; font-size: 13px; color: var(--text-secondary);">
+            Move selected photos to a new folder.
+          </p>
+
+          <div class="form-group">
+            <label for="batchMovePathInput">Destination Folder (inside photos directory):</label>
+            <input type="text" id="batchMovePathInput" list="batchMoveFolderSuggestions" class="form-control" placeholder="e.g. vacation or nature/vacation" autocomplete="off" />
+            <datalist id="batchMoveFolderSuggestions"></datalist>
+            <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;">
+              Enter a folder path inside the photos directory. The folder will be created if it does not exist.
+            </span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelBatchMoveBtn">Cancel</button>
+          <button class="btn btn-primary" id="confirmBatchMoveBtn">Move</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <script src="vendor/leaflet/leaflet.js"></script>
-  <script type="module" src="app.js?v=14"></script>
+  <script type="module" src="app.js?v=16"></script>
 </body>
 </html>
