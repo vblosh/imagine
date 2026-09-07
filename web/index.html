@@ -18,25 +18,25 @@
             <circle cx="8.5" cy="8.5" r="1.5"/>
             <polyline points="21 15 16 10 5 21"/>
           </svg>
-          <span class="logo-text">IMAGINE <span class="logo-sub">Organizer</span></span>
+          <span class="logo-text">IMAGINE <span class="logo-sub" data-i18n="logo_sub">Organizer</span></span>
         </div>
 
         <nav class="view-tabs" id="viewTabs">
           <button class="tab-btn active" data-tab="media">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-            Media
+            <span data-i18n="tab_media">Media</span>
           </button>
           <button class="tab-btn" data-tab="people">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            People
+            <span data-i18n="tab_people">People</span>
           </button>
           <button class="tab-btn" data-tab="places">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-            Places
+            <span data-i18n="tab_places">Places</span>
           </button>
           <button class="tab-btn" data-tab="events">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-            Events
+            <span data-i18n="tab_events">Events</span>
           </button>
         </nav>
       </div>
@@ -44,29 +44,45 @@
       <div class="top-bar-center">
         <div class="search-box">
           <svg class="search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="searchInput" placeholder="Search photos, camera, tags..." autocomplete="off">
-          <button class="clear-search" id="clearSearchBtn" title="Clear search">&times;</button>
+          <input type="text" id="searchInput" placeholder="Search photos, camera, tags..." data-i18n-placeholder="search_placeholder" autocomplete="off">
+          <button class="clear-search" id="clearSearchBtn" title="Clear search" data-i18n-title="clear_search">&times;</button>
         </div>
       </div>
 
       <div class="top-bar-right">
         <!-- Zoom Slider -->
-        <div class="zoom-control" title="Thumbnail Size">
+        <div class="zoom-control" title="Thumbnail Size" data-i18n-title="thumb_size">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="6" height="6"/></svg>
           <input type="range" id="zoomSlider" min="120" max="360" value="180" step="10">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
         </div>
 
-        <button class="btn btn-secondary" id="refreshBtn" title="Refresh media">
+        <!-- Language Selector -->
+        <div class="lang-selector" title="Language" data-i18n-title="language_select">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="lang-icon">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="2" y1="12" x2="22" y2="12"></line>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+          </svg>
+          <select id="langSelect" class="lang-select" aria-label="Select Language" data-i18n-aria-label="language_select">
+            <option value="en">English</option>
+            <option value="es">Español</option>
+            <option value="de">Deutsch</option>
+            <option value="ru">Русский</option>
+            <option value="zh">中文</option>
+          </select>
+        </div>
+
+        <button class="btn btn-secondary" id="refreshBtn" title="Refresh media" data-i18n-title="refresh_media">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
         </button>
 
         <button class="btn btn-primary" id="importBtn">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-          Import Folder
+          <span data-i18n="import_folder">Import Folder</span>
         </button>
 
-        <button class="btn btn-icon" id="toggleInspectorBtn" title="Toggle Inspector Panel">
+        <button class="btn btn-icon" id="toggleInspectorBtn" title="Toggle Inspector Panel" data-i18n-title="toggle_inspector">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
         </button>
       </div>
@@ -79,47 +95,47 @@
         <!-- Sidebar Navigation Accordion -->
         <div class="sidebar-section">
           <div class="sidebar-section-header">
-            <span class="section-title">Navigation</span>
+            <span class="section-title" data-i18n="nav_section">Navigation</span>
           </div>
           <ul class="sidebar-menu">
             <li class="menu-item active" data-filter="all" id="navAllMedia">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-              <span>All Media</span>
+              <span data-i18n="nav_all_media">All Media</span>
               <span class="count-badge" id="totalMediaCount">0</span>
             </li>
             <li class="menu-item" data-filter="photos" id="navPhotos">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-              <span>Photos</span>
+              <span data-i18n="nav_photos">Photos</span>
               <span class="count-badge" id="totalPhotosCount">0</span>
             </li>
             <li class="menu-item" data-filter="videos" id="navVideos">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-              <span>Videos</span>
+              <span data-i18n="nav_videos">Videos</span>
               <span class="count-badge" id="totalVideosCount">0</span>
             </li>
             <li class="menu-item" data-filter="audio" id="navAudio">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3"/><path d="M12 18v3"/></svg>
-              <span>Audio</span>
+              <span data-i18n="nav_audio">Audio</span>
               <span class="count-badge" id="totalAudioCount">0</span>
             </li>
             <li class="menu-item" data-filter="picks" id="navPicks">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-              <span>Picks</span>
+              <span data-i18n="nav_picks">Picks</span>
               <span class="count-badge" id="totalPicksCount">0</span>
             </li>
             <li class="menu-item" data-filter="rejects" id="navRejects">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-              <span>Rejects</span>
+              <span data-i18n="nav_rejects">Rejects</span>
               <span class="count-badge" id="totalRejectsCount">0</span>
             </li>
             <li class="menu-item" data-filter="not_rejects" id="navNotRejects">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="16 10 11 15 8 12"/></svg>
-              <span>Not Rejects</span>
+              <span data-i18n="nav_not_rejects">Not Rejects</span>
               <span class="count-badge" id="totalNotRejectsCount">0</span>
             </li>
             <li class="menu-item" data-filter="unrated" id="navUnrated">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-              <span>Unrated</span>
+              <span data-i18n="nav_unrated">Unrated</span>
               <span class="count-badge" id="totalUnratedCount">0</span>
             </li>
           </ul>
@@ -128,8 +144,8 @@
         <!-- Albums Section -->
         <div class="sidebar-section">
           <div class="sidebar-section-header">
-            <span class="section-title">Albums</span>
-            <button class="section-action-btn" id="newAlbumBtn" title="Create New Album">+</button>
+            <span class="section-title" data-i18n="albums_section">Albums</span>
+            <button class="section-action-btn" id="newAlbumBtn" title="Create New Album" data-i18n-title="new_album">+</button>
           </div>
           <ul class="sidebar-menu" id="albumsList">
             <!-- Dynamic Album items -->
@@ -139,35 +155,35 @@
         <!-- Keyword Tags Section -->
         <div class="sidebar-section">
           <div class="sidebar-section-header">
-            <span class="section-title">Keyword Tags</span>
-            <button class="section-action-btn" id="newTagBtn" title="Create New Tag">+</button>
+            <span class="section-title" data-i18n="tags_section">Keyword Tags</span>
+            <button class="section-action-btn" id="newTagBtn" title="Create New Tag" data-i18n-title="new_tag">+</button>
           </div>
           <div class="tags-tree" id="tagsTree">
             <div class="tag-category-group" data-category="people">
               <div class="category-header">
                 <span class="arrow">▼</span>
-                <span class="cat-label">People</span>
+                <span class="cat-label" data-i18n="cat_people">People</span>
               </div>
               <ul class="tag-items" id="tagCategoryPeople"></ul>
             </div>
             <div class="tag-category-group" data-category="places">
               <div class="category-header">
                 <span class="arrow">▼</span>
-                <span class="cat-label">Places</span>
+                <span class="cat-label" data-i18n="cat_places">Places</span>
               </div>
               <ul class="tag-items" id="tagCategoryPlaces"></ul>
             </div>
             <div class="tag-category-group" data-category="events">
               <div class="category-header">
                 <span class="arrow">▼</span>
-                <span class="cat-label">Events</span>
+                <span class="cat-label" data-i18n="cat_events">Events</span>
               </div>
               <ul class="tag-items" id="tagCategoryEvents"></ul>
             </div>
             <div class="tag-category-group" data-category="keyword">
               <div class="category-header">
                 <span class="arrow">▼</span>
-                <span class="cat-label">Keywords</span>
+                <span class="cat-label" data-i18n="cat_keywords">Keywords</span>
               </div>
               <ul class="tag-items" id="tagCategoryKeyword"></ul>
             </div>
@@ -177,7 +193,7 @@
         <!-- Folders Tree Section -->
         <div class="sidebar-section">
           <div class="sidebar-section-header">
-            <span class="section-title">Folders</span>
+            <span class="section-title" data-i18n="folders_section">Folders</span>
           </div>
           <div class="folders-tree" id="foldersTree">
             <!-- Dynamically populated from file paths -->
@@ -190,34 +206,34 @@
         <!-- Filter Bar / Breadcrumb & Batch Actions -->
         <div class="content-toolbar">
           <div class="filter-indicator" id="filterIndicator">
-            <button class="btn btn-sm btn-secondary btn-back" id="categoryBackBtn" style="display: none;" title="Back to overview">
+            <button class="btn btn-sm btn-secondary btn-back" id="categoryBackBtn" style="display: none;" title="Back to overview" data-i18n-title="back_to_overview">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-              <span id="categoryBackBtnLabel">Back to People</span>
+              <span id="categoryBackBtnLabel" data-i18n="back_to_people">Back to People</span>
             </button>
-            <span id="filterLabel">All Photos</span>
-            <button class="btn-link" id="clearFiltersBtn" style="display: none;">Clear Filter</button>
+            <span id="filterLabel" data-i18n="all_photos">All Photos</span>
+            <button class="btn-link" id="clearFiltersBtn" style="display: none;" data-i18n="clear_filter">Clear Filter</button>
           </div>
 
           <!-- View Mode Switcher: Grid vs Map -->
           <div class="view-mode-toggle" id="viewModeToggle" role="group" aria-label="View Mode">
-            <button class="btn-toggle active" id="viewGridBtn" data-mode="grid" title="Grid View (G)">
+            <button class="btn-toggle active" id="viewGridBtn" data-mode="grid" title="Grid View (G)" data-i18n-title="grid_view">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-              <span>Grid</span>
+              <span data-i18n="grid">Grid</span>
             </button>
-            <button class="btn-toggle" id="viewMapBtn" data-mode="map" title="Map View (M)">
+            <button class="btn-toggle" id="viewMapBtn" data-mode="map" title="Map View (M)" data-i18n-title="map_view">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
-              <span>Map</span>
+              <span data-i18n="map">Map</span>
             </button>
           </div>
 
           <div class="sort-selector">
-            <label for="sortSelect">Sort:</label>
+            <label for="sortSelect" data-i18n="sort_label">Sort:</label>
             <select id="sortSelect">
-              <option value="date_taken-desc">Date (Newest first)</option>
-              <option value="date_taken-asc">Date (Oldest first)</option>
-              <option value="rating-desc">Rating (High to Low)</option>
-              <option value="file_name-asc">File Name (A-Z)</option>
-              <option value="file_size-desc">File Size (Largest)</option>
+              <option value="date_taken-desc" data-i18n="sort_date_desc">Date (Newest first)</option>
+              <option value="date_taken-asc" data-i18n="sort_date_asc">Date (Oldest first)</option>
+              <option value="rating-desc" data-i18n="sort_rating_desc">Rating (High to Low)</option>
+              <option value="file_name-asc" data-i18n="sort_name_asc">File Name (A-Z)</option>
+              <option value="file_size-desc" data-i18n="sort_size_desc">File Size (Largest)</option>
             </select>
           </div>
 
@@ -225,7 +241,7 @@
           <div class="batch-action-bar" id="batchActionBar" style="display: none;">
             <span class="batch-count" id="batchSelectedCount">0 selected</span>
             <div class="batch-rating">
-              <span>Rate:</span>
+              <span data-i18n="rate_label">Rate:</span>
               <div class="star-rating batch-stars" id="batchRating">
                 <span data-star="1">★</span>
                 <span data-star="2">★</span>
@@ -234,22 +250,22 @@
                 <span data-star="5">★</span>
               </div>
             </div>
-            <button class="btn btn-sm" id="batchPickBtn" title="Pick selected">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Pick
+            <button class="btn btn-sm" id="batchPickBtn" title="Pick selected" data-i18n-title="pick_selected">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> <span data-i18n="pick">Pick</span>
             </button>
-            <button class="btn btn-sm btn-danger" id="batchRejectBtn" title="Reject selected">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Reject
+            <button class="btn btn-sm btn-danger" id="batchRejectBtn" title="Reject selected" data-i18n-title="reject_selected">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> <span data-i18n="reject">Reject</span>
             </button>
-            <button class="btn btn-sm btn-danger" id="batchDeleteBtn" title="Delete selected photos from catalog">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> Delete
+            <button class="btn btn-sm btn-danger" id="batchDeleteBtn" title="Delete selected photos from catalog" data-i18n-title="delete_selected">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> <span data-i18n="delete">Delete</span>
             </button>
-            <button class="btn btn-sm" id="batchAddTagBtn">Add Tag</button>
-            <button class="btn btn-sm" id="batchAddAlbumBtn">Album</button>
-            <button class="btn btn-sm" id="batchDateBtn">Date</button>
-            <button class="btn btn-sm" id="batchMoveBtn" title="Move selected photos to another folder">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg> Move
+            <button class="btn btn-sm" id="batchAddTagBtn" data-i18n="add_tag">Add Tag</button>
+            <button class="btn btn-sm" id="batchAddAlbumBtn" data-i18n="add_to_album" title="Add to Album" data-i18n-title="add_to_album">Add to Album</button>
+            <button class="btn btn-sm" id="batchDateBtn" data-i18n="date" title="Adjust date & time" data-i18n-title="batch_date_btn_title">Date</button>
+            <button class="btn btn-sm" id="batchMoveBtn" title="Move selected photos to another folder" data-i18n-title="move_selected">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg> <span data-i18n="move">Move</span>
             </button>
-            <button class="btn btn-sm btn-secondary" id="batchClearBtn">Deselect</button>
+            <button class="btn btn-sm btn-secondary" id="batchClearBtn" data-i18n="deselect">Deselect</button>
           </div>
         </div>
 
@@ -260,9 +276,9 @@
           </div>
           <div class="empty-state" id="emptyState" style="display: none;">
             <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-            <h3>No Photos Found</h3>
-            <p>Import photos from a folder on your computer to get started.</p>
-            <button class="btn btn-primary" id="emptyImportBtn">Import Folder</button>
+            <h3 data-i18n="no_photos_found">No Photos Found</h3>
+            <p data-i18n="import_prompt">Import photos from a folder on your computer to get started.</p>
+            <button class="btn btn-primary" id="emptyImportBtn" data-i18n="import_folder">Import Folder</button>
           </div>
         </div>
 
@@ -276,7 +292,7 @@
             <div class="category-view-actions">
               <button class="btn btn-secondary btn-sm" id="categoryAddBtn">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                <span id="categoryAddBtnLabel">Add Person</span>
+                <span id="categoryAddBtnLabel" data-i18n="add_person">Add Person</span>
               </button>
             </div>
           </div>
@@ -287,9 +303,9 @@
             <svg class="category-empty-icon" id="categoryEmptyIcon" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
             </svg>
-            <h3 id="categoryEmptyTitle">No People Found</h3>
-            <p id="categoryEmptyText">Tag photos with people's names to organize them here.</p>
-            <button class="btn btn-primary" id="categoryEmptyActionBtn">Add Person</button>
+            <h3 id="categoryEmptyTitle" data-i18n="no_people_found">No People Found</h3>
+            <p id="categoryEmptyText" data-i18n="tag_people_prompt">Tag photos with people's names to organize them here.</p>
+            <button class="btn btn-primary" id="categoryEmptyActionBtn" data-i18n="add_person">Add Person</button>
           </div>
         </div>
 
@@ -299,8 +315,8 @@
           <div class="map-search-overlay" id="mapSearchOverlay">
             <div class="map-search-box">
               <svg class="search-icon" id="mapSearchIcon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input type="text" id="mapSearchInput" placeholder="Search place, city, or coordinates..." autocomplete="off">
-              <button class="clear-search" id="clearMapSearchBtn" title="Clear place search" style="display: none;">&times;</button>
+              <input type="text" id="mapSearchInput" placeholder="Search place, city, or coordinates..." autocomplete="off" data-i18n-placeholder="map_search_placeholder">
+              <button class="clear-search" id="clearMapSearchBtn" title="Clear place search" data-i18n-title="clear_place_search" style="display: none;">&times;</button>
               <div class="map-search-spinner" id="mapSearchSpinner" style="display: none;"></div>
             </div>
             <div class="map-search-results" id="mapSearchResults" style="display: none;"></div>
@@ -308,33 +324,33 @@
 
           <div class="map-toolbar-overlay">
             <div class="map-badge" id="mapPhotoCountBadge">
-              <span id="mapPhotoCount">0</span> photos on map
+              <span id="mapPhotoCount">0</span> <span data-i18n="photos_on_map_suffix">photos on map</span>
             </div>
-            <button class="btn btn-sm btn-secondary" id="mapFitBoundsBtn" title="Fit all photos in view">
+            <button class="btn btn-sm btn-secondary" id="mapFitBoundsBtn" title="Fit all photos in view" data-i18n-title="fit_all_title">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 15 21 21 15 21"/><polyline points="3 9 3 3 9 3"/></svg>
-              Fit All
+              <span data-i18n="fit_all">Fit All</span>
             </button>
-            <button class="btn btn-sm btn-secondary" id="mapToggleUnmappedBtn" title="Toggle unmapped photos tray">
+            <button class="btn btn-sm btn-secondary" id="mapToggleUnmappedBtn" title="Toggle unmapped photos tray" data-i18n-title="toggle_unmapped">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
               <span id="unmappedBtnLabel">Unmapped (0)</span>
             </button>
-            <button class="btn btn-sm btn-secondary" id="mapLoadMoreBtn" style="display: none;" title="Load next page of photos">
+            <button class="btn btn-sm btn-secondary" id="mapLoadMoreBtn" style="display: none;" title="Load next page of photos" data-i18n-title="load_next_page" data-i18n="load_more">
               Load More
             </button>
-            <button class="btn btn-sm btn-secondary" id="mapLoadAllBtn" style="display: none;" title="Load all photos in catalog for map">
+            <button class="btn btn-sm btn-secondary" id="mapLoadAllBtn" style="display: none;" title="Load all photos in catalog for map" data-i18n-title="load_all_photos_map" data-i18n="load_all">
               Load All
             </button>
           </div>
           <div id="leafletMap" class="leaflet-map-canvas"></div>
           <div class="unmapped-tray" id="unmappedTray" style="display: none;">
             <div class="unmapped-tray-header">
-              <span class="tray-title" id="unmappedTrayTitle">Unmapped Photos — Select photos, then click anywhere on the map to place them</span>
+              <span class="tray-title" id="unmappedTrayTitle" data-i18n="unmapped_tray_title_default">Unmapped Photos — Select photos, then click anywhere on the map to place them</span>
               <div class="unmapped-tray-actions">
                 <span class="unmapped-selected-count" id="unmappedSelectedCount" style="display: none;">0 selected</span>
-                <button class="btn btn-xs btn-secondary" id="unmappedSelectAllBtn" title="Select all unmapped photos">Select All</button>
-                <button class="btn btn-xs btn-secondary" id="unmappedDeselectAllBtn" title="Clear selection" style="display: none;">Deselect</button>
-                <button class="btn btn-xs btn-secondary" id="unmappedLoadMoreBtn" style="display: none;" title="Load more photos into tray">Load More</button>
-                <button class="btn-icon-sm" id="closeUnmappedTrayBtn" title="Close unmapped tray">&times;</button>
+                <button class="btn btn-xs btn-secondary" id="unmappedSelectAllBtn" title="Select all unmapped photos" data-i18n-title="select_all_unmapped" data-i18n="select_all">Select All</button>
+                <button class="btn btn-xs btn-secondary" id="unmappedDeselectAllBtn" title="Clear selection" data-i18n-title="clear_selection" style="display: none;" data-i18n="deselect">Deselect</button>
+                <button class="btn btn-xs btn-secondary" id="unmappedLoadMoreBtn" style="display: none;" title="Load more photos into tray" data-i18n-title="load_more_tray" data-i18n="load_more">Load More</button>
+                <button class="btn-icon-sm" id="closeUnmappedTrayBtn" title="Close unmapped tray" data-i18n-title="close_unmapped_tray">&times;</button>
               </div>
             </div>
             <div class="unmapped-photos-list" id="unmappedPhotosList"></div>
@@ -352,33 +368,33 @@
 
         <!-- Bottom Timeline Scrub Bar -->
         <footer class="bottom-scrub-bar">
-          <div class="scrub-label">Timeline</div>
+          <div class="scrub-label" data-i18n="timeline">Timeline</div>
           <div class="timeline-container" id="timelineContainer">
             <!-- Dynamic month/year tick bars generated here -->
           </div>
-          <button class="btn-link" id="resetTimelineBtn" title="Reset date range">Reset</button>
+          <button class="btn-link" id="resetTimelineBtn" title="Reset date range" data-i18n-title="reset_timeline" data-i18n="reset">Reset</button>
         </footer>
       </main>
 
       <!-- Right Inspector Panel -->
       <aside class="right-inspector" id="rightInspector">
-        <div class="inspector-resizer-left" id="inspectorResizerLeft" role="separator" aria-orientation="vertical" tabindex="0" title="Drag to resize Inspector panel width (double-click to reset)"></div>
+        <div class="inspector-resizer-left" id="inspectorResizerLeft" role="separator" aria-orientation="vertical" tabindex="0" title="Drag to resize Inspector panel width (double-click to reset)" data-i18n-title="resize_inspector"></div>
         <div class="inspector-header">
-          <span class="inspector-title">Inspector</span>
-          <button class="btn-icon-sm" id="closeInspectorBtn" title="Close panel">&times;</button>
+          <span class="inspector-title" data-i18n="inspector">Inspector</span>
+          <button class="btn-icon-sm" id="closeInspectorBtn" title="Close panel" data-i18n-title="close_panel">&times;</button>
         </div>
 
         <div class="inspector-body" id="inspectorBody">
           <!-- Populated dynamically when photo is selected -->
           <div class="no-selection" id="inspectorNoSelection">
-            <p>Select a photo to view metadata, EXIF properties, ratings, and tags.</p>
+            <p data-i18n="no_selection_text">Select a photo to view metadata, EXIF properties, ratings, and tags.</p>
           </div>
 
           <div class="selection-details" id="inspectorSelection" style="display: none;">
             <!-- Selected photo preview -->
             <div class="inspector-preview" id="inspectorPreviewWrapper">
               <img id="inspectorImg" src="" alt="Photo preview">
-              <div class="preview-overlay-btn" id="openLoupeFromInspector" title="Open Fullscreen Loupe">
+              <div class="preview-overlay-btn" id="openLoupeFromInspector" title="Open Fullscreen Loupe" data-i18n-title="open_loupe">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
               </div>
             </div>
@@ -394,10 +410,10 @@
                   <span data-star="5">★</span>
                 </div>
                 <div class="flag-toggle" id="inspectorFlag">
-                  <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)">
+                  <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)" data-i18n-title="pick_p">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
                   </button>
-                  <button class="flag-btn flag-reject" data-flag="-1" title="Reject (Del)">
+                  <button class="flag-btn flag-reject" data-flag="-1" title="Reject (Del)" data-i18n-title="reject_del">
                     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                   </button>
                 </div>
@@ -407,14 +423,14 @@
             <!-- File Properties Section -->
             <div class="inspector-section resizable-panel" id="fileInfoSection" data-panel="fileInfo">
               <div class="section-header-row">
-                <h4 class="section-heading">File Information</h4>
+                <h4 class="section-heading" data-i18n="file_info">File Information</h4>
               </div>
               <div class="resizable-panel-body" id="fileInfoBody">
                 <dl class="prop-list">
-                  <dt>Name</dt>
+                  <dt data-i18n="file_name">Name</dt>
                   <dd class="prop-editable-row" id="infoFileNameRow">
-                    <span id="infoFileName" class="editable-text" title="Click to rename">-</span>
-                    <button class="btn-inline-edit" id="renameFileBtn" title="Rename file" aria-label="Rename file">
+                    <span id="infoFileName" class="editable-text" title="Click to rename" data-i18n-title="click_to_rename">-</span>
+                    <button class="btn-inline-edit" id="renameFileBtn" title="Rename file" aria-label="Rename file" data-i18n-title="rename_file" data-i18n-aria-label="rename_file">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path><path d="M15 5l4 4"></path></svg>
                     </button>
                     <div class="inline-edit-form" id="renameFileForm" style="display: none;">
@@ -425,16 +441,16 @@
                       </div>
                     </div>
                   </dd>
-                  <dt>Type</dt>
+                  <dt data-i18n="media_type">Type</dt>
                   <dd id="infoMediaType">-</dd>
-                  <dt>Dimensions</dt>
+                  <dt data-i18n="dimensions">Dimensions</dt>
                   <dd id="infoDimensions">-</dd>
-                  <dt>File Size</dt>
+                  <dt data-i18n="file_size">File Size</dt>
                   <dd id="infoFileSize">-</dd>
-                  <dt>Date Taken</dt>
+                  <dt data-i18n="date_taken">Date Taken</dt>
                   <dd class="prop-editable-row" id="infoDateTakenRow">
-                    <span id="infoDateTaken" class="editable-text" title="Click to change date">-</span>
-                    <button class="btn-inline-edit" id="editDateTakenBtn" title="Change date" aria-label="Change date">
+                    <span id="infoDateTaken" class="editable-text" title="Click to change date" data-i18n-title="click_to_change_date">-</span>
+                    <button class="btn-inline-edit" id="editDateTakenBtn" title="Change date" aria-label="Change date" data-i18n-title="change_date" data-i18n-aria-label="change_date">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path><path d="M15 5l4 4"></path></svg>
                     </button>
                     <div class="inline-edit-form" id="editDateTakenForm" style="display: none;">
@@ -445,24 +461,24 @@
                       </div>
                     </div>
                   </dd>
-                  <dt>Caption</dt>
+                  <dt data-i18n="caption">Caption</dt>
                   <dd class="prop-editable-row" id="infoCaptionRow">
-                    <span id="infoCaption" class="break-all editable-text" title="Click to edit caption">-</span>
-                    <button class="btn-inline-edit" id="editCaptionBtn" title="Change caption" aria-label="Change caption">
+                    <span id="infoCaption" class="break-all editable-text" title="Click to edit caption" data-i18n-title="click_to_edit_caption">-</span>
+                    <button class="btn-inline-edit" id="editCaptionBtn" title="Change caption" aria-label="Change caption" data-i18n-title="change_caption" data-i18n-aria-label="change_caption">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path><path d="M15 5l4 4"></path></svg>
                     </button>
                     <div class="inline-edit-form" id="editCaptionForm" style="display: none;">
-                      <input type="text" class="inline-edit-input" id="editCaptionInput" placeholder="Add caption..." autocomplete="off" />
+                      <input type="text" class="inline-edit-input" id="editCaptionInput" placeholder="Add caption..." autocomplete="off" data-i18n-placeholder="add_caption_placeholder" />
                       <div class="inline-edit-actions">
                         <button class="btn-inline-act btn-inline-save" id="saveCaptionBtn" title="Save (Enter)">✓</button>
                         <button class="btn-inline-act btn-inline-cancel" id="cancelCaptionBtn" title="Cancel (Esc)">✕</button>
                       </div>
                     </div>
                   </dd>
-                  <dt>Path</dt>
+                  <dt data-i18n="path">Path</dt>
                   <dd class="prop-editable-row" id="infoFilePathRow">
                     <span id="infoFilePath" class="break-all">-</span>
-                    <button class="btn-inline-edit" id="inspectorMovePathBtn" title="Move to folder" aria-label="Move file">
+                    <button class="btn-inline-edit" id="inspectorMovePathBtn" title="Move to folder" aria-label="Move file" data-i18n-title="move_to_folder" data-i18n-aria-label="move_to_folder">
                       <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg>
                     </button>
                   </dd>
@@ -476,25 +492,25 @@
             <!-- Audio / Video Media Properties Section -->
             <div class="inspector-section resizable-panel" id="avSection" data-panel="av" style="display: none;">
               <div class="section-header-row">
-                <h4 class="section-heading">Audio / Video Info</h4>
+                <h4 class="section-heading" data-i18n="av_info">Audio / Video Info</h4>
               </div>
               <div class="resizable-panel-body" id="avBody">
                 <dl class="prop-list">
-                  <dt>Duration</dt>
+                  <dt data-i18n="duration">Duration</dt>
                   <dd id="infoDuration">-</dd>
-                  <dt id="dtArtist">Artist</dt>
+                  <dt id="dtArtist" data-i18n="artist">Artist</dt>
                   <dd id="infoArtist">-</dd>
-                  <dt id="dtTitle">Title</dt>
+                  <dt id="dtTitle" data-i18n="title">Title</dt>
                   <dd id="infoTitle">-</dd>
-                  <dt id="dtAlbum">Album</dt>
+                  <dt id="dtAlbum" data-i18n="album">Album</dt>
                   <dd id="infoAlbum">-</dd>
-                  <dt id="dtGenre">Genre</dt>
+                  <dt id="dtGenre" data-i18n="genre">Genre</dt>
                   <dd id="infoGenre">-</dd>
-                  <dt id="dtCodec">Codec</dt>
+                  <dt id="dtCodec" data-i18n="codec">Codec</dt>
                   <dd id="infoCodec">-</dd>
-                  <dt id="dtBitrate">Bitrate</dt>
+                  <dt id="dtBitrate" data-i18n="bitrate">Bitrate</dt>
                   <dd id="infoBitrate">-</dd>
-                  <dt id="dtAudioDetails">Audio</dt>
+                  <dt id="dtAudioDetails" data-i18n="audio">Audio</dt>
                   <dd id="infoAudioDetails">-</dd>
                 </dl>
               </div>
@@ -506,23 +522,23 @@
             <!-- EXIF Metadata Section -->
             <div class="inspector-section resizable-panel" id="exifSection" data-panel="exif">
               <div class="section-header-row">
-                <h4 class="section-heading">Camera & Exposure (EXIF)</h4>
+                <h4 class="section-heading" data-i18n="exif_info">Camera & Exposure (EXIF)</h4>
               </div>
               <div class="resizable-panel-body" id="exifBody">
                 <dl class="prop-list">
-                  <dt>Camera</dt>
+                  <dt data-i18n="camera">Camera</dt>
                   <dd id="infoCamera">-</dd>
-                  <dt>Lens</dt>
+                  <dt data-i18n="lens">Lens</dt>
                   <dd id="infoLens">-</dd>
-                  <dt>Exposure</dt>
+                  <dt data-i18n="exposure">Exposure</dt>
                   <dd id="infoExposure">-</dd>
-                  <dt>Aperture</dt>
+                  <dt data-i18n="aperture">Aperture</dt>
                   <dd id="infoAperture">-</dd>
-                  <dt>ISO</dt>
+                  <dt data-i18n="iso">ISO</dt>
                   <dd id="infoIso">-</dd>
-                  <dt>Focal Length</dt>
+                  <dt data-i18n="focal_length">Focal Length</dt>
                   <dd id="infoFocal">-</dd>
-                  <dt>GPS</dt>
+                  <dt data-i18n="gps">GPS</dt>
                   <dd id="infoGps">-</dd>
                 </dl>
               </div>
@@ -533,17 +549,17 @@
 
             <!-- Location Section -->
             <div class="inspector-section" id="inspectorLocationSection">
-              <h4 class="section-heading">Location</h4>
+              <h4 class="section-heading" data-i18n="location">Location</h4>
               <div class="inspector-gps-actions" id="inspectorGpsActions" style="display: none;">
-                <button class="btn btn-xs btn-primary" id="inspectorShowOnMapBtn" title="Show this photo on the map">
+                <button class="btn btn-xs btn-primary" id="inspectorShowOnMapBtn" title="Show this photo on the map" data-i18n-title="show_on_map_title">
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
-                  Show on Map
+                  <span data-i18n="show_on_map">Show on Map</span>
                 </button>
-                <button class="btn btn-xs btn-secondary" id="inspectorClearGpsBtn" title="Remove GPS coordinates">Clear</button>
+                <button class="btn btn-xs btn-secondary" id="inspectorClearGpsBtn" title="Remove GPS coordinates" data-i18n-title="clear_gps_title" data-i18n="clear">Clear</button>
               </div>
               <button class="btn btn-xs btn-secondary" id="inspectorPlaceOnMapBtn" style="display: none; margin-top: 6px; width: 100%;">
                 <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                Place on Map
+                <span data-i18n="place_on_map">Place on Map</span>
               </button>
               <div id="inspectorMiniMap" class="inspector-minimap" style="display: none;"></div>
             </div>
@@ -551,44 +567,44 @@
             <!-- Tags Section -->
             <div class="inspector-section">
               <div class="inspector-section-heading-row" style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-                <h4 class="section-heading" style="margin-bottom: 0;">Tags</h4>
-                <button class="section-action-btn" id="inspectorAddTagModalBtn" title="Open Tag Dialog">+</button>
+                <h4 class="section-heading" style="margin-bottom: 0;" data-i18n="tags">Tags</h4>
+                <button class="section-action-btn" id="inspectorAddTagModalBtn" title="Open Tag Dialog" data-i18n-title="open_tag_dialog">+</button>
               </div>
               <div class="tags-container" id="inspectorTags">
                 <!-- Tag badges with remove button -->
               </div>
               <div class="add-tag-inline">
-                <input type="text" id="addTagInput" list="tagSuggestions" placeholder="Add tag..." autocomplete="off">
+                <input type="text" id="addTagInput" list="tagSuggestions" placeholder="Add tag..." autocomplete="off" data-i18n-placeholder="add_tag_placeholder">
                 <datalist id="tagSuggestions"></datalist>
-                <select id="addTagCategorySelect" class="tag-category-select" title="Tag Category">
-                  <option value="keyword" selected>Keyword</option>
-                  <option value="places">Places</option>
-                  <option value="people">People</option>
-                  <option value="events">Events</option>
+                <select id="addTagCategorySelect" class="tag-category-select" title="Tag Category" data-i18n-title="tag_category_title">
+                  <option value="keyword" selected data-i18n="cat_keyword">Keyword</option>
+                  <option value="places" data-i18n="cat_places">Places</option>
+                  <option value="people" data-i18n="cat_people">People</option>
+                  <option value="events" data-i18n="cat_events">Events</option>
                 </select>
-                <button class="btn btn-sm" id="addTagBtn">Add</button>
+                <button class="btn btn-sm" id="addTagBtn" data-i18n="add">Add</button>
               </div>
               <button class="btn btn-xs btn-secondary" id="inspectorOpenTagModalBtn" style="margin-top: 6px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 5px;">
                 <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
-                Choose People / Event / Dialog...
+                <span data-i18n="choose_dialog">Choose People / Event / Dialog...</span>
               </button>
             </div>
 
             <!-- Albums Section -->
             <div class="inspector-section">
-              <h4 class="section-heading">Albums</h4>
-              <button class="btn btn-sm btn-secondary" id="inspectorAddToAlbumBtn" style="width: 100%;">Add to Album</button>
+              <h4 class="section-heading" data-i18n="albums_section">Albums</h4>
+              <button class="btn btn-sm btn-secondary" id="inspectorAddToAlbumBtn" style="width: 100%;" data-i18n="add_to_album">Add to Album</button>
             </div>
 
             <!-- Actions Section -->
             <div class="inspector-section" style="display: flex; flex-direction: column; gap: 6px;">
-              <button class="btn btn-sm btn-secondary" id="inspectorMoveBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Move to folder">
+              <button class="btn btn-sm btn-secondary" id="inspectorMoveBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Move to folder" data-i18n-title="move_to_folder">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg>
-                Move...
+                <span data-i18n="move_btn">Move...</span>
               </button>
               <button class="btn btn-sm btn-danger-outline" id="inspectorDeleteBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-                Delete from Catalog
+                <span data-i18n="delete_from_catalog">Delete from Catalog</span>
               </button>
             </div>
           </div>
@@ -600,7 +616,7 @@
     <div class="loupe-modal" id="loupeModal" style="display: none;">
       <div class="loupe-backdrop" id="loupeBackdrop"></div>
       <div class="loupe-content">
-        <button class="loupe-btn loupe-prev" id="loupePrevBtn" title="Previous (Left Arrow)">&lsaquo;</button>
+        <button class="loupe-btn loupe-prev" id="loupePrevBtn" title="Previous (Left Arrow)" data-i18n-title="prev_photo">&lsaquo;</button>
         <div class="loupe-image-container">
           <div class="loupe-image-viewport" id="loupeImageViewport">
             <img id="loupeImg" src="" alt="Fullscreen Loupe View" draggable="false">
@@ -655,100 +671,100 @@
               <span data-star="5">★</span>
             </div>
             <div class="flag-toggle" id="loupeFlag">
-              <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)">✔</button>
-              <button class="flag-btn flag-reject" data-flag="-1" title="Reject (X)">✖</button>
+              <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)" data-i18n-title="pick_p">✔</button>
+              <button class="flag-btn flag-reject" data-flag="-1" title="Reject (X)" data-i18n-title="reject_selected">✖</button>
             </div>
-            <button class="btn btn-secondary loupe-quick-edit-btn" id="loupeQuickEditBtn" title="Quick Edit (E)">
+            <button class="btn btn-secondary loupe-quick-edit-btn" id="loupeQuickEditBtn" title="Quick Edit (E)" data-i18n-title="quick_edit_shortcut">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 20h9"/>
                 <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
               </svg>
-              <span>Quick Edit</span>
+              <span data-i18n="quick_edit">Quick Edit</span>
             </button>
-            <button class="flag-btn" id="loupeDeleteBtn" title="Delete from Catalog" style="margin-left: 6px; color: var(--reject-color);">
+            <button class="flag-btn" id="loupeDeleteBtn" title="Delete from Catalog" data-i18n-title="delete_from_catalog" style="margin-left: 6px; color: var(--reject-color);">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
             </button>
             <div class="loupe-zoom-controls" id="loupeZoomControls">
-              <button class="loupe-zoom-btn" id="loupeZoomOutBtn" title="Zoom Out (-)">−</button>
-              <input type="range" class="loupe-zoom-slider" id="loupeZoomSlider" min="100" max="500" value="100" step="5" title="Zoom Slider">
-              <button class="loupe-zoom-btn" id="loupeZoomInBtn" title="Zoom In (+)">+</button>
-              <button class="loupe-zoom-value" id="loupeZoomResetBtn" title="Reset Zoom (Z or Ctrl+0)">100%</button>
+              <button class="loupe-zoom-btn" id="loupeZoomOutBtn" title="Zoom Out (-)" data-i18n-title="zoom_out">−</button>
+              <input type="range" class="loupe-zoom-slider" id="loupeZoomSlider" min="100" max="500" value="100" step="5" title="Zoom Slider" data-i18n-title="zoom_slider">
+              <button class="loupe-zoom-btn" id="loupeZoomInBtn" title="Zoom In (+)" data-i18n-title="zoom_in">+</button>
+              <button class="loupe-zoom-value" id="loupeZoomResetBtn" title="Reset Zoom (Z or Ctrl+0)" data-i18n-title="reset_zoom">100%</button>
             </div>
           </div>
           <!-- Floating Quick Edit Toolbar -->
           <div class="quick-edit-toolbar" id="quickEditToolbar" style="display: none;">
-            <div class="quick-edit-group" title="Rotate">
-              <button class="quick-edit-btn" id="quickEditRotateLeftBtn" title="Rotate Left 90° (L)">
+            <div class="quick-edit-group" title="Rotate" data-i18n-title="rotate_left">
+              <button class="quick-edit-btn" id="quickEditRotateLeftBtn" title="Rotate Left 90° (L)" data-i18n-title="rotate_left_title">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
                   <polyline points="3 3 3 8 8 8"/>
                 </svg>
-                <span>Rotate Left</span>
+                <span data-i18n="rotate_left">Rotate Left</span>
               </button>
-              <button class="quick-edit-btn" id="quickEditRotateRightBtn" title="Rotate Right 90° (R)">
+              <button class="quick-edit-btn" id="quickEditRotateRightBtn" title="Rotate Right 90° (R)" data-i18n-title="rotate_right_title">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
                   <polyline points="21 3 21 8 16 8"/>
                 </svg>
-                <span>Rotate Right</span>
+                <span data-i18n="rotate_right">Rotate Right</span>
               </button>
             </div>
 
             <div class="quick-edit-divider"></div>
 
-            <div class="quick-edit-group" title="Crop">
-              <button class="quick-edit-btn" id="quickEditCropBtn" title="Crop Tool (C)">
+            <div class="quick-edit-group" title="Crop" data-i18n-title="crop">
+              <button class="quick-edit-btn" id="quickEditCropBtn" title="Crop Tool (C)" data-i18n-title="crop_tool_title">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M6 2v14a2 2 0 0 0 2 2h14"/>
                   <path d="M18 22V8a2 2 0 0 0-2-2H2"/>
                 </svg>
-                <span>Crop</span>
+                <span data-i18n="crop">Crop</span>
               </button>
               <div class="quick-edit-sub-options" id="cropSubOptions" style="display: none;">
-                <select id="cropAspectRatioSelect" class="quick-edit-select" title="Aspect Ratio">
-                  <option value="original">Original</option>
-                  <option value="free">Freeform</option>
-                  <option value="1:1">1:1 Square</option>
-                  <option value="4:3">4:3 Standard</option>
-                  <option value="16:9">16:9 Widescreen</option>
-                  <option value="3:2">3:2 Classic</option>
+                <select id="cropAspectRatioSelect" class="quick-edit-select" title="Aspect Ratio" data-i18n-title="aspect_ratio">
+                  <option value="original" data-i18n="aspect_original">Original</option>
+                  <option value="free" data-i18n="aspect_free">Freeform</option>
+                  <option value="1:1" data-i18n="aspect_1_1">1:1 Square</option>
+                  <option value="4:3" data-i18n="aspect_4_3">4:3 Standard</option>
+                  <option value="16:9" data-i18n="aspect_16_9">16:9 Widescreen</option>
+                  <option value="3:2" data-i18n="aspect_3_2">3:2 Classic</option>
                 </select>
-                <button class="btn btn-sm btn-primary" id="quickEditApplyCropBtn" title="Apply Crop (Enter)">Apply</button>
-                <button class="btn btn-sm btn-secondary" id="quickEditCancelCropBtn" title="Cancel Crop (Esc)">Cancel</button>
+                <button class="btn btn-sm btn-primary" id="quickEditApplyCropBtn" title="Apply Crop (Enter)" data-i18n-title="apply_crop" data-i18n="apply">Apply</button>
+                <button class="btn btn-sm btn-secondary" id="quickEditCancelCropBtn" title="Cancel Crop (Esc)" data-i18n-title="cancel_crop" data-i18n="cancel">Cancel</button>
               </div>
             </div>
 
             <div class="quick-edit-divider"></div>
 
-            <div class="quick-edit-group" title="Smart Fix">
-              <button class="quick-edit-btn" id="quickEditSmartFixBtn" title="Auto Smart Fix (S)">
+            <div class="quick-edit-group" title="Smart Fix" data-i18n-title="smart_fix">
+              <button class="quick-edit-btn" id="quickEditSmartFixBtn" title="Auto Smart Fix (S)" data-i18n-title="smart_fix_title">
                 <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/>
                 </svg>
-                <span>Smart Fix</span>
+                <span data-i18n="smart_fix">Smart Fix</span>
               </button>
               <div class="quick-edit-sub-options" id="smartFixSubOptions" style="display: none;">
                 <label class="quick-edit-slider-label" title="Smart Fix Intensity">
-                  <span>Amount:</span>
+                  <span data-i18n="amount">Amount:</span>
                   <input type="range" id="smartFixIntensitySlider" min="10" max="100" value="100" class="loupe-zoom-slider" style="width: 70px;">
                   <span id="smartFixIntensityVal">100%</span>
                 </label>
-                <button class="btn btn-sm btn-secondary" id="quickEditCompareBtn" title="Hold or click to view unedited original">Compare</button>
+                <button class="btn btn-sm btn-secondary" id="quickEditCompareBtn" title="Hold or click to view unedited original" data-i18n-title="compare_title" data-i18n="compare">Compare</button>
               </div>
             </div>
 
             <div class="quick-edit-divider"></div>
 
             <div class="quick-edit-group quick-edit-actions">
-              <button class="btn btn-sm btn-secondary" id="quickEditResetBtn" title="Reset All Edits">Reset</button>
-              <button class="btn btn-sm btn-secondary" id="quickEditCancelBtn" title="Cancel & Close (Esc)">Cancel</button>
-              <button class="btn btn-sm btn-secondary" id="quickEditSaveCopyBtn" title="Save as a new copy">Save Copy</button>
-              <button class="btn btn-sm btn-primary" id="quickEditSaveBtn" title="Save changes (Ctrl+S)">Save</button>
+              <button class="btn btn-sm btn-secondary" id="quickEditResetBtn" title="Reset All Edits" data-i18n-title="reset_edits" data-i18n="reset">Reset</button>
+              <button class="btn btn-sm btn-secondary" id="quickEditCancelBtn" title="Cancel & Close (Esc)" data-i18n-title="cancel_close" data-i18n="cancel">Cancel</button>
+              <button class="btn btn-sm btn-secondary" id="quickEditSaveCopyBtn" title="Save as a new copy" data-i18n-title="save_copy_title" data-i18n="save_copy">Save Copy</button>
+              <button class="btn btn-sm btn-primary" id="quickEditSaveBtn" title="Save changes (Ctrl+S)" data-i18n-title="save_changes" data-i18n="save">Save</button>
             </div>
           </div>
         </div>
-        <button class="loupe-btn loupe-next" id="loupeNextBtn" title="Next (Right Arrow)">&rsaquo;</button>
-        <button class="loupe-close" id="loupeCloseBtn" title="Close (Escape)">&times;</button>
+        <button class="loupe-btn loupe-next" id="loupeNextBtn" title="Next (Right Arrow)" data-i18n-title="next_photo">&rsaquo;</button>
+        <button class="loupe-close" id="loupeCloseBtn" title="Close (Escape)" data-i18n-title="close_esc">&times;</button>
       </div>
     </div>
 
@@ -757,18 +773,18 @@
       <div class="modal-backdrop" id="importBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3>Import Photos to Catalog</h3>
-          <button class="btn-icon-sm" id="closeImportModalBtn">&times;</button>
+          <h3 data-i18n="import_modal_title">Import Photos to Catalog</h3>
+          <button class="btn-icon-sm" id="closeImportModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
-            <label for="importPathInput">Directory Path on Server:</label>
-            <input type="text" id="importPathInput" placeholder="/path/to/photos (e.g. /home/slava/photos)" class="form-control">
+            <label for="importPathInput" data-i18n="dir_path_server">Directory Path on Server:</label>
+            <input type="text" id="importPathInput" placeholder="/path/to/photos (e.g. /home/slava/photos)" class="form-control" data-i18n-placeholder="import_path_placeholder">
           </div>
           <div class="form-checkbox">
             <label>
               <input type="checkbox" id="importRecursiveCheck" checked>
-              Scan Subdirectories Recursively
+              <span data-i18n="scan_recursive">Scan Subdirectories Recursively</span>
             </label>
           </div>
 
@@ -778,14 +794,14 @@
               <div class="progress-bar-fill" id="importProgressBar" style="width: 0%;"></div>
             </div>
             <div class="import-status-text">
-              <span id="importStatusCounts">Scanning files...</span>
+              <span id="importStatusCounts" data-i18n="scanning_files">Scanning files...</span>
               <span id="importCurrentFile" class="text-ellipsis"></span>
             </div>
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="cancelImportBtn">Cancel</button>
-          <button class="btn btn-primary" id="startImportBtn">Start Import</button>
+          <button class="btn btn-secondary" id="cancelImportBtn" data-i18n="cancel">Cancel</button>
+          <button class="btn btn-primary" id="startImportBtn" data-i18n="start_import">Start Import</button>
         </div>
       </div>
     </div>
@@ -795,22 +811,22 @@
       <div class="modal-backdrop" id="newAlbumBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3>Create New Album</h3>
-          <button class="btn-icon-sm" id="closeNewAlbumModalBtn">&times;</button>
+          <h3 data-i18n="create_album_title">Create New Album</h3>
+          <button class="btn-icon-sm" id="closeNewAlbumModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
           <div class="form-group">
-            <label for="albumNameInput">Album Name:</label>
-            <input type="text" id="albumNameInput" placeholder="e.g. Summer Vacation 2026" class="form-control">
+            <label for="albumNameInput" data-i18n="album_name_label">Album Name:</label>
+            <input type="text" id="albumNameInput" placeholder="e.g. Summer Vacation 2026" class="form-control" data-i18n-placeholder="album_name_placeholder">
           </div>
           <div class="form-group">
-            <label for="albumDescInput">Description (optional):</label>
-            <textarea id="albumDescInput" rows="2" class="form-control" placeholder="Album description"></textarea>
+            <label for="albumDescInput" data-i18n="desc_optional">Description (optional):</label>
+            <textarea id="albumDescInput" rows="2" class="form-control" placeholder="Album description" data-i18n-placeholder="album_desc_placeholder"></textarea>
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="cancelAlbumBtn">Cancel</button>
-          <button class="btn btn-primary" id="createAlbumSubmitBtn">Create Album</button>
+          <button class="btn btn-secondary" id="cancelAlbumBtn" data-i18n="cancel">Cancel</button>
+          <button class="btn btn-primary" id="createAlbumSubmitBtn" data-i18n="create_album_btn">Create Album</button>
         </div>
       </div>
     </div>
@@ -820,24 +836,24 @@
       <div class="modal-backdrop" id="addToAlbumBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3>Add to Album</h3>
-          <button class="btn-icon-sm" id="closeAddToAlbumModalBtn">&times;</button>
+          <h3 data-i18n="add_to_album_title">Add to Album</h3>
+          <button class="btn-icon-sm" id="closeAddToAlbumModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
-          <p id="addToAlbumTargetCount" style="margin-bottom: 12px; font-size: 13px; color: var(--text-secondary);">Select an album for the selected photo(s):</p>
+          <p id="addToAlbumTargetCount" style="margin-bottom: 12px; font-size: 13px; color: var(--text-secondary);" data-i18n="select_album_for_photos">Select an album for the selected photo(s):</p>
           <div class="form-group" id="addToAlbumSelectGroup">
-            <label for="addToAlbumSelect">Select Album:</label>
+            <label for="addToAlbumSelect" data-i18n="select_album_label">Select Album:</label>
             <select id="addToAlbumSelect" class="form-control">
               <!-- Populated dynamically -->
             </select>
           </div>
-          <div id="noAlbumsNotice" style="display: none; margin-bottom: 12px; color: var(--text-dim); font-size: 13px;">
+          <div id="noAlbumsNotice" style="display: none; margin-bottom: 12px; color: var(--text-dim); font-size: 13px;" data-i18n="no_albums_notice">
             No albums exist yet. Please create an album first using the "+" button next to Albums in the sidebar.
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="cancelAddToAlbumBtn">Cancel</button>
-          <button class="btn btn-primary" id="confirmAddToAlbumBtn">Add to Album</button>
+          <button class="btn btn-secondary" id="cancelAddToAlbumBtn" data-i18n="cancel">Cancel</button>
+          <button class="btn btn-primary" id="confirmAddToAlbumBtn" data-i18n="add_to_album">Add to Album</button>
         </div>
       </div>
     </div>
@@ -852,9 +868,9 @@
               <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
               <line x1="7" y1="7" x2="7.01" y2="7"></line>
             </svg>
-            <h3 id="tagModalHeading">Add Tag</h3>
+            <h3 id="tagModalHeading" data-i18n="tag_modal_title">Add Tag</h3>
           </div>
-          <button class="btn-icon-sm" id="closeNewTagModalBtn" title="Close">&times;</button>
+          <button class="btn-icon-sm" id="closeNewTagModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body tag-modal-body">
           <!-- Target Photo Banner (shown when a photo or photos are selected) -->
@@ -866,10 +882,10 @@
             <div class="tag-target-details">
               <div class="tag-target-filename" id="tagModalPhotoName">photo.jpg</div>
               <div class="tag-target-meta" id="tagModalPhotoMeta">2026-09-01 • 3.2 MB</div>
-              <div class="tag-target-tags-row">
-                <span class="tag-target-tags-label">Current tags:</span>
+              <div class="tag-target-tags-row" id="tagModalPhotoTagsRow">
+                <span class="tag-target-tags-label" data-i18n="tag_target_current_tags">Current tags:</span>
                 <div class="tag-target-tags-list" id="tagModalPhotoCurrentTags">
-                  <span class="tag-target-no-tags">None</span>
+                  <span class="tag-target-no-tags" data-i18n="tag_target_none">None</span>
                 </div>
               </div>
             </div>
@@ -879,14 +895,14 @@
           <div class="tag-modal-apply-wrap" id="tagModalApplyGroup" style="display: none;">
             <label class="tag-modal-checkbox-label">
               <input type="checkbox" id="tagModalApplyToPhotoCheckbox" checked>
-              <span id="tagModalApplyLabel">Attach tag to selected photo</span>
+              <span id="tagModalApplyLabel" data-i18n="tag_attach_single">Attach tag to selected photo</span>
             </label>
           </div>
 
           <!-- Tag Name Input Group with Search Help -->
           <div class="form-group">
             <div class="tag-modal-label-row">
-              <label for="tagNameInput" class="tag-modal-label">Tag Name:</label>
+              <label for="tagNameInput" class="tag-modal-label" data-i18n="tag_name_label">Tag Name:</label>
               <span class="tag-modal-category-badge" id="tagDetectedBadge" style="display: none;"></span>
             </div>
             <div class="tag-search-input-wrap">
@@ -896,7 +912,7 @@
                   <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                 </svg>
               </span>
-              <input type="text" id="tagNameInput" list="tagModalSuggestions" placeholder="e.g. Mountain, John, Birthday" class="form-control tag-name-search-input" autocomplete="off">
+              <input type="text" id="tagNameInput" list="tagModalSuggestions" placeholder="e.g. Mountain, John, Birthday" class="form-control tag-name-search-input" autocomplete="off" data-i18n-placeholder="tag_name_placeholder">
               <datalist id="tagModalSuggestions"></datalist>
               <button type="button" class="tag-search-clear-btn" id="tagModalClearInputBtn" title="Clear input" style="display: none;">&times;</button>
             </div>
@@ -905,8 +921,8 @@
           <!-- Choose Category: People, Events, Places, Keyword -->
           <div class="form-group">
             <div class="tag-modal-label-row">
-              <label for="tagCategorySelect" class="tag-modal-label">Category:</label>
-              <span class="tag-modal-label-hint">Choose People, Events, Places, or Keywords</span>
+              <label for="tagCategorySelect" class="tag-modal-label" data-i18n="category_label">Category:</label>
+              <span class="tag-modal-label-hint" data-i18n="category_hint">Choose People, Events, Places, or Keywords</span>
             </div>
             <div class="tag-category-cards" id="tagCategoryCards">
               <button type="button" class="category-card" data-cat="people" id="catBtnPeople">
@@ -921,8 +937,8 @@
                   </span>
                   <span class="category-card-dot cat-dot-people"></span>
                 </div>
-                <span class="category-card-title">People</span>
-                <span class="category-card-desc">Friends, Family</span>
+                <span class="category-card-title" data-i18n="cat_people">People</span>
+                <span class="category-card-desc" data-i18n="cat_desc_people">Friends, Family</span>
               </button>
 
               <button type="button" class="category-card" data-cat="events" id="catBtnEvents">
@@ -937,8 +953,8 @@
                   </span>
                   <span class="category-card-dot cat-dot-events"></span>
                 </div>
-                <span class="category-card-title">Events</span>
-                <span class="category-card-desc">Birthdays, Trips</span>
+                <span class="category-card-title" data-i18n="cat_events">Events</span>
+                <span class="category-card-desc" data-i18n="cat_desc_events">Birthdays, Trips</span>
               </button>
 
               <button type="button" class="category-card" data-cat="places" id="catBtnPlaces">
@@ -951,8 +967,8 @@
                   </span>
                   <span class="category-card-dot cat-dot-places"></span>
                 </div>
-                <span class="category-card-title">Places</span>
-                <span class="category-card-desc">Cities, Nature</span>
+                <span class="category-card-title" data-i18n="cat_places">Places</span>
+                <span class="category-card-desc" data-i18n="cat_desc_places">Cities, Nature</span>
               </button>
 
               <button type="button" class="category-card active" data-cat="keyword" id="catBtnKeyword">
@@ -965,19 +981,19 @@
                   </span>
                   <span class="category-card-dot cat-dot-keyword"></span>
                 </div>
-                <span class="category-card-title">Keyword</span>
-                <span class="category-card-desc">General tags</span>
+                <span class="category-card-title" data-i18n="cat_keyword">Keyword</span>
+                <span class="category-card-desc" data-i18n="cat_desc_keyword">General tags</span>
               </button>
             </div>
 
             <!-- Underlying select kept in DOM for programmatic/test synchronization -->
             <div class="tag-modal-select-fallback">
-              <span class="tag-modal-select-label">Category select:</span>
+              <span class="tag-modal-select-label" data-i18n="tag_category_title">Category select:</span>
               <select id="tagCategorySelect" class="form-control tag-category-select-control">
-                <option value="keyword">General Keyword</option>
-                <option value="people">People</option>
-                <option value="places">Places</option>
-                <option value="events">Events</option>
+                <option value="keyword" data-i18n="cat_keyword">General Keyword</option>
+                <option value="people" data-i18n="cat_people">People</option>
+                <option value="places" data-i18n="cat_places">Places</option>
+                <option value="events" data-i18n="cat_events">Events</option>
               </select>
             </div>
           </div>
@@ -985,8 +1001,8 @@
           <!-- Search Help & Suggestions Section -->
           <div class="tag-search-help-box">
             <div class="tag-search-help-header">
-              <span class="tag-search-help-title" id="tagSearchHelpTitle">Search Help & Suggestions</span>
-              <span class="tag-search-help-sub" id="tagSearchHelpSub">Click to select tag</span>
+              <span class="tag-search-help-title" id="tagSearchHelpTitle" data-i18n="search_help_title">Search Help & Suggestions</span>
+              <span class="tag-search-help-sub" id="tagSearchHelpSub" data-i18n="search_help_sub">Click to select tag</span>
             </div>
             <div class="tag-search-help-chips" id="tagSearchHelpChips">
               <!-- Dynamically populated tags with category styling -->
@@ -994,8 +1010,8 @@
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="cancelTagBtn">Cancel</button>
-          <button class="btn btn-primary" id="createTagSubmitBtn">Create Tag</button>
+          <button class="btn btn-secondary" id="cancelTagBtn" data-i18n="cancel">Cancel</button>
+          <button class="btn btn-primary" id="createTagSubmitBtn" data-i18n="create_tag_btn">Create Tag</button>
         </div>
       </div>
     </div>
@@ -1005,24 +1021,24 @@
       <div class="modal-backdrop" id="deleteMediaBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3>Delete from Catalog</h3>
-          <button class="btn-icon-sm" id="closeDeleteMediaModalBtn">&times;</button>
+          <h3 data-i18n="delete_from_catalog">Delete from Catalog</h3>
+          <button class="btn-icon-sm" id="closeDeleteMediaModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
-          <p id="deleteMediaPromptText" style="margin-bottom: 8px; font-size: 14px;">Are you sure you want to delete the selected photo(s) from the catalog?</p>
+          <p id="deleteMediaPromptText" style="margin-bottom: 8px; font-size: 14px;" data-i18n="delete_media_prompt_single">Are you sure you want to delete the selected photo(s) from the catalog?</p>
           <div class="form-checkbox" style="margin: 12px 0 8px 0;">
             <label>
               <input type="checkbox" id="deleteFromDiskCheckbox">
-              Also delete from disk
+              <span data-i18n="delete_disk_checkbox">Also delete from disk</span>
             </label>
           </div>
-          <p id="deleteMediaWarningText" style="margin-bottom: 0; font-size: 12px; color: var(--text-dim);">
+          <p id="deleteMediaWarningText" style="margin-bottom: 0; font-size: 12px; color: var(--text-dim);" data-i18n="delete_media_warning">
             This removes photo metadata, ratings, tags, and album associations from the catalog database. The original files on disk will not be deleted.
           </p>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="cancelDeleteMediaBtn">Cancel</button>
-          <button class="btn btn-danger" id="confirmDeleteMediaBtn">Delete from Catalog</button>
+          <button class="btn btn-secondary" id="cancelDeleteMediaBtn" data-i18n="cancel">Cancel</button>
+          <button class="btn btn-danger" id="confirmDeleteMediaBtn" data-i18n="delete_from_catalog">Delete from Catalog</button>
         </div>
       </div>
     </div>
@@ -1032,18 +1048,18 @@
       <div class="modal-backdrop" id="deleteTagBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3>Delete Tag</h3>
-          <button class="btn-icon-sm" id="closeDeleteTagModalBtn">&times;</button>
+          <h3 data-i18n="delete_tag_title">Delete Tag</h3>
+          <button class="btn-icon-sm" id="closeDeleteTagModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
           <p id="deleteTagPromptText" style="margin-bottom: 8px; font-size: 14px;">Are you sure you want to delete tag?</p>
-          <p id="deleteTagWarningText" style="margin-bottom: 0; font-size: 12px; color: var(--text-dim);">
+          <p id="deleteTagWarningText" style="margin-bottom: 0; font-size: 12px; color: var(--text-dim);" data-i18n="delete_tag_warning">
             This removes the tag from all associated photos in the catalog database. The original files on disk will not be deleted.
           </p>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="cancelDeleteTagBtn">Cancel</button>
-          <button class="btn btn-danger" id="confirmDeleteTagBtn">Delete Tag</button>
+          <button class="btn btn-secondary" id="cancelDeleteTagBtn" data-i18n="cancel">Cancel</button>
+          <button class="btn btn-danger" id="confirmDeleteTagBtn" data-i18n="delete_tag_btn">Delete Tag</button>
         </div>
       </div>
     </div>
@@ -1060,32 +1076,32 @@
               <line x1="8" y1="2" x2="8" y2="6"></line>
               <line x1="3" y1="10" x2="21" y2="10"></line>
             </svg>
-            <h3>Change Date</h3>
+            <h3 data-i18n="batch_date_title">Change Date</h3>
           </div>
-          <button class="btn-icon-sm" id="closeBatchDateModalBtn" title="Close">&times;</button>
+          <button class="btn-icon-sm" id="closeBatchDateModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
-          <p id="batchDateTargetCount" style="margin-bottom: 2px; font-size: 13px; color: var(--text-secondary);">
+          <p id="batchDateTargetCount" style="margin-bottom: 2px; font-size: 13px; color: var(--text-secondary);" data-i18n="batch_date_subtitle">
             Adjust date &amp; time for selected photos.
           </p>
 
           <div id="batchDateRefInfo" class="batch-date-ref-box">
-            <div><span class="batch-date-label">Reference photo:</span> <span id="batchDateRefName" class="batch-date-val">-</span></div>
-            <div><span class="batch-date-label">Original date:</span> <span id="batchDateRefOriginal" class="batch-date-val">-</span></div>
+            <div><span class="batch-date-label" data-i18n="ref_photo">Reference photo:</span> <span id="batchDateRefName" class="batch-date-val">-</span></div>
+            <div><span class="batch-date-label" data-i18n="original_date">Original date:</span> <span id="batchDateRefOriginal" class="batch-date-val">-</span></div>
           </div>
 
           <!-- Date / Time Input -->
           <div class="form-group">
-            <label for="batchDateInput">Date &amp; Time (UTC):</label>
+            <label for="batchDateInput" data-i18n="datetime_utc">Date &amp; Time (UTC):</label>
             <input type="datetime-local" id="batchDateInput" class="form-control" />
           </div>
 
           <!-- Shift Hours Section -->
           <div class="form-group">
-            <label for="batchDateShiftHours">Shift hours:</label>
+            <label for="batchDateShiftHours" data-i18n="shift_hours">Shift hours:</label>
             <div class="batch-date-shift-row">
               <input type="number" id="batchDateShiftHours" class="form-control" style="width: 90px;" step="any" value="0" />
-              <span class="batch-date-unit">hours</span>
+              <span class="batch-date-unit" data-i18n="hours_unit">hours</span>
               <div class="batch-date-quick-btns">
                 <button type="button" class="btn btn-sm btn-secondary" id="shiftMinus24Btn" title="Shift -24 hours">-24h</button>
                 <button type="button" class="btn btn-sm btn-secondary" id="shiftMinus1Btn" title="Shift -1 hour">-1h</button>
@@ -1097,9 +1113,9 @@
 
           <!-- Time Zone Adjust Section -->
           <div class="form-group">
-            <label for="batchDateTimezoneSelect">Time Zone Adjust:</label>
+            <label for="batchDateTimezoneSelect" data-i18n="timezone_adjust">Time Zone Adjust:</label>
             <select id="batchDateTimezoneSelect" class="form-control">
-              <option value="0">No time zone adjustment (0 hours)</option>
+              <option value="0" data-i18n="no_tz_adjust">No time zone adjustment (0 hours)</option>
               <optgroup label="Positive Offsets (East / Ahead)">
                 <option value="1">+1 hour (UTC+1: London BST, Paris CET, Berlin, Rome)</option>
                 <option value="2">+2 hours (UTC+2: Paris CEST, Cairo, Athens, Helsinki, Kyiv)</option>
@@ -1142,10 +1158,10 @@
 
           <!-- Time Zone Calculator (From -> To) -->
           <div class="batch-date-tz-calc">
-            <span class="batch-date-calc-title">Or calculate from time zones:</span>
+            <span class="batch-date-calc-title" data-i18n="tz_calc_title">Or calculate from time zones:</span>
             <div class="batch-date-tz-row">
               <div class="batch-date-tz-col">
-                <label for="batchDateTzFrom">Camera TZ:</label>
+                <label for="batchDateTzFrom" data-i18n="camera_tz">Camera TZ:</label>
                 <select id="batchDateTzFrom" class="form-control batch-date-tz-mini">
                   <option value="-12">UTC-12</option>
                   <option value="-11">UTC-11</option>
@@ -1184,7 +1200,7 @@
               </div>
               <div class="batch-date-tz-arrow">&rarr;</div>
               <div class="batch-date-tz-col">
-                <label for="batchDateTzTo">Destination TZ:</label>
+                <label for="batchDateTzTo" data-i18n="dest_tz">Destination TZ:</label>
                 <select id="batchDateTzTo" class="form-control batch-date-tz-mini">
                   <option value="-12">UTC-12</option>
                   <option value="-11">UTC-11</option>
@@ -1226,17 +1242,17 @@
 
           <!-- Application Mode -->
           <div class="form-group" style="margin-top: 4px;">
-            <label style="margin-bottom: 6px;">Application Mode:</label>
+            <label style="margin-bottom: 6px;" data-i18n="app_mode">Application Mode:</label>
             <div class="form-checkbox" style="margin-bottom: 6px;">
               <label>
                 <input type="radio" name="batchDateMode" id="batchDateModeShift" value="shift" checked>
-                Shift each photo relatively (preserve time intervals)
+                <span data-i18n="mode_shift">Shift each photo relatively (preserve time intervals)</span>
               </label>
             </div>
             <div class="form-checkbox">
               <label>
                 <input type="radio" name="batchDateMode" id="batchDateModeExact" value="exact">
-                Set all selected photos to the exact same date &amp; time
+                <span data-i18n="mode_exact">Set all selected photos to the exact same date &amp; time</span>
               </label>
             </div>
           </div>
@@ -1247,8 +1263,8 @@
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="cancelBatchDateBtn">Cancel</button>
-          <button class="btn btn-primary" id="confirmBatchDateBtn">Apply Date Change</button>
+          <button class="btn btn-secondary" id="cancelBatchDateBtn" data-i18n="cancel">Cancel</button>
+          <button class="btn btn-primary" id="confirmBatchDateBtn" data-i18n="apply_date_change">Apply Date Change</button>
         </div>
       </div>
     </div>
@@ -1263,27 +1279,27 @@
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
               <polyline points="12 11 16 14 12 17"></polyline>
             </svg>
-            <h3 id="batchMoveModalTitle">Move to Folder</h3>
+            <h3 id="batchMoveModalTitle" data-i18n="move_modal_title">Move to Folder</h3>
           </div>
-          <button class="btn-icon-sm" id="closeBatchMoveModalBtn" title="Close">&times;</button>
+          <button class="btn-icon-sm" id="closeBatchMoveModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
-          <p id="batchMoveTargetCount" style="margin-bottom: 12px; font-size: 13px; color: var(--text-secondary);">
+          <p id="batchMoveTargetCount" style="margin-bottom: 12px; font-size: 13px; color: var(--text-secondary);" data-i18n="move_target_text">
             Move selected photos to a new folder.
           </p>
 
           <div class="form-group">
-            <label for="batchMovePathInput">Destination Folder (inside photos directory):</label>
-            <input type="text" id="batchMovePathInput" list="batchMoveFolderSuggestions" class="form-control" placeholder="e.g. vacation or nature/vacation" autocomplete="off" />
+            <label for="batchMovePathInput" data-i18n="dest_folder_label">Destination Folder (inside photos directory):</label>
+            <input type="text" id="batchMovePathInput" list="batchMoveFolderSuggestions" class="form-control" placeholder="e.g. vacation or nature/vacation" autocomplete="off" data-i18n-placeholder="dest_folder_placeholder" />
             <datalist id="batchMoveFolderSuggestions"></datalist>
-            <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;">
+            <span style="font-size: 11px; color: var(--text-dim); margin-top: 4px; display: block;" data-i18n="dest_folder_hint">
               Enter a folder path inside the photos directory. The folder will be created if it does not exist.
             </span>
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-secondary" id="cancelBatchMoveBtn">Cancel</button>
-          <button class="btn btn-primary" id="confirmBatchMoveBtn">Move</button>
+          <button class="btn btn-secondary" id="cancelBatchMoveBtn" data-i18n="cancel">Cancel</button>
+          <button class="btn btn-primary" id="confirmBatchMoveBtn" data-i18n="confirm_move">Move</button>
         </div>
       </div>
     </div>

@@ -23,6 +23,7 @@ import {
 } from './media-grid.js';
 import { updateInspector, openInspector } from './inspector.js';
 import { openLoupeForMedia } from './loupe.js';
+import { t } from './i18n.js';
 
 let mapSearchAbortController = null;
 const geocodeCache = new Map();
@@ -224,7 +225,7 @@ export function renderMapMarkers(force = false) {
   if (dom.mapLoadMoreBtn) {
     if (state.mediaItems.length < state.totalCount) {
       dom.mapLoadMoreBtn.style.display = 'inline-block';
-      dom.mapLoadMoreBtn.textContent = `Load More (${state.mediaItems.length}/${state.totalCount})`;
+      dom.mapLoadMoreBtn.textContent = `${t('load_more')} (${state.mediaItems.length}/${state.totalCount})`;
     } else {
       dom.mapLoadMoreBtn.style.display = 'none';
     }
@@ -548,19 +549,19 @@ export function updatePlacementModeState() {
   if (count > 0) {
     if (dom.mapViewContainer) dom.mapViewContainer.classList.add('placement-mode');
     if (dom.unmappedSelectedCount) {
-      dom.unmappedSelectedCount.textContent = `${count} selected`;
+      dom.unmappedSelectedCount.textContent = t('n_selected', { count });
       dom.unmappedSelectedCount.style.display = 'inline';
     }
     if (dom.unmappedDeselectAllBtn) dom.unmappedDeselectAllBtn.style.display = 'inline-block';
     if (dom.unmappedTrayTitle) {
-      dom.unmappedTrayTitle.textContent = `${count} photo${count > 1 ? 's' : ''} selected — Click anywhere on the map to place`;
+      dom.unmappedTrayTitle.textContent = t('unmapped_tray_title_selected', { count, s: count > 1 ? 's' : '' });
     }
   } else {
     if (dom.mapViewContainer) dom.mapViewContainer.classList.remove('placement-mode');
     if (dom.unmappedSelectedCount) dom.unmappedSelectedCount.style.display = 'none';
     if (dom.unmappedDeselectAllBtn) dom.unmappedDeselectAllBtn.style.display = 'none';
     if (dom.unmappedTrayTitle) {
-      dom.unmappedTrayTitle.textContent = 'Unmapped Photos — Select photos, then click anywhere on the map to place them';
+      dom.unmappedTrayTitle.textContent = t('unmapped_tray_title_default');
     }
   }
 }
@@ -636,9 +637,9 @@ export function renderUnmappedTray() {
 
   if (dom.unmappedBtnLabel) {
     if (state.mediaItems.length < state.totalCount) {
-      dom.unmappedBtnLabel.textContent = `Unmapped in loaded photos (${unmapped.length})`;
+      dom.unmappedBtnLabel.textContent = t('unmapped_btn_loaded', { count: unmapped.length });
     } else {
-      dom.unmappedBtnLabel.textContent = `Unmapped (${unmapped.length})`;
+      dom.unmappedBtnLabel.textContent = t('unmapped_btn', { count: unmapped.length });
     }
   }
 

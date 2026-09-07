@@ -29,6 +29,7 @@ import { updateInspector, patchInspectorRatingAndFlag } from './inspector.js';
 import { openLoupeForMedia, updateLoupeControls } from './loupe.js';
 import { updateModalTagSuggestions, renderModalSearchHelp, openDeleteTagModal } from './modals.js';
 import { renderCategoryView } from './category-view.js';
+import { t, getShortMonthName } from './i18n.js';
 
 // DOM Caching & Query Scoping
 export const cardMap = new Map();
@@ -424,7 +425,7 @@ export function renderGrid() {
   // Group items by Month & Year in UTC
   const groups = {};
   state.mediaItems.forEach(item => {
-    let groupKey = 'Undated';
+    let groupKey = t('undated');
     if (item.date_taken && item.date_taken > 0) {
       const d = new Date(item.date_taken * 1000);
       groupKey = `${getMonthName(d.getUTCMonth() + 1)} ${d.getUTCFullYear()}`;
@@ -442,9 +443,10 @@ export function renderGrid() {
 
     const headerEl = document.createElement('div');
     headerEl.className = 'date-header';
+    const itemNoun = groups[groupTitle].length === 1 ? t('item_singular') : t('item_plural');
     headerEl.innerHTML = `
       <span>${groupTitle}</span>
-      <span class="group-count">${groups[groupTitle].length} ${groups[groupTitle].length === 1 ? 'item' : 'items'}</span>
+      <span class="group-count">${groups[groupTitle].length} ${itemNoun}</span>
     `;
     groupEl.appendChild(headerEl);
 
@@ -532,7 +534,7 @@ export function appendMediaToGrid(newItems) {
       headerEl.className = 'date-header';
       headerEl.innerHTML = `
         <span>${groupKey}</span>
-        <span class="group-count">0 items</span>
+        <span class="group-count">0 ${t('item_plural')}</span>
       `;
       groupEl.appendChild(headerEl);
 
@@ -587,7 +589,7 @@ export function appendMediaToGrid(newItems) {
       const count = cardsWrap.children.length;
       const countEl = groupEl.querySelector('.group-count');
       if (countEl) {
-        countEl.textContent = `${count} ${count === 1 ? 'item' : 'items'}`;
+        countEl.textContent = `${count} ${count === 1 ? t('item_singular') : t('item_plural')}`;
       }
     }
   });
@@ -721,7 +723,7 @@ export function updateBatchBar() {
   const sortSelector = document.querySelector('.sort-selector');
   if (count > 1) {
     dom.batchActionBar.style.display = 'flex';
-    if (dom.batchSelectedCount) dom.batchSelectedCount.textContent = `${count} selected`;
+    if (dom.batchSelectedCount) dom.batchSelectedCount.textContent = t('n_selected', { count });
     if (sortSelector) sortSelector.style.display = 'none';
   } else {
     dom.batchActionBar.style.display = 'none';
@@ -1015,7 +1017,7 @@ export function renderTimeline() {
   dom.timelineContainer.innerHTML = '';
 
   if (state.timelineData.length === 0) {
-    dom.timelineContainer.innerHTML = '<span style="color:var(--text-dim);font-size:10px;align-self:center;">No timeline data</span>';
+    dom.timelineContainer.innerHTML = `<span style="color:var(--text-dim);font-size:10px;align-self:center;">${t('no_timeline_data')}</span>`;
     return;
   }
 
@@ -1036,8 +1038,9 @@ export function renderTimeline() {
     }
 
     const heightPercent = Math.max(10, Math.round((entry.count / maxCount) * 100));
-    const monthAbbr = getMonthName(entry.month).substring(0, 3);
-    const title = `${monthAbbr} ${entry.year}: ${entry.count} photos`;
+    const monthAbbr = getShortMonthName(entry.month);
+    const itemNoun = entry.count === 1 ? t('photo_singular') : t('photo_plural');
+    const title = `${monthAbbr} ${entry.year}: ${entry.count} ${itemNoun}`;
 
     wrap.title = title;
     wrap.innerHTML = `
@@ -1098,18 +1101,22 @@ export function updateFilterLabel() {
     if (state.activeTagId) {
       if (dom.categoryBackBtn) {
         dom.categoryBackBtn.style.display = 'inline-flex';
-        const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
+        const tabKey = `tab_${state.activeTab}`;
+        const tabName = t(tabKey);
         if (dom.categoryBackBtnLabel) {
-          dom.categoryBackBtnLabel.textContent = `Back to ${tabName}`;
+          dom.categoryBackBtnLabel.textContent = t('back_to_tab', { tab: tabName });
         }
       }
     } else {
       if (dom.categoryBackBtn) {
         dom.categoryBackBtn.style.display = 'none';
       }
-      const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
+      const tabKey = `tab_${state.activeTab}`;
+      const tabName = t(tabKey);
       const catTags = (state.tags || []).filter(t => (t.category || 'keyword').toLowerCase() === state.activeTab.toLowerCase());
-      const noun = catTags.length === 1 ? (state.activeTab === 'people' ? 'person' : state.activeTab.slice(0, -1)) : state.activeTab;
+      const singularKey = state.activeTab === 'people' ? 'person_singular' : state.activeTab === 'places' ? 'place_singular' : 'event_singular';
+      const pluralKey = state.activeTab === 'people' ? 'person_plural' : state.activeTab === 'places' ? 'place_plural' : 'event_plural';
+      const noun = catTags.length === 1 ? t(singularKey) : t(pluralKey);
       if (dom.filterLabel) {
         dom.filterLabel.innerHTML = `<strong>${escapeHtml(tabName)}</strong> (${catTags.length} ${noun})`;
       }
@@ -1127,26 +1134,26 @@ export function updateFilterLabel() {
   const parts = [];
 
   if (state.activeMediaType === 'photos') {
-    parts.push('Photos');
+    parts.push(t('nav_photos'));
   } else if (state.activeMediaType === 'videos') {
-    parts.push('Videos');
+    parts.push(t('nav_videos'));
   } else if (state.activeMediaType === 'audio') {
-    parts.push('Audio');
+    parts.push(t('nav_audio'));
   }
 
   if (state.activeStatusFilter === 'picks') {
-    parts.push('Picks');
+    parts.push(t('nav_picks'));
   } else if (state.activeStatusFilter === 'rejects') {
-    parts.push('Rejects');
+    parts.push(t('nav_rejects'));
   } else if (state.activeStatusFilter === 'not_rejects') {
-    parts.push('Not Rejects');
+    parts.push(t('nav_not_rejects'));
   } else if (state.activeStatusFilter === 'unrated') {
-    parts.push('Unrated Photos');
+    parts.push(t('unrated_photos'));
   }
 
   if (state.activeAlbumId) {
     const album = state.albums.find(a => a.id === state.activeAlbumId);
-    parts.push(`Album: ${album ? album.name : state.activeAlbumId}`);
+    parts.push(`${t('album')}: ${album ? album.name : state.activeAlbumId}`);
   }
 
   const tagCount = state.activeTagIds ? state.activeTagIds.size : 0;
@@ -1156,16 +1163,17 @@ export function updateFilterLabel() {
     const tagId = state.activeTagId;
     const tag = state.tags.find(t => t.id === tagId);
     if (state.activeTab && state.activeTab !== 'media') {
-      const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
+      const tabKey = `tab_${state.activeTab}`;
+      const tabName = t(tabKey);
       parts.push(`${tabName}: ${tag ? tag.name : tagId}`);
     } else {
-      parts.push(`Tag: ${tag ? tag.name : tagId}`);
+      parts.push(`${t('filter_tag')}: ${tag ? tag.name : tagId}`);
     }
   } else if (folderCount === 1 && tagCount === 0) {
     const folder = state.activeFolder;
     const partsFolder = folder.split(/[\/\\]/);
     const folderName = partsFolder[partsFolder.length - 1] || folder;
-    parts.push(`Folder: ${folderName}`);
+    parts.push(`${t('filter_folder')}: ${folderName}`);
   } else if (tagCount + folderCount > 1) {
     const orLabels = [];
     state.activeTagIds.forEach(id => {
@@ -1190,10 +1198,11 @@ export function updateFilterLabel() {
   }
 
   const isFiltered = parts.length > 0;
-  const label = isFiltered ? parts.join(' • ') : 'All Media';
+  const label = isFiltered ? parts.join(' • ') : t('all_photos');
+  const itemsNoun = state.totalCount === 1 ? t('item_singular') : t('item_plural');
 
   if (dom.filterLabel) {
-    dom.filterLabel.innerHTML = `<strong>${escapeHtml(label)}</strong> (${state.totalCount} items)`;
+    dom.filterLabel.innerHTML = `<strong>${escapeHtml(label)}</strong> (${state.totalCount} ${itemsNoun})`;
   }
   if (dom.clearFiltersBtn) {
     dom.clearFiltersBtn.style.display = isFiltered ? 'inline-block' : 'none';

@@ -10,7 +10,7 @@ Imagine combines a high-speed C++20 core engine with an interactive Command-Line
 1. [System Requirements & Installation](#1-system-requirements--installation)
 2. [Quick Start Tutorial](#2-quick-start-tutorial)
 3. [Importing Photos](#3-importing-photos)
-4. [Browsing & Navigation](#4-browsing--navigation)
+4. [Browsing & Navigation (including Language / i18n)](#4-browsing--navigation)
 5. [Organizing & Tagging](#5-organizing--tagging)
 6. [Fullscreen Loupe Viewer](#6-fullscreen-loupe-viewer)
 7. [Inspector & EXIF Metadata](#7-inspector--exif-metadata)
@@ -170,6 +170,28 @@ At the bottom of the screen is an interactive year and month scrub bar:
 - Vertical bars represent the concentration of photos taken in each month.
 - Click on any bar (e.g., *Sep 2026*) to jump directly to photos taken during that period.
 - Click **"Reset"** to return to the full unconstrained catalog.
+
+### Language & Internationalization (i18n)
+Imagine features native multi-language internationalization supporting 5 languages:
+- **English** (`en`) — Default
+- **Español / Spanish** (`es`)
+- **Deutsch / German** (`de`)
+- **Русский / Russian** (`ru`)
+- **中文 / Chinese (Simplified)** (`zh`)
+
+#### Switching Languages
+- **Dropdown Selector**: Click the language selector dropdown (`#langSelect`) in the top navigation bar (accompanied by a globe icon) to choose any language. All UI elements, labels, empty states, and inspector fields update immediately in real-time without reloading the page.
+- **Preference Persistence**: Your language selection is automatically stored in browser `localStorage` (`imagine_language`) and restored across restarts.
+- **Direct URL Parameter**: Launch the interface in any specific language using the `?lang=<code>` URL query parameter (for example, `http://localhost:8080/?lang=es` or `http://localhost:8080/?lang=zh`).
+
+#### Localization Scope
+Full interface localization covers:
+- **Navigation & Search**: Top view tabs, search input placeholder, import button, language picker.
+- **Sidebar & Filters**: Media types (Photos, Videos, Audio), status flags (Picks, Rejects, Not Rejects, Unrated), album & tag categories.
+- **Photo Grid & Inspector**: Date groups, media count badges, EXIF technical parameters, inline edit prompts, and action buttons.
+- **Timeline Scrubber**: Localized short month names across all scripts and alphabets (Latin, Cyrillic, Hanzi).
+- **Modals & Dialogs**: Tag assignment dialog, album creation, delete confirmation modals, and system notifications/toasts.
+- **Map View**: Map action toolbar, geotagging banner, and unmapped tray.
 
 ---
 

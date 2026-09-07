@@ -6,6 +6,7 @@
 import { state } from './state.js';
 import { dom } from './dom.js';
 import { escapeHtml } from './api.js';
+import { t } from './i18n.js';
 import {
   loadMedia,
   updateSidebarActive,
@@ -18,12 +19,12 @@ export function getCategoryConfig(cat) {
   if (c === 'places') {
     return {
       category: 'places',
-      title: 'Places',
-      singular: 'place',
-      plural: 'places',
-      addLabel: 'Add Place',
-      emptyTitle: 'No Places Found',
-      emptyText: 'Tag photos with places or locations to organize them here.',
+      title: t('tab_places'),
+      singular: t('place_singular'),
+      plural: t('place_plural'),
+      addLabel: t('add_place'),
+      emptyTitle: t('no_places_found'),
+      emptyText: t('tag_places_prompt'),
       iconSvg: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
       thumbPlaceholderSvg: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'
     };
@@ -31,12 +32,12 @@ export function getCategoryConfig(cat) {
   if (c === 'events') {
     return {
       category: 'events',
-      title: 'Events',
-      singular: 'event',
-      plural: 'events',
-      addLabel: 'Add Event',
-      emptyTitle: 'No Events Found',
-      emptyText: 'Tag photos with events (e.g. Birthday, Vacation) to organize them here.',
+      title: t('tab_events'),
+      singular: t('event_singular'),
+      plural: t('event_plural'),
+      addLabel: t('add_event'),
+      emptyTitle: t('no_events_found'),
+      emptyText: t('tag_events_prompt'),
       iconSvg: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
       thumbPlaceholderSvg: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'
     };
@@ -44,12 +45,12 @@ export function getCategoryConfig(cat) {
   // Default: People
   return {
     category: 'people',
-    title: 'People',
-    singular: 'person',
-    plural: 'people',
-    addLabel: 'Add Person',
-    emptyTitle: 'No People Found',
-    emptyText: 'Tag photos with people\'s names to organize them here.',
+    title: t('tab_people'),
+    singular: t('person_singular'),
+    plural: t('person_plural'),
+    addLabel: t('add_person'),
+    emptyTitle: t('no_people_found'),
+    emptyText: t('tag_people_prompt'),
     iconSvg: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
     thumbPlaceholderSvg: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
   };

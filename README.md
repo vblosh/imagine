@@ -18,6 +18,7 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Sidebars**: Collapsible Folders tree, Standard/Smart Albums, and Tag categories (People, Places, Events, Keywords).
   - **Inspector Panel**: EXIF breakdown (camera, lens, shutter speed, aperture, ISO, focal length, GPS map link), 5-star ratings, pick/reject flags, and tag editor.
   - **Fullscreen Loupe / Slideshow**: Keyboard-driven full-resolution viewer (0–5 star ratings, P/X flags, Arrow navigation).
+  - **Multilingual Support (i18n)**: 5 built-in languages (English, Spanish, German, Russian, Chinese) with instant switching, `localStorage` persistence, and URL parameter override (`?lang=...`).
 - **High-Throughput Importer**:
   - Multi-threaded scanning and processing pipeline (`std::jthread` thread pool).
   - Fast change-detection skipping unchanged files.
@@ -110,6 +111,7 @@ imagine/
 │   ├── app.css                 # Dark theme stylesheet & CSS variables
 │   ├── app.js                  # Application bootstrap & lifecycle wiring
 │   ├── api.js                  # REST API client & response schema normalization
+│   ├── i18n.js                 # 5-language internationalization (EN, ES, DE, RU, ZH)
 │   ├── state.js                # Central reactive application state & GPS cache
 │   ├── dom.js                  # DOM element caching, validation & toast alerts
 │   ├── media-grid.js           # Media grid rendering, card selection & pagination

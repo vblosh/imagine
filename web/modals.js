@@ -17,6 +17,7 @@ import { dom, showToast } from './dom.js';
 import { loadMetadata, loadMedia, updateBatchBar, batchUpdateDates, renderGrid } from './media-grid.js';
 import { updateInspector } from './inspector.js';
 import { closeLoupe } from './loupe.js';
+import { t } from './i18n.js';
 
 // Internal pending state
 let pendingAddToAlbumIds = [];
@@ -187,7 +188,9 @@ export function openAddToAlbumModal(mediaIds) {
   pendingAddToAlbumIds = mediaIds;
   const count = mediaIds.length;
   if (dom.addToAlbumTargetCount) {
-    dom.addToAlbumTargetCount.textContent = `Add ${count} selected photo${count > 1 ? 's' : ''} to:`;
+    dom.addToAlbumTargetCount.textContent = count === 1
+      ? t('add_to_album_single')
+      : t('add_to_album_n', { count });
   }
 
   if (!state.albums || state.albums.length === 0) {
@@ -200,9 +203,10 @@ export function openAddToAlbumModal(mediaIds) {
     if (dom.confirmAddToAlbumBtn) dom.confirmAddToAlbumBtn.disabled = false;
 
     if (dom.addToAlbumSelect) {
-      dom.addToAlbumSelect.innerHTML = state.albums.map(album =>
-        `<option value="${album.id}">${escapeHtml(album.name)} (${album.item_count || 0} photos)</option>`
-      ).join('');
+      dom.addToAlbumSelect.innerHTML = state.albums.map(album => {
+        const photoNoun = (album.item_count === 1) ? t('photo_singular') : t('photo_plural');
+        return `<option value="${album.id}">${escapeHtml(album.name)} (${album.item_count || 0} ${photoNoun})</option>`;
+      }).join('');
     }
   }
 
@@ -267,15 +271,15 @@ export function openTagModal(targetMediaIds = null) {
     const count = pendingTagTargetMediaIds.length;
 
     if (dom.tagModalHeading) {
-      dom.tagModalHeading.textContent = count === 1 ? 'Add Tag to Photo' : `Add Tag to ${count} Photos`;
+      dom.tagModalHeading.textContent = count === 1 ? t('tag_modal_title_single') : t('tag_modal_title_n', { count });
     }
     if (dom.createTagSubmitBtn) {
-      dom.createTagSubmitBtn.textContent = count === 1 ? 'Add Tag to Photo' : 'Add Tag to Photos';
+      dom.createTagSubmitBtn.textContent = count === 1 ? t('add_tag_btn_single') : t('add_tag_btn_n');
     }
     if (dom.tagModalApplyLabel) {
       dom.tagModalApplyLabel.textContent = count === 1
-        ? 'Attach tag to selected photo'
-        : `Attach tag to ${count} selected photos`;
+        ? t('tag_attach_single')
+        : t('tag_attach_multi', { count });
     }
 
     if (firstItem) {
@@ -288,28 +292,41 @@ export function openTagModal(targetMediaIds = null) {
         };
       }
       if (dom.tagModalPhotoName) {
-        dom.tagModalPhotoName.textContent = count === 1 ? (firstItem.file_name || 'Selected Photo') : `${count} photos selected`;
+        dom.tagModalPhotoName.textContent = count === 1
+          ? (firstItem.file_name || t('selected_photo'))
+          : t('n_photos_selected', { count });
       }
-      if (dom.tagModalPhotoMeta) {
-        if (count === 1) {
+
+      const tagsRow = dom.tagModalPhotoTagsRow || (dom.tagModalPhotoCurrentTags ? dom.tagModalPhotoCurrentTags.closest('.tag-target-tags-row') : null);
+
+      if (count === 1) {
+        if (dom.tagModalPhotoMeta) {
+          dom.tagModalPhotoMeta.style.display = '';
           const metaParts = [];
           if (firstItem.date_taken) metaParts.push(formatDate(firstItem.date_taken));
           if (firstItem.width && firstItem.height) metaParts.push(`${firstItem.width} × ${firstItem.height}`);
           if (firstItem.file_size) metaParts.push(formatBytes(firstItem.file_size));
-          dom.tagModalPhotoMeta.textContent = metaParts.join(' • ') || 'Photo details';
-        } else {
-          dom.tagModalPhotoMeta.textContent = `${count} items in current selection`;
+          dom.tagModalPhotoMeta.textContent = metaParts.join(' • ') || t('photo_details');
         }
-      }
-      if (dom.tagModalPhotoCurrentTags) {
-        if (count === 1 && firstItem.tags && firstItem.tags.length > 0) {
-          dom.tagModalPhotoCurrentTags.innerHTML = firstItem.tags
-            .map(t => `<span class="tag-badge" data-category="${escapeHtml((t.category || 'keyword').toLowerCase())}">${escapeHtml(t.name)}</span>`)
-            .join('');
-        } else if (count === 1) {
-          dom.tagModalPhotoCurrentTags.innerHTML = '<span class="tag-target-no-tags">No tags yet</span>';
-        } else {
-          dom.tagModalPhotoCurrentTags.innerHTML = `<span class="tag-target-no-tags">${count} photos selected</span>`;
+        if (tagsRow) {
+          tagsRow.style.display = '';
+          if (dom.tagModalPhotoCurrentTags) {
+            if (firstItem.tags && firstItem.tags.length > 0) {
+              dom.tagModalPhotoCurrentTags.innerHTML = firstItem.tags
+                .map(t => `<span class="tag-badge" data-category="${escapeHtml((t.category || 'keyword').toLowerCase())}">${escapeHtml(t.name)}</span>`)
+                .join('');
+            } else {
+              dom.tagModalPhotoCurrentTags.innerHTML = `<span class="tag-target-no-tags">${t('tag_target_no_tags_yet')}</span>`;
+            }
+          }
+        }
+      } else {
+        // Multiple photos selected: leave only one clean, translated line
+        if (dom.tagModalPhotoMeta) {
+          dom.tagModalPhotoMeta.style.display = 'none';
+        }
+        if (tagsRow) {
+          tagsRow.style.display = 'none';
         }
       }
     }
@@ -322,8 +339,8 @@ export function openTagModal(targetMediaIds = null) {
       }
     }
   } else {
-    if (dom.tagModalHeading) dom.tagModalHeading.textContent = 'Create Keyword Tag';
-    if (dom.createTagSubmitBtn) dom.createTagSubmitBtn.textContent = 'Create Tag';
+    if (dom.tagModalHeading) dom.tagModalHeading.textContent = t('create_keyword_tag_title');
+    if (dom.createTagSubmitBtn) dom.createTagSubmitBtn.textContent = t('create_tag_btn');
   }
 
   // Reset inputs
@@ -548,19 +565,18 @@ export function openDeleteMediaModal(mediaIds) {
   const count = mediaIds.length;
   if (dom.deleteMediaPromptText) {
     dom.deleteMediaPromptText.textContent = count === 1
-      ? 'Are you sure you want to delete this photo from the catalog?'
-      : `Are you sure you want to delete ${count} selected photos from the catalog?`;
+      ? t('delete_media_prompt_single')
+      : t('delete_media_prompt_multi', { count });
   }
   if (dom.deleteFromDiskCheckbox) {
     dom.deleteFromDiskCheckbox.checked = false;
   }
   if (dom.deleteMediaWarningText) {
-    dom.deleteMediaWarningText.textContent =
-      'This removes photo metadata, ratings, tags, and album associations from the catalog database. The original files on disk will not be deleted.';
+    dom.deleteMediaWarningText.textContent = t('delete_media_warning');
     dom.deleteMediaWarningText.style.color = 'var(--text-dim)';
   }
   if (dom.confirmDeleteMediaBtn) {
-    dom.confirmDeleteMediaBtn.textContent = 'Delete from Catalog';
+    dom.confirmDeleteMediaBtn.textContent = t('delete_from_catalog');
   }
   if (dom.deleteMediaModal) {
     dom.deleteMediaModal.style.display = 'flex';
@@ -575,12 +591,11 @@ export function closeDeleteMediaModal() {
     dom.deleteFromDiskCheckbox.checked = false;
   }
   if (dom.deleteMediaWarningText) {
-    dom.deleteMediaWarningText.textContent =
-      'This removes photo metadata, ratings, tags, and album associations from the catalog database. The original files on disk will not be deleted.';
+    dom.deleteMediaWarningText.textContent = t('delete_media_warning');
     dom.deleteMediaWarningText.style.color = 'var(--text-dim)';
   }
   if (dom.confirmDeleteMediaBtn) {
-    dom.confirmDeleteMediaBtn.textContent = 'Delete from Catalog';
+    dom.confirmDeleteMediaBtn.textContent = t('delete_from_catalog');
   }
   pendingDeleteMediaIds = [];
 }
@@ -643,11 +658,10 @@ export function openDeleteTagModal(tag) {
   }
   const tagName = pendingDeleteTag.name || 'this tag';
   if (dom.deleteTagPromptText) {
-    dom.deleteTagPromptText.textContent = `Are you sure you want to delete tag "${tagName}"?`;
+    dom.deleteTagPromptText.textContent = t('delete_tag_prompt', { name: tagName });
   }
   if (dom.deleteTagWarningText) {
-    dom.deleteTagWarningText.textContent =
-      'This removes the tag from all associated photos in the catalog database. The original files on disk will not be deleted.';
+    dom.deleteTagWarningText.textContent = t('delete_tag_warning');
   }
   if (dom.deleteTagModal) {
     dom.deleteTagModal.style.display = 'flex';
@@ -724,21 +738,30 @@ export function updateBatchDatePreview() {
   const shiftHours = dom.batchDateShiftHours ? parseFloat(dom.batchDateShiftHours.value) || 0 : 0;
   const inputTs = dom.batchDateInput ? parseDatetimeLocalToUtc(dom.batchDateInput.value) : null;
   const count = pendingBatchDateIds.length;
+  const previewPrefix = `<strong>${t('preview_label')}:</strong> `;
 
   if (isShiftMode) {
     const sign = shiftHours > 0 ? '+' : '';
-    const formattedShift = `${sign}${shiftHours} hour${Math.abs(shiftHours) === 1 ? '' : 's'}`;
+    const unit = Math.abs(shiftHours) === 1 ? t('hour_singular') : t('hour_plural');
+    const formattedShift = `${sign}${shiftHours} ${unit}`;
     const newRefTs = batchDateRefTs ? (batchDateRefTs + Math.round(shiftHours * 3600)) : inputTs;
     const newDateStr = newRefTs ? formatDateTime(newRefTs) : '-';
 
     if (Math.abs(shiftHours) < 0.001) {
-      dom.batchDatePreview.innerHTML = `<strong>Preview:</strong> No time shift (dates unchanged). Affects ${count} photo${count > 1 ? 's' : ''}.`;
+      const text = count === 1 ? t('preview_no_shift_single') : t('preview_no_shift_n', { count });
+      dom.batchDatePreview.innerHTML = `${previewPrefix}${escapeHtml(text)}`;
     } else {
-      dom.batchDatePreview.innerHTML = `<strong>Preview:</strong> First photo will be adjusted to <strong>${newDateStr}</strong> (${formattedShift}). All ${count} photo${count > 1 ? 's' : ''} will shift by ${formattedShift}.`;
+      const text = t('preview_shift_first', {
+        date: newDateStr,
+        shift: formattedShift,
+        count
+      });
+      dom.batchDatePreview.innerHTML = `${previewPrefix}${text}`;
     }
   } else {
-    const targetDateStr = inputTs ? formatDateTime(inputTs) : 'Unknown Date';
-    dom.batchDatePreview.innerHTML = `<strong>Preview:</strong> All ${count} photo${count > 1 ? 's' : ''} will be set to exact date: <strong>${targetDateStr}</strong>.`;
+    const targetDateStr = inputTs ? formatDateTime(inputTs) : t('unknown_date');
+    const text = t('preview_exact', { count, date: targetDateStr });
+    dom.batchDatePreview.innerHTML = `${previewPrefix}${text}`;
   }
 }
 
@@ -807,7 +830,7 @@ export function openBatchDateModal(mediaIds = null) {
     : Array.from(state.selectedIds);
 
   if (ids.length === 0) {
-    showToast('No photos selected', 'info');
+    showToast(t('no_photos_selected'), 'info');
     return;
   }
 
@@ -820,7 +843,9 @@ export function openBatchDateModal(mediaIds = null) {
 
   const count = pendingBatchDateIds.length;
   if (dom.batchDateTargetCount) {
-    dom.batchDateTargetCount.textContent = `Adjust date & time for ${count} selected photo${count > 1 ? 's' : ''}.`;
+    dom.batchDateTargetCount.textContent = count === 1
+      ? t('adjust_date_target_single')
+      : t('adjust_date_target_n', { count });
   }
 
   const firstItem = selectedItems[0] || state.mediaItems.find(m => m.id === pendingBatchDateIds[0]);
@@ -832,7 +857,7 @@ export function openBatchDateModal(mediaIds = null) {
     dom.batchDateRefName.textContent = firstItem ? (firstItem.file_name || `ID #${firstItem.id}`) : `Photo #${pendingBatchDateIds[0]}`;
   }
   if (dom.batchDateRefOriginal) {
-    dom.batchDateRefOriginal.textContent = initialTs ? formatDateTime(initialTs) : 'No date set';
+    dom.batchDateRefOriginal.textContent = initialTs ? formatDateTime(initialTs) : t('no_date_set');
   }
 
   const nowSec = Math.floor(Date.now() / 1000);
@@ -946,7 +971,7 @@ export function openBatchMoveModal(mediaIds = null) {
     if (state.lastSelectedId) {
       ids.push(state.lastSelectedId);
     } else {
-      showToast('No photos selected', 'info');
+      showToast(t('no_photos_selected'), 'info');
       return;
     }
   }
@@ -955,11 +980,13 @@ export function openBatchMoveModal(mediaIds = null) {
   const count = ids.length;
   if (dom.batchMoveTargetCount) {
     dom.batchMoveTargetCount.textContent = count === 1
-      ? 'Move 1 selected photo to a folder inside the photos directory:'
-      : `Move ${count} selected photos to a folder inside the photos directory:`;
+      ? t('move_target_single')
+      : t('move_target_n', { count });
   }
   if (dom.batchMoveModalTitle) {
-    dom.batchMoveModalTitle.textContent = count === 1 ? 'Move Photo' : 'Move Photos';
+    dom.batchMoveModalTitle.textContent = count === 1
+      ? t('move_photo_single')
+      : t('move_photo_n');
   }
 
   if (dom.batchMoveFolderSuggestions && state.allFolders) {

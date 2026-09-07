@@ -19,6 +19,7 @@ import {
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { updateItemRating, loadMetadata, renderGrid, loadMedia } from './media-grid.js';
+import { t } from './i18n.js';
 
 let currentInspectorFetchId = 0;
 let inspectorAbortController = null;
@@ -87,8 +88,8 @@ export function renderInspectorContent(item) {
 
   // File Properties
   if (dom.infoFileName) dom.infoFileName.textContent = item.file_name || '-';
-  const typeLabels = { photo: 'Photo', video: 'Video', audio: 'Audio' };
-  if (dom.infoMediaType) dom.infoMediaType.textContent = typeLabels[item.media_type] || item.media_type || 'Photo';
+  const typeLabels = { photo: t('type_photo'), video: t('type_video'), audio: t('type_audio') };
+  if (dom.infoMediaType) dom.infoMediaType.textContent = typeLabels[item.media_type] || item.media_type || t('type_photo');
   if (dom.infoDimensions) dom.infoDimensions.textContent = item.width && item.height ? `${item.width} × ${item.height} px` : '-';
   if (dom.infoFileSize) dom.infoFileSize.textContent = formatBytes(item.file_size);
   if (dom.infoDateTaken) dom.infoDateTaken.textContent = formatDateTime(item.date_taken);
@@ -568,7 +569,7 @@ export async function handleSaveRename() {
   if (!currentInspectorItem || !dom.renameFileInput) return;
   const rawInput = dom.renameFileInput.value.trim();
   if (!rawInput) {
-    showToast('File name cannot be empty', 'error');
+    showToast(t('toast_file_name_empty'), 'error');
     return;
   }
   if (rawInput === currentInspectorItem.file_name) {
@@ -576,7 +577,7 @@ export async function handleSaveRename() {
     return;
   }
   if (/[\\/:*?"<>|]/.test(rawInput)) {
-    showToast('File name cannot contain / \\ : * ? " < > |', 'error');
+    showToast(t('toast_file_name_invalid'), 'error');
     return;
   }
 
@@ -791,7 +792,7 @@ export async function handleSaveCaption() {
       if (dom.infoCaption) dom.infoCaption.textContent = newCaption || '-';
 
       closeCaptionForm();
-      showToast('Caption updated', 'success');
+      showToast(t('toast_caption_saved'), 'success');
     }
   } catch (err) {
     showToast('Failed to update caption: ' + (err.message || 'Error'), 'error');

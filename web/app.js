@@ -18,6 +18,7 @@ import {
 } from './api.js';
 import { state } from './state.js';
 import { dom, validateRequiredDom, showToast } from './dom.js';
+import { initI18n, setLanguage, onLanguageChange, t, SUPPORTED_LANGUAGES } from './i18n.js';
 import {
   cardMap,
   getCardElement,
@@ -1104,6 +1105,23 @@ let initialized = false;
 export async function init() {
   if (initialized) return;
   initialized = true;
+  initI18n();
+  onLanguageChange(() => {
+    updateFilterLabel();
+    updateBatchBar();
+    renderTimeline();
+    if (state.activeTab && state.activeTab !== 'media') {
+      renderCategoryView(state.activeTab);
+    } else {
+      renderGrid();
+    }
+    if (state.selectedIds.size > 0) {
+      updateInspector();
+    }
+    if (state.viewMode === 'map') {
+      renderUnmappedTray();
+    }
+  });
   validateRequiredDom();
   setupEventListeners();
   await loadMetadata();
@@ -1155,5 +1173,8 @@ window._imagineApp = {
   loupePrev,
   clearAllFilters,
   showToast,
-  getOriginalMediaUrl
+  getOriginalMediaUrl,
+  setLanguage,
+  t,
+  SUPPORTED_LANGUAGES
 };

@@ -3,6 +3,8 @@
  * Pure Vanilla JavaScript (Offline-ready, no dependencies)
  */
 
+import { t, getLocaleCode, getMonthName as i18nGetMonthName } from './i18n.js';
+
 export const api = {
   async get(endpoint, params = {}, options = {}) {
     const url = new URL(endpoint, window.location.origin);
@@ -84,9 +86,9 @@ export function formatBytes(bytes) {
 
 export function formatDate(timestamp) {
   const ts = numeric(timestamp);
-  if (ts === null || ts <= 0) return 'Unknown Date';
+  if (ts === null || ts <= 0) return t('unknown_date');
   const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, {
+  return d.toLocaleDateString(getLocaleCode(), {
     timeZone: 'UTC',
     year: 'numeric',
     month: 'short',
@@ -96,9 +98,9 @@ export function formatDate(timestamp) {
 
 export function formatDateTime(timestamp) {
   const ts = numeric(timestamp);
-  if (ts === null || ts <= 0) return 'Unknown Date';
+  if (ts === null || ts <= 0) return t('unknown_date');
   const d = new Date(ts * 1000);
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString(getLocaleCode(), {
     timeZone: 'UTC',
     year: 'numeric',
     month: 'short',
@@ -120,23 +122,20 @@ export function formatDuration(seconds) {
   const s = numeric(seconds);
   if (s === null || s <= 0) return '0:00';
   const totalSec = Math.round(s);
-  const hrs = Math.floor(totalSec / 3600);
-  const mins = Math.floor((totalSec % 3600) / 60);
+  const mins = Math.floor(totalSec / 60);
   const secs = totalSec % 60;
-  const padSec = secs < 10 ? '0' + secs : secs;
-  if (hrs > 0) {
-    const padMin = mins < 10 ? '0' + mins : mins;
+  const padSec = secs < 10 ? `0${secs}` : `${secs}`;
+  if (mins >= 60) {
+    const hrs = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    const padMin = remMins < 10 ? `0${remMins}` : `${remMins}`;
     return `${hrs}:${padMin}:${padSec}`;
   }
   return `${mins}:${padSec}`;
 }
 
 export function getMonthName(monthNumber) {
-  const months = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
-  return months[monthNumber - 1] || '';
+  return i18nGetMonthName(monthNumber);
 }
 
 export function hasValidGps(item) {
