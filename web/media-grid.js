@@ -28,6 +28,7 @@ import {
 import { updateInspector, patchInspectorRatingAndFlag } from './inspector.js';
 import { openLoupeForMedia, updateLoupeControls } from './loupe.js';
 import { updateModalTagSuggestions, renderModalSearchHelp, openDeleteTagModal } from './modals.js';
+import { renderCategoryView } from './category-view.js';
 
 // DOM Caching & Query Scoping
 export const cardMap = new Map();
@@ -128,11 +129,21 @@ export async function loadMedia(append = false) {
   const abortController = new AbortController();
   loadMediaAbortController = abortController;
 
+  if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
+    state.isLoadingMedia = false;
+    renderCategoryView(state.activeTab);
+    updateFilterLabel();
+    return;
+  }
+
   const fetchId = ++currentLoadMediaId;
   state.isLoadingMedia = true;
   state.mediaOffset = 0;
 
   try {
+    if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+    if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
+
     const params = {
       ...buildMediaParams(),
       limit: state.mediaLimit,
@@ -334,6 +345,9 @@ export async function loadMetadata() {
     renderSidebarAlbums();
     renderSidebarFolders();
     renderTimeline();
+    if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
+      renderCategoryView(state.activeTab);
+    }
     if (typeof updateModalTagSuggestions === 'function') {
       updateModalTagSuggestions();
     }
@@ -939,12 +953,37 @@ export function updateSidebarActive() {
 }
 
 export function updateFilterLabel() {
-  const parts = [];
-
-  if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
-    const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
-    parts.push(`Category: ${tabName}`);
+  if (state.activeTab && state.activeTab !== 'media') {
+    if (state.activeTagId) {
+      if (dom.categoryBackBtn) {
+        dom.categoryBackBtn.style.display = 'inline-flex';
+        const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
+        if (dom.categoryBackBtnLabel) {
+          dom.categoryBackBtnLabel.textContent = `Back to ${tabName}`;
+        }
+      }
+    } else {
+      if (dom.categoryBackBtn) {
+        dom.categoryBackBtn.style.display = 'none';
+      }
+      const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
+      const catTags = (state.tags || []).filter(t => (t.category || 'keyword').toLowerCase() === state.activeTab.toLowerCase());
+      const noun = catTags.length === 1 ? (state.activeTab === 'people' ? 'person' : state.activeTab.slice(0, -1)) : state.activeTab;
+      if (dom.filterLabel) {
+        dom.filterLabel.innerHTML = `<strong>${escapeHtml(tabName)}</strong> (${catTags.length} ${noun})`;
+      }
+      if (dom.clearFiltersBtn) {
+        dom.clearFiltersBtn.style.display = state.searchText ? 'inline-block' : 'none';
+      }
+      return;
+    }
+  } else {
+    if (dom.categoryBackBtn) {
+      dom.categoryBackBtn.style.display = 'none';
+    }
   }
+
+  const parts = [];
 
   if (state.activeMediaType === 'photos') {
     parts.push('Photos');
@@ -971,7 +1010,12 @@ export function updateFilterLabel() {
 
   if (state.activeTagId) {
     const tag = state.tags.find(t => t.id === state.activeTagId);
-    parts.push(`Tag: ${tag ? tag.name : state.activeTagId}`);
+    if (state.activeTab && state.activeTab !== 'media') {
+      const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
+      parts.push(`${tabName}: ${tag ? tag.name : state.activeTagId}`);
+    } else {
+      parts.push(`Tag: ${tag ? tag.name : state.activeTagId}`);
+    }
   }
 
   if (state.activeFolder) {
@@ -1010,6 +1054,9 @@ export function clearAllFilters() {
   state.activeTab = 'media';
   state.searchText = '';
   if (dom.searchInput) dom.searchInput.value = '';
+  if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+  if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
+  if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
   if (dom.viewTabs) {
     dom.viewTabs.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'media'));
   }

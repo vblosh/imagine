@@ -55,6 +55,7 @@ import {
   toggleSmartFix,
   saveEdits
 } from './quick-edit.js';
+import { navigateBackToCategory } from './category-view.js';
 
 export function handleEscapeKey() {
   // 1. Modals (highest priority)
@@ -139,6 +140,16 @@ export function handleEscapeKey() {
     state.unmappedTrayOpen = false;
     if (dom.unmappedTray) dom.unmappedTray.style.display = 'none';
     exitPlacementMode();
+    return true;
+  }
+
+  // 6b. Category Drilldown (People, Places, Events: Back button active)
+  if ((dom.categoryBackBtn && dom.categoryBackBtn.style.display !== 'none') ||
+      (state.activeTab && state.activeTab !== 'media' && state.activeTagId)) {
+    if (state.selectedIds && state.selectedIds.size > 0) {
+      clearCardSelections();
+    }
+    navigateBackToCategory();
     return true;
   }
 

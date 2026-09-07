@@ -36,6 +36,7 @@ export function switchViewMode(mode) {
     if (dom.viewGridBtn) dom.viewGridBtn.classList.remove('active');
     if (dom.viewMapBtn) dom.viewMapBtn.classList.add('active');
     if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+    if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
     if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
     initMap();
     if (state.mapInstance) {
@@ -50,10 +51,16 @@ export function switchViewMode(mode) {
   } else {
     if (dom.viewGridBtn) dom.viewGridBtn.classList.add('active');
     if (dom.viewMapBtn) dom.viewMapBtn.classList.remove('active');
-    if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
     if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
     exitPlacementMode();
-    renderGrid();
+    if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
+      if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'flex';
+      if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+    } else {
+      if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+      if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+      renderGrid();
+    }
   }
 }
 

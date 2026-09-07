@@ -43,12 +43,18 @@ void to_json(nlohmann::json& j, const Tag& t) {
         {"id", t.id},
         {"name", t.name},
         {"category", t.category},
-        {"media_count", t.media_count}
+        {"media_count", t.media_count},
+        {"cover_hash", t.cover_hash}
     };
     if (t.parent_id.has_value()) {
         j["parent_id"] = *t.parent_id;
     } else {
         j["parent_id"] = nullptr;
+    }
+    if (t.cover_media_id.has_value()) {
+        j["cover_media_id"] = *t.cover_media_id;
+    } else {
+        j["cover_media_id"] = nullptr;
     }
 }
 
@@ -57,10 +63,16 @@ void from_json(const nlohmann::json& j, Tag& t) {
     t.name = j.value("name", "");
     t.category = j.value("category", "keyword");
     t.media_count = j.value("media_count", int64_t{0});
+    t.cover_hash = j.value("cover_hash", "");
     if (j.contains("parent_id") && !j["parent_id"].is_null()) {
         t.parent_id = j["parent_id"].get<TagId>();
     } else {
         t.parent_id = std::nullopt;
+    }
+    if (j.contains("cover_media_id") && !j["cover_media_id"].is_null()) {
+        t.cover_media_id = j["cover_media_id"].get<MediaId>();
+    } else {
+        t.cover_media_id = std::nullopt;
     }
 }
 

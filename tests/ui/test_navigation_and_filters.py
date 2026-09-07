@@ -67,41 +67,85 @@ def test_sidebar_quick_filters(server, page: Page):
 
 
 def test_view_tabs_category_filtering(server, page: Page):
-    """Switching top-bar view tabs (Media, People, Places, Events) filters by tag category."""
+    """Clicking top tabs (People, Places, Events) opens grid with photo and name; clicking photo selects and shows photos."""
     page.goto(server["url"])
 
     cards = page.locator(".photo-card")
     expect(cards).to_have_count(6)
 
-    # 1. Switch to People tab
+    category_view = page.locator("#categoryViewContainer")
+    category_cards = page.locator(".category-card-item")
+    back_btn = page.locator("#categoryBackBtn")
+
+    # 1. Switch to People tab -> opens People Grid with cards for Alice and Bob
     page.locator('.tab-btn[data-tab="people"]').click()
     expect(page.locator('.tab-btn[data-tab="people"]')).to_have_class(re.compile(r"\bactive\b"))
-    # People category contains both birthday.bmp (Alice) and portrait.bmp (Bob)
-    expect(cards).to_have_count(2)
-    people_names = [cards.nth(0).locator(".card-filename").text_content(), cards.nth(1).locator(".card-filename").text_content()]
-    assert "birthday.bmp" in people_names
-    assert "portrait.bmp" in people_names
+    expect(category_view).to_be_visible()
+    expect(category_cards).to_have_count(2)
 
-    # 2. Switch to Places tab
+    alice_card = page.locator('.category-card-item', has_text="Alice")
+    bob_card = page.locator('.category-card-item', has_text="Bob")
+    expect(alice_card).to_be_visible()
+    expect(bob_card).to_be_visible()
+    # Check that each card has photo thumbnail and name
+    expect(alice_card.locator(".category-card-name")).to_have_text("Alice")
+    expect(bob_card.locator(".category-card-name")).to_have_text("Bob")
+
+    # Click on Alice's card/photo -> selects Alice and shows photos from Alice
+    alice_card.click()
+    expect(category_view).to_be_hidden()
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("birthday.bmp")
+    expect(back_btn).to_be_visible()
+    expect(back_btn).to_contain_text("Back to People")
+
+    # Click Back to People -> returns to People grid
+    back_btn.click()
+    expect(category_view).to_be_visible()
+    expect(category_cards).to_have_count(2)
+
+    # 2. Switch to Places tab -> opens Places Grid with cards for Alps and Beach
     page.locator('.tab-btn[data-tab="places"]').click()
     expect(page.locator('.tab-btn[data-tab="places"]')).to_have_class(re.compile(r"\bactive\b"))
-    # Places category contains both mountain.bmp (Alps) and beach.bmp (Beach)
-    expect(page.locator(".photo-card", has_text="mountain.bmp")).to_be_visible()
-    expect(cards).to_have_count(2)
-    places_names = [cards.nth(0).locator(".card-filename").text_content(), cards.nth(1).locator(".card-filename").text_content()]
-    assert "mountain.bmp" in places_names
-    assert "beach.bmp" in places_names
+    expect(category_view).to_be_visible()
+    expect(category_cards).to_have_count(2)
 
-    # 3. Switch to Events tab
+    alps_card = page.locator('.category-card-item', has_text="Alps")
+    beach_card = page.locator('.category-card-item', has_text="Beach")
+    expect(alps_card).to_be_visible()
+    expect(beach_card).to_be_visible()
+
+    # Click on Alps -> shows mountain.bmp
+    alps_card.click()
+    expect(category_view).to_be_hidden()
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("mountain.bmp")
+    expect(back_btn).to_contain_text("Back to Places")
+
+    # Click Places tab on top -> returns to Places grid
+    page.locator('.tab-btn[data-tab="places"]').click()
+    expect(category_view).to_be_visible()
+    expect(category_cards).to_have_count(2)
+
+    # 3. Switch to Events tab -> opens Events Grid with card for Birthday 2026
     page.locator('.tab-btn[data-tab="events"]').click()
     expect(page.locator('.tab-btn[data-tab="events"]')).to_have_class(re.compile(r"\bactive\b"))
-    # Events tag is "Birthday 2026", tagged on birthday.bmp
+    expect(category_view).to_be_visible()
+    expect(category_cards).to_have_count(1)
+
+    event_card = page.locator('.category-card-item', has_text="Birthday 2026")
+    expect(event_card).to_be_visible()
+
+    # Click on Birthday 2026 -> shows birthday.bmp
+    event_card.click()
+    expect(category_view).to_be_hidden()
     expect(cards).to_have_count(1)
     expect(cards.first.locator(".card-filename")).to_have_text("birthday.bmp")
 
-    # 4. Switch back to Media tab
+    # 4. Switch back to Media tab -> returns to all 6 photos
     page.locator('.tab-btn[data-tab="media"]').click()
     expect(page.locator('.tab-btn[data-tab="media"]')).to_have_class(re.compile(r"\bactive\b"))
+    expect(category_view).to_be_hidden()
     expect(cards).to_have_count(6)
 
 

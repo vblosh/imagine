@@ -355,6 +355,7 @@ export function openTagModal(targetMediaIds = null) {
     dom.tagNameInput.focus();
   }
 }
+export const openNewTagModal = openTagModal;
 
 export function closeTagModal() {
   if (dom.newTagModal) {

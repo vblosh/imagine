@@ -135,8 +135,11 @@ import {
   updateBatchDatePreview
 } from './modals.js';
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
+import { renderCategoryView, initCategoryView, navigateBackToCategory } from './category-view.js';
 
 export function setupEventListeners() {
+  initCategoryView();
+
   // Deselect on actual background click
   if (dom.gridScrollContainer) {
     dom.gridScrollContainer.addEventListener('click', (e) => {
@@ -498,7 +501,15 @@ export function setupEventListeners() {
         state.activeStatusFilter = null;
         updateSidebarActive();
         renderTimeline();
-        loadMedia();
+        if (state.activeTab === 'media') {
+          if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+          if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
+          if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
+          loadMedia();
+        } else {
+          renderCategoryView(state.activeTab);
+          updateFilterLabel();
+        }
       });
     });
   }

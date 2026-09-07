@@ -163,7 +163,9 @@ export function normalizeTag(raw) {
     name: String(raw.name || ''),
     category: typeof raw.category === 'string' ? raw.category : 'keyword',
     parent_id: raw.parent_id != null ? Number(raw.parent_id) : null,
-    media_count: Number.isFinite(Number(raw.media_count)) ? Number(raw.media_count) : 0
+    media_count: Number.isFinite(Number(raw.media_count)) ? Number(raw.media_count) : 0,
+    cover_media_id: raw.cover_media_id != null ? Number(raw.cover_media_id) : null,
+    cover_hash: typeof raw.cover_hash === 'string' ? raw.cover_hash : ''
   };
 }
 

@@ -625,7 +625,9 @@ Result<TagId> CatalogDb::createOrGetTag(const std::string& name, const std::stri
 Result<std::vector<Tag>> CatalogDb::getAllTags() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
-        SELECT t.id, t.name, t.category, t.parent_id, COUNT(mt.media_id) AS media_count
+        SELECT t.id, t.name, t.category, t.parent_id, COUNT(mt.media_id) AS media_count,
+               (SELECT mt2.media_id FROM media_tags mt2 JOIN media_items m2 ON mt2.media_id = m2.id WHERE mt2.tag_id = t.id ORDER BY (CASE WHEN m2.media_type IN ('video', 'audio') THEN 1 ELSE 0 END) ASC, m2.date_taken DESC, m2.id DESC LIMIT 1) AS cover_media_id,
+               (SELECT m2.content_hash FROM media_tags mt2 JOIN media_items m2 ON mt2.media_id = m2.id WHERE mt2.tag_id = t.id ORDER BY (CASE WHEN m2.media_type IN ('video', 'audio') THEN 1 ELSE 0 END) ASC, m2.date_taken DESC, m2.id DESC LIMIT 1) AS cover_hash
         FROM tags t
         LEFT JOIN media_tags mt ON t.id = mt.tag_id
         GROUP BY t.id
@@ -646,6 +648,12 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
             t.parent_id = stmt.getInt64(3);
         }
         t.media_count = stmt.getInt64(4);
+        if (!stmt.isNull(5)) {
+            t.cover_media_id = stmt.getInt64(5);
+        }
+        if (!stmt.isNull(6)) {
+            t.cover_hash = stmt.getString(6);
+        }
         tags.push_back(std::move(t));
     }
     return tags;

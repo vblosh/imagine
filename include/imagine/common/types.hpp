@@ -117,6 +117,8 @@ struct Tag {
     std::string category{"keyword"}; // "people", "places", "events", "keyword"
     std::optional<TagId> parent_id{std::nullopt};
     int64_t media_count{0};
+    std::optional<MediaId> cover_media_id{std::nullopt};
+    std::string cover_hash;
 };
 
 struct MediaItem {

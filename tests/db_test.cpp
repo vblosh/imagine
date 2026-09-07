@@ -528,3 +528,66 @@ TEST_F(CatalogDbTest, GetAllFolders) {
     EXPECT_EQ(afterDel[0], "Egypt/Betlehem");
     EXPECT_EQ(afterDel[1], "family");
 }
+
+TEST_F(CatalogDbTest, GetAllTagsPhotoCoverPriority) {
+    // 1. Tag with both video and photo, where video has newer date_taken than photo.
+    // Tag should prioritize photo for cover_media_id and cover_hash.
+    auto eventTagRes = db.createOrGetTag("Conference 2026", "events");
+    ASSERT_TRUE(eventTagRes.isOk());
+    TagId eventTagId = eventTagRes.value();
+
+    MediaItem photoItem;
+    photoItem.file_path = "conf/stage_photo.jpg";
+    photoItem.file_name = "stage_photo.jpg";
+    photoItem.content_hash = "hash_photo_1";
+    photoItem.media_type = "photo";
+    photoItem.date_taken = 1000;
+    auto photoId = db.insertMedia(photoItem).value();
+    ASSERT_TRUE(db.addTagToMedia(photoId, eventTagId).isOk());
+
+    MediaItem videoItem;
+    videoItem.file_path = "conf/keynote_video.mp4";
+    videoItem.file_name = "keynote_video.mp4";
+    videoItem.content_hash = "hash_video_1";
+    videoItem.media_type = "video";
+    videoItem.date_taken = 2000; // Newer than photo!
+    auto videoId = db.insertMedia(videoItem).value();
+    ASSERT_TRUE(db.addTagToMedia(videoId, eventTagId).isOk());
+
+    // 2. Tag with only a video -> falls back to video
+    auto videoOnlyTagRes = db.createOrGetTag("Concert", "events");
+    ASSERT_TRUE(videoOnlyTagRes.isOk());
+    TagId videoOnlyTagId = videoOnlyTagRes.value();
+
+    MediaItem concertVideo;
+    concertVideo.file_path = "concert/live.mp4";
+    concertVideo.file_name = "live.mp4";
+    concertVideo.content_hash = "hash_video_concert";
+    concertVideo.media_type = "video";
+    concertVideo.date_taken = 3000;
+    auto concertVideoId = db.insertMedia(concertVideo).value();
+    ASSERT_TRUE(db.addTagToMedia(concertVideoId, videoOnlyTagId).isOk());
+
+    auto tagsRes = db.getAllTags();
+    ASSERT_TRUE(tagsRes.isOk());
+    const auto& tags = tagsRes.value();
+
+    // Verify Conference 2026 prefers photo over newer video
+    auto confIt = std::find_if(tags.begin(), tags.end(), [](const Tag& t) { return t.name == "Conference 2026"; });
+    ASSERT_NE(confIt, tags.end());
+    EXPECT_EQ(confIt->media_count, 2);
+    ASSERT_TRUE(confIt->cover_media_id.has_value());
+    EXPECT_EQ(*confIt->cover_media_id, photoId);
+    EXPECT_FALSE(confIt->cover_hash.empty());
+    EXPECT_EQ(confIt->cover_hash, "hash_photo_1");
+
+    // Verify Concert with only video falls back to video
+    auto concertIt = std::find_if(tags.begin(), tags.end(), [](const Tag& t) { return t.name == "Concert"; });
+    ASSERT_NE(concertIt, tags.end());
+    EXPECT_EQ(concertIt->media_count, 1);
+    ASSERT_TRUE(concertIt->cover_media_id.has_value());
+    EXPECT_EQ(*concertIt->cover_media_id, concertVideoId);
+    EXPECT_FALSE(concertIt->cover_hash.empty());
+    EXPECT_EQ(concertIt->cover_hash, "hash_video_concert");
+}
+

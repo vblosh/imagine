@@ -190,6 +190,10 @@
         <!-- Filter Bar / Breadcrumb & Batch Actions -->
         <div class="content-toolbar">
           <div class="filter-indicator" id="filterIndicator">
+            <button class="btn btn-sm btn-secondary btn-back" id="categoryBackBtn" style="display: none;" title="Back to overview">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+              <span id="categoryBackBtnLabel">Back to People</span>
+            </button>
             <span id="filterLabel">All Photos</span>
             <button class="btn-link" id="clearFiltersBtn" style="display: none;">Clear Filter</button>
           </div>
@@ -259,6 +263,33 @@
             <h3>No Photos Found</h3>
             <p>Import photos from a folder on your computer to get started.</p>
             <button class="btn btn-primary" id="emptyImportBtn">Import Folder</button>
+          </div>
+        </div>
+
+        <!-- People / Places / Events Grid Container -->
+        <div class="category-view-container" id="categoryViewContainer" style="display: none;">
+          <div class="category-view-header">
+            <div class="category-view-info">
+              <h2 class="category-view-title" id="categoryViewTitle">People</h2>
+              <span class="category-view-subtitle" id="categoryViewSubtitle">0 people</span>
+            </div>
+            <div class="category-view-actions">
+              <button class="btn btn-secondary btn-sm" id="categoryAddBtn">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                <span id="categoryAddBtnLabel">Add Person</span>
+              </button>
+            </div>
+          </div>
+          <div class="category-cards-grid" id="categoryCardsGrid">
+            <!-- Dynamic cards for People / Places / Events -->
+          </div>
+          <div class="empty-state" id="categoryEmptyState" style="display: none;">
+            <svg class="category-empty-icon" id="categoryEmptyIcon" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+            </svg>
+            <h3 id="categoryEmptyTitle">No People Found</h3>
+            <p id="categoryEmptyText">Tag photos with people's names to organize them here.</p>
+            <button class="btn btn-primary" id="categoryEmptyActionBtn">Add Person</button>
           </div>
         </div>
 
