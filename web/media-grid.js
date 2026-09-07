@@ -27,7 +27,7 @@ import {
 } from './map-view.js';
 import { updateInspector, patchInspectorRatingAndFlag } from './inspector.js';
 import { openLoupeForMedia, updateLoupeControls } from './loupe.js';
-import { updateModalTagSuggestions, renderModalSearchHelp } from './modals.js';
+import { updateModalTagSuggestions, renderModalSearchHelp, openDeleteTagModal } from './modals.js';
 
 // DOM Caching & Query Scoping
 export const cardMap = new Map();
@@ -736,24 +736,9 @@ export function renderSidebarTags() {
 
     const delBtn = li.querySelector('.delete-tag-btn');
     if (delBtn) {
-      delBtn.addEventListener('click', async (e) => {
+      delBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (!window.confirm(`Are you sure you want to delete tag "${tag.name}"?`)) {
-          return;
-        }
-        try {
-          await api.del(`/api/tags/${tag.id}`);
-          if (state.activeTagId === tag.id) {
-            state.activeTagId = null;
-          }
-          await loadMetadata();
-          loadMedia();
-          updateInspector();
-          showToast(`Tag "${tag.name}" deleted.`, 'info');
-        } catch (err) {
-          console.error('Failed to delete tag:', err);
-          showToast('Failed to delete tag: ' + (err.message || 'Server error'), 'error');
-        }
+        openDeleteTagModal(tag);
       });
     }
 

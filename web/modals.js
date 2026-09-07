@@ -21,6 +21,7 @@ import { closeLoupe } from './loupe.js';
 let pendingAddToAlbumIds = [];
 let pendingTagTargetMediaIds = [];
 let pendingDeleteMediaIds = [];
+let pendingDeleteTag = null;
 
 // --- Import Modal & Workflow ---
 export function openImportModal() {
@@ -627,3 +628,57 @@ export async function submitDeleteMedia() {
   updateBatchBar();
   updateInspector();
 }
+
+// --- Delete Tag Modal ---
+export function openDeleteTagModal(tag) {
+  if (!tag) return;
+  if (typeof tag === 'number' || typeof tag === 'string') {
+    const found = (state.tags || []).find(t => t.id === tag || t.id === Number(tag));
+    pendingDeleteTag = found || { id: tag, name: String(tag) };
+  } else {
+    pendingDeleteTag = tag;
+  }
+  const tagName = pendingDeleteTag.name || 'this tag';
+  if (dom.deleteTagPromptText) {
+    dom.deleteTagPromptText.textContent = `Are you sure you want to delete tag "${tagName}"?`;
+  }
+  if (dom.deleteTagWarningText) {
+    dom.deleteTagWarningText.textContent =
+      'This removes the tag from all associated photos in the catalog database. The original files on disk will not be deleted.';
+  }
+  if (dom.deleteTagModal) {
+    dom.deleteTagModal.style.display = 'flex';
+  }
+}
+
+export function closeDeleteTagModal() {
+  if (dom.deleteTagModal) {
+    dom.deleteTagModal.style.display = 'none';
+  }
+  pendingDeleteTag = null;
+}
+
+export async function submitDeleteTag() {
+  if (!pendingDeleteTag) {
+    closeDeleteTagModal();
+    return;
+  }
+
+  const tag = pendingDeleteTag;
+  closeDeleteTagModal();
+
+  try {
+    await api.del(`/api/tags/${tag.id}`);
+    if (state.activeTagId === tag.id) {
+      state.activeTagId = null;
+    }
+    await loadMetadata();
+    loadMedia();
+    updateInspector();
+    showToast(`Tag "${tag.name}" deleted.`, 'info');
+  } catch (err) {
+    console.error('Failed to delete tag:', err);
+    showToast('Failed to delete tag: ' + (err.message || 'Server error'), 'error');
+  }
+}
+

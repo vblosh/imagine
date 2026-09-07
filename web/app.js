@@ -114,7 +114,9 @@ import {
   submitCreateTag,
   openDeleteMediaModal,
   closeDeleteMediaModal,
-  submitDeleteMedia
+  submitDeleteMedia,
+  closeDeleteTagModal,
+  submitDeleteTag
 } from './modals.js';
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
 
@@ -960,6 +962,12 @@ export function setupEventListeners() {
       }
     });
   }
+
+  // Delete Tag Modal
+  if (dom.closeDeleteTagModalBtn) dom.closeDeleteTagModalBtn.addEventListener('click', closeDeleteTagModal);
+  if (dom.cancelDeleteTagBtn) dom.cancelDeleteTagBtn.addEventListener('click', closeDeleteTagModal);
+  if (dom.deleteTagBackdrop) dom.deleteTagBackdrop.addEventListener('click', closeDeleteTagModal);
+  if (dom.confirmDeleteTagBtn) dom.confirmDeleteTagBtn.addEventListener('click', submitDeleteTag);
 
   setupResizablePanels();
   setupKeyboardShortcuts();

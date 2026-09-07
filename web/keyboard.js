@@ -23,6 +23,7 @@ import {
 } from './map-view.js';
 import {
   closeDeleteMediaModal,
+  closeDeleteTagModal,
   closeImportModal,
   closeAlbumModal,
   closeTagModal,
@@ -55,6 +56,11 @@ import {
 
 export function handleEscapeKey() {
   // 1. Modals (highest priority)
+  if (dom.deleteTagModal && dom.deleteTagModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeDeleteTagModal();
+    return true;
+  }
   if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
     if (document.activeElement?.blur) document.activeElement.blur();
     closeDeleteMediaModal();

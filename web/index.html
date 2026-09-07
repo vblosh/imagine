@@ -938,9 +938,30 @@
       </div>
     </div>
 
+    <!-- Delete Tag Modal Dialog -->
+    <div class="modal" id="deleteTagModal" style="display: none;">
+      <div class="modal-backdrop" id="deleteTagBackdrop"></div>
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3>Delete Tag</h3>
+          <button class="btn-icon-sm" id="closeDeleteTagModalBtn">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="deleteTagPromptText" style="margin-bottom: 8px; font-size: 14px;">Are you sure you want to delete tag?</p>
+          <p id="deleteTagWarningText" style="margin-bottom: 0; font-size: 12px; color: var(--text-dim);">
+            This removes the tag from all associated photos in the catalog database. The original files on disk will not be deleted.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancelDeleteTagBtn">Cancel</button>
+          <button class="btn btn-danger" id="confirmDeleteTagBtn">Delete Tag</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <script src="vendor/leaflet/leaflet.js"></script>
-  <script type="module" src="app.js?v=12"></script>
+  <script type="module" src="app.js?v=13"></script>
 </body>
 </html>

@@ -241,7 +241,14 @@ export const dom = {
   confirmDeleteMediaBtn: document.getElementById('confirmDeleteMediaBtn'),
   deleteMediaPromptText: document.getElementById('deleteMediaPromptText'),
   deleteFromDiskCheckbox: document.getElementById('deleteFromDiskCheckbox'),
-  deleteMediaWarningText: document.getElementById('deleteMediaWarningText')
+  deleteMediaWarningText: document.getElementById('deleteMediaWarningText'),
+  deleteTagModal: document.getElementById('deleteTagModal'),
+  deleteTagBackdrop: document.getElementById('deleteTagBackdrop'),
+  closeDeleteTagModalBtn: document.getElementById('closeDeleteTagModalBtn'),
+  cancelDeleteTagBtn: document.getElementById('cancelDeleteTagBtn'),
+  confirmDeleteTagBtn: document.getElementById('confirmDeleteTagBtn'),
+  deleteTagPromptText: document.getElementById('deleteTagPromptText'),
+  deleteTagWarningText: document.getElementById('deleteTagWarningText')
 };
 
 export function refreshDomReferences() {

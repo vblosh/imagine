@@ -137,14 +137,22 @@ def test_delete_tag(server, page: Page):
     tag_item = page.locator("#tagCategoryKeyword .tag-item", has_text="ToDelete Tag")
     expect(tag_item).to_be_visible()
 
-    # Dismissing confirm cancels deletion
-    page.once("dialog", lambda d: d.dismiss())
+    modal = page.locator("#deleteTagModal")
+    expect(modal).to_be_hidden()
+
+    # Dismissing / canceling deletion
     tag_item.locator(".delete-tag-btn").click()
+    expect(modal).to_be_visible()
+    expect(page.locator("#deleteTagPromptText")).to_contain_text('Are you sure you want to delete tag "ToDelete Tag"?')
+    page.locator("#cancelDeleteTagBtn").click()
+    expect(modal).to_be_hidden()
     expect(page.locator("#tagCategoryKeyword .tag-item", has_text="ToDelete Tag")).to_be_visible()
 
     # Accepting confirm deletes the tag
-    page.once("dialog", lambda d: d.accept())
     tag_item.locator(".delete-tag-btn").click()
+    expect(modal).to_be_visible()
+    page.locator("#confirmDeleteTagBtn").click()
+    expect(modal).to_be_hidden()
     expect(page.locator("#tagCategoryKeyword .tag-item", has_text="ToDelete Tag")).to_have_count(0)
 
     # 2. Delete an active tag and verify filter resets
@@ -153,17 +161,50 @@ def test_delete_tag(server, page: Page):
     expect(page.locator("#filterLabel")).to_contain_text("Tag: Sunset")
     expect(cards).to_have_count(2)
 
-    # Delete the active "Sunset" tag with confirmation
-    page.once("dialog", lambda d: d.accept())
+    # Delete the active "Sunset" tag with confirmation modal
     sunset_tag.locator(".delete-tag-btn").click()
+    expect(modal).to_be_visible()
+    expect(page.locator("#deleteTagPromptText")).to_contain_text('Are you sure you want to delete tag "Sunset"?')
+    page.locator("#confirmDeleteTagBtn").click()
+    expect(modal).to_be_hidden()
     expect(page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")).to_have_count(0)
     # Filter resets back to all media
     expect(cards).to_have_count(6)
 
 
+def test_delete_tag_modal_close_and_backdrop_and_escape(server, page: Page):
+    """Test closing delete tag modal via close icon, backdrop, and Escape key."""
+    page.goto(server["url"])
+
+    modal = page.locator("#deleteTagModal")
+    expect(modal).to_be_hidden()
+
+    sunset_tag = page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")
+
+    # 1. Close icon button
+    sunset_tag.locator(".delete-tag-btn").click()
+    expect(modal).to_be_visible()
+    page.locator("#closeDeleteTagModalBtn").click()
+    expect(modal).to_be_hidden()
+    expect(sunset_tag).to_be_visible()
+
+    # 2. Backdrop click
+    sunset_tag.locator(".delete-tag-btn").click()
+    expect(modal).to_be_visible()
+    page.locator("#deleteTagBackdrop").click(position={"x": 10, "y": 10})
+    expect(modal).to_be_hidden()
+    expect(sunset_tag).to_be_visible()
+
+    # 3. Escape key
+    sunset_tag.locator(".delete-tag-btn").click()
+    expect(modal).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(modal).to_be_hidden()
+    expect(sunset_tag).to_be_visible()
+
+
 def test_delete_tag_removes_from_sidebar_and_photos(server, page: Page):
     """Verify deleting a tag from the left panel removes it from sidebar and from photo metadata in inspector."""
-    page.on("dialog", lambda d: d.accept())
     page.goto(server["url"])
 
     # 1. Select mountain.bmp which is tagged with 'Alps' and 'Sunset'
@@ -179,8 +220,13 @@ def test_delete_tag_removes_from_sidebar_and_photos(server, page: Page):
     expect(sunset_item).to_be_visible()
     expect(sunset_item.locator(".count-badge")).to_have_text("2")
 
+    modal = page.locator("#deleteTagModal")
+
     # 2. Delete "Sunset" from the left Keywords tag panel
     sunset_item.locator(".delete-tag-btn").click()
+    expect(modal).to_be_visible()
+    page.locator("#confirmDeleteTagBtn").click()
+    expect(modal).to_be_hidden()
 
     # Verify "Sunset" is completely gone from the left sidebar
     expect(page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")).to_have_count(0)
@@ -217,6 +263,9 @@ def test_delete_tag_removes_from_sidebar_and_photos(server, page: Page):
 
     # 5. Delete "Beach" from sidebar as well
     beach_item.locator(".delete-tag-btn").click()
+    expect(modal).to_be_visible()
+    page.locator("#confirmDeleteTagBtn").click()
+    expect(modal).to_be_hidden()
     expect(page.locator("#tagCategoryPlaces .tag-item", has_text="Beach")).to_have_count(0)
 
 
