@@ -65,6 +65,7 @@ def test_timeline_click_to_filter_and_reset(server, page: Page):
 def test_timeline_labels_do_not_overlap_with_many_months(server, page: Page):
     """Ensure timeline labels do not overlap when catalog contains dozens of months."""
     page.goto(server["url"])
+    expect(page.locator("#timelineContainer .timeline-bar-wrap")).to_have_count(3)
 
     # Provide 60 months of data across 5 years
     months_data = []

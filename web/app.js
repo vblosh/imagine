@@ -198,10 +198,11 @@ export function setupEventListeners() {
         state.activeFolder = null;
         updateSidebarActive();
       }
+      const debounceDelay = window.__TEST_MODE__ ? 50 : 300;
       searchTimer = setTimeout(() => {
         state.searchText = val;
         loadMedia();
-      }, 300);
+      }, debounceDelay);
     });
   }
 
@@ -371,9 +372,10 @@ export function setupEventListeners() {
         return;
       }
       if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'block';
+      const debounceDelay = window.__TEST_MODE__ ? 50 : 800;
       state.mapSearchDebounceTimer = setTimeout(() => {
         performMapPlaceSearch(q);
-      }, 800);
+      }, debounceDelay);
     });
 
     dom.mapSearchInput.addEventListener('keydown', (e) => {

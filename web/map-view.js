@@ -1033,7 +1033,7 @@ export async function performMapPlaceSearch(rawQuery) {
       try {
         const now = Date.now();
         const elapsed = now - lastNominatimRequestTime;
-        if (elapsed < 1000) {
+        if (!window.__TEST_MODE__ && elapsed < 1000) {
           await new Promise(r => setTimeout(r, 1000 - elapsed));
         }
         if (searchId !== currentMapSearchId) return;
