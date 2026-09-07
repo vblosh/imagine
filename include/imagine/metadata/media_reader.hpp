@@ -25,6 +25,10 @@ struct MediaFileInfo {
     int32_t orientation{1};
     std::vector<uint8_t> cover_art;
     std::string cover_mime;
+    bool has_gps{false};
+    double latitude{0.0};
+    double longitude{0.0};
+    double altitude{0.0};
 };
 
 class FfmpegHelper {
@@ -44,6 +48,7 @@ public:
     static bool isAudioExtension(const std::string& ext);
     static bool isImageExtension(const std::string& ext);
     static std::string detectMediaType(const std::string& path);
+    static bool parseIso6709(const std::string& str, double& outLat, double& outLon, double& outAlt);
 
     static Result<MediaFileInfo> readMetadata(const std::string& filePath);
 

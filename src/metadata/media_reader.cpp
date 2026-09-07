@@ -189,6 +189,39 @@ Result<MediaFileInfo> MediaReader::readMetadata(const std::string& filePath) {
     return fallback;
 }
 
+bool MediaReader::parseIso6709(const std::string& str, double& outLat, double& outLon, double& outAlt) {
+    if (str.empty()) return false;
+    const char* p = str.c_str();
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+    if (*p != '+' && *p != '-') return false;
+
+    char* end = nullptr;
+    double lat = std::strtod(p, &end);
+    if (end == p || (*end != '+' && *end != '-')) return false;
+
+    p = end;
+    double lon = std::strtod(p, &end);
+    if (end == p) return false;
+
+    double alt = 0.0;
+    p = end;
+    if (*p == '+' || *p == '-') {
+        alt = std::strtod(p, &end);
+    }
+
+    if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
+        return false;
+    }
+    if (lat == 0.0 && lon == 0.0) {
+        return false;
+    }
+
+    outLat = lat;
+    outLon = lon;
+    outAlt = alt;
+    return true;
+}
+
 // --- MP4 / MOV / M4V / M4A Parser ---
 
 Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
@@ -230,6 +263,8 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
         int channels{0};
         int sample_rate{0};
     };
+
+    std::unordered_map<uint32_t, std::string> metaKeys;
 
     std::function<void(uint64_t, uint64_t, TrackContext*)> parseContainer;
     parseContainer = [&](uint64_t startPos, uint64_t endPos, TrackContext* trackCtx) {
@@ -402,16 +437,62 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                     }
                 }
             } else if (boxType == "meta") {
-                file.seekg(4, std::ios::cur); // skip version & flags
-                parseContainer(file.tellg(), std::min(nextBoxPos, endPos), trackCtx);
+                uint8_t probe[8];
+                bool isFullBox = true;
+                if (file.read(reinterpret_cast<char*>(probe), 8)) {
+                    auto isFourCCChar = [](uint8_t c) {
+                        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == ' ' || c == 0xA9;
+                    };
+                    if (isFourCCChar(probe[4]) && isFourCCChar(probe[5]) &&
+                        isFourCCChar(probe[6]) && isFourCCChar(probe[7])) {
+                        isFullBox = false;
+                    }
+                }
+                uint64_t startOfInner = dataPos + (isFullBox ? 4 : 0);
+                parseContainer(startOfInner, std::min(nextBoxPos, endPos), trackCtx);
+            } else if (boxType == "keys" && nextBoxPos - dataPos >= 8) {
+                uint8_t verFlags[4];
+                if (file.read(reinterpret_cast<char*>(verFlags), 4)) {
+                    uint8_t countBuf[4];
+                    if (file.read(reinterpret_cast<char*>(countBuf), 4)) {
+                        uint32_t count = readBe32(countBuf);
+                        uint64_t curOffset = file.tellg();
+                        for (uint32_t i = 1; i <= count && curOffset + 8 <= nextBoxPos && file.good(); ++i) {
+                            file.seekg(curOffset, std::ios::beg);
+                            uint8_t entryHdr[8];
+                            if (!file.read(reinterpret_cast<char*>(entryHdr), 8)) break;
+                            uint32_t kSize = readBe32(entryHdr);
+                            if (kSize < 8 || curOffset + kSize > nextBoxPos) break;
+                            uint32_t nameLen = kSize - 8;
+                            std::string kName(nameLen, '\0');
+                            if (file.read(kName.data(), nameLen)) {
+                                metaKeys[i] = kName;
+                            }
+                            curOffset += kSize;
+                        }
+                    }
+                }
             } else if (boxType == "ilst") {
-                // Parse iTunes style metadata atoms
+                // Parse iTunes / QuickTime style metadata atoms
                 while (static_cast<uint64_t>(file.tellg()) < nextBoxPos && file.good()) {
                     uint64_t tagPos = file.tellg();
                     uint64_t tagSize = 0;
                     std::string tagType;
                     if (!readBoxHeader(tagSize, tagType) || tagSize < 8) break;
                     uint64_t nextTagPos = tagPos + tagSize;
+
+                    uint32_t keyIndex = 0;
+                    if (tagType.size() >= 4) {
+                        keyIndex = (static_cast<uint8_t>(tagType[0]) << 24) |
+                                   (static_cast<uint8_t>(tagType[1]) << 16) |
+                                   (static_cast<uint8_t>(tagType[2]) << 8)  |
+                                   static_cast<uint8_t>(tagType[3]);
+                    }
+                    std::string keyName;
+                    auto kit = metaKeys.find(keyIndex);
+                    if (kit != metaKeys.end()) {
+                        keyName = kit->second;
+                    }
 
                     // Search for inner "data" atom
                     uint64_t dataAtomPos = file.tellg();
@@ -447,6 +528,28 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                                 file.read(reinterpret_cast<char*>(info.cover_art.data()), valLen);
                                 uint32_t flagVal = readBe32(typeFlag);
                                 info.cover_mime = (flagVal == 14) ? "image/png" : "image/jpeg";
+                            } else if (keyName == "com.apple.quicktime.location.ISO6709" || tagType == "\xa9xyz" || tagType == "xyz ") {
+                                std::string val(valLen, '\0');
+                                file.read(val.data(), valLen);
+                                double lat = 0.0, lon = 0.0, alt = 0.0;
+                                if (parseIso6709(val, lat, lon, alt)) {
+                                    info.has_gps = true;
+                                    info.latitude = lat;
+                                    info.longitude = lon;
+                                    info.altitude = alt;
+                                }
+                            } else if (valLen >= 10 && valLen <= 64) {
+                                std::string val(valLen, '\0');
+                                file.read(val.data(), valLen);
+                                if (!info.has_gps && (val[0] == '+' || val[0] == '-')) {
+                                    double lat = 0.0, lon = 0.0, alt = 0.0;
+                                    if (parseIso6709(val, lat, lon, alt)) {
+                                        info.has_gps = true;
+                                        info.latitude = lat;
+                                        info.longitude = lon;
+                                        info.altitude = alt;
+                                    }
+                                }
                             }
                             break;
                         }
@@ -454,6 +557,46 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                     }
 
                     file.seekg(nextTagPos, std::ios::beg);
+                }
+            } else if ((boxType == "\xa9xyz" || boxType == "xyz ") && nextBoxPos - dataPos >= 10) {
+                uint32_t payloadLen = static_cast<uint32_t>(nextBoxPos - dataPos);
+                std::string val(payloadLen, '\0');
+                if (file.read(val.data(), payloadLen)) {
+                    size_t start = 0;
+                    while (start < val.size() && val[start] != '+' && val[start] != '-') start++;
+                    if (start < val.size()) {
+                        double lat = 0.0, lon = 0.0, alt = 0.0;
+                        if (parseIso6709(val.substr(start), lat, lon, alt)) {
+                            info.has_gps = true;
+                            info.latitude = lat;
+                            info.longitude = lon;
+                            info.altitude = alt;
+                        }
+                    }
+                }
+            } else if (boxType == "loci" && nextBoxPos - dataPos >= 18) {
+                uint8_t verFlags[4];
+                if (file.read(reinterpret_cast<char*>(verFlags), 4)) {
+                    file.seekg(2, std::ios::cur); // skip language code (2 bytes)
+                    // skip name (null-terminated string)
+                    int ch = 0;
+                    while ((ch = file.get()) != EOF && ch != 0 && static_cast<uint64_t>(file.tellg()) < nextBoxPos) {}
+                    file.seekg(1, std::ios::cur); // skip role byte
+                    uint8_t coords[12];
+                    if (file.read(reinterpret_cast<char*>(coords), 12)) {
+                        int32_t latFixed = static_cast<int32_t>(readBe32(coords));
+                        int32_t lonFixed = static_cast<int32_t>(readBe32(coords + 4));
+                        int32_t altFixed = static_cast<int32_t>(readBe32(coords + 8));
+                        double lat = static_cast<double>(latFixed) / 65536.0;
+                        double lon = static_cast<double>(lonFixed) / 65536.0;
+                        double alt = static_cast<double>(altFixed) / 65536.0;
+                        if (lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0 && (lat != 0.0 || lon != 0.0)) {
+                            info.has_gps = true;
+                            info.latitude = lat;
+                            info.longitude = lon;
+                            info.altitude = alt;
+                        }
+                    }
                 }
             }
 

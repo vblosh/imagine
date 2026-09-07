@@ -455,6 +455,13 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         item.bitrate = mediaInfo.bitrate;
         item.channels = mediaInfo.channels;
         item.sample_rate = mediaInfo.sample_rate;
+        if (mediaInfo.has_gps) {
+            item.exif.has_gps = true;
+            item.exif.latitude = mediaInfo.latitude;
+            item.exif.longitude = mediaInfo.longitude;
+            item.exif.altitude = mediaInfo.altitude;
+        }
+        item.exif.orientation = mediaInfo.orientation;
         item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize);
         item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize);
     }

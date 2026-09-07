@@ -950,3 +950,158 @@ TEST(MediaTest, ServerMediaEndpoints) {
     server.stop();
     catalog.close();
 }
+
+TEST(MediaTest, Mp4QuickTimeGpsParser) {
+    // 1. Direct ISO 6709 parser testing
+    double lat = 0.0, lon = 0.0, alt = 0.0;
+    EXPECT_TRUE(MediaReader::parseIso6709("+49.4792+010.9830+295.730/", lat, lon, alt));
+    EXPECT_NEAR(lat, 49.4792, 0.0001);
+    EXPECT_NEAR(lon, 10.9830, 0.0001);
+    EXPECT_NEAR(alt, 295.730, 0.001);
+
+    EXPECT_TRUE(MediaReader::parseIso6709("-28.4142-016.5577/", lat, lon, alt));
+    EXPECT_NEAR(lat, -28.4142, 0.0001);
+    EXPECT_NEAR(lon, -16.5577, 0.0001);
+    EXPECT_NEAR(alt, 0.0, 0.001);
+
+    EXPECT_FALSE(MediaReader::parseIso6709("", lat, lon, alt));
+    EXPECT_FALSE(MediaReader::parseIso6709("invalid_coords", lat, lon, alt));
+    EXPECT_FALSE(MediaReader::parseIso6709("+00.0000+000.0000/", lat, lon, alt));
+    EXPECT_FALSE(MediaReader::parseIso6709("+95.0000+010.0000/", lat, lon, alt));
+
+    // 2. Synthesize QuickTime MP4 with meta -> keys + ilst
+    TempDir tmp;
+    std::string movPath = (tmp.path() / "test_gps.mov").string();
+    std::vector<uint8_t> data;
+
+    // ftyp
+    writeBe32(data, 20);
+    writeString(data, "ftyp");
+    writeString(data, "qt  ");
+    writeBe32(data, 512);
+    writeString(data, "qt  ");
+
+    // moov
+    size_t moovStart = data.size();
+    writeBe32(data, 0); // placeholder
+    writeString(data, "moov");
+
+    // mvhd
+    size_t mvhdStart = data.size();
+    writeBe32(data, 108);
+    writeString(data, "mvhd");
+    data.push_back(0); // version
+    data.push_back(0); data.push_back(0); data.push_back(0); // flags
+    writeBe32(data, 0); // creation
+    writeBe32(data, 0); // mod
+    writeBe32(data, 600); // timescale
+    writeBe32(data, 6000); // 10s
+    data.resize(mvhdStart + 108, 0);
+
+    // meta box container
+    size_t metaStart = data.size();
+    writeBe32(data, 0); // placeholder
+    writeString(data, "meta");
+    writeBe32(data, 0); // version + flags
+
+    // hdlr box
+    size_t hdlrStart = data.size();
+    writeBe32(data, 0); // placeholder
+    writeString(data, "hdlr");
+    writeBe32(data, 0); // version + flags
+    writeBe32(data, 0); // pre_defined
+    writeString(data, "mdta");
+    data.resize(data.size() + 17, 0);
+    uint32_t hdlrSize = static_cast<uint32_t>(data.size() - hdlrStart);
+    data[hdlrStart] = (hdlrSize >> 24) & 0xFF;
+    data[hdlrStart + 1] = (hdlrSize >> 16) & 0xFF;
+    data[hdlrStart + 2] = (hdlrSize >> 8) & 0xFF;
+    data[hdlrStart + 3] = hdlrSize & 0xFF;
+
+    // keys box
+    size_t keysStart = data.size();
+    writeBe32(data, 0); // placeholder
+    writeString(data, "keys");
+    writeBe32(data, 0); // version + flags
+    writeBe32(data, 1); // 1 key
+    std::string keyName = "com.apple.quicktime.location.ISO6709";
+    writeBe32(data, static_cast<uint32_t>(8 + keyName.size()));
+    writeString(data, "mdta");
+    writeString(data, keyName);
+    uint32_t keysSize = static_cast<uint32_t>(data.size() - keysStart);
+    data[keysStart] = (keysSize >> 24) & 0xFF;
+    data[keysStart + 1] = (keysSize >> 16) & 0xFF;
+    data[keysStart + 2] = (keysSize >> 8) & 0xFF;
+    data[keysStart + 3] = keysSize & 0xFF;
+
+    // ilst box
+    size_t ilstStart = data.size();
+    writeBe32(data, 0); // placeholder
+    writeString(data, "ilst");
+
+    // item 1 (key index 1)
+    size_t item1Start = data.size();
+    writeBe32(data, 0); // placeholder
+    writeBe32(data, 1); // tag type = 1
+
+    // data atom inside item 1
+    std::string coordStr = "+49.4792+010.9830+295.730/";
+    writeBe32(data, static_cast<uint32_t>(16 + coordStr.size()));
+    writeString(data, "data");
+    writeBe32(data, 1); // type = UTF-8 text
+    writeBe32(data, 0); // locale
+    writeString(data, coordStr);
+
+    uint32_t item1Size = static_cast<uint32_t>(data.size() - item1Start);
+    data[item1Start] = (item1Size >> 24) & 0xFF;
+    data[item1Start + 1] = (item1Size >> 16) & 0xFF;
+    data[item1Start + 2] = (item1Size >> 8) & 0xFF;
+    data[item1Start + 3] = item1Size & 0xFF;
+
+    uint32_t ilstSize = static_cast<uint32_t>(data.size() - ilstStart);
+    data[ilstStart] = (ilstSize >> 24) & 0xFF;
+    data[ilstStart + 1] = (ilstSize >> 16) & 0xFF;
+    data[ilstStart + 2] = (ilstSize >> 8) & 0xFF;
+    data[ilstStart + 3] = ilstSize & 0xFF;
+
+    // Patch meta size
+    uint32_t metaSize = static_cast<uint32_t>(data.size() - metaStart);
+    data[metaStart] = (metaSize >> 24) & 0xFF;
+    data[metaStart + 1] = (metaSize >> 16) & 0xFF;
+    data[metaStart + 2] = (metaSize >> 8) & 0xFF;
+    data[metaStart + 3] = metaSize & 0xFF;
+
+    // Patch moov size
+    uint32_t moovSize = static_cast<uint32_t>(data.size() - moovStart);
+    data[moovStart] = (moovSize >> 24) & 0xFF;
+    data[moovStart + 1] = (moovSize >> 16) & 0xFF;
+    data[moovStart + 2] = (moovSize >> 8) & 0xFF;
+    data[moovStart + 3] = moovSize & 0xFF;
+
+    // Write file
+    {
+        std::ofstream ofs(movPath, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    auto res = MediaReader::readMetadata(movPath);
+    ASSERT_TRUE(res.isOk()) << res.status().message();
+    auto info = res.value();
+    EXPECT_TRUE(info.has_gps);
+    EXPECT_NEAR(info.latitude, 49.4792, 0.0001);
+    EXPECT_NEAR(info.longitude, 10.9830, 0.0001);
+    EXPECT_NEAR(info.altitude, 295.730, 0.001);
+
+    // 3. Test with real camera video if available
+    std::string realMov = "D:/Foto/Camera Roll/IMG_0001.MOV";
+    if (std::filesystem::exists(realMov)) {
+        auto realRes = MediaReader::readMetadata(realMov);
+        ASSERT_TRUE(realRes.isOk()) << realRes.status().message();
+        auto realInfo = realRes.value();
+        EXPECT_TRUE(realInfo.has_gps);
+        EXPECT_NEAR(realInfo.latitude, 49.4792, 0.0001);
+        EXPECT_NEAR(realInfo.longitude, 10.9830, 0.0001);
+        EXPECT_NEAR(realInfo.altitude, 295.730, 0.001);
+    }
+}
+
