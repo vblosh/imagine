@@ -900,6 +900,19 @@ TEST_F(ServerTest, ApiRouterStandaloneWithDbAndCache) {
     ASSERT_TRUE(progRes);
     EXPECT_EQ(progRes->status, 200);
 
+    // Operations requiring Catalog fail cleanly with 500 in standalone mode
+    auto moveRes = client.Post("/api/media/1/move", "{\"destination_path\": \"dest\"}", "application/json");
+    ASSERT_TRUE(moveRes);
+    EXPECT_EQ(moveRes->status, 500);
+
+    auto renameRes = client.Post("/api/media/1/rename", "{\"name\": \"test.jpg\"}", "application/json");
+    ASSERT_TRUE(renameRes);
+    EXPECT_EQ(renameRes->status, 500);
+
+    auto delRes = client.Delete("/api/media/1?delete_from_disk=true");
+    ASSERT_TRUE(delRes);
+    EXPECT_EQ(delRes->status, 500);
+
     // Stop standalone server
     s.stop();
     if (th.joinable()) th.join();

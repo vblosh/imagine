@@ -211,8 +211,7 @@ static std::atomic<bool> g_isImporting{false};
 
 } // anonymous namespace
 
-ApiRouter::ApiRouter(core::Catalog& catalog)
-    : catalog_(&catalog) {
+void ApiRouter::initFromEnvironment() {
     const char* envToken = std::getenv("IMAGINE_API_TOKEN");
     if (envToken && *envToken) {
         apiToken_ = envToken;
@@ -223,16 +222,14 @@ ApiRouter::ApiRouter(core::Catalog& catalog)
     }
 }
 
+ApiRouter::ApiRouter(core::Catalog& catalog)
+    : catalog_(&catalog) {
+    initFromEnvironment();
+}
+
 ApiRouter::ApiRouter(db::CatalogDb& db, thumbnail::Cache& cache)
     : db_(&db), cache_(&cache) {
-    const char* envToken = std::getenv("IMAGINE_API_TOKEN");
-    if (envToken && *envToken) {
-        apiToken_ = envToken;
-    }
-    const char* envOrigin = std::getenv("IMAGINE_ALLOWED_ORIGIN");
-    if (envOrigin && *envOrigin) {
-        allowedOrigin_ = envOrigin;
-    }
+    initFromEnvironment();
 }
 
 ApiRouter::~ApiRouter() {
@@ -302,209 +299,10 @@ std::string ApiRouter::resolvePhotoPath(const std::string& recordedPath) const {
 }
 
 Status ApiRouter::moveMedia(MediaId id, const std::string& destinationPath, std::string* outNewFilePath) {
-    if (catalog_) {
-        return catalog_->moveMedia(id, destinationPath, outNewFilePath);
+    if (!catalog_) {
+        return Status::internal("Catalog is required to move media");
     }
-
-    std::string destClean = destinationPath;
-    destClean.erase(0, destClean.find_first_not_of(" \t\r\n"));
-    auto lastNonWs = destClean.find_last_not_of(" \t\r\n");
-    if (lastNonWs != std::string::npos) {
-        destClean.erase(lastNonWs + 1);
-    }
-    if (destClean.empty()) {
-        return Status::invalidArgument("Destination path cannot be empty");
-    }
-
-    std::replace(destClean.begin(), destClean.end(), '\\', '/');
-    while (destClean.size() > 1 && destClean.back() == '/') {
-        destClean.pop_back();
-    }
-
-    auto itemRes = db().getMediaById(id);
-    if (!itemRes.isOk()) {
-        return itemRes.status();
-    }
-    const auto& item = itemRes.value();
-
-    std::string oldDiskPath = resolvePhotoPath(item.file_path);
-    std::error_code ec;
-    std::filesystem::path oldDiskFs;
-    if (!oldDiskPath.empty()) {
-        oldDiskFs = pathFromUtf8(oldDiskPath);
-    }
-    if (oldDiskPath.empty() || !std::filesystem::exists(oldDiskFs, ec) || !std::filesystem::is_regular_file(oldDiskFs, ec)) {
-        return Status::notFound("Source file does not exist on disk: " + (oldDiskPath.empty() ? item.file_path : oldDiskPath));
-    }
-
-    std::filesystem::path targetDirFs;
-    std::filesystem::path photosDirFs;
-    if (!oldDiskPath.empty() && std::filesystem::exists(oldDiskFs, ec)) {
-        std::filesystem::path itemRelFs = pathFromUtf8(item.file_path);
-        if (itemRelFs.is_relative()) {
-            auto cur = oldDiskFs.parent_path();
-            auto relParent = itemRelFs.parent_path();
-            while (!relParent.empty() && relParent != "." && !cur.empty()) {
-                cur = cur.parent_path();
-                relParent = relParent.parent_path();
-            }
-            photosDirFs = cur;
-        } else {
-            auto oldParent = oldDiskFs.parent_path();
-            if (!oldParent.empty() && !oldParent.parent_path().empty() && oldParent != oldParent.parent_path()) {
-                photosDirFs = oldParent.parent_path();
-            } else {
-                photosDirFs = oldParent;
-            }
-        }
-    } else {
-        std::error_code ecCur;
-        photosDirFs = std::filesystem::current_path(ecCur);
-    }
-
-    bool isAbs = false;
-    std::filesystem::path destFs = pathFromUtf8(destClean);
-    if (destFs.has_root_name()) {
-        isAbs = true;
-    } else if (destFs.is_absolute() && destClean != "/" && destClean != "\\") {
-        // On POSIX, a leading '/' can either denote an absolute host path (e.g. /tmp/outside or /var/...)
-        // or a catalog-relative path with a leading slash (e.g. /winter or /vacation/summer).
-        // If it targets within photosDirFs, or points to an existing directory/ancestor outside photosDirFs,
-        // treat it as an absolute host path. Otherwise, treat it as relative to the photos root.
-        std::error_code ecCheck;
-        std::filesystem::path normTargetCheck = stripExtendedPrefix(destFs).lexically_normal();
-        std::filesystem::path normRootCheck = stripExtendedPrefix(photosDirFs).lexically_normal();
-        if (!normRootCheck.empty() && (normTargetCheck == normRootCheck || core::Importer::isInsideRootDir(normTargetCheck, normRootCheck))) {
-            isAbs = true;
-        } else if (!normRootCheck.empty() && normRootCheck.has_parent_path() && normRootCheck.parent_path() != "/" &&
-                   (normTargetCheck == normRootCheck.parent_path() || core::Importer::isInsideRootDir(normTargetCheck, normRootCheck.parent_path()))) {
-            isAbs = true;
-        } else if (std::filesystem::exists(destFs, ecCheck)) {
-            isAbs = true;
-        } else if (destFs.has_parent_path() && destFs.parent_path() != "/" &&
-                   std::filesystem::exists(destFs.parent_path(), ecCheck)) {
-            isAbs = true;
-        }
-    }
-    if (!isAbs) {
-        while (!destClean.empty() && (destClean.front() == '/' || destClean.front() == '\\')) {
-            destClean.erase(0, 1);
-        }
-    }
-
-    if (!isAbs && (destClean.empty() || destClean == ".")) {
-        targetDirFs = photosDirFs;
-    } else if (!isAbs) {
-        targetDirFs = photosDirFs / pathFromUtf8(destClean);
-    } else {
-        targetDirFs = destFs;
-    }
-
-    // Enforce that move destination must reside inside the photos root directory
-    std::filesystem::path normTarget = stripExtendedPrefix(targetDirFs).lexically_normal();
-    std::filesystem::path normRoot = stripExtendedPrefix(photosDirFs).lexically_normal();
-
-    bool isSameDir = false;
-    std::error_code ecEq;
-    if (std::filesystem::equivalent(normTarget, normRoot, ecEq) && !ecEq) {
-        isSameDir = true;
-    }
-    if (!isSameDir) {
-        std::string sTarget = normTarget.generic_string();
-        std::string sRoot = normRoot.generic_string();
-        while (sTarget.size() > 1 && sTarget.back() == '/') sTarget.pop_back();
-        while (sRoot.size() > 1 && sRoot.back() == '/') sRoot.pop_back();
-#if defined(_WIN32)
-        auto toLower = [](std::string s) {
-            for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            return s;
-        };
-        isSameDir = (toLower(sTarget) == toLower(sRoot));
-#else
-        isSameDir = (sTarget == sRoot);
-#endif
-    }
-
-    bool insidePhotosDir = isSameDir || core::Importer::isInsideRootDir(normTarget, normRoot);
-    if (!insidePhotosDir) {
-        std::error_code ecCan;
-        std::filesystem::path canTarget = stripExtendedPrefix(std::filesystem::weakly_canonical(targetDirFs, ecCan));
-        std::filesystem::path canRoot = stripExtendedPrefix(std::filesystem::weakly_canonical(photosDirFs, ecCan));
-        if (canTarget == canRoot || core::Importer::isInsideRootDir(canTarget, canRoot)) {
-            insidePhotosDir = true;
-        }
-    }
-
-    if (!insidePhotosDir) {
-        return Status::invalidArgument("Move destination must be inside the photos directory (" +
-                                      pathToUtf8(normRoot) + "): " + pathToUtf8(normTarget));
-    }
-
-    std::filesystem::path newDiskFs = targetDirFs / pathFromUtf8(item.file_name);
-    std::string newStoredPath = (isAbs || std::filesystem::path(item.file_path).is_absolute())
-        ? newDiskFs.generic_string()
-        : core::Importer::toRelativePath(newDiskFs, photosDirFs);
-
-    std::string itemNorm = item.file_path;
-    std::replace(itemNorm.begin(), itemNorm.end(), '\\', '/');
-    std::string newNorm = newStoredPath;
-    std::replace(newNorm.begin(), newNorm.end(), '\\', '/');
-    if (itemNorm == newNorm) {
-        if (outNewFilePath) *outNewFilePath = item.file_path;
-        return Status::ok();
-    }
-
-    auto existingRes = db().getMediaByPath(newStoredPath);
-    if (existingRes.isOk() && existingRes.value().id != id) {
-        return Status::alreadyExists("A media item with path already exists in the catalog: " + newStoredPath);
-    }
-
-    bool diskMoved = false;
-
-    if (!oldDiskPath.empty()) {
-        oldDiskFs = pathFromUtf8(oldDiskPath);
-        if (std::filesystem::exists(oldDiskFs, ec) && std::filesystem::is_regular_file(oldDiskFs, ec)) {
-            std::filesystem::create_directories(targetDirFs, ec);
-            if (ec) {
-                return Status::ioError("Failed to create destination directory: " + ec.message());
-            }
-
-            if (std::filesystem::exists(newDiskFs, ec)) {
-                std::error_code eqEc;
-                if (!std::filesystem::equivalent(oldDiskFs, newDiskFs, eqEc)) {
-                    return Status::alreadyExists("A file already exists at destination on disk: " + pathToUtf8(newDiskFs));
-                }
-            } else {
-                std::filesystem::rename(oldDiskFs, newDiskFs, ec);
-                if (ec) {
-                    ec.clear();
-                    std::filesystem::copy_file(oldDiskFs, newDiskFs, std::filesystem::copy_options::overwrite_existing, ec);
-                    if (!ec) {
-                        std::filesystem::remove(oldDiskFs, ec);
-                        diskMoved = true;
-                    } else {
-                        return Status::ioError("Failed to move file on disk: " + ec.message());
-                    }
-                } else {
-                    diskMoved = true;
-                }
-            }
-        }
-    }
-
-    Status dbStatus = db().updateFileNameAndPath(id, item.file_name, newStoredPath);
-    if (!dbStatus.isOk()) {
-        if (diskMoved) {
-            std::error_code ecRollback;
-            std::filesystem::rename(newDiskFs, oldDiskFs, ecRollback);
-        }
-        return dbStatus;
-    }
-
-    if (outNewFilePath) {
-        *outNewFilePath = newStoredPath;
-    }
-    return Status::ok();
+    return catalog_->moveMedia(id, destinationPath, outNewFilePath);
 }
 
 void ApiRouter::registerRoutes(httplib::Server& server) {
@@ -1032,11 +830,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 return;
             }
 
-            newName.erase(0, newName.find_first_not_of(" \t\r\n"));
-            auto lastNonWs = newName.find_last_not_of(" \t\r\n");
-            if (lastNonWs != std::string::npos) {
-                newName.erase(lastNonWs + 1);
-            }
+            newName = trimWhitespace(newName);
 
             if (newName.empty() || newName.size() > kMaxNameLength) {
                 sendError(res, "File name cannot be empty and must be at most " + std::to_string(kMaxNameLength) + " characters", 400);
@@ -1056,61 +850,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             if (catalog_) {
                 s = catalog_->renameMedia(id, newName, &newPath, &finalName);
             } else {
-                auto itemRes = db().getMediaById(id);
-                if (!itemRes.isOk()) {
-                    sendStatusError(res, itemRes.status());
-                    return;
-                }
-                const auto& item = itemRes.value();
-
-                std::filesystem::path curFileP(item.file_name);
-                std::filesystem::path newFileP(newName);
-                if (!newFileP.has_extension() && curFileP.has_extension()) {
-                    finalName += curFileP.extension().string();
-                }
-
-                if (item.file_name == finalName) {
-                    sendJson(res, {{"status", "ok"}, {"id", id}, {"file_name", finalName}, {"file_path", item.file_path}});
-                    return;
-                }
-
-                std::filesystem::path currentPath(item.file_path);
-                std::filesystem::path parent = currentPath.parent_path();
-                std::filesystem::path pNew = parent.empty() ? std::filesystem::path(finalName) : (parent / finalName);
-                newPath = pNew.generic_string();
-
-                auto existingRes = db().getMediaByPath(newPath);
-                if (existingRes.isOk() && existingRes.value().id != id) {
-                    sendError(res, "A media item with path already exists in the catalog: " + newPath, 409);
-                    return;
-                }
-
-                std::string oldDiskPath = resolvePhotoPath(item.file_path);
-                std::error_code ec;
-                bool diskRenamed = false;
-                std::filesystem::path oldFs;
-                std::filesystem::path newFs;
-                if (!oldDiskPath.empty()) {
-                    oldFs = pathFromUtf8(oldDiskPath);
-                    if (std::filesystem::exists(oldFs, ec) && std::filesystem::is_regular_file(oldFs, ec)) {
-                        newFs = oldFs.parent_path() / pathFromUtf8(finalName);
-                        if (std::filesystem::exists(newFs, ec) && newFs != oldFs) {
-                            sendError(res, "File already exists on disk: " + pathToUtf8(newFs), 409);
-                            return;
-                        }
-                        std::filesystem::rename(oldFs, newFs, ec);
-                        if (ec) {
-                            sendError(res, "Failed to rename file on disk: " + ec.message(), 500);
-                            return;
-                        }
-                        diskRenamed = true;
-                    }
-                }
-                s = db().updateFileNameAndPath(id, finalName, newPath);
-                if (!s.isOk() && diskRenamed) {
-                    std::error_code ecRollback;
-                    std::filesystem::rename(newFs, oldFs, ecRollback);
-                }
+                s = Status::internal("Catalog is required to rename media");
             }
 
             if (!s.isOk()) {
@@ -1147,11 +887,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 return;
             }
 
-            destPath.erase(0, destPath.find_first_not_of(" \t\r\n"));
-            auto lastNonWs = destPath.find_last_not_of(" \t\r\n");
-            if (lastNonWs != std::string::npos) {
-                destPath.erase(lastNonWs + 1);
-            }
+            destPath = trimWhitespace(destPath);
             if (destPath.empty()) {
                 sendError(res, "Destination path cannot be empty", 400);
                 return;
@@ -1352,11 +1088,6 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     server.Delete(R"(/api/media/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
         MediaId id = std::stoll(req.matches[1]);
-        auto mediaRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
-        if (!mediaRes.isOk()) {
-            sendStatusError(res, mediaRes.status());
-            return;
-        }
 
         bool deleteFromDisk = false;
         if (req.has_param("delete_from_disk")) {
@@ -1364,24 +1095,20 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             deleteFromDisk = (val == "true" || val == "1");
         }
 
-        std::string filePath;
-        if (!catalog_ && deleteFromDisk) {
-            filePath = resolvePhotoPath(mediaRes.value().file_path);
+        Status s;
+        if (catalog_) {
+            s = catalog_->deleteMedia(id, deleteFromDisk);
+        } else {
+            if (deleteFromDisk) {
+                sendStatusError(res, Status::internal("Catalog is required to delete files from disk"));
+                return;
+            }
+            s = db().deleteMedia(id);
         }
 
-        Status s = catalog_ ? catalog_->deleteMedia(id, deleteFromDisk) : db().deleteMedia(id);
         if (!s.isOk()) {
             sendStatusError(res, s);
             return;
-        }
-
-        if (!catalog_ && deleteFromDisk && !filePath.empty()) {
-            std::error_code ec;
-            if (!std::filesystem::remove(pathFromUtf8(filePath), ec)) {
-                if (ec) {
-                    IMAGINE_LOG_WARN("Failed to delete file from disk: " + filePath + " (" + ec.message() + ")");
-                }
-            }
         }
 
         sendJson(res, {{"status", "ok"}, {"id", id}, {"deleted_from_disk", deleteFromDisk}});
@@ -1411,23 +1138,17 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             int deletedCount = 0;
             std::vector<MediaId> failedIds;
             for (MediaId id : ids) {
-                std::string filePath;
-                if (!catalog_ && deleteFromDisk) {
-                    auto itemRes = db().getMediaById(id);
-                    if (itemRes.isOk()) {
-                        filePath = resolvePhotoPath(itemRes.value().file_path);
+                Status s;
+                if (catalog_) {
+                    s = catalog_->deleteMedia(id, deleteFromDisk);
+                } else {
+                    if (deleteFromDisk) {
+                        s = Status::internal("Catalog is required to delete files from disk");
+                    } else {
+                        s = db().deleteMedia(id);
                     }
                 }
-                Status s = catalog_ ? catalog_->deleteMedia(id, deleteFromDisk) : db().deleteMedia(id);
                 if (s.isOk()) {
-                    if (!catalog_ && deleteFromDisk && !filePath.empty()) {
-                        std::error_code ec;
-                        if (!std::filesystem::remove(pathFromUtf8(filePath), ec)) {
-                            if (ec) {
-                                IMAGINE_LOG_WARN("Failed to delete file from disk: " + filePath + " (" + ec.message() + ")");
-                            }
-                        }
-                    }
                     deletedCount++;
                 } else {
                     failedIds.push_back(id);
@@ -1683,11 +1404,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 return;
             }
 
-            destPath.erase(0, destPath.find_first_not_of(" \t\r\n"));
-            auto lastNonWs = destPath.find_last_not_of(" \t\r\n");
-            if (lastNonWs != std::string::npos) {
-                destPath.erase(lastNonWs + 1);
-            }
+            destPath = trimWhitespace(destPath);
             if (destPath.empty()) {
                 sendError(res, "Destination path cannot be empty", 400);
                 return;

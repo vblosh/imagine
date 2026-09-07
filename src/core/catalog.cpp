@@ -81,6 +81,10 @@ bool Catalog::isOpen() const {
 
 void Catalog::setPhotosDir(std::string photosDir) {
     std::unique_lock<std::shared_mutex> lock(rwMutex_);
+    setPhotosDirInternal(std::move(photosDir));
+}
+
+void Catalog::setPhotosDirInternal(std::string photosDir) {
     photosDir_ = std::move(photosDir);
     if (importer_) {
         importer_->setPhotosDir(photosDir_);
@@ -167,12 +171,16 @@ Result<int64_t> Catalog::makePathsRelative(const std::string& photosDir, const s
     }
     auto res = db_->makePathsRelative(photosDir, thumbsDir);
     if (res.isOk() && !photosDir.empty()) {
-        photosDir_ = photosDir;
-        if (importer_) {
-            importer_->setPhotosDir(photosDir_);
-        }
+        setPhotosDirInternal(photosDir);
     }
     return res;
+}
+
+void Catalog::syncPhotosDirFromImporter() {
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
+    if (photosDir_.empty() && importer_ && !importer_->photosDir().empty()) {
+        photosDir_ = importer_->photosDir();
+    }
 }
 
 Result<ImportProgress> Catalog::importDirectory(
@@ -185,19 +193,8 @@ Result<ImportProgress> Catalog::importDirectory(
         return Status::internal("Catalog is not open");
     }
     auto res = importer_->importDirectory(path, recursive, std::move(progressCb));
-    bool needUpdatePhotosDir = false;
-    std::string newPhotosDir;
-    if (photosDir_.empty() && !importer_->photosDir().empty()) {
-        needUpdatePhotosDir = true;
-        newPhotosDir = importer_->photosDir();
-    }
     lock.unlock();
-    if (needUpdatePhotosDir) {
-        std::unique_lock<std::shared_mutex> ulock(rwMutex_);
-        if (photosDir_.empty()) {
-            photosDir_ = std::move(newPhotosDir);
-        }
-    }
+    syncPhotosDirFromImporter();
     return res;
 }
 
@@ -207,18 +204,9 @@ Result<MediaItem> Catalog::importFile(const std::string& path) {
         return Status::internal("Catalog is not open");
     }
     auto res = importer_->importFile(path);
-    bool needUpdatePhotosDir = false;
-    std::string newPhotosDir;
-    if (res.isOk() && photosDir_.empty() && !importer_->photosDir().empty()) {
-        needUpdatePhotosDir = true;
-        newPhotosDir = importer_->photosDir();
-    }
     lock.unlock();
-    if (needUpdatePhotosDir) {
-        std::unique_lock<std::shared_mutex> ulock(rwMutex_);
-        if (photosDir_.empty()) {
-            photosDir_ = std::move(newPhotosDir);
-        }
+    if (res.isOk()) {
+        syncPhotosDirFromImporter();
     }
     return res;
 }
@@ -396,12 +384,7 @@ Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::s
         return Status::internal("Catalog is not open");
     }
 
-    std::string destClean = destinationPath;
-    destClean.erase(0, destClean.find_first_not_of(" \t\r\n"));
-    auto lastNonWs = destClean.find_last_not_of(" \t\r\n");
-    if (lastNonWs != std::string::npos) {
-        destClean.erase(lastNonWs + 1);
-    }
+    std::string destClean = trimWhitespace(destinationPath);
     if (destClean.empty()) {
         return Status::invalidArgument("Destination path cannot be empty");
     }

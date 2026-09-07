@@ -97,6 +97,8 @@ public:
 
 private:
     void closeInternal();
+    void syncPhotosDirFromImporter();
+    void setPhotosDirInternal(std::string photosDir);
 
     size_t threadCount_{1};
     std::unique_ptr<db::CatalogDb> db_;

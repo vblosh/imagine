@@ -58,6 +58,7 @@ private:
     void registerGeocodeRoutes(httplib::Server& server);
 
     bool checkAuth(const httplib::Request& req, httplib::Response& res) const;
+    void initFromEnvironment();
     Status moveMedia(MediaId id, const std::string& destinationPath, std::string* outNewFilePath = nullptr);
 
     core::Catalog* catalog_{nullptr};
