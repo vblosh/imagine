@@ -476,3 +476,88 @@ def test_geocode_backend_proxy_integration(server, page: Page):
     expect(popup).to_be_visible()
     expect(popup.locator(".map-popup-title")).to_contain_text("Eiffel Tower")
 
+
+def test_select_unmapped_photo_opens_in_inspector(server, page: Page):
+    """Selecting an unmapped photo in the tray opens that photo in the inspector (and expands the panel if collapsed)."""
+    page.goto(server["url"])
+
+    # 1. Collapse the inspector to verify selecting an unmapped photo expands it
+    inspector = page.locator("#rightInspector")
+    page.locator("#closeInspectorBtn").click()
+    expect(inspector).to_have_class(re.compile(r"\bcollapsed\b"))
+
+    # 2. Switch to Map View and open unmapped tray
+    page.locator("#viewMapBtn").click()
+    expect(page.locator("#mapViewContainer")).to_be_visible()
+
+    page.locator("#mapToggleUnmappedBtn").click()
+    expect(page.locator("#unmappedTray")).to_be_visible()
+
+    # 3. Click sunset.bmp unmapped chip
+    sunset_chip = page.locator(".unmapped-chip", has_text="sunset.bmp")
+    expect(sunset_chip).to_be_visible()
+    sunset_chip.click()
+
+    # Verify chip is active
+    expect(sunset_chip).to_have_class(re.compile(r"\bactive\b"))
+
+    # Verify inspector opened and displays sunset.bmp
+    expect(inspector).not_to_have_class(re.compile(r"\bcollapsed\b"))
+    expect(page.locator("#inspectorNoSelection")).to_be_hidden()
+    expect(page.locator("#inspectorSelection")).to_be_visible()
+    expect(page.locator("#infoFileName")).to_have_text("sunset.bmp")
+
+    # 4. Click another unmapped chip (birthday.bmp)
+    birthday_chip = page.locator(".unmapped-chip", has_text="birthday.bmp")
+    expect(birthday_chip).to_be_visible()
+    birthday_chip.click()
+
+    # Verify birthday.bmp is now selected and displayed in inspector
+    expect(birthday_chip).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#infoFileName")).to_have_text("birthday.bmp")
+
+    # 5. Deselect birthday.bmp by clicking it again
+    birthday_chip.click()
+    expect(birthday_chip).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#inspectorNoSelection")).to_be_visible()
+
+
+def test_unmapped_photo_hover_tooltip(server, page: Page):
+    """Hovering over an unmapped photo chip in the tray displays a clear tooltip with enlarged thumbnail and metadata."""
+    page.goto(server["url"])
+
+    # Switch to Map View and open unmapped tray
+    page.locator("#viewMapBtn").click()
+    expect(page.locator("#mapViewContainer")).to_be_visible()
+
+    page.locator("#mapToggleUnmappedBtn").click()
+    expect(page.locator("#unmappedTray")).to_be_visible()
+
+    tooltip = page.locator("#unmappedPhotoTooltip")
+    expect(tooltip).to_be_hidden()
+
+    # Hover over sunset.bmp chip
+    sunset_chip = page.locator(".unmapped-chip", has_text="sunset.bmp")
+    expect(sunset_chip).to_be_visible()
+    sunset_chip.hover()
+
+    # Tooltip should appear
+    expect(tooltip).to_be_visible()
+    expect(page.locator("#unmappedTooltipTitle")).to_have_text("sunset.bmp")
+    expect(page.locator("#unmappedTooltipImg")).to_be_visible()
+    expect(page.locator("#unmappedTooltipMeta")).to_be_visible()
+
+    # Move mouse away to map
+    page.locator("#leafletMap").hover()
+    expect(tooltip).to_be_hidden()
+
+    # Hover over birthday.bmp chip
+    birthday_chip = page.locator(".unmapped-chip", has_text="birthday.bmp")
+    expect(birthday_chip).to_be_visible()
+    birthday_chip.hover()
+
+    expect(tooltip).to_be_visible()
+    expect(page.locator("#unmappedTooltipTitle")).to_have_text("birthday.bmp")
+
+
+

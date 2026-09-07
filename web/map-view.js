@@ -9,6 +9,7 @@ import {
   numeric,
   hasValidGps,
   formatDateTime,
+  formatBytes,
   getOriginalMediaUrl
 } from './api.js';
 import { state, getGpsMediaItems, invalidateGpsCache } from './state.js';
@@ -20,7 +21,7 @@ import {
   loadMoreMedia,
   renderGrid
 } from './media-grid.js';
-import { updateInspector } from './inspector.js';
+import { updateInspector, openInspector } from './inspector.js';
 import { openLoupeForMedia } from './loupe.js';
 
 let mapSearchAbortController = null;
@@ -29,6 +30,7 @@ let currentMapSearchId = 0;
 let lastNominatimRequestTime = 0;
 
 export function switchViewMode(mode) {
+  hideUnmappedTooltip();
   state.viewMode = mode;
   if (mode === 'map') {
     if (dom.viewGridBtn) dom.viewGridBtn.classList.remove('active');
@@ -557,8 +559,8 @@ export function updatePlacementModeState() {
 }
 
 export function handleUnmappedChipClick(id, event, unmappedList) {
-  const isMultiKey = event.ctrlKey || event.metaKey;
-  const isShiftKey = event.shiftKey;
+  const isMultiKey = event && (event.ctrlKey || event.metaKey);
+  const isShiftKey = event && event.shiftKey;
 
   if (isShiftKey && state.lastUnmappedClickedId !== null) {
     const ids = unmappedList.map(i => i.id);
@@ -568,31 +570,56 @@ export function handleUnmappedChipClick(id, event, unmappedList) {
       const [low, high] = startIdx < endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
       for (let i = low; i <= high; i++) {
         state.placementMediaIds.add(ids[i]);
+        state.selectedIds.add(ids[i]);
       }
     } else {
       state.placementMediaIds.add(id);
-      state.lastUnmappedClickedId = id;
+      state.selectedIds.add(id);
     }
+    state.lastUnmappedClickedId = id;
+    state.lastSelectedId = id;
+    const remaining = Array.from(state.selectedIds).filter(x => x !== id);
+    state.selectedIds = new Set([id, ...remaining]);
   } else if (isMultiKey) {
     if (state.placementMediaIds.has(id)) {
       state.placementMediaIds.delete(id);
+      state.selectedIds.delete(id);
+      if (state.lastSelectedId === id) {
+        state.lastSelectedId = state.selectedIds.size > 0 ? Array.from(state.selectedIds)[0] : null;
+      }
     } else {
       state.placementMediaIds.add(id);
+      const remaining = Array.from(state.selectedIds).filter(x => x !== id);
+      state.selectedIds = new Set([id, ...remaining]);
+      state.lastSelectedId = id;
     }
     state.lastUnmappedClickedId = id;
   } else {
     if (state.placementMediaIds.has(id) && state.placementMediaIds.size === 1) {
       state.placementMediaIds.clear();
       state.lastUnmappedClickedId = null;
+      state.selectedIds.delete(id);
+      if (state.lastSelectedId === id) {
+        state.lastSelectedId = null;
+      }
     } else {
       state.placementMediaIds.clear();
       state.placementMediaIds.add(id);
       state.lastUnmappedClickedId = id;
+      state.selectedIds.clear();
+      state.selectedIds.add(id);
+      state.lastSelectedId = id;
     }
+  }
+
+  if (state.selectedIds.has(id)) {
+    openInspector();
   }
 
   updatePlacementModeState();
   renderUnmappedTray();
+  updateInspector();
+  updateMapMarkerSelections();
 }
 
 export function renderUnmappedTray() {
@@ -645,6 +672,13 @@ export function renderUnmappedTray() {
       handleUnmappedChipClick(item.id, e, unmapped);
     };
 
+    chip.onmouseenter = () => {
+      showUnmappedTooltip(item, chip);
+    };
+    chip.onmouseleave = () => {
+      hideUnmappedTooltip();
+    };
+
     dom.unmappedPhotosList.appendChild(chip);
   });
 
@@ -662,14 +696,80 @@ export function renderUnmappedTray() {
   }
 }
 
+export function showUnmappedTooltip(item, chipElement) {
+  if (!dom.unmappedPhotoTooltip || !item || !chipElement) return;
+
+  const thumbUrl = item.content_hash
+    ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
+    : getOriginalMediaUrl(item);
+
+  if (dom.unmappedTooltipImg) {
+    dom.unmappedTooltipImg.src = thumbUrl;
+    dom.unmappedTooltipImg.alt = item.file_name || 'Photo preview';
+    dom.unmappedTooltipImg.onerror = () => {
+      dom.unmappedTooltipImg.src = getOriginalMediaUrl(item);
+    };
+  }
+
+  if (dom.unmappedTooltipTitle) {
+    dom.unmappedTooltipTitle.textContent = item.file_name || 'Photo';
+  }
+
+  if (dom.unmappedTooltipMeta) {
+    const metaParts = [];
+    if (item.width && item.height) {
+      metaParts.push(`${item.width} × ${item.height} px`);
+    }
+    if (item.file_size) {
+      metaParts.push(formatBytes(item.file_size));
+    }
+    if (item.date_taken) {
+      metaParts.push(formatDateTime(item.date_taken));
+    }
+    dom.unmappedTooltipMeta.textContent = metaParts.join(' • ');
+    dom.unmappedTooltipMeta.style.display = metaParts.length > 0 ? 'block' : 'none';
+  }
+
+  const rect = chipElement.getBoundingClientRect();
+  const tooltipWidth = 240;
+  const bottom = Math.max(10, window.innerHeight - rect.top + 10);
+  const idealLeft = rect.left + rect.width / 2 - tooltipWidth / 2;
+  const left = Math.max(10, Math.min(window.innerWidth - tooltipWidth - 10, idealLeft));
+
+  dom.unmappedPhotoTooltip.style.bottom = `${bottom}px`;
+  dom.unmappedPhotoTooltip.style.left = `${left}px`;
+  dom.unmappedPhotoTooltip.style.display = 'flex';
+  dom.unmappedPhotoTooltip.setAttribute('aria-hidden', 'false');
+
+  requestAnimationFrame(() => {
+    if (dom.unmappedPhotoTooltip) {
+      dom.unmappedPhotoTooltip.classList.add('visible');
+    }
+  });
+}
+
+export function hideUnmappedTooltip() {
+  if (!dom.unmappedPhotoTooltip) return;
+  dom.unmappedPhotoTooltip.classList.remove('visible');
+  dom.unmappedPhotoTooltip.style.display = 'none';
+  dom.unmappedPhotoTooltip.setAttribute('aria-hidden', 'true');
+}
+
 export function enterPlacementMode(mediaId) {
+  state.placementMediaIds.clear();
   state.placementMediaIds.add(mediaId);
   state.lastUnmappedClickedId = mediaId;
+  state.selectedIds.clear();
+  state.selectedIds.add(mediaId);
+  state.lastSelectedId = mediaId;
+  openInspector();
   updatePlacementModeState();
   renderUnmappedTray();
+  updateInspector();
 }
 
 export function exitPlacementMode() {
+  hideUnmappedTooltip();
   state.placementMediaIds.clear();
   state.placementMediaId = null;
   state.lastUnmappedClickedId = null;

@@ -23,9 +23,17 @@ let currentInspectorFetchId = 0;
 let inspectorAbortController = null;
 let activeResizeObservers = [];
 
+export function openInspector() {
+  if (dom.rightInspector && dom.rightInspector.classList.contains('collapsed')) {
+    dom.rightInspector.classList.remove('collapsed');
+  }
+}
+
 export function patchInspectorRatingAndFlag(item) {
   if (state.selectedIds.size === 0) return;
-  const selectedId = Array.from(state.selectedIds)[0];
+  const selectedId = (state.lastSelectedId && state.selectedIds.has(state.lastSelectedId))
+    ? state.lastSelectedId
+    : Array.from(state.selectedIds)[0];
   if (selectedId !== item.id) return;
   if (dom.inspectorRating) {
     dom.inspectorRating.querySelectorAll('span').forEach(span => {
@@ -164,8 +172,10 @@ export async function updateInspector() {
   inspectorAbortController = new AbortController();
   const signal = inspectorAbortController.signal;
 
-  // Pick first selected ID
-  const selectedId = Array.from(state.selectedIds)[0];
+  // Pick first selected ID (prefer lastSelectedId if valid)
+  const selectedId = (state.lastSelectedId && state.selectedIds.has(state.lastSelectedId))
+    ? state.lastSelectedId
+    : Array.from(state.selectedIds)[0];
   let item = state.mediaItems.find(m => m.id === selectedId);
 
   // Render immediately from memory to eliminate lag

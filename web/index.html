@@ -304,6 +304,15 @@
             </div>
             <div class="unmapped-photos-list" id="unmappedPhotosList"></div>
           </div>
+          <div class="unmapped-photo-tooltip" id="unmappedPhotoTooltip" style="display: none;" role="tooltip" aria-hidden="true">
+            <div class="unmapped-tooltip-preview">
+              <img id="unmappedTooltipImg" src="" alt="Photo thumbnail preview">
+            </div>
+            <div class="unmapped-tooltip-info">
+              <div class="unmapped-tooltip-title" id="unmappedTooltipTitle"></div>
+              <div class="unmapped-tooltip-meta" id="unmappedTooltipMeta"></div>
+            </div>
+          </div>
         </div>
 
         <!-- Bottom Timeline Scrub Bar -->
@@ -962,6 +971,6 @@
   </div>
 
   <script src="vendor/leaflet/leaflet.js"></script>
-  <script type="module" src="app.js?v=13"></script>
+  <script type="module" src="app.js?v=14"></script>
 </body>
 </html>

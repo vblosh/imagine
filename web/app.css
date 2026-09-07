@@ -2850,7 +2850,7 @@ body.resizing-horizontal * {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 150px;
+  max-height: 165px;
 }
 
 .unmapped-tray-header {
@@ -2895,8 +2895,8 @@ body.resizing-horizontal * {
 
 .unmapped-chip {
   flex-shrink: 0;
-  width: 72px;
-  height: 72px;
+  width: 80px;
+  height: 80px;
   border-radius: 4px;
   border: 2px solid transparent;
   overflow: hidden;
@@ -2904,6 +2904,72 @@ body.resizing-horizontal * {
   cursor: pointer;
   background: #111111;
   transition: all 0.15s ease;
+}
+
+/* Unmapped Photo Hover Tooltip Preview */
+.unmapped-photo-tooltip {
+  position: fixed;
+  z-index: 3000;
+  pointer-events: none;
+  background: rgba(24, 24, 27, 0.96);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  padding: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.75), 0 0 1px rgba(255, 255, 255, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 240px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.unmapped-photo-tooltip.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.unmapped-tooltip-preview {
+  width: 100%;
+  height: 160px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #0d0d0d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.unmapped-tooltip-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.unmapped-tooltip-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 4px 1px;
+}
+
+.unmapped-tooltip-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #f3f4f6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.unmapped-tooltip-meta {
+  font-size: 11px;
+  color: var(--text-secondary, #9ca3af);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .unmapped-chip img {

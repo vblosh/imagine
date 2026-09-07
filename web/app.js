@@ -46,6 +46,7 @@ import {
 } from './media-grid.js';
 import {
   updateInspector,
+  openInspector,
   renderStarWidget,
   setupResizablePanels
 } from './inspector.js';
@@ -58,6 +59,8 @@ import {
   renderUnmappedTray,
   enterPlacementMode,
   exitPlacementMode,
+  showUnmappedTooltip,
+  hideUnmappedTooltip,
   clearGeotag,
   clearMapSearch,
   performMapPlaceSearch,
@@ -286,15 +289,23 @@ export function setupEventListeners() {
   if (dom.unmappedSelectAllBtn) {
     dom.unmappedSelectAllBtn.addEventListener('click', () => {
       const unmapped = state.mediaItems.filter(item => !(item && item.exif && item.exif.has_gps && numeric(item.exif.latitude) !== null && numeric(item.exif.longitude) !== null));
-      unmapped.forEach(item => state.placementMediaIds.add(item.id));
+      unmapped.forEach(item => {
+        state.placementMediaIds.add(item.id);
+        state.selectedIds.add(item.id);
+      });
       state.lastUnmappedClickedId = unmapped.length > 0 ? unmapped[unmapped.length - 1].id : null;
+      if (unmapped.length > 0 && (!state.lastSelectedId || !state.selectedIds.has(state.lastSelectedId))) {
+        state.lastSelectedId = unmapped[0].id;
+      }
       if (dom.mapViewContainer) dom.mapViewContainer.classList.add('placement-mode');
       if (dom.unmappedSelectedCount) {
         dom.unmappedSelectedCount.textContent = `${state.placementMediaIds.size} selected`;
         dom.unmappedSelectedCount.style.display = 'inline';
       }
       if (dom.unmappedDeselectAllBtn) dom.unmappedDeselectAllBtn.style.display = 'inline-block';
+      if (unmapped.length > 0) openInspector();
       renderUnmappedTray();
+      updateInspector();
     });
   }
   if (dom.mapLoadMoreBtn) {
@@ -322,6 +333,7 @@ export function setupEventListeners() {
   }
   if (dom.unmappedPhotosList) {
     dom.unmappedPhotosList.addEventListener('scroll', () => {
+      hideUnmappedTooltip();
       const { scrollLeft, scrollWidth, clientWidth } = dom.unmappedPhotosList;
       if (scrollWidth - (scrollLeft + clientWidth) < 100) {
         if (!state.isLoadingMore && !state.isLoadingMedia && state.mediaItems.length < state.totalCount) {
@@ -333,7 +345,10 @@ export function setupEventListeners() {
   if (dom.unmappedDeselectAllBtn) {
     dom.unmappedDeselectAllBtn.addEventListener('click', () => {
       exitPlacementMode();
+      state.selectedIds.clear();
+      state.lastSelectedId = null;
       renderUnmappedTray();
+      updateInspector();
     });
   }
 
