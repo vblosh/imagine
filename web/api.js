@@ -7,8 +7,17 @@ export const api = {
   async get(endpoint, params = {}, options = {}) {
     const url = new URL(endpoint, window.location.origin);
     Object.keys(params).forEach(k => {
-      if (params[k] !== undefined && params[k] !== null && params[k] !== '') {
-        url.searchParams.append(k, params[k]);
+      const val = params[k];
+      if (val !== undefined && val !== null && val !== '') {
+        if (Array.isArray(val)) {
+          val.forEach(item => {
+            if (item !== undefined && item !== null && item !== '') {
+              url.searchParams.append(k, item);
+            }
+          });
+        } else {
+          url.searchParams.append(k, val);
+        }
       }
     });
     const fetchOpts = {};

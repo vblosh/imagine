@@ -25,6 +25,8 @@ struct QueryCriteria {
     int64_t date_to{0};
     std::string search_text;
     std::string folder;
+    std::vector<std::string> folders;
+    bool tag_folder_or_mode{false};
     std::string tag_category;
     std::string sort_by{"date_taken"};
     bool sort_descending{true};
@@ -71,6 +73,9 @@ public:
     QueryBuilder& dateRange(int64_t from, int64_t to);
     QueryBuilder& search(std::string text);
     QueryBuilder& folder(std::string folder);
+    QueryBuilder& addFolder(std::string folder);
+    QueryBuilder& setFolders(std::vector<std::string> folders);
+    QueryBuilder& tagFolderOrMode(bool enabled = true);
     QueryBuilder& tagCategory(std::string tagCategory);
     QueryBuilder& sort(std::string sortBy, bool descending = true);
     QueryBuilder& paginate(int32_t limit, int32_t offset = 0);

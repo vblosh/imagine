@@ -67,9 +67,20 @@ export function buildMediaParams() {
   };
 
   if (state.searchText) params.search = state.searchText;
-  if (state.activeFolder) params.folder = state.activeFolder;
-  if (state.activeTagId) {
-    params.tag_id = state.activeTagId;
+
+  const hasTags = state.activeTagIds && state.activeTagIds.size > 0;
+  const hasFolders = state.activeFolders && state.activeFolders.size > 0;
+
+  if (hasTags || hasFolders) {
+    if (hasTags) {
+      params.tag_id = Array.from(state.activeTagIds);
+      params.tag_ids = Array.from(state.activeTagIds).join(',');
+    }
+    if (hasFolders) {
+      params.folder = Array.from(state.activeFolders);
+      params.folders = JSON.stringify(Array.from(state.activeFolders));
+    }
+    params.tag_folder_mode = 'or';
   } else if (state.activeTab && state.activeTab !== 'media') {
     params.tag_category = state.activeTab.toLowerCase();
   }
@@ -335,8 +346,20 @@ export async function loadMetadata() {
     state.tags = Array.isArray(tags) ? tags.map(normalizeTag).filter(Boolean) : [];
     state.albums = Array.isArray(albums) ? albums.map(normalizeAlbum).filter(Boolean) : [];
     state.allFolders = new Set(Array.isArray(folders) ? folders.filter(Boolean) : []);
-    if (state.activeFolder && !state.allFolders.has(state.activeFolder)) {
-      state.activeFolder = null;
+    if (state.activeFolders) {
+      for (const f of Array.from(state.activeFolders)) {
+        if (!state.allFolders.has(f)) {
+          state.activeFolders.delete(f);
+        }
+      }
+    }
+    if (state.activeTagIds) {
+      const tagIdSet = new Set(state.tags.map(t => t.id));
+      for (const tid of Array.from(state.activeTagIds)) {
+        if (!tagIdSet.has(tid)) {
+          state.activeTagIds.delete(tid);
+        }
+      }
     }
     state.timelineData = Array.isArray(timeline) ? timeline.map(normalizeTimelineEntry).filter(Boolean) : [];
     state.stats = normalizeCatalogStats(stats);
@@ -706,6 +729,137 @@ export function updateBatchBar() {
   }
 }
 
+export function getSidebarSelectableItems() {
+  const items = [];
+  const catContainers = [
+    dom.tagCategoryPeople,
+    dom.tagCategoryPlaces,
+    dom.tagCategoryEvents,
+    dom.tagCategoryKeyword
+  ];
+  catContainers.forEach(container => {
+    if (!container) return;
+    const lis = container.querySelectorAll('.tag-item');
+    lis.forEach(li => {
+      const tid = Number(li.dataset.tagId);
+      if (Number.isFinite(tid)) {
+        items.push({ type: 'tag', id: tid, element: li });
+      }
+    });
+  });
+
+  if (dom.foldersTree) {
+    const divs = dom.foldersTree.querySelectorAll('.folder-item');
+    divs.forEach(div => {
+      const f = div.dataset.folderPath;
+      if (f) {
+        items.push({ type: 'folder', path: f, element: div });
+      }
+    });
+  }
+
+  return items;
+}
+
+export function handleSidebarItemClick(itemType, itemValue, e) {
+  const isCtrl = Boolean(e && (e.ctrlKey || e.metaKey));
+  const isShift = Boolean(e && e.shiftKey);
+
+  // If on category drilldown view, return to media view
+  if (state.activeTab && state.activeTab !== 'media') {
+    state.activeTab = 'media';
+    if (dom.viewTabs) {
+      dom.viewTabs.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.tab === 'media');
+      });
+    }
+  }
+  if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+  if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
+  if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
+
+  state.activeTimelinePeriod = null;
+
+  if (isShift) {
+    const allItems = getSidebarSelectableItems();
+    const currIdx = allItems.findIndex(it => (
+      it.type === itemType && (itemType === 'tag' ? it.id === itemValue : it.path === itemValue)
+    ));
+    const anchor = state.lastSidebarClickedItem;
+    let anchorIdx = -1;
+    if (anchor) {
+      anchorIdx = allItems.findIndex(it => (
+        it.type === anchor.type && (anchor.type === 'tag' ? it.id === anchor.id : it.path === anchor.path)
+      ));
+    }
+
+    if (currIdx !== -1) {
+      const start = (anchorIdx !== -1) ? Math.min(anchorIdx, currIdx) : currIdx;
+      const end = (anchorIdx !== -1) ? Math.max(anchorIdx, currIdx) : currIdx;
+
+      if (!isCtrl) {
+        state.activeTagIds.clear();
+        state.activeFolders.clear();
+      }
+
+      for (let i = start; i <= end; i++) {
+        const it = allItems[i];
+        if (it.type === 'tag') state.activeTagIds.add(it.id);
+        else if (it.type === 'folder') state.activeFolders.add(it.path);
+      }
+
+      if (!anchor || anchorIdx === -1) {
+        state.lastSidebarClickedItem = {
+          type: itemType,
+          id: itemType === 'tag' ? itemValue : undefined,
+          path: itemType === 'folder' ? itemValue : undefined
+        };
+      }
+    }
+  } else if (isCtrl) {
+    if (itemType === 'tag') {
+      if (state.activeTagIds.has(itemValue)) {
+        state.activeTagIds.delete(itemValue);
+      } else {
+        state.activeTagIds.add(itemValue);
+      }
+      state.lastSidebarClickedItem = { type: 'tag', id: itemValue };
+    } else if (itemType === 'folder') {
+      if (state.activeFolders.has(itemValue)) {
+        state.activeFolders.delete(itemValue);
+      } else {
+        state.activeFolders.add(itemValue);
+      }
+      state.lastSidebarClickedItem = { type: 'folder', path: itemValue };
+    }
+  } else {
+    // Normal single click
+    const isOnlyTag = (itemType === 'tag' && state.activeTagIds.size === 1 && state.activeTagIds.has(itemValue) && state.activeFolders.size === 0);
+    const isOnlyFolder = (itemType === 'folder' && state.activeFolders.size === 1 && state.activeFolders.has(itemValue) && state.activeTagIds.size === 0);
+
+    if (isOnlyTag || isOnlyFolder) {
+      // Toggle off
+      state.activeTagIds.clear();
+      state.activeFolders.clear();
+      state.lastSidebarClickedItem = null;
+    } else {
+      state.activeTagIds.clear();
+      state.activeFolders.clear();
+      if (itemType === 'tag') {
+        state.activeTagIds.add(itemValue);
+        state.lastSidebarClickedItem = { type: 'tag', id: itemValue };
+      } else {
+        state.activeFolders.add(itemValue);
+        state.lastSidebarClickedItem = { type: 'folder', path: itemValue };
+      }
+    }
+  }
+
+  updateSidebarActive();
+  renderTimeline();
+  loadMedia();
+}
+
 export function renderSidebarTags() {
   const categories = {
     people: dom.tagCategoryPeople,
@@ -734,24 +888,16 @@ export function renderSidebarTags() {
     if (!container) return;
 
     const li = document.createElement('li');
-    li.className = 'tag-item' + (state.activeTagId === tag.id ? ' active' : '');
+    li.className = 'tag-item' + (state.activeTagIds.has(tag.id) ? ' active' : '');
+    li.dataset.tagId = String(tag.id);
     const safeTagName = escapeHtml(tag.name);
     li.innerHTML = `
       <span class="tag-name">${safeTagName}</span>
       <span class="count-badge">${tag.media_count || 0}</span>
       <button class="delete-tag-btn" title="Delete tag">&times;</button>
     `;
-    li.addEventListener('click', () => {
-      if (state.activeTagId === tag.id) {
-        state.activeTagId = null;
-      } else {
-        state.activeTagId = tag.id;
-        state.activeFolder = null;
-        state.activeTimelinePeriod = null;
-      }
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
+    li.addEventListener('click', (e) => {
+      handleSidebarItemClick('tag', tag.id, e);
     });
 
     const delBtn = li.querySelector('.delete-tag-btn');
@@ -790,7 +936,7 @@ export function renderSidebarAlbums() {
         state.activeAlbumId = null;
       } else {
         state.activeAlbumId = album.id;
-        state.activeFolder = null;
+        state.activeFolders.clear();
         state.activeTimelinePeriod = null;
       }
       updateSidebarActive();
@@ -848,7 +994,8 @@ export function renderSidebarFolders() {
   const sortedFolders = Array.from(state.allFolders).sort();
   sortedFolders.forEach(folder => {
     const el = document.createElement('div');
-    el.className = 'folder-item' + (state.activeFolder === folder ? ' active' : '');
+    el.className = 'folder-item' + (state.activeFolders.has(folder) ? ' active' : '');
+    el.dataset.folderPath = folder;
     const parts = folder.split(/[\/\\]/);
     const shortName = parts[parts.length - 1] || folder;
 
@@ -856,15 +1003,8 @@ export function renderSidebarFolders() {
       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       <span title="${escapeHtml(folder)}">${escapeHtml(shortName)}</span>
     `;
-    el.addEventListener('click', () => {
-      if (state.activeFolder === folder) {
-        state.activeFolder = null;
-      } else {
-        state.activeFolder = folder;
-      }
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
+    el.addEventListener('click', (e) => {
+      handleSidebarItemClick('folder', folder, e);
     });
     dom.foldersTree.appendChild(el);
   });
@@ -924,11 +1064,13 @@ export function renderTimeline() {
 }
 
 export function updateSidebarActive() {
+  const hasTag = state.activeTagIds && state.activeTagIds.size > 0;
+  const hasFolder = state.activeFolders && state.activeFolders.size > 0;
   const isAllMedia = (!state.activeMediaType || state.activeMediaType === 'all')
     && !state.activeStatusFilter
-    && !state.activeTagId
+    && !hasTag
     && !state.activeAlbumId
-    && !state.activeFolder
+    && !hasFolder
     && !state.searchText
     && (!state.activeTab || state.activeTab === 'media')
     && !state.activeTimelinePeriod;
@@ -945,9 +1087,8 @@ export function updateSidebarActive() {
   renderSidebarAlbums();
   if (dom.foldersTree) {
     dom.foldersTree.querySelectorAll('.folder-item').forEach(el => {
-      const titleSpan = el.querySelector('span');
-      const folderPath = titleSpan ? titleSpan.getAttribute('title') : '';
-      el.classList.toggle('active', Boolean(state.activeFolder && state.activeFolder === folderPath));
+      const folderPath = el.dataset.folderPath || (el.querySelector('span')?.getAttribute('title') || '');
+      el.classList.toggle('active', Boolean(folderPath && state.activeFolders && state.activeFolders.has(folderPath)));
     });
   }
 }
@@ -1008,20 +1149,35 @@ export function updateFilterLabel() {
     parts.push(`Album: ${album ? album.name : state.activeAlbumId}`);
   }
 
-  if (state.activeTagId) {
-    const tag = state.tags.find(t => t.id === state.activeTagId);
+  const tagCount = state.activeTagIds ? state.activeTagIds.size : 0;
+  const folderCount = state.activeFolders ? state.activeFolders.size : 0;
+
+  if (tagCount === 1 && folderCount === 0) {
+    const tagId = state.activeTagId;
+    const tag = state.tags.find(t => t.id === tagId);
     if (state.activeTab && state.activeTab !== 'media') {
       const tabName = state.activeTab.charAt(0).toUpperCase() + state.activeTab.slice(1);
-      parts.push(`${tabName}: ${tag ? tag.name : state.activeTagId}`);
+      parts.push(`${tabName}: ${tag ? tag.name : tagId}`);
     } else {
-      parts.push(`Tag: ${tag ? tag.name : state.activeTagId}`);
+      parts.push(`Tag: ${tag ? tag.name : tagId}`);
     }
-  }
-
-  if (state.activeFolder) {
-    const partsFolder = state.activeFolder.split(/[\/\\]/);
-    const folderName = partsFolder[partsFolder.length - 1] || state.activeFolder;
+  } else if (folderCount === 1 && tagCount === 0) {
+    const folder = state.activeFolder;
+    const partsFolder = folder.split(/[\/\\]/);
+    const folderName = partsFolder[partsFolder.length - 1] || folder;
     parts.push(`Folder: ${folderName}`);
+  } else if (tagCount + folderCount > 1) {
+    const orLabels = [];
+    state.activeTagIds.forEach(id => {
+      const tag = state.tags.find(t => t.id === id);
+      orLabels.push(tag ? tag.name : String(id));
+    });
+    state.activeFolders.forEach(folder => {
+      const folderParts = folder.split(/[\/\\]/);
+      const shortName = folderParts[folderParts.length - 1] || folder;
+      orLabels.push(shortName);
+    });
+    parts.push(`Filter (OR): ${orLabels.join(', ')}`);
   }
 
   if (state.searchText) {
@@ -1047,9 +1203,10 @@ export function updateFilterLabel() {
 export function clearAllFilters() {
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
-  state.activeTagId = null;
+  state.activeTagIds.clear();
   state.activeAlbumId = null;
-  state.activeFolder = null;
+  state.activeFolders.clear();
+  state.lastSidebarClickedItem = null;
   state.activeTimelinePeriod = null;
   state.activeTab = 'media';
   state.searchText = '';

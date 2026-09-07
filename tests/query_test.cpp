@@ -428,3 +428,49 @@ TEST_F(QueryTest, QueryByTagCategory) {
     EXPECT_EQ(resKeyword.value().total_count, 2);
 }
 
+TEST_F(QueryTest, QueryByTagsAndFoldersOrMode) {
+    MediaItem item4;
+    item4.file_path = "/photos/family/img4.jpg";
+    item4.file_name = "img4.jpg";
+    item4.file_size = 4000;
+    item4.file_modified_time = 4000;
+    item4.content_hash = "hash4";
+    item4.date_taken = 4000;
+    MediaId id4 = db.insertMedia(item4).value();
+
+    TagId tagAlice = db.createOrGetTag("Alice", "people").value();
+    ASSERT_TRUE(db.addTagToMedia(id3, tagAlice).isOk());
+
+    // 1. Multiple tags with OR mode: tagPortrait (id2) OR tagAlice (id3)
+    QueryCriteria cTagsOr;
+    cTagsOr.tag_ids = {tagPortrait, tagAlice};
+    cTagsOr.tag_folder_or_mode = true;
+    auto resTagsOr = QueryBuilder::execute(db, cTagsOr);
+    ASSERT_TRUE(resTagsOr.isOk());
+    EXPECT_EQ(resTagsOr.value().total_count, 2);
+
+    // 2. Multiple folders with OR mode: /photos/2026 OR /photos/family
+    QueryCriteria cFoldersOr;
+    cFoldersOr.folders = {"/photos/2026", "/photos/family"};
+    cFoldersOr.tag_folder_or_mode = true;
+    auto resFoldersOr = QueryBuilder::execute(db, cFoldersOr);
+    ASSERT_TRUE(resFoldersOr.isOk());
+    EXPECT_EQ(resFoldersOr.value().total_count, 4);
+
+    // 3. Tags and Folders together with OR mode: tagAlice (id3) OR folder /photos/family (id4)
+    QueryCriteria cMixedOr;
+    cMixedOr.tag_ids = {tagAlice};
+    cMixedOr.folders = {"/photos/family"};
+    cMixedOr.tag_folder_or_mode = true;
+    auto resMixedOr = QueryBuilder::execute(db, cMixedOr);
+    ASSERT_TRUE(resMixedOr.isOk());
+    EXPECT_EQ(resMixedOr.value().total_count, 2);
+    std::set<MediaId> foundIds;
+    for (const auto& it : resMixedOr.value().items) {
+        foundIds.insert(it.id);
+    }
+    EXPECT_TRUE(foundIds.count(id3));
+    EXPECT_TRUE(foundIds.count(id4));
+}
+
+

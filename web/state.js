@@ -28,9 +28,28 @@ export const state = {
       this.activeStatusFilter = null;
     }
   },
-  activeTagId: null,
+  activeTagIds: new Set(),
+  activeFolders: new Set(),
+  lastSidebarClickedItem: null,
+  get activeTagId() {
+    return this.activeTagIds.size > 0 ? this.activeTagIds.values().next().value : null;
+  },
+  set activeTagId(val) {
+    this.activeTagIds.clear();
+    if (val !== null && val !== undefined) {
+      this.activeTagIds.add(Number(val));
+    }
+  },
   activeAlbumId: null,
-  activeFolder: null,
+  get activeFolder() {
+    return this.activeFolders.size > 0 ? this.activeFolders.values().next().value : null;
+  },
+  set activeFolder(val) {
+    this.activeFolders.clear();
+    if (val !== null && val !== undefined) {
+      this.activeFolders.add(String(val));
+    }
+  },
   allFolders: new Set(),
   activeTimelinePeriod: null, // { year, month }
   searchText: '',

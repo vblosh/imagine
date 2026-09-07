@@ -1627,4 +1627,53 @@ TEST_F(ServerTest, WebServerPayloadLimitConfig) {
     EXPECT_EQ(server_->payloadMaxLength(), 50 * 1024 * 1024);
 }
 
+TEST_F(ServerTest, MediaFilterOrModeTagsAndFolders) {
+    httplib::Client client("127.0.0.1", port_);
+
+    auto photosDir = testDir_ / "photos";
+    auto dirA = photosDir / "dirA";
+    auto dirB = photosDir / "dirB";
+    std::filesystem::create_directories(dirA);
+    std::filesystem::create_directories(dirB);
+
+    std::string pathA = (dirA / "photo_a.jpg").string();
+    std::string pathB = (dirB / "photo_b.jpg").string();
+
+    ImageBuffer buf;
+    buf.width = 100;
+    buf.height = 100;
+    buf.channels = 3;
+    buf.data.resize(100 * 100 * 3, 150);
+    ASSERT_TRUE(Generator::saveJpeg(buf, pathA).isOk());
+    ASSERT_TRUE(Generator::saveJpeg(buf, pathB).isOk());
+
+    ASSERT_TRUE(catalog_->importDirectory(photosDir.string(), true, nullptr).isOk());
+
+    auto mA = catalog_->getMediaByPath(pathA).value();
+    auto mB = catalog_->getMediaByPath(pathB).value();
+
+    auto tag1 = catalog_->db().createOrGetTag("TagAlpha", "people").value();
+    auto tag2 = catalog_->db().createOrGetTag("TagBeta", "places").value();
+    ASSERT_TRUE(catalog_->db().addTagToMedia(mA.id, tag1).isOk());
+    ASSERT_TRUE(catalog_->db().addTagToMedia(mB.id, tag2).isOk());
+
+    auto res1 = client.Get("/api/media?tag_ids=" + std::to_string(tag1) + "," + std::to_string(tag2) + "&tag_folder_mode=or");
+    ASSERT_TRUE(res1);
+    EXPECT_EQ(res1->status, 200);
+    auto j1 = nlohmann::json::parse(res1->body);
+    EXPECT_EQ(j1["items"].size(), 2);
+
+    auto res2 = client.Get("/api/media?folder=dirA&folder=dirB&tag_folder_mode=or");
+    ASSERT_TRUE(res2);
+    EXPECT_EQ(res2->status, 200);
+    auto j2 = nlohmann::json::parse(res2->body);
+    EXPECT_EQ(j2["items"].size(), 2);
+
+    auto res3 = client.Get("/api/media?tag_id=" + std::to_string(tag1) + "&folder=dirB&tag_folder_mode=or");
+    ASSERT_TRUE(res3);
+    EXPECT_EQ(res3->status, 200);
+    auto j3 = nlohmann::json::parse(res3->body);
+    EXPECT_EQ(j3["items"].size(), 2);
+}
+
 

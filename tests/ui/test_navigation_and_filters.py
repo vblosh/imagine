@@ -348,3 +348,207 @@ def test_combine_navigation_filters_albums_and_tags(server, page: Page):
     expect(page.locator("#navAllMedia")).to_have_class(re.compile(r"\bactive\b"))
     expect(cards).to_have_count(6)
 
+
+def test_ctrl_click_multiple_tags_or_filter(server, page: Page):
+    """Test selecting multiple tags across People/Places/Events/Keywords using Ctrl-click filters them with OR logic."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    alice_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Alice")
+    bob_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Bob")
+    beach_tag = page.locator("#tagCategoryPlaces .tag-item", has_text="Beach")
+
+    # 1. Click Alice (People)
+    alice_tag.click()
+    expect(alice_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("birthday.bmp")
+
+    # 2. Ctrl-click Bob (People) -> OR filter: Alice OR Bob
+    bob_tag.click(modifiers=["Control"])
+    expect(alice_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(bob_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(2)
+    names = [cards.nth(0).locator(".card-filename").text_content(), cards.nth(1).locator(".card-filename").text_content()]
+    assert "birthday.bmp" in names
+    assert "portrait.bmp" in names
+    expect(page.locator("#filterLabel")).to_contain_text("Filter (OR)")
+
+    # 3. Ctrl-click Beach (Places) -> OR filter: Alice OR Bob OR Beach
+    beach_tag.click(modifiers=["Control"])
+    expect(beach_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(3)
+    names = [cards.nth(i).locator(".card-filename").text_content() for i in range(3)]
+    assert "birthday.bmp" in names
+    assert "portrait.bmp" in names
+    assert "beach.bmp" in names
+
+    # 4. Ctrl-click Alice to deselect it -> OR filter: Bob OR Beach
+    alice_tag.click(modifiers=["Control"])
+    expect(alice_tag).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(bob_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(beach_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(2)
+    names = [cards.nth(0).locator(".card-filename").text_content(), cards.nth(1).locator(".card-filename").text_content()]
+    assert "portrait.bmp" in names
+    assert "beach.bmp" in names
+
+
+def test_ctrl_click_multiple_folders_or_filter(server, page: Page):
+    """Test selecting multiple folders using Ctrl-click filters them with OR logic."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    family_folder = page.locator("#foldersTree .folder-item", has_text="family")
+    nature_folder = page.locator("#foldersTree .folder-item", has_text="nature")
+
+    # 1. Click family folder
+    family_folder.click()
+    expect(family_folder).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(2)
+
+    # 2. Ctrl-click nature folder -> family OR nature (all 6 items)
+    nature_folder.click(modifiers=["Control"])
+    expect(family_folder).to_have_class(re.compile(r"\bactive\b"))
+    expect(nature_folder).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(6)
+    expect(page.locator("#filterLabel")).to_contain_text("Filter (OR)")
+
+    # 3. Ctrl-click family folder to deselect it -> only nature folder active (4 items)
+    family_folder.click(modifiers=["Control"])
+    expect(family_folder).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(nature_folder).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(4)
+
+
+def test_ctrl_click_mixed_tags_and_folders_or_filter(server, page: Page):
+    """Test selecting tags and folders together using Ctrl-click filters with OR logic."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    bob_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Bob")
+    nature_folder = page.locator("#foldersTree .folder-item", has_text="nature")
+
+    # 1. Click Bob (portrait.bmp)
+    bob_tag.click()
+    expect(bob_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("portrait.bmp")
+
+    # 2. Ctrl-click nature folder -> Bob OR nature folder
+    # nature folder has 4 items (mountain, sunset, beach, forest), plus Bob (portrait.bmp) in family folder = 5 items total
+    nature_folder.click(modifiers=["Control"])
+    expect(bob_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(nature_folder).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(5)
+    names = [cards.nth(i).locator(".card-filename").text_content() for i in range(5)]
+    assert "portrait.bmp" in names
+    assert "mountain.bmp" in names
+    assert "sunset.bmp" in names
+    assert "beach.bmp" in names
+    assert "forest.bmp" in names
+    assert "birthday.bmp" not in names
+    expect(page.locator("#filterLabel")).to_contain_text("Filter (OR)")
+
+    # 3. Clear filters button clears both
+    page.locator("#clearFiltersBtn").click()
+    expect(bob_tag).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(nature_folder).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(6)
+
+
+def test_shift_click_range_selection(server, page: Page):
+    """Test Shift-clicking to select a range of items in the sidebar."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    alice_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Alice")
+    bob_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Bob")
+
+    # 1. Click Alice (first item)
+    alice_tag.click()
+    expect(alice_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(1)
+
+    # 2. Shift-click Bob (second item) -> both Alice and Bob selected
+    bob_tag.click(modifiers=["Shift"])
+    expect(alice_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(bob_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(2)
+
+    # 3. Normal click on Bob deselects the multi-selection and leaves only Bob
+    bob_tag.click()
+    expect(alice_tag).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(bob_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("portrait.bmp")
+
+
+def test_ctrl_click_across_all_categories_and_folders(server, page: Page):
+    """Test selecting items from People, Places, Events, Keywords, and Folders simultaneously using Ctrl-click."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    alice_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Alice")
+    beach_tag = page.locator("#tagCategoryPlaces .tag-item", has_text="Beach")
+    bday_tag = page.locator("#tagCategoryEvents .tag-item", has_text="Birthday 2026")
+    sunset_tag = page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")
+    family_folder = page.locator("#foldersTree .folder-item", has_text="family")
+
+    # Click Alice (People)
+    alice_tag.click()
+    expect(alice_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(1)
+
+    # Ctrl-click Beach (Places)
+    beach_tag.click(modifiers=["Control"])
+    expect(beach_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(2)  # birthday.bmp, beach.bmp
+
+    # Ctrl-click Birthday 2026 (Events)
+    bday_tag.click(modifiers=["Control"])
+    expect(bday_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(2)  # birthday.bmp (has both Alice & Birthday 2026), beach.bmp
+
+    # Ctrl-click Sunset (Keywords)
+    sunset_tag.click(modifiers=["Control"])
+    expect(sunset_tag).to_have_class(re.compile(r"\bactive\b"))
+    # Sunset is on mountain.bmp and sunset.bmp -> total now 4 (birthday, beach, mountain, sunset)
+    expect(cards).to_have_count(4)
+
+    # Ctrl-click family folder
+    family_folder.click(modifiers=["Control"])
+    expect(family_folder).to_have_class(re.compile(r"\bactive\b"))
+    # family folder adds portrait.bmp -> total now 5
+    expect(cards).to_have_count(5)
+
+    # All selected elements are highlighted active
+    expect(alice_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(beach_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(bday_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(sunset_tag).to_have_class(re.compile(r"\bactive\b"))
+    expect(family_folder).to_have_class(re.compile(r"\bactive\b"))
+
+    expect(page.locator("#filterLabel")).to_contain_text("Filter (OR)")
+
+    # Clear filters button clears all
+    page.locator("#clearFiltersBtn").click()
+    expect(cards).to_have_count(6)
+    expect(alice_tag).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(beach_tag).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(bday_tag).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(sunset_tag).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(family_folder).not_to_have_class(re.compile(r"\bactive\b"))
+
+
+

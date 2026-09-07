@@ -627,12 +627,56 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             criteria.search_text = std::move(search);
         }
         if (req.has_param("folder")) {
-            std::string folder = req.get_param_value("folder");
-            if (folder.size() > kMaxFolderLength) {
-                sendError(res, "Folder path exceeds maximum length", 400);
-                return;
+            size_t count = req.get_param_value_count("folder");
+            for (size_t i = 0; i < count; ++i) {
+                std::string folder = req.get_param_value("folder", i);
+                if (folder.size() > kMaxFolderLength) {
+                    sendError(res, "Folder path exceeds maximum length", 400);
+                    return;
+                }
+                criteria.folders.push_back(folder);
             }
-            criteria.folder = std::move(folder);
+            if (criteria.folder.empty() && !criteria.folders.empty()) {
+                criteria.folder = criteria.folders.front();
+            }
+        }
+        if (req.has_param("folders")) {
+            std::string foldersStr = req.get_param_value("folders");
+            if (!foldersStr.empty()) {
+                if (foldersStr.front() == '[' && foldersStr.back() == ']') {
+                    try {
+                        auto arr = nlohmann::json::parse(foldersStr);
+                        if (arr.is_array()) {
+                            for (const auto& item : arr) {
+                                if (item.is_string()) {
+                                    std::string f = item.get<std::string>();
+                                    if (f.size() > kMaxFolderLength) {
+                                        sendError(res, "Folder path exceeds maximum length", 400);
+                                        return;
+                                    }
+                                    criteria.folders.push_back(f);
+                                }
+                            }
+                        }
+                    } catch (...) {}
+                } else {
+                    char delim = (foldersStr.find('|') != std::string::npos) ? '|' : ',';
+                    std::stringstream ss(foldersStr);
+                    std::string item;
+                    while (std::getline(ss, item, delim)) {
+                        if (!item.empty()) {
+                            if (item.size() > kMaxFolderLength) {
+                                sendError(res, "Folder path exceeds maximum length", 400);
+                                return;
+                            }
+                            criteria.folders.push_back(item);
+                        }
+                    }
+                }
+            }
+            if (criteria.folder.empty() && !criteria.folders.empty()) {
+                criteria.folder = criteria.folders.front();
+            }
         }
         if (req.has_param("tag_category")) {
             std::string tagCat = req.get_param_value("tag_category");
@@ -650,12 +694,41 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             criteria.tag_category = std::move(tagCat);
         }
         if (req.has_param("tag_id")) {
-            TagId tid = 0;
-            if (!parseInt(req.get_param_value("tag_id"), tid)) {
-                sendError(res, "Query parameter 'tag_id' must be an integer", 400);
-                return;
+            size_t count = req.get_param_value_count("tag_id");
+            for (size_t i = 0; i < count; ++i) {
+                TagId tid = 0;
+                if (!parseInt(req.get_param_value("tag_id", i), tid)) {
+                    sendError(res, "Query parameter 'tag_id' must be an integer", 400);
+                    return;
+                }
+                criteria.tag_ids.push_back(tid);
             }
-            criteria.tag_ids.push_back(tid);
+        }
+        if (req.has_param("tag_ids")) {
+            std::string tidsStr = req.get_param_value("tag_ids");
+            std::stringstream ss(tidsStr);
+            std::string item;
+            while (std::getline(ss, item, ',')) {
+                if (!item.empty()) {
+                    TagId tid = 0;
+                    if (!parseInt(item, tid)) {
+                        sendError(res, "Query parameter 'tag_ids' must contain comma-separated integers", 400);
+                        return;
+                    }
+                    criteria.tag_ids.push_back(tid);
+                }
+            }
+        }
+        if (req.has_param("tag_folder_mode")) {
+            std::string mode = req.get_param_value("tag_folder_mode");
+            if (mode == "or" || mode == "1" || mode == "true") {
+                criteria.tag_folder_or_mode = true;
+            }
+        } else if (req.has_param("filter_or")) {
+            std::string mode = req.get_param_value("filter_or");
+            if (mode == "or" || mode == "1" || mode == "true") {
+                criteria.tag_folder_or_mode = true;
+            }
         }
         if (req.has_param("album_id")) {
             AlbumId aid = 0;

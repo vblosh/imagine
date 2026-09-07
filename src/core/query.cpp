@@ -18,6 +18,12 @@ void to_json(nlohmann::json& j, const QueryCriteria& c) {
         {"offset", c.offset},
         {"tag_ids", c.tag_ids}
     };
+    if (!c.folders.empty()) {
+        j["folders"] = c.folders;
+    }
+    if (c.tag_folder_or_mode) {
+        j["tag_folder_or_mode"] = c.tag_folder_or_mode;
+    }
     if (c.min_rating.has_value()) {
         j["min_rating"] = *c.min_rating;
     }
@@ -71,6 +77,12 @@ void from_json(const nlohmann::json& j, QueryCriteria& c) {
     }
     if (j.contains("folder") && j["folder"].is_string()) {
         c.folder = j["folder"].get<std::string>();
+    }
+    if (j.contains("folders") && j["folders"].is_array()) {
+        c.folders = j["folders"].get<std::vector<std::string>>();
+    }
+    if (j.contains("tag_folder_or_mode") && j["tag_folder_or_mode"].is_boolean()) {
+        c.tag_folder_or_mode = j["tag_folder_or_mode"].get<bool>();
     }
     if (j.contains("tag_category") && j["tag_category"].is_string()) {
         c.tag_category = j["tag_category"].get<std::string>();
@@ -206,6 +218,21 @@ QueryBuilder& QueryBuilder::folder(std::string folder) {
     return *this;
 }
 
+QueryBuilder& QueryBuilder::addFolder(std::string folder) {
+    criteria_.folders.push_back(std::move(folder));
+    return *this;
+}
+
+QueryBuilder& QueryBuilder::setFolders(std::vector<std::string> folders) {
+    criteria_.folders = std::move(folders);
+    return *this;
+}
+
+QueryBuilder& QueryBuilder::tagFolderOrMode(bool enabled) {
+    criteria_.tag_folder_or_mode = enabled;
+    return *this;
+}
+
 QueryBuilder& QueryBuilder::tagCategory(std::string tagCategory) {
     criteria_.tag_category = std::move(tagCategory);
     return *this;
@@ -274,9 +301,66 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
         params.push_back(std::to_string(static_cast<int32_t>(*criteria_.not_flag)));
     }
 
-    for (TagId tagId : criteria_.tag_ids) {
-        clauses.push_back("id IN (SELECT media_id FROM media_tags WHERE tag_id = ?)");
-        params.push_back(std::to_string(tagId));
+    if (criteria_.tag_folder_or_mode) {
+        std::vector<std::string> orClauses;
+        std::vector<std::string> orParams;
+
+        if (!criteria_.tag_ids.empty()) {
+            std::string placeholders;
+            for (size_t i = 0; i < criteria_.tag_ids.size(); ++i) {
+                if (i > 0) placeholders += ", ";
+                placeholders += "?";
+                orParams.push_back(std::to_string(criteria_.tag_ids[i]));
+            }
+            orClauses.push_back("id IN (SELECT media_id FROM media_tags WHERE tag_id IN (" + placeholders + "))");
+        }
+
+        std::vector<std::string> allFolders = criteria_.folders;
+        if (!criteria_.folder.empty() && std::find(allFolders.begin(), allFolders.end(), criteria_.folder) == allFolders.end()) {
+            allFolders.push_back(criteria_.folder);
+        }
+
+        for (const auto& f : allFolders) {
+            if (f.empty()) continue;
+            std::string folder = f;
+            while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\')) {
+                folder.pop_back();
+            }
+            orClauses.push_back("(file_path LIKE ? OR file_path LIKE ?)");
+            orParams.push_back(folder + "/%");
+            orParams.push_back(folder + "\\%");
+        }
+
+        if (!orClauses.empty()) {
+            std::string combined;
+            for (size_t i = 0; i < orClauses.size(); ++i) {
+                if (i > 0) combined += " OR ";
+                combined += "(" + orClauses[i] + ")";
+            }
+            clauses.push_back(combined);
+            params.insert(params.end(), orParams.begin(), orParams.end());
+        }
+    } else {
+        for (TagId tagId : criteria_.tag_ids) {
+            clauses.push_back("id IN (SELECT media_id FROM media_tags WHERE tag_id = ?)");
+            params.push_back(std::to_string(tagId));
+        }
+
+        std::vector<std::string> allFolders = criteria_.folders;
+        if (!criteria_.folder.empty() && std::find(allFolders.begin(), allFolders.end(), criteria_.folder) == allFolders.end()) {
+            allFolders.push_back(criteria_.folder);
+        }
+
+        for (const auto& f : allFolders) {
+            if (f.empty()) continue;
+            std::string folder = f;
+            while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\')) {
+                folder.pop_back();
+            }
+            clauses.push_back("(file_path LIKE ? OR file_path LIKE ?)");
+            params.push_back(folder + "/%");
+            params.push_back(folder + "\\%");
+        }
     }
 
     if (criteria_.album_id.has_value()) {
@@ -334,16 +418,6 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
         params.push_back(pattern);
         params.push_back(pattern);
         params.push_back(pattern);
-    }
-
-    if (!criteria_.folder.empty()) {
-        std::string folder = criteria_.folder;
-        while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\')) {
-            folder.pop_back();
-        }
-        clauses.push_back("(file_path LIKE ? OR file_path LIKE ?)");
-        params.push_back(folder + "/%");
-        params.push_back(folder + "\\%");
     }
 
     if (!criteria_.tag_category.empty()) {

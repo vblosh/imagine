@@ -672,7 +672,9 @@ export async function submitDeleteTag() {
 
   try {
     await api.del(`/api/tags/${tag.id}`);
-    if (state.activeTagId === tag.id) {
+    if (state.activeTagIds && state.activeTagIds.has(tag.id)) {
+      state.activeTagIds.delete(tag.id);
+    } else if (state.activeTagId === tag.id) {
       state.activeTagId = null;
     }
     await loadMetadata();
