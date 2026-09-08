@@ -1670,7 +1670,7 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
 
         res.set_header("Accept-Ranges", "bytes");
         res.set_header("ETag", etag);
-        res.set_header("Cache-Control", "no-cache, must-revalidate");
+        res.set_header("Cache-Control", "no-store, no-cache, must-revalidate");
 
         if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {
             res.status = 304;

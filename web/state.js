@@ -63,6 +63,7 @@ export const state = {
   loupeZoom: 1.0,
   loupePanX: 0,
   loupePanY: 0,
+  loupeShowOriginal: false,
   importPollInterval: null,
   viewMode: 'grid',
   mapInstance: null,

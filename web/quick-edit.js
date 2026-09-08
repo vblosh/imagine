@@ -648,7 +648,11 @@ export async function saveEdits(mode = "overwrite") {
         state.mediaItems[idx] = updatedItem;
       }
       const newOriginalUrl = getOriginalMediaUrl(updatedItem);
-      if (dom.loupeImg) dom.loupeImg.src = newOriginalUrl;
+      if (dom.loupeImg) {
+        dom.loupeImg.src = newOriginalUrl;
+        dom.loupeImg.dataset.originalUrl = newOriginalUrl;
+        dom.loupeImg.dataset.isOriginal = "true";
+      }
       const cardImg = document.querySelector(`.photo-card[data-id="${id}"] img`);
       if (cardImg) cardImg.src = `/api/thumbnails/${updatedItem.content_hash}/256${cacheBuster}`;
       if (dom.inspectorImg && state.selectedIds.has(id)) {

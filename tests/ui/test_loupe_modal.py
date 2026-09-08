@@ -13,12 +13,16 @@ def test_open_loupe_via_double_click_and_inspector_overlay(server, page: Page):
     loupe = page.locator("#loupeModal")
     expect(loupe).to_be_hidden()
 
-    # 1. Open via double click on mountain.bmp
+    # 1. Open via double click on mountain.bmp (loads 1024 thumbnail by default)
     card = page.locator(".photo-card", has_text="mountain.bmp")
     card.dblclick()
     expect(loupe).to_be_visible()
     expect(page.locator("#loupeFileName")).to_have_text("mountain.bmp")
     expect(page.locator("#loupeIndex")).to_contain_text("1 / 6")
+    expect(page.locator("#loupeImg")).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
+
+    # Clicking on the image loads the full-resolution original
+    page.locator("#loupeImg").click()
     expect(page.locator("#loupeImg")).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
 
     # Close loupe
@@ -31,6 +35,7 @@ def test_open_loupe_via_double_click_and_inspector_overlay(server, page: Page):
     page.locator("#openLoupeFromInspector").click()
     expect(loupe).to_be_visible()
     expect(page.locator("#loupeFileName")).to_have_text("mountain.bmp")
+    expect(page.locator("#loupeImg")).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
     page.locator("#loupeCloseBtn").click()
     expect(loupe).to_be_hidden()
 
@@ -63,6 +68,48 @@ def test_loupe_navigation_buttons_and_arrow_keys(server, page: Page):
     # Press ArrowLeft key
     page.keyboard.press("ArrowLeft")
     expect(page.locator("#loupeIndex")).to_have_text("1 / 6")
+
+
+def test_loupe_arrow_navigation_preserves_original_image_mode(server, page: Page):
+    """When user clicks image to load original, navigating with left/right arrows continues loading originals."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # 1. Open loupe on first photo (initially 1024 thumbnail)
+    cards.first.dblclick()
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+    loupe_img = page.locator("#loupeImg")
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
+
+    # 2. Click on image to load full original
+    loupe_img.click()
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
+
+    # 3. Navigate right with ArrowRight -> new image should directly show original
+    page.keyboard.press("ArrowRight")
+    expect(page.locator("#loupeIndex")).to_have_text("2 / 6")
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
+
+    # 4. Navigate right again with Next button -> 3rd image also shows original
+    page.locator("#loupeNextBtn").click()
+    expect(page.locator("#loupeIndex")).to_have_text("3 / 6")
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
+
+    # 5. Navigate left with ArrowLeft -> previous image also shows original
+    page.keyboard.press("ArrowLeft")
+    expect(page.locator("#loupeIndex")).to_have_text("2 / 6")
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
+
+    # 6. Close loupe and re-open on photo 1 -> should reset back to 1024 thumbnail default
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+
+    cards.first.dblclick()
+    expect(loupe).to_be_visible()
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
 
 
 def test_loupe_rating_and_flagging(server, page: Page):

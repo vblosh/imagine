@@ -1441,7 +1441,7 @@ TEST_F(ServerTest, EditPhotoEndpointOverwriteAndCopy) {
     auto origBefore = client.Get("/api/photos/" + std::to_string(id) + "/original");
     ASSERT_TRUE(origBefore);
     EXPECT_EQ(origBefore->status, 200);
-    EXPECT_EQ(origBefore->get_header_value("Cache-Control"), "no-cache, must-revalidate");
+    EXPECT_EQ(origBefore->get_header_value("Cache-Control"), "no-store, no-cache, must-revalidate");
     std::string etagBefore = origBefore->get_header_value("ETag");
     EXPECT_FALSE(etagBefore.empty());
 
@@ -1466,7 +1466,7 @@ TEST_F(ServerTest, EditPhotoEndpointOverwriteAndCopy) {
     auto origAfter = client.Get("/api/photos/" + std::to_string(id) + "/original", condBefore);
     ASSERT_TRUE(origAfter);
     EXPECT_EQ(origAfter->status, 200);
-    EXPECT_EQ(origAfter->get_header_value("Cache-Control"), "no-cache, must-revalidate");
+    EXPECT_EQ(origAfter->get_header_value("Cache-Control"), "no-store, no-cache, must-revalidate");
     EXPECT_NE(origAfter->get_header_value("ETag"), etagBefore);
 
     auto resJson = nlohmann::json::parse(editRes->body);

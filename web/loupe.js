@@ -18,6 +18,7 @@ export function openLoupeForMedia(id) {
   const idx = state.mediaItems.findIndex(m => m.id === id);
   if (idx === -1) return;
   state.loupeIndex = idx;
+  state.loupeShowOriginal = false;
   if (dom.loupeModal) dom.loupeModal.style.display = 'flex';
   if (document.activeElement && typeof document.activeElement.blur === 'function') {
     document.activeElement.blur();
@@ -30,7 +31,13 @@ export function closeLoupe() {
     closeQuickEdit(false);
   }
   state.loupeIndex = -1;
+  state.loupeShowOriginal = false;
   resetLoupeZoomToFit();
+  if (dom.loupeImg) {
+    dom.loupeImg.removeAttribute('src');
+    delete dom.loupeImg.dataset.originalUrl;
+    delete dom.loupeImg.dataset.isOriginal;
+  }
   if (dom.loupeVideo) {
     dom.loupeVideo.pause();
     dom.loupeVideo.removeAttribute('src');
@@ -42,6 +49,22 @@ export function closeLoupe() {
     dom.loupeAudio.load();
   }
   if (dom.loupeModal) dom.loupeModal.style.display = 'none';
+}
+
+export function loadLoupeOriginal() {
+  state.loupeShowOriginal = true;
+  if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return;
+  const item = state.mediaItems[state.loupeIndex];
+  if (!item || item.media_type === 'video' || item.media_type === 'audio') return;
+  if (!dom.loupeImg) return;
+
+  const originalUrl = dom.loupeImg.dataset.originalUrl || getOriginalMediaUrl(item);
+  if (dom.loupeImg.dataset.isOriginal === 'true') {
+    return;
+  }
+
+  dom.loupeImg.dataset.isOriginal = 'true';
+  dom.loupeImg.src = originalUrl;
 }
 
 export function updateLoupeView() {
@@ -115,10 +138,24 @@ export function updateLoupeView() {
       dom.loupeQuickEditBtn.disabled = true;
     }
   } else {
-    // Photo
+    // Photo: display original if loupeShowOriginal is true; otherwise high-resolution 1024 thumbnail
+    const originalUrl = fileUrl;
+    const shouldShowOriginal = Boolean(state.loupeShowOriginal);
+    const targetUrl = shouldShowOriginal
+      ? originalUrl
+      : (item.content_hash ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/1024` : originalUrl);
+
     if (dom.loupeImg) {
-      dom.loupeImg.src = fileUrl;
+      dom.loupeImg.dataset.originalUrl = originalUrl;
+      dom.loupeImg.dataset.isOriginal = (targetUrl === originalUrl) ? 'true' : 'false';
+      dom.loupeImg.src = targetUrl;
       dom.loupeImg.style.display = 'block';
+      dom.loupeImg.onerror = () => {
+        if (dom.loupeImg.src !== originalUrl) {
+          dom.loupeImg.src = originalUrl;
+          dom.loupeImg.dataset.isOriginal = 'true';
+        }
+      };
     }
     if (dom.loupeZoomControls) {
       dom.loupeZoomControls.style.display = 'flex';
@@ -169,6 +206,10 @@ export function toggleLoupePlayback() {
 export function setLoupeZoom(targetZoom, focusClientX = null, focusClientY = null) {
   const prevZoom = state.loupeZoom || 1.0;
   const clampedZoom = Math.min(LOUPE_MAX_ZOOM, Math.max(LOUPE_MIN_ZOOM, Math.round(targetZoom * 100) / 100));
+
+  if (clampedZoom > 1.0) {
+    loadLoupeOriginal();
+  }
 
   if (clampedZoom === 1.0) {
     state.loupeZoom = 1.0;

@@ -80,7 +80,8 @@ import {
   loupeZoomOut,
   resetLoupeZoom,
   loupeNext,
-  loupePrev
+  loupePrev,
+  loadLoupeOriginal
 } from './loupe.js';
 import {
   openQuickEdit,
@@ -847,11 +848,13 @@ export function setupEventListeners() {
   let isLoupeDragging = false;
   let loupeDragStartX = 0;
   let loupeDragStartY = 0;
+  let loupeDragMoved = false;
 
   if (dom.loupeImageViewport) {
     dom.loupeImageViewport.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       if (e.target.closest('.loupe-toolbar')) return;
+      loupeDragMoved = false;
       if (state.loupeZoom <= 1.0) return;
 
       isLoupeDragging = true;
@@ -859,6 +862,12 @@ export function setupEventListeners() {
       loupeDragStartY = e.clientY - state.loupePanY;
       dom.loupeImageViewport.classList.add('is-dragging');
       e.preventDefault();
+    });
+
+    dom.loupeImageViewport.addEventListener('click', (e) => {
+      if (e.target.closest('.loupe-toolbar')) return;
+      if (loupeDragMoved) return;
+      loadLoupeOriginal();
     });
 
     dom.loupeImageViewport.addEventListener('dblclick', (e) => {
@@ -879,6 +888,7 @@ export function setupEventListeners() {
 
   window.addEventListener('mousemove', (e) => {
     if (!isLoupeDragging) return;
+    loupeDragMoved = true;
     state.loupePanX = e.clientX - loupeDragStartX;
     state.loupePanY = e.clientY - loupeDragStartY;
     clampLoupePan();

@@ -321,6 +321,9 @@ def test_after_save_original_file_not_loaded_from_browser_cache(server, page: Pa
     # Re-open loupe on mountain.bmp: must show the updated image, NOT the old cached image
     card.dblclick()
     expect(loupe).to_be_visible()
+    loupe_img.click()
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
+    page.wait_for_function("() => { const img = document.getElementById('loupeImg'); return img && img.complete && img.naturalWidth > 0; }")
     assert int(loupe_img.evaluate("el => el.naturalWidth")) == orig_h
     assert int(loupe_img.evaluate("el => el.naturalHeight")) == orig_w
 
