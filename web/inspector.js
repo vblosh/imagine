@@ -20,6 +20,7 @@ import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { updateItemRating, loadMetadata, renderGrid, loadMedia } from './media-grid.js';
 import { t } from './i18n.js';
+import { saveInspectorCollapsedState } from './persistence.js';
 
 let currentInspectorFetchId = 0;
 let inspectorAbortController = null;
@@ -30,6 +31,7 @@ let inlineEditingInitialized = false;
 export function openInspector() {
   if (dom.rightInspector && dom.rightInspector.classList.contains('collapsed')) {
     dom.rightInspector.classList.remove('collapsed');
+    saveInspectorCollapsedState(false);
   }
 }
 

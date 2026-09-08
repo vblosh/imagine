@@ -15,6 +15,7 @@ import {
   updateBatchBar
 } from './media-grid.js';
 import { updateInspector } from './inspector.js';
+import { saveInspectorCollapsedState } from './persistence.js';
 import {
   updateMapMarkerSelections,
   switchViewMode,
@@ -169,6 +170,7 @@ export function handleEscapeKey() {
   // 9. Inspector collapse state (collapse if open)
   if (dom.rightInspector && !dom.rightInspector.classList.contains('collapsed')) {
     dom.rightInspector.classList.add('collapsed');
+    saveInspectorCollapsedState(true);
     return true;
   }
 

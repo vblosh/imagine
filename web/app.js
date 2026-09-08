@@ -44,8 +44,28 @@ import {
   batchUpdateRatings,
   toggleItemFlag,
   toggleFlagsForIds,
-  expandTagCategory
+  expandTagCategory,
+  collapseTagCategory,
+  expandFolders,
+  collapseFolders
 } from './media-grid.js';
+import {
+  saveFoldersCollapsedState,
+  saveTagCategoryCollapsedState,
+  saveZoomPreference,
+  saveViewModePreference,
+  saveSortPreference,
+  saveInspectorCollapsedState,
+  saveActiveTabPreference,
+  saveNavFilterPreference,
+  saveActiveFoldersPreference,
+  saveActiveTagIdsPreference,
+  saveSearchPreference,
+  clearFilterPreferences,
+  restoreLayoutPreferences,
+  restoreNavigationPreferences,
+  getSavedViewMode
+} from './persistence.js';
 import {
   updateInspector,
   openInspector,
@@ -193,6 +213,7 @@ export function setupEventListeners() {
   if (dom.zoomSlider) {
     dom.zoomSlider.addEventListener('input', (e) => {
       document.documentElement.style.setProperty('--thumb-size', `${e.target.value}px`);
+      saveZoomPreference(e.target.value);
     });
   }
 
@@ -204,6 +225,7 @@ export function setupEventListeners() {
         if (dom.searchInput.value) {
           dom.searchInput.value = '';
           state.searchText = '';
+          saveSearchPreference('');
           loadMedia();
         }
         dom.searchInput.blur();
@@ -215,11 +237,13 @@ export function setupEventListeners() {
       const val = e.target.value.trim();
       if (state.activeFolder) {
         state.activeFolder = null;
+        saveActiveFoldersPreference(state.activeFolders);
         updateSidebarActive();
       }
       const debounceDelay = window.__TEST_MODE__ ? 50 : 300;
       searchTimer = setTimeout(() => {
         state.searchText = val;
+        saveSearchPreference(val);
         loadMedia();
       }, debounceDelay);
     });
@@ -229,6 +253,7 @@ export function setupEventListeners() {
     dom.clearSearchBtn.addEventListener('click', () => {
       if (dom.searchInput) dom.searchInput.value = '';
       state.searchText = '';
+      saveSearchPreference('');
       loadMedia();
     });
   }
@@ -257,6 +282,7 @@ export function setupEventListeners() {
       const [field, dir] = e.target.value.split('-');
       state.sortBy = field;
       state.sortDesc = (dir === 'desc');
+      saveSortPreference(e.target.value);
       loadMedia();
     });
   }
@@ -502,6 +528,8 @@ export function setupEventListeners() {
         state.activeTimelinePeriod = null;
         state.activeMediaType = 'all';
         state.activeStatusFilter = null;
+        clearFilterPreferences();
+        saveActiveTabPreference(state.activeTab);
         updateSidebarActive();
         renderTimeline();
         if (state.activeTab === 'media') {
@@ -532,6 +560,8 @@ export function setupEventListeners() {
       state.activeMediaType = (state.activeMediaType === 'photos') ? 'all' : 'photos';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
+      saveNavFilterPreference(state.activeNavFilter);
+      saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
       renderTimeline();
       loadMedia();
@@ -542,6 +572,8 @@ export function setupEventListeners() {
       state.activeMediaType = (state.activeMediaType === 'videos') ? 'all' : 'videos';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
+      saveNavFilterPreference(state.activeNavFilter);
+      saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
       renderTimeline();
       loadMedia();
@@ -552,6 +584,8 @@ export function setupEventListeners() {
       state.activeMediaType = (state.activeMediaType === 'audio') ? 'all' : 'audio';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
+      saveNavFilterPreference(state.activeNavFilter);
+      saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
       renderTimeline();
       loadMedia();
@@ -562,6 +596,8 @@ export function setupEventListeners() {
       state.activeStatusFilter = (state.activeStatusFilter === 'picks') ? null : 'picks';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
+      saveNavFilterPreference(state.activeNavFilter);
+      saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
       renderTimeline();
       loadMedia();
@@ -572,6 +608,8 @@ export function setupEventListeners() {
       state.activeStatusFilter = (state.activeStatusFilter === 'rejects') ? null : 'rejects';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
+      saveNavFilterPreference(state.activeNavFilter);
+      saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
       renderTimeline();
       loadMedia();
@@ -582,6 +620,8 @@ export function setupEventListeners() {
       state.activeStatusFilter = (state.activeStatusFilter === 'not_rejects') ? null : 'not_rejects';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
+      saveNavFilterPreference(state.activeNavFilter);
+      saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
       renderTimeline();
       loadMedia();
@@ -592,6 +632,8 @@ export function setupEventListeners() {
       state.activeStatusFilter = (state.activeStatusFilter === 'unrated') ? null : 'unrated';
       state.activeFolder = null;
       state.activeTimelinePeriod = null;
+      saveNavFilterPreference(state.activeNavFilter);
+      saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
       renderTimeline();
       loadMedia();
@@ -602,18 +644,13 @@ export function setupEventListeners() {
   document.querySelectorAll('.category-header').forEach(hdr => {
     hdr.addEventListener('click', () => {
       const group = hdr.closest('.tag-category-group');
+      const cat = group ? group.dataset.category : null;
       const items = group ? group.querySelector('.tag-items') : null;
-      const arrow = hdr.querySelector('.arrow');
-      if (items) {
-        if (items.style.display === 'none') {
-          items.style.display = 'block';
-          if (arrow) arrow.textContent = '▼';
-          hdr.setAttribute('aria-expanded', 'true');
-        } else {
-          items.style.display = 'none';
-          if (arrow) arrow.textContent = '▶';
-          hdr.setAttribute('aria-expanded', 'false');
-        }
+      const isCurrentlyCollapsed = items && items.style.display === 'none';
+      if (isCurrentlyCollapsed) {
+        expandTagCategory(cat, true);
+      } else {
+        collapseTagCategory(cat, true);
       }
     });
     hdr.addEventListener('keydown', (e) => {
@@ -627,18 +664,11 @@ export function setupEventListeners() {
   // Folders header collapsible
   if (dom.foldersHeader) {
     dom.foldersHeader.addEventListener('click', () => {
-      const tree = dom.foldersTree;
-      const arrow = dom.foldersHeader.querySelector('.arrow') || dom.foldersArrow;
-      if (tree) {
-        if (tree.style.display === 'none') {
-          tree.style.display = 'block';
-          if (arrow) arrow.textContent = '▼';
-          dom.foldersHeader.setAttribute('aria-expanded', 'true');
-        } else {
-          tree.style.display = 'none';
-          if (arrow) arrow.textContent = '▶';
-          dom.foldersHeader.setAttribute('aria-expanded', 'false');
-        }
+      const isCurrentlyCollapsed = dom.foldersTree && dom.foldersTree.style.display === 'none';
+      if (isCurrentlyCollapsed) {
+        expandFolders(true);
+      } else {
+        collapseFolders(true);
       }
     });
     dom.foldersHeader.addEventListener('keydown', (e) => {
@@ -652,12 +682,18 @@ export function setupEventListeners() {
   // Inspector toggle
   if (dom.toggleInspectorBtn) {
     dom.toggleInspectorBtn.addEventListener('click', () => {
-      if (dom.rightInspector) dom.rightInspector.classList.toggle('collapsed');
+      if (dom.rightInspector) {
+        dom.rightInspector.classList.toggle('collapsed');
+        saveInspectorCollapsedState(dom.rightInspector.classList.contains('collapsed'));
+      }
     });
   }
   if (dom.closeInspectorBtn) {
     dom.closeInspectorBtn.addEventListener('click', () => {
-      if (dom.rightInspector) dom.rightInspector.classList.add('collapsed');
+      if (dom.rightInspector) {
+        dom.rightInspector.classList.add('collapsed');
+        saveInspectorCollapsedState(true);
+      }
     });
   }
   if (dom.openLoupeFromInspector) {
@@ -1172,7 +1208,15 @@ export async function init() {
     }
   });
   validateRequiredDom();
+  restoreLayoutPreferences();
+  restoreNavigationPreferences();
   setupEventListeners();
+
+  const savedMode = getSavedViewMode();
+  if (savedMode === 'map') {
+    switchViewMode('map');
+  }
+
   await loadMetadata();
   await loadMedia();
 }
@@ -1186,6 +1230,23 @@ if (document.readyState === 'loading') {
 
 // Expose state and API for UI test assertions and debugging
 window._imagineState = state;
+window._imaginePersistence = {
+  saveFoldersCollapsedState,
+  saveTagCategoryCollapsedState,
+  saveZoomPreference,
+  saveViewModePreference,
+  saveSortPreference,
+  saveInspectorCollapsedState,
+  saveActiveTabPreference,
+  saveNavFilterPreference,
+  saveActiveFoldersPreference,
+  saveActiveTagIdsPreference,
+  saveSearchPreference,
+  clearFilterPreferences,
+  restoreLayoutPreferences,
+  restoreNavigationPreferences,
+  getSavedViewMode
+};
 window._imagineApp = {
   state,
   dom,
@@ -1225,5 +1286,8 @@ window._imagineApp = {
   getOriginalMediaUrl,
   setLanguage,
   t,
-  SUPPORTED_LANGUAGES
+  SUPPORTED_LANGUAGES,
+  restoreLayoutPreferences,
+  restoreNavigationPreferences,
+  clearFilterPreferences
 };

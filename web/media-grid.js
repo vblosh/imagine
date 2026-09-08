@@ -30,6 +30,14 @@ import { openLoupeForMedia, updateLoupeControls } from './loupe.js';
 import { updateModalTagSuggestions, renderModalSearchHelp, openDeleteTagModal } from './modals.js';
 import { renderCategoryView } from './category-view.js';
 import { t, getShortMonthName } from './i18n.js';
+import {
+  saveActiveFoldersPreference,
+  saveActiveTagIdsPreference,
+  clearFilterPreferences,
+  saveActiveTabPreference,
+  saveFoldersCollapsedState,
+  saveTagCategoryCollapsedState
+} from './persistence.js';
 
 // DOM Caching & Query Scoping
 export const cardMap = new Map();
@@ -371,6 +379,7 @@ export async function loadMetadata() {
     renderSidebarAlbums();
     renderSidebarFolders();
     renderTimeline();
+    updateSidebarActive();
     if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
       renderCategoryView(state.activeTab);
     }
@@ -772,6 +781,7 @@ export function handleSidebarItemClick(itemType, itemValue, e) {
   // If on category drilldown view, return to media view
   if (state.activeTab && state.activeTab !== 'media') {
     state.activeTab = 'media';
+    saveActiveTabPreference('media');
     if (dom.viewTabs) {
       dom.viewTabs.querySelectorAll('.tab-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.tab === 'media');
@@ -861,12 +871,14 @@ export function handleSidebarItemClick(itemType, itemValue, e) {
     }
   }
 
+  saveActiveFoldersPreference(state.activeFolders);
+  saveActiveTagIdsPreference(state.activeTagIds);
   updateSidebarActive();
   renderTimeline();
   loadMedia();
 }
 
-export function expandTagCategory(category) {
+export function expandTagCategory(category, save = true) {
   const cat = (category || 'keyword').toLowerCase();
   const group = document.querySelector(`.tag-category-group[data-category="${cat}"]`);
   if (!group) return;
@@ -877,10 +889,11 @@ export function expandTagCategory(category) {
     if (arrow) arrow.textContent = '▼';
     const hdr = group.querySelector('.category-header');
     if (hdr) hdr.setAttribute('aria-expanded', 'true');
+    if (save) saveTagCategoryCollapsedState(cat, false);
   }
 }
 
-export function collapseTagCategory(category) {
+export function collapseTagCategory(category, save = true) {
   const cat = (category || 'keyword').toLowerCase();
   const group = document.querySelector(`.tag-category-group[data-category="${cat}"]`);
   if (!group) return;
@@ -891,24 +904,27 @@ export function collapseTagCategory(category) {
     if (arrow) arrow.textContent = '▶';
     const hdr = group.querySelector('.category-header');
     if (hdr) hdr.setAttribute('aria-expanded', 'false');
+    if (save) saveTagCategoryCollapsedState(cat, true);
   }
 }
 
-export function expandFolders() {
+export function expandFolders(save = true) {
   if (dom.foldersTree) {
     dom.foldersTree.style.display = 'block';
     const arrow = dom.foldersHeader?.querySelector('.arrow') || dom.foldersArrow;
     if (arrow) arrow.textContent = '▼';
     if (dom.foldersHeader) dom.foldersHeader.setAttribute('aria-expanded', 'true');
+    if (save) saveFoldersCollapsedState(false);
   }
 }
 
-export function collapseFolders() {
+export function collapseFolders(save = true) {
   if (dom.foldersTree) {
     dom.foldersTree.style.display = 'none';
     const arrow = dom.foldersHeader?.querySelector('.arrow') || dom.foldersArrow;
     if (arrow) arrow.textContent = '▶';
     if (dom.foldersHeader) dom.foldersHeader.setAttribute('aria-expanded', 'false');
+    if (save) saveFoldersCollapsedState(true);
   }
 }
 
@@ -1290,6 +1306,8 @@ export function clearAllFilters() {
   }
   updateSidebarActive();
   renderTimeline();
+  clearFilterPreferences();
+  saveActiveTabPreference('media');
   loadMedia();
 }
 

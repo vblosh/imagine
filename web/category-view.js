@@ -13,6 +13,7 @@ import {
   updateFilterLabel
 } from './media-grid.js';
 import { openTagModal } from './modals.js';
+import { saveActiveTagIdsPreference } from './persistence.js';
 
 export function getCategoryConfig(cat) {
   const c = (cat || 'people').toLowerCase();
@@ -360,6 +361,7 @@ export function selectCategoryItem(tag) {
   state.activeAlbumId = null;
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
+  saveActiveTagIdsPreference(state.activeTagIds);
 
   // Clear previous grid contents immediately so previous person's photos don't flash
   if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
@@ -379,6 +381,7 @@ export function selectCategoryItem(tag) {
 
 export function navigateBackToCategory() {
   state.activeTagId = null;
+  saveActiveTagIdsPreference(state.activeTagIds);
   if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
   if (dom.emptyState) dom.emptyState.style.display = 'none';
   updateSidebarActive();

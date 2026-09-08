@@ -24,6 +24,7 @@ import {
 import { updateInspector, openInspector } from './inspector.js';
 import { openLoupeForMedia } from './loupe.js';
 import { t } from './i18n.js';
+import { saveViewModePreference } from './persistence.js';
 
 let mapSearchAbortController = null;
 const geocodeCache = new Map();
@@ -33,6 +34,7 @@ let lastNominatimRequestTime = 0;
 export function switchViewMode(mode) {
   hideUnmappedTooltip();
   state.viewMode = mode;
+  saveViewModePreference(mode);
   if (mode === 'map') {
     if (dom.viewGridBtn) dom.viewGridBtn.classList.remove('active');
     if (dom.viewMapBtn) dom.viewMapBtn.classList.add('active');
