@@ -80,18 +80,170 @@ export function getTagCoverUrl(tag) {
   return null;
 }
 
+export const DEFAULT_CATEGORY_SORTS = {
+  people: 'count-desc',
+  places: 'name-asc',
+  events: 'last_date-desc'
+};
+
+export function getCategorySort(category) {
+  const cat = (category || state.activeTab || 'people').toLowerCase();
+  if (state.categorySort && state.categorySort[cat]) {
+    return state.categorySort[cat];
+  }
+  try {
+    const saved = localStorage.getItem(`imagine_category_sort_${cat}`);
+    if (saved) return saved;
+  } catch (_) {}
+  return DEFAULT_CATEGORY_SORTS[cat] || 'name-asc';
+}
+
+export function setCategorySort(category, sortKey) {
+  const cat = (category || state.activeTab || 'people').toLowerCase();
+  if (!state.categorySort) {
+    state.categorySort = { ...DEFAULT_CATEGORY_SORTS };
+  }
+  state.categorySort[cat] = sortKey;
+  try {
+    localStorage.setItem(`imagine_category_sort_${cat}`, sortKey);
+  } catch (_) {}
+}
+
+export function getTagDates(tag) {
+  let first = (tag.first_date != null && Number.isFinite(Number(tag.first_date)) && Number(tag.first_date) > 0)
+    ? Number(tag.first_date)
+    : null;
+  let last = (tag.last_date != null && Number.isFinite(Number(tag.last_date)) && Number(tag.last_date) > 0)
+    ? Number(tag.last_date)
+    : null;
+
+  // Fallback to inspecting state.mediaItems if first or last is missing
+  if ((first === null || last === null) && Array.isArray(state.mediaItems) && state.mediaItems.length > 0) {
+    const matching = state.mediaItems.filter(m =>
+      m.tags && m.tags.some(t => t.id === tag.id || (t.name && tag.name && t.name.toLowerCase() === tag.name.toLowerCase()))
+    );
+    for (const m of matching) {
+      const dt = m.date_taken || m.created_at || m.file_modified_time;
+      if (dt && Number.isFinite(dt) && dt > 0) {
+        if (first === null || dt < first) first = dt;
+        if (last === null || dt > last) last = dt;
+      }
+    }
+  }
+
+  return { firstDate: first, lastDate: last };
+}
+
+export function sortCategoryTags(tags, sortKey) {
+  const items = tags.map(tag => {
+    const dates = getTagDates(tag);
+    return {
+      tag,
+      firstDate: dates.firstDate,
+      lastDate: dates.lastDate,
+      count: Number(tag.media_count) || 0,
+      name: String(tag.name || '')
+    };
+  });
+
+  items.sort((a, b) => {
+    switch (sortKey) {
+      case 'date':
+      case 'date-desc':
+      case 'last_date-desc':
+      case 'last_date_desc':
+      case 'date_last_desc': {
+        if (a.lastDate !== null && b.lastDate !== null) {
+          if (b.lastDate !== a.lastDate) return b.lastDate - a.lastDate;
+        } else if (a.lastDate !== null) {
+          return -1;
+        } else if (b.lastDate !== null) {
+          return 1;
+        }
+        return a.name.localeCompare(b.name);
+      }
+      case 'last_date-asc':
+      case 'last_date_asc':
+      case 'date_last_asc': {
+        if (a.lastDate !== null && b.lastDate !== null) {
+          if (a.lastDate !== b.lastDate) return a.lastDate - b.lastDate;
+        } else if (a.lastDate !== null) {
+          return -1;
+        } else if (b.lastDate !== null) {
+          return 1;
+        }
+        return a.name.localeCompare(b.name);
+      }
+      case 'first_date-desc':
+      case 'first_date_desc':
+      case 'date_first_desc': {
+        if (a.firstDate !== null && b.firstDate !== null) {
+          if (b.firstDate !== a.firstDate) return b.firstDate - a.firstDate;
+        } else if (a.firstDate !== null) {
+          return -1;
+        } else if (b.firstDate !== null) {
+          return 1;
+        }
+        return a.name.localeCompare(b.name);
+      }
+      case 'date-asc':
+      case 'first_date-asc':
+      case 'first_date_asc':
+      case 'date_first_asc': {
+        if (a.firstDate !== null && b.firstDate !== null) {
+          if (a.firstDate !== b.firstDate) return a.firstDate - b.firstDate;
+        } else if (a.firstDate !== null) {
+          return -1;
+        } else if (b.firstDate !== null) {
+          return 1;
+        }
+        return a.name.localeCompare(b.name);
+      }
+      case 'count-desc':
+      case 'count_desc':
+      case 'images-desc': {
+        if (b.count !== a.count) return b.count - a.count;
+        return a.name.localeCompare(b.name);
+      }
+      case 'count-asc':
+      case 'count_asc':
+      case 'images-asc': {
+        if (a.count !== b.count) return a.count - b.count;
+        return a.name.localeCompare(b.name);
+      }
+      case 'name-desc':
+      case 'name_desc': {
+        return b.name.localeCompare(a.name);
+      }
+      case 'name-asc':
+      case 'name_asc':
+      default: {
+        return a.name.localeCompare(b.name);
+      }
+    }
+  });
+
+  for (let i = 0; i < items.length; i++) {
+    tags[i] = items[i].tag;
+  }
+  return tags;
+}
+
 export function renderCategoryView(category) {
   if (!dom.categoryViewContainer || !dom.categoryCardsGrid) return;
 
   const cat = (category || state.activeTab || 'people').toLowerCase();
   const config = getCategoryConfig(cat);
 
-  // Switch display containers
+  // Switch display containers and toolbars
   dom.categoryViewContainer.style.display = 'flex';
+  if (dom.contentToolbar) dom.contentToolbar.style.display = 'none';
+  if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'flex';
   if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
   if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
   if (dom.emptyState) dom.emptyState.style.display = 'none';
   if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
+  if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
 
   // Filter tags by category
   let tags = (state.tags || []).filter(t => (t.category || 'keyword').toLowerCase() === cat);
@@ -102,8 +254,14 @@ export function renderCategoryView(category) {
     tags = tags.filter(t => (t.name || '').toLowerCase().includes(q));
   }
 
-  // Sort alphabetically by tag name
-  tags.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  // Update combobox selection to reflect active sort for this category
+  const currentSort = getCategorySort(cat);
+  if (dom.categorySortSelect && dom.categorySortSelect.value !== currentSort) {
+    dom.categorySortSelect.value = currentSort;
+  }
+
+  // Sort tags using active sort
+  sortCategoryTags(tags, currentSort);
 
   // Update header labels
   if (dom.categoryViewTitle) {
@@ -203,8 +361,14 @@ export function selectCategoryItem(tag) {
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
 
+  // Clear previous grid contents immediately so previous person's photos don't flash
+  if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
+  if (dom.emptyState) dom.emptyState.style.display = 'none';
+
   // Transition from category view to photo grid
   if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+  if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
+  if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
   if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
   if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
 
@@ -215,6 +379,8 @@ export function selectCategoryItem(tag) {
 
 export function navigateBackToCategory() {
   state.activeTagId = null;
+  if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
+  if (dom.emptyState) dom.emptyState.style.display = 'none';
   updateSidebarActive();
   updateFilterLabel();
   renderCategoryView();
@@ -236,6 +402,15 @@ export function initCategoryView() {
   if (dom.categoryEmptyActionBtn) {
     dom.categoryEmptyActionBtn.addEventListener('click', () => {
       openTagModal();
+    });
+  }
+
+  if (dom.categorySortSelect) {
+    dom.categorySortSelect.addEventListener('change', (e) => {
+      const val = e.target.value;
+      const cat = (state.activeTab || 'people').toLowerCase();
+      setCategorySort(cat, val);
+      renderCategoryView(cat);
     });
   }
 }

@@ -627,9 +627,12 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
     const char* sql = R"SQL(
         SELECT t.id, t.name, t.category, t.parent_id, COUNT(mt.media_id) AS media_count,
                (SELECT mt2.media_id FROM media_tags mt2 JOIN media_items m2 ON mt2.media_id = m2.id WHERE mt2.tag_id = t.id ORDER BY (CASE WHEN m2.media_type IN ('video', 'audio') THEN 1 ELSE 0 END) ASC, m2.date_taken DESC, m2.id DESC LIMIT 1) AS cover_media_id,
-               (SELECT m2.content_hash FROM media_tags mt2 JOIN media_items m2 ON mt2.media_id = m2.id WHERE mt2.tag_id = t.id ORDER BY (CASE WHEN m2.media_type IN ('video', 'audio') THEN 1 ELSE 0 END) ASC, m2.date_taken DESC, m2.id DESC LIMIT 1) AS cover_hash
+               (SELECT m2.content_hash FROM media_tags mt2 JOIN media_items m2 ON mt2.media_id = m2.id WHERE mt2.tag_id = t.id ORDER BY (CASE WHEN m2.media_type IN ('video', 'audio') THEN 1 ELSE 0 END) ASC, m2.date_taken DESC, m2.id DESC LIMIT 1) AS cover_hash,
+               MIN(CASE WHEN m.date_taken > 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS first_date,
+               MAX(CASE WHEN m.date_taken > 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS last_date
         FROM tags t
         LEFT JOIN media_tags mt ON t.id = mt.tag_id
+        LEFT JOIN media_items m ON mt.media_id = m.id
         GROUP BY t.id
         ORDER BY t.category ASC, t.name ASC;
     )SQL";
@@ -653,6 +656,12 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
         }
         if (!stmt.isNull(6)) {
             t.cover_hash = stmt.getString(6);
+        }
+        if (!stmt.isNull(7)) {
+            t.first_date = stmt.getInt64(7);
+        }
+        if (!stmt.isNull(8)) {
+            t.last_date = stmt.getInt64(8);
         }
         tags.push_back(std::move(t));
     }

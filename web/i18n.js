@@ -74,6 +74,12 @@ export const translations = {
     sort_rating_desc: 'Rating (High to Low)',
     sort_name_asc: 'File Name (A-Z)',
     sort_size_desc: 'File Size (Largest)',
+    sort_last_date_desc: 'Newest first',
+    sort_first_date_asc: 'Oldest first',
+    sort_name_az: 'Name (A-Z)',
+    sort_name_za: 'Name (Z-A)',
+    sort_count_desc: 'Most photos',
+    sort_count_asc: 'Least photos',
 
     // Batch Actions
     n_selected: '{count} selected',
@@ -445,6 +451,12 @@ export const translations = {
     sort_rating_desc: 'Calificación (de mayor a menor)',
     sort_name_asc: 'Nombre de archivo (A-Z)',
     sort_size_desc: 'Tamaño de archivo (más grande)',
+    sort_last_date_desc: 'Más recientes primero',
+    sort_first_date_asc: 'Más antiguas primero',
+    sort_name_az: 'Nombre (A-Z)',
+    sort_name_za: 'Nombre (Z-A)',
+    sort_count_desc: 'Más fotos',
+    sort_count_asc: 'Menos fotos',
 
     // Batch Actions
     n_selected: '{count} seleccionados',
@@ -816,6 +828,12 @@ export const translations = {
     sort_rating_desc: 'Bewertung (hoch nach niedrig)',
     sort_name_asc: 'Dateiname (A-Z)',
     sort_size_desc: 'Dateigröße (größte zuerst)',
+    sort_last_date_desc: 'Neueste zuerst',
+    sort_first_date_asc: 'Älteste zuerst',
+    sort_name_az: 'Name (A-Z)',
+    sort_name_za: 'Name (Z-A)',
+    sort_count_desc: 'Meiste Fotos',
+    sort_count_asc: 'Wenigste Fotos',
 
     // Batch Actions
     n_selected: '{count} ausgewählt',
@@ -1187,6 +1205,12 @@ export const translations = {
     sort_rating_desc: 'Оценка (по убыванию)',
     sort_name_asc: 'Имя файла (А-Я / A-Z)',
     sort_size_desc: 'Размер файла (по убыванию)',
+    sort_last_date_desc: 'Сначала новые',
+    sort_first_date_asc: 'Сначала старые',
+    sort_name_az: 'Имя (А-Я / A-Z)',
+    sort_name_za: 'Имя (Я-А / Z-A)',
+    sort_count_desc: 'Больше фото',
+    sort_count_asc: 'Меньше фото',
 
     // Batch Actions
     n_selected: 'Выбрано: {count}',
@@ -1558,6 +1582,12 @@ export const translations = {
     sort_rating_desc: '评分（从高到低）',
     sort_name_asc: '文件名 (A-Z)',
     sort_size_desc: '文件大小（最大优先）',
+    sort_last_date_desc: '最新优先',
+    sort_first_date_asc: '最旧优先',
+    sort_name_az: '名称 (A-Z)',
+    sort_name_za: '名称 (Z-A)',
+    sort_count_desc: '照片最多',
+    sort_count_asc: '照片最少',
 
     // Batch Actions
     n_selected: '已选择 {count} 项',

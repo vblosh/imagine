@@ -589,16 +589,25 @@ body, html {
   color: #ffffff;
 }
 
-.sort-selector {
+.sort-selector,
+.category-sort-selector {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.sort-selector {
   margin-left: auto;
 }
 
-.sort-selector select {
+.category-sort-selector {
+  margin-left: 0;
+}
+
+.sort-selector select,
+.category-sort-selector select {
   background-color: #1a1a1a;
   border: 1px solid var(--border-color);
   color: var(--text-primary);
@@ -653,24 +662,35 @@ body, html {
   background-color: var(--bg-app);
 }
 
-.category-view-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 20px;
-  padding-bottom: 12px;
+.category-toolbar {
+  height: 38px;
+  margin-bottom: 0;
+  padding: 0 16px;
+  background-color: #232323;
   border-bottom: 1px solid var(--border-color);
 }
 
 .category-view-info {
   display: flex;
   align-items: baseline;
-  gap: 12px;
+  gap: 10px;
 }
 
+.category-view-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.category-sort-selector {
+  margin-left: 0;
+}
+
+.category-toolbar .category-view-title,
 .category-view-title {
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   color: #ffffff;
 }
 

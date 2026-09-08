@@ -56,6 +56,16 @@ void to_json(nlohmann::json& j, const Tag& t) {
     } else {
         j["cover_media_id"] = nullptr;
     }
+    if (t.first_date.has_value()) {
+        j["first_date"] = *t.first_date;
+    } else {
+        j["first_date"] = nullptr;
+    }
+    if (t.last_date.has_value()) {
+        j["last_date"] = *t.last_date;
+    } else {
+        j["last_date"] = nullptr;
+    }
 }
 
 void from_json(const nlohmann::json& j, Tag& t) {
@@ -73,6 +83,16 @@ void from_json(const nlohmann::json& j, Tag& t) {
         t.cover_media_id = j["cover_media_id"].get<MediaId>();
     } else {
         t.cover_media_id = std::nullopt;
+    }
+    if (j.contains("first_date") && !j["first_date"].is_null()) {
+        t.first_date = j["first_date"].get<int64_t>();
+    } else {
+        t.first_date = std::nullopt;
+    }
+    if (j.contains("last_date") && !j["last_date"].is_null()) {
+        t.last_date = j["last_date"].get<int64_t>();
+    } else {
+        t.last_date = std::nullopt;
     }
 }
 

@@ -505,10 +505,14 @@ export function setupEventListeners() {
         renderTimeline();
         if (state.activeTab === 'media') {
           if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+          if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
+          if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
           if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
           if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
           loadMedia();
         } else {
+          if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
+          if (dom.emptyState) dom.emptyState.style.display = 'none';
           renderCategoryView(state.activeTab);
           updateFilterLabel();
         }

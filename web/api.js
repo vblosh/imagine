@@ -173,7 +173,9 @@ export function normalizeTag(raw) {
     parent_id: raw.parent_id != null ? Number(raw.parent_id) : null,
     media_count: Number.isFinite(Number(raw.media_count)) ? Number(raw.media_count) : 0,
     cover_media_id: raw.cover_media_id != null ? Number(raw.cover_media_id) : null,
-    cover_hash: typeof raw.cover_hash === 'string' ? raw.cover_hash : ''
+    cover_hash: typeof raw.cover_hash === 'string' ? raw.cover_hash : '',
+    first_date: raw.first_date != null && Number.isFinite(Number(raw.first_date)) ? Number(raw.first_date) : null,
+    last_date: raw.last_date != null && Number.isFinite(Number(raw.last_date)) ? Number(raw.last_date) : null
   };
 }
 

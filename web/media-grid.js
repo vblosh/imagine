@@ -154,6 +154,8 @@ export async function loadMedia(append = false) {
 
   try {
     if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+    if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
+    if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
     if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
 
     const params = {
@@ -777,6 +779,8 @@ export function handleSidebarItemClick(itemType, itemValue, e) {
     }
   }
   if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+  if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
+  if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
   if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
   if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
 
@@ -1221,6 +1225,8 @@ export function clearAllFilters() {
   state.searchText = '';
   if (dom.searchInput) dom.searchInput.value = '';
   if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+  if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
+  if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
   if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
   if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
   if (dom.viewTabs) {

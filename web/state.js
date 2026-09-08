@@ -55,6 +55,11 @@ export const state = {
   searchText: '',
   sortBy: 'date_taken',
   sortDesc: true,
+  categorySort: {
+    people: 'count-desc',
+    places: 'name-asc',
+    events: 'last_date-desc'
+  },
   tags: [],
   albums: [],
   timelineData: [],

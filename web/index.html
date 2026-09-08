@@ -204,7 +204,7 @@
       <!-- Center Grid Area -->
       <main class="center-content">
         <!-- Filter Bar / Breadcrumb & Batch Actions -->
-        <div class="content-toolbar">
+        <div class="content-toolbar" id="contentToolbar">
           <div class="filter-indicator" id="filterIndicator">
             <button class="btn btn-sm btn-secondary btn-back" id="categoryBackBtn" style="display: none;" title="Back to overview" data-i18n-title="back_to_overview">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
@@ -269,6 +269,31 @@
           </div>
         </div>
 
+        <!-- People, Places, Event Toolbar -->
+        <div class="content-toolbar category-toolbar category-view-header" id="categoryToolbar" style="display: none;">
+          <div class="category-view-info">
+            <h2 class="category-view-title" id="categoryViewTitle">People</h2>
+            <span class="category-view-subtitle" id="categoryViewSubtitle">0 people</span>
+          </div>
+          <div class="category-view-actions">
+            <div class="category-sort-selector">
+              <label for="categorySortSelect" data-i18n="sort_label">Sort:</label>
+              <select id="categorySortSelect" aria-label="Sort categories" data-i18n-aria-label="sort_label">
+                <option value="last_date-desc" data-i18n="sort_last_date_desc">Newest first</option>
+                <option value="first_date-asc" data-i18n="sort_first_date_asc">Oldest first</option>
+                <option value="name-asc" data-i18n="sort_name_az">Name (A-Z)</option>
+                <option value="name-desc" data-i18n="sort_name_za">Name (Z-A)</option>
+                <option value="count-desc" data-i18n="sort_count_desc">Most photos</option>
+                <option value="count-asc" data-i18n="sort_count_asc">Least photos</option>
+              </select>
+            </div>
+            <button class="btn btn-secondary btn-sm" id="categoryAddBtn">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <span id="categoryAddBtnLabel" data-i18n="add_person">Add Person</span>
+            </button>
+          </div>
+        </div>
+
         <!-- Photo Grid Container -->
         <div class="grid-scroll-container" id="gridScrollContainer">
           <div class="media-grid" id="mediaGrid">
@@ -284,18 +309,6 @@
 
         <!-- People / Places / Events Grid Container -->
         <div class="category-view-container" id="categoryViewContainer" style="display: none;">
-          <div class="category-view-header">
-            <div class="category-view-info">
-              <h2 class="category-view-title" id="categoryViewTitle">People</h2>
-              <span class="category-view-subtitle" id="categoryViewSubtitle">0 people</span>
-            </div>
-            <div class="category-view-actions">
-              <button class="btn btn-secondary btn-sm" id="categoryAddBtn">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                <span id="categoryAddBtnLabel" data-i18n="add_person">Add Person</span>
-              </button>
-            </div>
-          </div>
           <div class="category-cards-grid" id="categoryCardsGrid">
             <!-- Dynamic cards for People / Places / Events -->
           </div>

@@ -580,6 +580,10 @@ TEST_F(CatalogDbTest, GetAllTagsPhotoCoverPriority) {
     EXPECT_EQ(*confIt->cover_media_id, photoId);
     EXPECT_FALSE(confIt->cover_hash.empty());
     EXPECT_EQ(confIt->cover_hash, "hash_photo_1");
+    ASSERT_TRUE(confIt->first_date.has_value());
+    EXPECT_EQ(*confIt->first_date, 1000);
+    ASSERT_TRUE(confIt->last_date.has_value());
+    EXPECT_EQ(*confIt->last_date, 2000);
 
     // Verify Concert with only video falls back to video
     auto concertIt = std::find_if(tags.begin(), tags.end(), [](const Tag& t) { return t.name == "Concert"; });
@@ -589,5 +593,9 @@ TEST_F(CatalogDbTest, GetAllTagsPhotoCoverPriority) {
     EXPECT_EQ(*concertIt->cover_media_id, concertVideoId);
     EXPECT_FALSE(concertIt->cover_hash.empty());
     EXPECT_EQ(concertIt->cover_hash, "hash_video_concert");
+    ASSERT_TRUE(concertIt->first_date.has_value());
+    EXPECT_EQ(*concertIt->first_date, 3000);
+    ASSERT_TRUE(concertIt->last_date.has_value());
+    EXPECT_EQ(*concertIt->last_date, 3000);
 }
 
