@@ -367,13 +367,36 @@ body, html {
 /* Left Sidebar */
 .left-sidebar {
   width: 240px;
+  min-width: 160px;
+  max-width: 600px;
   background-color: var(--bg-sidebar);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   flex-shrink: 0;
+  position: relative;
 }
+
+/* Right-Edge Horizontal Resizer for Left Sidebar */
+.sidebar-resizer-right {
+  width: 6px;
+  margin-left: -3px;
+  margin-right: -3px;
+  cursor: ew-resize;
+  z-index: 20;
+  background-color: transparent;
+  transition: background-color 0.15s ease;
+  outline: none;
+  flex-shrink: 0;
+}
+
+.sidebar-resizer-right:hover,
+.sidebar-resizer-right:focus-visible,
+.sidebar-resizer-right.dragging {
+  background-color: var(--accent-color);
+}
+
 
 .sidebar-section {
   padding: 12px 0 6px;
@@ -437,6 +460,18 @@ body, html {
   font-weight: 600;
   border-left: 3px solid var(--accent-color);
   padding-left: 11px;
+}
+
+.menu-item svg {
+  flex-shrink: 0;
+}
+
+.menu-item .album-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .count-badge {
@@ -539,8 +574,24 @@ body, html {
   display: flex;
   align-items: center;
   gap: 6px;
-  text-overflow: ellipsis;
   overflow: hidden;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.folder-item .folder-icon,
+.folder-item svg {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+}
+
+.folder-item .folder-name,
+.folder-item span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

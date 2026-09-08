@@ -1006,8 +1006,8 @@ export function renderSidebarFolders() {
     const shortName = parts[parts.length - 1] || folder;
 
     el.innerHTML = `
-      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-      <span title="${escapeHtml(folder)}">${escapeHtml(shortName)}</span>
+      <svg class="folder-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <span class="folder-name" title="${escapeHtml(folder)}">${escapeHtml(shortName)}</span>
     `;
     el.addEventListener('click', (e) => {
       handleSidebarItemClick('folder', folder, e);

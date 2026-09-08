@@ -551,4 +551,153 @@ def test_ctrl_click_across_all_categories_and_folders(server, page: Page):
     expect(family_folder).not_to_have_class(re.compile(r"\bactive\b"))
 
 
+def test_long_folder_name_icon_does_not_disappear(server, page: Page):
+    """Verify that for long folder names like 'Deutsche orden Schloß', the folder icon does not disappear."""
+    def handle_folders(route):
+        route.fulfill(json=["family", "nature", "Deutsche orden Schloß", "A very long folder name that overflows the left panel width"])
+
+    page.route("**/api/folders*", handle_folders)
+    page.goto(server["url"])
+
+    expect(page.locator(".photo-card")).to_have_count(6)
+
+    folder_item = page.locator("#foldersTree .folder-item", has_text="Deutsche orden Schloß")
+    expect(folder_item).to_be_visible()
+
+    # The folder icon (SVG) must be visible and have non-zero dimensions (~13px)
+    icon = folder_item.locator("svg")
+    expect(icon).to_be_visible()
+    bb = icon.bounding_box()
+    assert bb is not None, "Folder icon bounding box should exist"
+    assert bb["width"] >= 12, f"Folder icon width should be >= 12px, got {bb['width']}"
+    assert bb["height"] >= 12, f"Folder icon height should be >= 12px, got {bb['height']}"
+
+    # Even if sidebar is made narrow (160px), folder icon must still be visible and not disappear
+    sidebar = page.locator("#leftSidebar")
+    sidebar.evaluate("el => el.style.width = '160px'")
+
+    bb_narrow = icon.bounding_box()
+    assert bb_narrow is not None
+    assert bb_narrow["width"] >= 12, f"Folder icon must not disappear when sidebar is narrow, got {bb_narrow['width']}"
+    expect(icon).to_be_visible()
+
+
+def test_left_sidebar_resize_drag_and_reset(server, page: Page):
+    """Dragging the right resizer of the left sidebar expands and shrinks it horizontally; double-click resets."""
+    page.goto(server["url"])
+
+    sidebar = page.locator("#leftSidebar")
+    resizer = page.locator("#sidebarResizerRight")
+
+    expect(sidebar).to_be_visible()
+    expect(resizer).to_be_visible()
+
+    initial_bb = sidebar.bounding_box()
+    assert initial_bb is not None
+    initial_width = initial_bb["width"]
+    assert 235 <= initial_width <= 245, f"Expected default width around 240px, got {initial_width}"
+
+    # 1. Drag resizer 80px to the right (widening)
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + 100)
+    page.mouse.down()
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2 + 80, r_bb["y"] + 100)
+    page.mouse.up()
+
+    widened_bb = sidebar.bounding_box()
+    assert widened_bb is not None
+    assert widened_bb["width"] > initial_width + 60, f"Sidebar should widen by ~80px, got {widened_bb['width']}"
+
+    # 2. Drag resizer 50px to the left (shrinking)
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + 100)
+    page.mouse.down()
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2 - 50, r_bb["y"] + 100)
+    page.mouse.up()
+
+    shrunk_bb = sidebar.bounding_box()
+    assert shrunk_bb is not None
+    assert shrunk_bb["width"] < widened_bb["width"] - 30
+
+    # 3. Double-click resizer to reset to default
+    resizer.dblclick()
+    reset_bb = sidebar.bounding_box()
+    assert reset_bb is not None
+    assert abs(reset_bb["width"] - initial_width) < 2, f"Double-click should reset width to default, got {reset_bb['width']}"
+
+
+def test_left_sidebar_keyboard_controls(server, page: Page):
+    """Keyboard Arrow keys on focused sidebar resizer adjust width, and Enter resets."""
+    page.goto(server["url"])
+
+    sidebar = page.locator("#leftSidebar")
+    resizer = page.locator("#sidebarResizerRight")
+
+    initial_bb = sidebar.bounding_box()
+    assert initial_bb is not None
+    initial_width = initial_bb["width"]
+
+    resizer.focus()
+
+    # ArrowRight expands width by 10px per press
+    resizer.press("ArrowRight")
+    resizer.press("ArrowRight")
+    expanded_bb = sidebar.bounding_box()
+    assert expanded_bb is not None
+    assert expanded_bb["width"] >= initial_width + 18
+
+    # ArrowLeft shrinks width
+    resizer.press("ArrowLeft")
+    decreased_bb = sidebar.bounding_box()
+    assert decreased_bb is not None
+    assert decreased_bb["width"] < expanded_bb["width"]
+
+    # Enter resets width
+    resizer.press("Enter")
+    reset_bb = sidebar.bounding_box()
+    assert reset_bb is not None
+    assert abs(reset_bb["width"] - initial_width) < 2
+
+
+def test_left_sidebar_resize_persistence(server, page: Page):
+    """Resized sidebar width persists across page reloads in localStorage."""
+    page.goto(server["url"])
+
+    sidebar = page.locator("#leftSidebar")
+    resizer = page.locator("#sidebarResizerRight")
+
+    initial_bb = sidebar.bounding_box()
+    assert initial_bb is not None
+    initial_width = initial_bb["width"]
+
+    # Drag resizer 90px to the right
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + 120)
+    page.mouse.down()
+    page.mouse.move(r_bb["x"] + r_bb["width"] / 2 + 90, r_bb["y"] + 120)
+    page.mouse.up()
+
+    widened_bb = sidebar.bounding_box()
+    assert widened_bb is not None
+    saved_val = page.evaluate("() => localStorage.getItem('imagine_sidebar_width')")
+    assert saved_val is not None
+    assert int(saved_val) > initial_width + 70
+
+    # Reload page
+    page.reload()
+    reloaded_sidebar = page.locator("#leftSidebar")
+    reloaded_bb = reloaded_sidebar.bounding_box()
+    assert reloaded_bb is not None
+    assert abs(reloaded_bb["width"] - widened_bb["width"]) < 3, "Resized width should persist after reload"
+
+    # Double click to reset
+    page.locator("#sidebarResizerRight").dblclick()
+    cleared_val = page.evaluate("() => localStorage.getItem('imagine_sidebar_width')")
+    assert cleared_val is None
+
+
+
 

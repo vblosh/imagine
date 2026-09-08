@@ -517,6 +517,92 @@ export function setupResizablePanels() {
       }
     });
   }
+
+  // 3. Horizontal resizing for Left Sidebar Panel
+  const sidebarResizer = dom.sidebarResizerRight || document.getElementById('sidebarResizerRight');
+  const leftSidebar = dom.leftSidebar || document.getElementById('leftSidebar');
+  if (sidebarResizer && leftSidebar) {
+    // Restore saved width
+    try {
+      const savedWidth = localStorage.getItem('imagine_sidebar_width');
+      if (savedWidth) {
+        const w = parseInt(savedWidth, 10);
+        if (w >= 160 && w <= 600) {
+          leftSidebar.style.width = `${w}px`;
+        }
+      }
+    } catch (_) {}
+
+    sidebarResizer.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      sidebarResizer.setPointerCapture(e.pointerId);
+      sidebarResizer.classList.add('dragging');
+      document.body.classList.add('resizing-horizontal');
+
+      const startX = e.clientX;
+      const startWidth = leftSidebar.getBoundingClientRect().width;
+
+      function onPointerMove(moveEvent) {
+        const deltaX = moveEvent.clientX - startX; // dragging right widens left sidebar
+        const minWidth = 160;
+        const maxWidth = Math.min(600, window.innerWidth - 200);
+        const newWidth = Math.max(minWidth, Math.min(maxWidth, Math.round(startWidth + deltaX)));
+        leftSidebar.style.width = `${newWidth}px`;
+      }
+
+      function onPointerUp(upEvent) {
+        try {
+          sidebarResizer.releasePointerCapture(upEvent.pointerId);
+        } catch (_) {}
+        sidebarResizer.classList.remove('dragging');
+        document.body.classList.remove('resizing-horizontal');
+        sidebarResizer.removeEventListener('pointermove', onPointerMove);
+        sidebarResizer.removeEventListener('pointerup', onPointerUp);
+        sidebarResizer.removeEventListener('pointercancel', onPointerUp);
+
+        const finalWidth = parseInt(leftSidebar.style.width, 10);
+        if (!isNaN(finalWidth)) {
+          try {
+            localStorage.setItem('imagine_sidebar_width', finalWidth);
+          } catch (_) {}
+        }
+      }
+
+      sidebarResizer.addEventListener('pointermove', onPointerMove);
+      sidebarResizer.addEventListener('pointerup', onPointerUp);
+      sidebarResizer.addEventListener('pointercancel', onPointerUp);
+    });
+
+    // Double-click resets sidebar width
+    sidebarResizer.addEventListener('dblclick', () => {
+      leftSidebar.style.width = '';
+      try {
+        localStorage.removeItem('imagine_sidebar_width');
+      } catch (_) {}
+    });
+
+    // Keyboard support
+    sidebarResizer.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 25 : 10;
+      const currentWidth = leftSidebar.getBoundingClientRect().width;
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        const newW = Math.min(600, Math.round(currentWidth + step));
+        leftSidebar.style.width = `${newW}px`;
+        try { localStorage.setItem('imagine_sidebar_width', newW); } catch (_) {}
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const newW = Math.max(160, Math.round(currentWidth - step));
+        leftSidebar.style.width = `${newW}px`;
+        try { localStorage.setItem('imagine_sidebar_width', newW); } catch (_) {}
+      } else if (e.key === 'Enter' || e.key === 'Escape') {
+        e.preventDefault();
+        leftSidebar.style.width = '';
+        try { localStorage.removeItem('imagine_sidebar_width'); } catch (_) {}
+      }
+    });
+  }
 }
 
 export function closeAllInlineEditors() {
