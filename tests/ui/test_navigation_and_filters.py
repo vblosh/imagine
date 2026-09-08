@@ -177,6 +177,9 @@ def test_folder_tree_navigation(server, page: Page):
     folders = page.locator("#foldersTree .folder-item")
     expect(folders).to_have_count(2)
 
+    # Expand folders header
+    page.locator("#foldersHeader").click()
+
     # Find folder ending with 'family' and 'nature'
     family_folder = page.locator("#foldersTree .folder-item", has_text="family")
     nature_folder = page.locator("#foldersTree .folder-item", has_text="nature")
@@ -235,6 +238,7 @@ def test_folders_and_tags_visible_for_all_images_without_scroll(server, page: Pa
     expect(page.locator(".photo-card")).to_have_count(1)
 
     # BUT the folders sidebar must already show ALL folders (both 'family' and 'nature'), not just 'nature'
+    page.locator("#foldersHeader").click()
     folders = page.locator("#foldersTree .folder-item")
     expect(folders).to_have_count(2)
     expect(page.locator("#foldersTree .folder-item", has_text="family")).to_be_visible()
@@ -293,6 +297,7 @@ def test_combine_navigation_filters_albums_and_tags(server, page: Page):
     expect(cards.first.locator(".card-filename")).to_have_text("mountain.bmp")
 
     # 4. Combine with Tag: Sunset (tagged on mountain.bmp and sunset.bmp)
+    page.locator('.tag-category-group[data-category="keyword"] .category-header').click()
     sunset_tag = page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")
     sunset_tag.click()
     expect(page.locator("#navPhotos")).to_have_class(re.compile(r"\bactive\b"))
@@ -335,6 +340,7 @@ def test_combine_navigation_filters_albums_and_tags(server, page: Page):
     vacation_album.click()
     expect(cards).to_have_count(2)  # beach.bmp, birthday.bmp
 
+    page.locator('.tag-category-group[data-category="people"] .category-header').click()
     alice_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Alice")
     alice_tag.click()
     expect(vacation_album).to_have_class(re.compile(r"\bactive\b"))
@@ -356,6 +362,8 @@ def test_ctrl_click_multiple_tags_or_filter(server, page: Page):
     cards = page.locator(".photo-card")
     expect(cards).to_have_count(6)
 
+    page.locator('.tag-category-group[data-category="people"] .category-header').click()
+    page.locator('.tag-category-group[data-category="places"] .category-header').click()
     alice_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Alice")
     bob_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Bob")
     beach_tag = page.locator("#tagCategoryPlaces .tag-item", has_text="Beach")
@@ -403,6 +411,7 @@ def test_ctrl_click_multiple_folders_or_filter(server, page: Page):
     cards = page.locator(".photo-card")
     expect(cards).to_have_count(6)
 
+    page.locator("#foldersHeader").click()
     family_folder = page.locator("#foldersTree .folder-item", has_text="family")
     nature_folder = page.locator("#foldersTree .folder-item", has_text="nature")
 
@@ -432,6 +441,8 @@ def test_ctrl_click_mixed_tags_and_folders_or_filter(server, page: Page):
     cards = page.locator(".photo-card")
     expect(cards).to_have_count(6)
 
+    page.locator('.tag-category-group[data-category="people"] .category-header').click()
+    page.locator("#foldersHeader").click()
     bob_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Bob")
     nature_folder = page.locator("#foldersTree .folder-item", has_text="nature")
 
@@ -470,6 +481,7 @@ def test_shift_click_range_selection(server, page: Page):
     cards = page.locator(".photo-card")
     expect(cards).to_have_count(6)
 
+    page.locator('.tag-category-group[data-category="people"] .category-header').click()
     alice_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Alice")
     bob_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Bob")
 
@@ -498,6 +510,12 @@ def test_ctrl_click_across_all_categories_and_folders(server, page: Page):
 
     cards = page.locator(".photo-card")
     expect(cards).to_have_count(6)
+
+    page.locator('.tag-category-group[data-category="people"] .category-header').click()
+    page.locator('.tag-category-group[data-category="places"] .category-header').click()
+    page.locator('.tag-category-group[data-category="events"] .category-header').click()
+    page.locator('.tag-category-group[data-category="keyword"] .category-header').click()
+    page.locator("#foldersHeader").click()
 
     alice_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Alice")
     beach_tag = page.locator("#tagCategoryPlaces .tag-item", has_text="Beach")
@@ -561,6 +579,7 @@ def test_long_folder_name_icon_does_not_disappear(server, page: Page):
 
     expect(page.locator(".photo-card")).to_have_count(6)
 
+    page.locator("#foldersHeader").click()
     folder_item = page.locator("#foldersTree .folder-item", has_text="Deutsche orden Schloß")
     expect(folder_item).to_be_visible()
 
@@ -697,6 +716,34 @@ def test_left_sidebar_resize_persistence(server, page: Page):
     page.locator("#sidebarResizerRight").dblclick()
     cleared_val = page.evaluate("() => localStorage.getItem('imagine_sidebar_width')")
     assert cleared_val is None
+
+
+def test_folders_collapse_expand(server, page: Page):
+    """Folders section starts collapsed, and clicking header expands and collapses it."""
+    page.goto(server["url"])
+
+    header = page.locator("#foldersHeader")
+    tree = page.locator("#foldersTree")
+    arrow = page.locator("#foldersArrow")
+
+    # Initially folders tree is hidden, arrow is ▶
+    expect(tree).to_be_hidden()
+    expect(arrow).to_have_text("▶")
+
+    # Click header to expand
+    header.click()
+    expect(tree).to_be_visible()
+    expect(arrow).to_have_text("▼")
+
+    # Folders are visible inside
+    expect(tree.locator(".folder-item", has_text="family")).to_be_visible()
+    expect(tree.locator(".folder-item", has_text="nature")).to_be_visible()
+
+    # Click header to collapse again
+    header.click()
+    expect(tree).to_be_hidden()
+    expect(arrow).to_have_text("▶")
+
 
 
 

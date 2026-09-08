@@ -438,3 +438,29 @@ def test_i18n_tag_modal_single_line_for_multiple_photos(server, page: Page):
     expect(page.locator("#tagModalPhotoTagsRow")).to_be_hidden()
     page.locator("#cancelTagBtn").click()
     expect(tag_modal).to_be_hidden()
+
+
+def test_language_menu_style_matches_sort_menu(server, page: Page):
+    """Language select dropdown has styling matching the Sort select dropdown."""
+    page.goto(server["url"])
+
+    lang_select = page.locator("#langSelect")
+    sort_select = page.locator("#sortSelect")
+
+    # Both select elements should have matching background-color, border-color, border-radius, font-size
+    lang_bg = lang_select.evaluate("el => window.getComputedStyle(el).backgroundColor")
+    sort_bg = sort_select.evaluate("el => window.getComputedStyle(el).backgroundColor")
+    assert lang_bg == sort_bg, f"Expected {sort_bg}, got {lang_bg}"
+
+    lang_border = lang_select.evaluate("el => window.getComputedStyle(el).borderColor")
+    sort_border = sort_select.evaluate("el => window.getComputedStyle(el).borderColor")
+    assert lang_border == sort_border, f"Expected {sort_border}, got {lang_border}"
+
+    lang_font_size = lang_select.evaluate("el => window.getComputedStyle(el).fontSize")
+    sort_font_size = sort_select.evaluate("el => window.getComputedStyle(el).fontSize")
+    assert lang_font_size == sort_font_size, f"Expected {sort_font_size}, got {lang_font_size}"
+
+    lang_border_radius = lang_select.evaluate("el => window.getComputedStyle(el).borderRadius")
+    sort_border_radius = sort_select.evaluate("el => window.getComputedStyle(el).borderRadius")
+    assert lang_border_radius == sort_border_radius, f"Expected {sort_border_radius}, got {lang_border_radius}"
+

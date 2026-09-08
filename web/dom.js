@@ -87,6 +87,8 @@ export const dom = {
   sidebarResizerRight: document.getElementById('sidebarResizerRight'),
   sidebarResizer: document.getElementById('sidebarResizerRight'),
   foldersTree: document.getElementById('foldersTree'),
+  foldersHeader: document.getElementById('foldersHeader'),
+  foldersArrow: document.getElementById('foldersArrow'),
   tagCategoryPeople: document.getElementById('tagCategoryPeople'),
   tagCategoryPlaces: document.getElementById('tagCategoryPlaces'),
   tagCategoryEvents: document.getElementById('tagCategoryEvents'),

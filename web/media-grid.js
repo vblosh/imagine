@@ -866,6 +866,52 @@ export function handleSidebarItemClick(itemType, itemValue, e) {
   loadMedia();
 }
 
+export function expandTagCategory(category) {
+  const cat = (category || 'keyword').toLowerCase();
+  const group = document.querySelector(`.tag-category-group[data-category="${cat}"]`);
+  if (!group) return;
+  const items = group.querySelector('.tag-items');
+  const arrow = group.querySelector('.arrow');
+  if (items) {
+    items.style.display = 'block';
+    if (arrow) arrow.textContent = '▼';
+    const hdr = group.querySelector('.category-header');
+    if (hdr) hdr.setAttribute('aria-expanded', 'true');
+  }
+}
+
+export function collapseTagCategory(category) {
+  const cat = (category || 'keyword').toLowerCase();
+  const group = document.querySelector(`.tag-category-group[data-category="${cat}"]`);
+  if (!group) return;
+  const items = group.querySelector('.tag-items');
+  const arrow = group.querySelector('.arrow');
+  if (items) {
+    items.style.display = 'none';
+    if (arrow) arrow.textContent = '▶';
+    const hdr = group.querySelector('.category-header');
+    if (hdr) hdr.setAttribute('aria-expanded', 'false');
+  }
+}
+
+export function expandFolders() {
+  if (dom.foldersTree) {
+    dom.foldersTree.style.display = 'block';
+    const arrow = dom.foldersHeader?.querySelector('.arrow') || dom.foldersArrow;
+    if (arrow) arrow.textContent = '▼';
+    if (dom.foldersHeader) dom.foldersHeader.setAttribute('aria-expanded', 'true');
+  }
+}
+
+export function collapseFolders() {
+  if (dom.foldersTree) {
+    dom.foldersTree.style.display = 'none';
+    const arrow = dom.foldersHeader?.querySelector('.arrow') || dom.foldersArrow;
+    if (arrow) arrow.textContent = '▶';
+    if (dom.foldersHeader) dom.foldersHeader.setAttribute('aria-expanded', 'false');
+  }
+}
+
 export function renderSidebarTags() {
   const categories = {
     people: dom.tagCategoryPeople,
@@ -1097,6 +1143,16 @@ export function updateSidebarActive() {
       const folderPath = el.dataset.folderPath || (el.querySelector('span')?.getAttribute('title') || '');
       el.classList.toggle('active', Boolean(folderPath && state.activeFolders && state.activeFolders.has(folderPath)));
     });
+  }
+  if (hasTag && state.tags) {
+    state.tags.forEach(t => {
+      if (state.activeTagIds.has(t.id)) {
+        expandTagCategory(t.category);
+      }
+    });
+  }
+  if (hasFolder) {
+    expandFolders();
   }
 }
 

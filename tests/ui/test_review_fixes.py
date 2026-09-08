@@ -649,6 +649,7 @@ def test_filter_switching_resets_folder_and_timeline_filters(server, page: Page)
     expect(page.locator("#timelineContainer .timeline-bar-wrap.active")).to_have_count(1)
 
     # Click a tag item (e.g. Beach)
+    page.locator('.tag-category-group[data-category="places"] .category-header').click()
     tag_item = page.locator(".tag-item", has_text="Beach")
     expect(tag_item).to_be_visible()
     tag_item.click()

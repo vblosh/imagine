@@ -14,7 +14,7 @@ import {
 } from './api.js';
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
-import { loadMetadata, loadMedia, updateBatchBar, batchUpdateDates, renderGrid } from './media-grid.js';
+import { loadMetadata, loadMedia, updateBatchBar, batchUpdateDates, renderGrid, expandTagCategory } from './media-grid.js';
 import { updateInspector } from './inspector.js';
 import { closeLoupe } from './loupe.js';
 import { t } from './i18n.js';
@@ -552,6 +552,7 @@ export async function submitCreateTag() {
 
   closeTagModal();
   await loadMetadata();
+  expandTagCategory(category);
   updateInspector();
   if (state.activeTab === category) {
     await loadMedia();

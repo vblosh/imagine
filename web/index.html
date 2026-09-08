@@ -59,11 +59,13 @@
 
         <!-- Language Selector -->
         <div class="lang-selector" title="Language" data-i18n-title="language_select">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="lang-icon">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="2" y1="12" x2="22" y2="12"></line>
-            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-          </svg>
+          <label for="langSelect" class="lang-label" style="display: flex; align-items: center; cursor: pointer; margin: 0;">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="lang-icon">
+              <circle cx="12" cy="12" r="10"></circle>
+              <line x1="2" y1="12" x2="22" y2="12"></line>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+          </label>
           <select id="langSelect" class="lang-select" aria-label="Select Language" data-i18n-aria-label="language_select">
             <option value="en">English</option>
             <option value="es">Español</option>
@@ -160,42 +162,45 @@
           </div>
           <div class="tags-tree" id="tagsTree">
             <div class="tag-category-group" data-category="people">
-              <div class="category-header">
-                <span class="arrow">▼</span>
+              <div class="category-header" role="button" tabindex="0" aria-expanded="false">
+                <span class="arrow">▶</span>
                 <span class="cat-label" data-i18n="cat_people">People</span>
               </div>
-              <ul class="tag-items" id="tagCategoryPeople"></ul>
+              <ul class="tag-items" id="tagCategoryPeople" style="display: none;"></ul>
             </div>
             <div class="tag-category-group" data-category="places">
-              <div class="category-header">
-                <span class="arrow">▼</span>
+              <div class="category-header" role="button" tabindex="0" aria-expanded="false">
+                <span class="arrow">▶</span>
                 <span class="cat-label" data-i18n="cat_places">Places</span>
               </div>
-              <ul class="tag-items" id="tagCategoryPlaces"></ul>
+              <ul class="tag-items" id="tagCategoryPlaces" style="display: none;"></ul>
             </div>
             <div class="tag-category-group" data-category="events">
-              <div class="category-header">
-                <span class="arrow">▼</span>
+              <div class="category-header" role="button" tabindex="0" aria-expanded="false">
+                <span class="arrow">▶</span>
                 <span class="cat-label" data-i18n="cat_events">Events</span>
               </div>
-              <ul class="tag-items" id="tagCategoryEvents"></ul>
+              <ul class="tag-items" id="tagCategoryEvents" style="display: none;"></ul>
             </div>
             <div class="tag-category-group" data-category="keyword">
-              <div class="category-header">
-                <span class="arrow">▼</span>
+              <div class="category-header" role="button" tabindex="0" aria-expanded="false">
+                <span class="arrow">▶</span>
                 <span class="cat-label" data-i18n="cat_keywords">Keywords</span>
               </div>
-              <ul class="tag-items" id="tagCategoryKeyword"></ul>
+              <ul class="tag-items" id="tagCategoryKeyword" style="display: none;"></ul>
             </div>
           </div>
         </div>
 
         <!-- Folders Tree Section -->
-        <div class="sidebar-section">
-          <div class="sidebar-section-header">
-            <span class="section-title" data-i18n="folders_section">Folders</span>
+        <div class="sidebar-section" id="foldersSection">
+          <div class="sidebar-section-header collapsible" id="foldersHeader" role="button" tabindex="0" aria-expanded="false" title="Folders" data-i18n-title="folders_section">
+            <div class="sidebar-section-header-title">
+              <span class="arrow" id="foldersArrow">▶</span>
+              <span class="section-title" data-i18n="folders_section">Folders</span>
+            </div>
           </div>
-          <div class="folders-tree" id="foldersTree">
+          <div class="folders-tree" id="foldersTree" style="display: none;">
             <!-- Dynamically populated from file paths -->
           </div>
         </div>

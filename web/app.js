@@ -43,7 +43,8 @@ import {
   batchUpdateFlags,
   batchUpdateRatings,
   toggleItemFlag,
-  toggleFlagsForIds
+  toggleFlagsForIds,
+  expandTagCategory
 } from './media-grid.js';
 import {
   updateInspector,
@@ -607,13 +608,46 @@ export function setupEventListeners() {
         if (items.style.display === 'none') {
           items.style.display = 'block';
           if (arrow) arrow.textContent = '▼';
+          hdr.setAttribute('aria-expanded', 'true');
         } else {
           items.style.display = 'none';
           if (arrow) arrow.textContent = '▶';
+          hdr.setAttribute('aria-expanded', 'false');
         }
       }
     });
+    hdr.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        hdr.click();
+      }
+    });
   });
+
+  // Folders header collapsible
+  if (dom.foldersHeader) {
+    dom.foldersHeader.addEventListener('click', () => {
+      const tree = dom.foldersTree;
+      const arrow = dom.foldersHeader.querySelector('.arrow') || dom.foldersArrow;
+      if (tree) {
+        if (tree.style.display === 'none') {
+          tree.style.display = 'block';
+          if (arrow) arrow.textContent = '▼';
+          dom.foldersHeader.setAttribute('aria-expanded', 'true');
+        } else {
+          tree.style.display = 'none';
+          if (arrow) arrow.textContent = '▶';
+          dom.foldersHeader.setAttribute('aria-expanded', 'false');
+        }
+      }
+    });
+    dom.foldersHeader.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        dom.foldersHeader.click();
+      }
+    });
+  }
 
   // Inspector toggle
   if (dom.toggleInspectorBtn) {
@@ -665,6 +699,7 @@ export function setupEventListeners() {
       if (dom.addTagInput) dom.addTagInput.value = '';
       updateInspector();
       loadMetadata();
+      expandTagCategory(category);
     } catch (err) {
       alert(`Failed to add tag: ${err.message}`);
     }

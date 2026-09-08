@@ -15,19 +15,19 @@ def test_tag_category_accordion_toggle(server, page: Page):
     items = people_group.locator(".tag-items")
     arrow = people_group.locator(".arrow")
 
-    # Initially items are visible, arrow is ▼
-    expect(items).to_be_visible()
-    expect(arrow).to_have_text("▼")
-
-    # Click header to collapse
-    header.click()
+    # Initially items are hidden, arrow is ▶
     expect(items).to_be_hidden()
     expect(arrow).to_have_text("▶")
 
-    # Click header to expand again
+    # Click header to expand
     header.click()
     expect(items).to_be_visible()
     expect(arrow).to_have_text("▼")
+
+    # Click header to collapse again
+    header.click()
+    expect(items).to_be_hidden()
+    expect(arrow).to_have_text("▶")
 
 
 def test_tags_sidebar_rendering_and_filtering(server, page: Page):
@@ -45,7 +45,8 @@ def test_tags_sidebar_rendering_and_filtering(server, page: Page):
     expect(page.locator("#tagCategoryEvents")).to_contain_text("Birthday 2026")
     expect(page.locator("#tagCategoryKeyword")).to_contain_text("Sunset")
 
-    # Click tag "Sunset" (in keyword category)
+    # Expand keyword category and click tag "Sunset"
+    page.locator('.tag-category-group[data-category="keyword"] .category-header').click()
     sunset_tag = page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")
     expect(sunset_tag.locator(".count-badge")).to_have_text("2")
     sunset_tag.click()
@@ -179,6 +180,7 @@ def test_delete_tag_modal_close_and_backdrop_and_escape(server, page: Page):
     modal = page.locator("#deleteTagModal")
     expect(modal).to_be_hidden()
 
+    page.locator('.tag-category-group[data-category="keyword"] .category-header').click()
     sunset_tag = page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")
 
     # 1. Close icon button
@@ -215,7 +217,8 @@ def test_delete_tag_removes_from_sidebar_and_photos(server, page: Page):
     expect(inspector_tags.locator(".tag-badge", has_text="Sunset")).to_be_visible()
     expect(inspector_tags.locator(".tag-badge", has_text="Alps")).to_be_visible()
 
-    # Verify Sunset is present in the left Keywords panel with count 2
+    # Expand Keywords category and verify Sunset is present in the left Keywords panel with count 2
+    page.locator('.tag-category-group[data-category="keyword"] .category-header').click()
     sunset_item = page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")
     expect(sunset_item).to_be_visible()
     expect(sunset_item.locator(".count-badge")).to_have_text("2")
@@ -256,7 +259,8 @@ def test_delete_tag_removes_from_sidebar_and_photos(server, page: Page):
     expect(inspector_tags.locator(".tag-badge", has_text="Beach")).to_have_count(0)
     expect(inspector_tags).to_contain_text("No tags")
 
-    # Still present in sidebar under Places, but count dropped from 1 to 0
+    # Expand Places category and verify still present in sidebar under Places, but count dropped from 1 to 0
+    page.locator('.tag-category-group[data-category="places"] .category-header').click()
     beach_item = page.locator("#tagCategoryPlaces .tag-item", has_text="Beach")
     expect(beach_item).to_be_visible()
     expect(beach_item.locator(".count-badge")).to_have_text("0")
