@@ -327,7 +327,6 @@ def test_map_clustering_zoom_combine_and_decombine(server, page: Page):
 
     # 1. Set zoom to 10 centered over Paris (where 3.3km is ~22px < 50px radius)
     page.evaluate("() => window._imagineState.mapInstance.setView([48.83, 2.316], 10)")
-    page.wait_for_timeout(300)
 
     # When zoomed out, the 2 Paris photos should COMBINE into 1 cluster pin with badge count '2'
     cluster_badge = page.locator(".photo-pin-count", has_text="2")
@@ -356,7 +355,6 @@ def test_map_clustering_zoom_combine_and_decombine(server, page: Page):
     # 2. Zoom in enough (zoom 15, where 3.3km is ~350px > 50px radius)
     # The cluster should DECOMBINE into 2 separate individual pins
     page.evaluate("() => window._imagineState.mapInstance.setView([48.859, 2.316], 15)")
-    page.wait_for_timeout(300)
 
     # In Paris, there should now be no badge '2'
     expect(cluster_badge).to_be_hidden()
@@ -375,14 +373,17 @@ def test_map_clustering_zoom_combine_and_decombine(server, page: Page):
 
     # 3. Zoom back out to zoom 10: photos should COMBINE back together
     page.evaluate("() => window._imagineState.mapInstance.setView([48.83, 2.316], 10)")
-    page.wait_for_timeout(300)
 
-    # Cluster badge '2' reappears, and navigation <> bar is active again on click
+    # Close the individual popup before opening the rebuilt cluster popup. The
+    # map keeps popup DOM nodes around briefly while Leaflet redraws markers.
     expect(cluster_badge).to_be_visible()
+    page.evaluate("() => window._imagineState.mapInstance.closePopup()")
+    expect(page.locator(".map-popup-card:visible")).to_have_count(0)
     cluster_pin.click()
-    expect(popup).to_be_visible()
-    expect(popup.locator(".map-popup-nav")).to_be_visible()
-    expect(popup.locator(".map-popup-nav")).to_contain_text("1 of 2")
+    active_popup = page.locator(".map-popup-card:visible")
+    expect(active_popup).to_have_count(1)
+    expect(active_popup.locator(".map-popup-nav")).to_be_visible()
+    expect(active_popup.locator(".map-popup-nav")).to_contain_text("1 of 2")
 
 
 def test_map_pagination_controls(server, page: Page):

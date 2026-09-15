@@ -1038,11 +1038,11 @@
     </div>
 
     <!-- Delete Photos Modal Dialog -->
-    <div class="modal" id="deleteMediaModal" style="display: none;">
+    <div class="modal" id="deleteMediaModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="deleteMediaModalTitle">
       <div class="modal-backdrop" id="deleteMediaBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3 data-i18n="delete_from_catalog">Delete from Catalog</h3>
+          <h3 id="deleteMediaModalTitle" data-i18n="delete_from_catalog">Delete from Catalog</h3>
           <button class="btn-icon-sm" id="closeDeleteMediaModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">

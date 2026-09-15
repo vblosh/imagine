@@ -582,6 +582,9 @@ export function openDeleteMediaModal(mediaIds) {
   if (dom.deleteMediaModal) {
     dom.deleteMediaModal.style.display = 'flex';
   }
+  if (dom.deleteFromDiskCheckbox) {
+    dom.deleteFromDiskCheckbox.focus();
+  }
 }
 
 export function closeDeleteMediaModal() {
@@ -608,6 +611,7 @@ export async function submitDeleteMedia() {
   }
 
   const idsToDelete = [...pendingDeleteMediaIds];
+  pendingDeleteMediaIds = [];
   const deleteFromDisk = !!(dom.deleteFromDiskCheckbox && dom.deleteFromDiskCheckbox.checked);
   const failedIds = [];
   try {

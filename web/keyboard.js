@@ -188,6 +188,57 @@ export function setupKeyboardShortcuts() {
     }
 
     const active = document.activeElement;
+
+    // Delete Media Modal shortcuts (Space toggles "Also delete from disk", Enter performs deletion)
+    if (dom.deleteMediaModal && (dom.deleteMediaModal.style.display === 'flex' || (dom.deleteMediaModal.style.display !== 'none' && dom.deleteMediaModal.style.display !== ''))) {
+      if (e.key === ' ' || e.key === 'Spacebar' || e.code === 'Space') {
+        e.preventDefault();
+        if (dom.deleteFromDiskCheckbox) {
+          dom.deleteFromDiskCheckbox.checked = !dom.deleteFromDiskCheckbox.checked;
+          dom.deleteFromDiskCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (active === dom.cancelDeleteMediaBtn) {
+          dom.cancelDeleteMediaBtn.click();
+        } else if (active === dom.closeDeleteMediaModalBtn) {
+          dom.closeDeleteMediaModalBtn.click();
+        } else if (dom.confirmDeleteMediaBtn) {
+          dom.confirmDeleteMediaBtn.click();
+        }
+        return;
+      }
+      if (e.key === 'Tab') {
+        const focusable = Array.from(
+          dom.deleteMediaModal.querySelectorAll(
+            'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          )
+        ).filter(el => el.offsetParent !== null || el.offsetWidth > 0 || el.offsetHeight > 0);
+
+        if (focusable.length > 0) {
+          const firstEl = focusable[0];
+          const lastEl = focusable[focusable.length - 1];
+          if (e.shiftKey) {
+            if (document.activeElement === firstEl || !dom.deleteMediaModal.contains(document.activeElement)) {
+              e.preventDefault();
+              lastEl.focus();
+            }
+          } else {
+            if (document.activeElement === lastEl || !dom.deleteMediaModal.contains(document.activeElement)) {
+              e.preventDefault();
+              firstEl.focus();
+            }
+          }
+        } else {
+          e.preventDefault();
+        }
+        return;
+      }
+      return;
+    }
+
     // If typing in input, textarea, or contenteditable, ignore shortcuts
     if (active?.matches('input, textarea, [contenteditable="true"]')) {
       return;
@@ -352,6 +403,18 @@ export function setupKeyboardShortcuts() {
       } else if (state.viewMode === 'map' && e.key === '/') {
         e.preventDefault();
         if (dom.mapSearchInput) dom.mapSearchInput.focus();
+      }
+    }
+  });
+
+  document.addEventListener('focusin', (e) => {
+    if (dom.deleteMediaModal && (dom.deleteMediaModal.style.display === 'flex' || (dom.deleteMediaModal.style.display !== 'none' && dom.deleteMediaModal.style.display !== ''))) {
+      if (!dom.deleteMediaModal.contains(e.target)) {
+        if (dom.deleteFromDiskCheckbox) {
+          dom.deleteFromDiskCheckbox.focus();
+        } else if (dom.confirmDeleteMediaBtn) {
+          dom.confirmDeleteMediaBtn.focus();
+        }
       }
     }
   });

@@ -125,16 +125,18 @@ def test_batch_operations_single_http_call(server, page: Page):
 
     # 1. Batch Flag
     api_calls.clear()
-    page.locator("#batchPickBtn").click()
-    page.wait_for_timeout(300)
+    with page.expect_response(lambda r: "/api/media/batch-flag" in r.url and r.ok) as response_info:
+        page.locator("#batchPickBtn").click()
+    response_info.value
     flag_calls = [url for url in api_calls if "flag" in url]
     assert len(flag_calls) == 1
     assert "/api/media/batch-flag" in flag_calls[0]
 
     # 2. Batch Rating
     api_calls.clear()
-    page.locator('#batchRating span[data-star="5"]').click()
-    page.wait_for_timeout(300)
+    with page.expect_response(lambda r: "/api/media/batch-rating" in r.url and r.ok) as response_info:
+        page.locator('#batchRating span[data-star="5"]').click()
+    response_info.value
     rating_calls = [url for url in api_calls if "rating" in url]
     assert len(rating_calls) == 1
     assert "/api/media/batch-rating" in rating_calls[0]
@@ -143,9 +145,10 @@ def test_batch_operations_single_http_call(server, page: Page):
     api_calls.clear()
     page.locator("#batchAddTagBtn").click()
     page.locator("#tagNameInput").fill("SingleBatchTag")
-    page.locator("#createTagSubmitBtn").click()
+    with page.expect_response(lambda r: "/api/media/batch-tags" in r.url and r.ok) as response_info:
+        page.locator("#createTagSubmitBtn").click()
+    response_info.value
     expect(page.locator("#newTagModal")).to_be_hidden()
-    page.wait_for_timeout(300)
     tag_calls = [url for url in api_calls if "batch-tags" in url]
     assert len(tag_calls) == 1
     assert "/api/media/batch-tags" in tag_calls[0]
@@ -213,7 +216,6 @@ def test_batch_move_photos_to_new_path(server, page: Page):
     expect(page.locator(".toast-success")).to_contain_text("Moved 2 photos to nature/vacation")
 
     # Folders sidebar should now list the new folder
-    page.wait_for_timeout(500)
     expect(page.locator("#foldersTree")).to_contain_text("vacation")
 
     # Verify files moved on disk within test environment photos directory

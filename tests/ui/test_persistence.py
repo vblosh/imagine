@@ -209,7 +209,6 @@ def test_nav_filter_and_search_persistence(server, page: Page):
     # Test search persistence
     search_input = page.locator("#searchInput")
     search_input.fill("mountain")
-    page.wait_for_timeout(350)
     expect(page.locator(".photo-card")).to_have_count(1)
 
     page.reload()

@@ -471,7 +471,6 @@ def test_inspector_move_button_and_outside_rejection(server, page: Page):
     expect(page.locator(".toast-success")).to_contain_text("Moved 1 photo to nature/alpine")
 
     # Path in inspector updates to new folder
-    page.wait_for_timeout(500)
     expect(page.locator("#infoFilePath")).to_contain_text("alpine")
 
     # Verify file moved on disk
