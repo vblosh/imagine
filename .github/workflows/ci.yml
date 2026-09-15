@@ -49,9 +49,14 @@ jobs:
       - name: Step Summary
         if: always()
         run: |
-          echo "### Unit Tests (GCC) :white_check_mark:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Compiler:** GCC (\`g++\`)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Build Type:** Release" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "### Unit Tests (GCC) :white_check_mark:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Compiler:** GCC (\`g++\`)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Build Type:** Release" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Unit Tests (GCC) :x:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status:** Job failed" >> $GITHUB_STEP_SUMMARY
+          fi
 
   clang-sanitizers-ui:
     name: Clang + Sanitizers + UI Tests
@@ -76,17 +81,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r tests/ui/requirements.txt
 
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(python -c 'import playwright; print(playwright.__version__)')" >> $GITHUB_OUTPUT
+
       - name: Cache Playwright Browsers
         uses: actions/cache@v4
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('tests/ui/requirements.txt') }}
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Playwright Chromium with system dependencies
         run: |
           if [ "${{ steps.playwright-cache.outputs.cache-hit }}" == "true" ]; then
             playwright install-deps chromium
+            playwright install chromium
           else
             playwright install --with-deps chromium
           fi
@@ -134,11 +144,16 @@ jobs:
       - name: Step Summary
         if: always()
         run: |
-          echo "### Clang + Sanitizers + UI Tests Completed :white_check_mark:" >> $GITHUB_STEP_SUMMARY
-          echo "- **Compiler:** Clang (\`clang++\`)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Sanitizers:** AddressSanitizer & UndefinedBehaviorSanitizer (Clean, 0 errors/leaks)" >> $GITHUB_STEP_SUMMARY
-          echo "- **Unit Tests:** 131 unit tests passed under ASan & UBSan" >> $GITHUB_STEP_SUMMARY
-          echo "- **UI Tests:** 149 deterministic Playwright browser tests passed" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "### Clang + Sanitizers + UI Tests Completed :white_check_mark:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Compiler:** Clang (\`clang++\`)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Sanitizers:** AddressSanitizer & UndefinedBehaviorSanitizer (Clean, 0 errors/leaks)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Unit Tests:** 131 unit tests passed under ASan & UBSan" >> $GITHUB_STEP_SUMMARY
+            echo "- **UI Tests:** 187 deterministic Playwright browser tests passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Clang + Sanitizers + UI Tests :x:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status:** Job failed" >> $GITHUB_STEP_SUMMARY
+          fi
 
   windows-msvc:
     name: Windows Build & Tests (MSVC)
@@ -185,9 +200,14 @@ jobs:
       - name: Step Summary
         if: always()
         run: |
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows Build & Tests (MSVC) :white_check_mark:"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Compiler:** MSVC (\`cl.exe\`)"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Build Type:** Release"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Dependencies:** vcpkg manifest mode (OpenSSL, Zlib)"
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Unit Tests:** 131 unit tests passed"
+          if ("${{ job.status }}" -eq "success") {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows Build & Tests (MSVC) :white_check_mark:"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Compiler:** MSVC (\`cl.exe\`)"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Build Type:** Release"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Dependencies:** vcpkg manifest mode (OpenSSL, Zlib)"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Unit Tests:** 131 unit tests passed"
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows Build & Tests (MSVC) :x:"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Status:** Job failed"
+          }
 
