@@ -14,10 +14,11 @@ Imagine combines a high-speed C++20 core engine with an interactive Command-Line
 5. [Organizing & Tagging](#5-organizing--tagging)
 6. [Fullscreen Loupe Viewer](#6-fullscreen-loupe-viewer)
 7. [Inspector & EXIF Metadata](#7-inspector--exif-metadata)
-8. [CLI Reference](#8-cli-reference)
-9. [REST API Reference](#9-rest-api-reference)
-10. [Under the Hood: Database & Cache](#10-under-the-hood-database--cache)
-11. [Troubleshooting & FAQ](#11-troubleshooting--faq)
+8. [Map View & Geotagging](#8-map-view--geotagging)
+9. [CLI Reference](#9-cli-reference)
+10. [REST API Reference](#10-rest-api-reference)
+11. [Under the Hood: Database & Cache](#11-under-the-hood-database--cache)
+12. [Troubleshooting & FAQ](#12-troubleshooting--faq)
 
 ---
 
@@ -320,7 +321,62 @@ The right-hand **Inspector Panel** provides an exhaustive breakdown of the techn
 
 ---
 
-## 8. CLI Reference
+## 8. Map View & Geotagging
+
+Imagine features an embedded, interactive world map powered by **Leaflet** and **OpenStreetMap**, allowing you to explore your catalog geographically, inspect photo pins, and assign or edit GPS coordinates.
+
+### Overview & Navigation
+
+| Action | Shortcut / Control | Description |
+|---|---|---|
+| **Switch to Map View** | Press `M` or click **Map** | Switches from Grid View to the interactive Map View via the view switcher. |
+| **Switch to Grid View** | Press `G` or click **Grid** | Returns to the standard chronological photo grid view. |
+| **Fit All Photos** | Click **Fit All** | Smoothly pans and zooms the map to fit all geotagged photos in your catalog into view. |
+| **Toggle Unmapped Tray** | Click **Unmapped (N)** | Toggles the bottom tray showing photos that do not yet have GPS coordinates. |
+| **Exit Placement / Deselect** | Press `Esc` or click **Deselect** | Clears active unmapped selection and exits geotagging placement mode. |
+
+### Core Features
+
+#### Custom Photo Pins & Spatial Clustering
+- **Thumbnail Pins**: Photos with valid GPS coordinates are rendered as custom map pins featuring visual thumbnail previews.
+- **Dynamic Clustering**: Photos within a 50-pixel screen radius automatically combine into clustered pins displaying a count badge.
+- **Zoom Decomposition**: Zooming into any area smoothly separates clusters into individual photo pins; zooming out recombines them into clusters.
+- **Interactive Popup Cards**: Clicking any pin opens a rich card with:
+  - Photo thumbnail, filename, date/time taken, and formatted GPS coordinates.
+  - **Cluster Navigation**: When multiple photos share a pin, use `<` and `>` arrow buttons (`X of Y`) to browse photos without zooming.
+  - **Quick Ratings & Flags**: Assign 1–5 star ratings or toggle Pick (`✔`) and Reject (`✖`) flags directly inside the map popup.
+  - **Loupe Mode**: Click the thumbnail preview to launch into the fullscreen Loupe viewer.
+
+#### Geotagging & The Unmapped Photos Tray
+The **Unmapped Tray** slides up from the bottom of the map, displaying thumbnails of all photos lacking GPS data:
+1. **Single Photo Placement**:
+   - Click an unmapped photo chip in the tray to activate placement mode.
+   - Click anywhere on the Leaflet map canvas to assign those coordinates to the photo.
+2. **Batch Placement Mode**:
+   - Multi-select multiple photos using `Ctrl` / `Cmd` + Click, select ranges with `Shift` + Click, or click **Select All**.
+   - Click on the map to assign the exact GPS coordinates to all selected photos simultaneously.
+3. **Hover Tooltip Preview**:
+   - Hover over any photo chip in the unmapped tray to view an enlarged preview thumbnail alongside pixel dimensions, file size, and timestamp.
+4. **Inspector Synchronization**:
+   - Selecting a photo chip in the unmapped tray automatically opens and displays that photo in the right-hand Inspector panel.
+
+#### Location & Coordinate Search
+The search overlay in the top-left corner of the map provides versatile search capabilities:
+- **Direct GPS Coordinates**: Type latitude and longitude (e.g., `48.8584, 2.2945` or `-33.8688 151.2093`) to fly directly to that location and drop a search marker.
+- **Catalog Photo Search**: Search by photo filename (e.g., `mountain`) to jump directly to already-geotagged catalog photos.
+- **OpenStreetMap Nominatim Geocoding**: Search for cities, addresses, or landmarks (e.g., `Eiffel Tower`, `Tokyo`). Queries are routed through the backend proxy (`/api/geocode`) with 24-hour in-memory caching and rate-limiting.
+- **"Place Photo Here" Button**: With photos selected in the unmapped tray, search for a place and click **Place Photo Here** inside the result popup to geotag them to the search result.
+
+#### Inspector Integration & Mini-Map
+When selecting a photo with GPS metadata:
+- **Inspector Mini-Map**: An embedded mini-map appears under the **Location** section of the Inspector panel, centered on the photo's coordinates.
+- **Show on Map**: Click **Show on Map** to switch to Map View, center the map on the photo, and open its popup card.
+- **Clear GPS**: Click **Clear** to remove GPS coordinates from the catalog database.
+- **Place on Map**: For photos without GPS, click **Place on Map** in the Inspector to jump directly to Map View in placement mode.
+
+---
+
+## 9. CLI Reference
 
 Imagine provides a unified command-line tool (`imagine`) for headless servers, scripts, and automation.
 
@@ -411,7 +467,7 @@ imagine delete <media_id...> [options]
 
 ---
 
-## 9. REST API Reference
+## 10. REST API Reference
 
 The embedded C++ HTTP server provides a full REST API for developers and external integrations.
 
@@ -423,6 +479,9 @@ The embedded C++ HTTP server provides a full REST API for developers and externa
 | `POST` | `/api/media/batch-delete` | Batch delete photos (`{"ids": [1, 2, ...], "delete_from_disk": false}`) |
 | `POST` | `/api/media/:id/rating` | Set star rating (`{"rating": 0-5}`) |
 | `POST` | `/api/media/:id/flag` | Set flag (`{"flag": -1\|0\|1}`) |
+| `POST` | `/api/media/:id/gps` | Update or clear GPS coordinates (`{"has_gps": true, "latitude": ..., "longitude": ...}`) |
+| `POST` | `/api/media/batch-gps` | Batch assign GPS coordinates (`{"ids": [...], "has_gps": true, "latitude": ..., "longitude": ...}`) |
+| `GET` | `/api/geocode` | Search locations via OpenStreetMap Nominatim proxy (`?q=<query>&limit=5`) |
 | `POST` | `/api/media/:id/tags` | Attach tag (`{"name": "...", "category": "..."}`) |
 | `DELETE` | `/api/media/:id/tags/:tag_id` | Detach tag from photo |
 | `GET` | `/api/thumbnails/:hash/:size` | Fetch cached JPEG thumbnail (`size`: 256 or 1024) |
@@ -441,7 +500,7 @@ The embedded C++ HTTP server provides a full REST API for developers and externa
 
 ---
 
-## 10. Under the Hood: Database & Cache
+## 11. Under the Hood: Database & Cache
 
 ### SQLite Catalog
 - **Location**: Default is `catalog.db` in your working directory (or any path specified via `--catalog`).
@@ -462,7 +521,7 @@ The embedded C++ HTTP server provides a full REST API for developers and externa
 
 ---
 
-## 11. Troubleshooting & FAQ
+## 12. Troubleshooting & FAQ
 
 ### Q: Why do my photos rotate sideways when imported?
 **A**: Imagine automatically reads EXIF orientation tags (1 through 8) and losslessly rotates thumbnails to the correct upright orientation during thumbnail generation.

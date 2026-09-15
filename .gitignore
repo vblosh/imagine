@@ -3,6 +3,7 @@
 /out/
 /bin/
 /lib/
+vcpkg_installed/
 
 # IDE & Editor files
 /.vs/
