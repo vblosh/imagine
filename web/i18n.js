@@ -149,6 +149,11 @@ export const translations = {
     load_more_tray: 'Load more photos into tray',
     close_unmapped_tray: 'Close unmapped tray',
     no_date: 'No date',
+    place_here: 'Place Here',
+    place_photo_here: 'Place Photo Here',
+    place_selected_photo_here: 'Place Selected Photo Here',
+    place_photo_name_here: 'Place "{name}" Here',
+    place_n_photos_here: 'Place {count} Selected Photos Here',
 
     // Timeline
     timeline: 'Timeline',
@@ -527,6 +532,11 @@ export const translations = {
     load_more_tray: 'Cargar más fotos en la bandeja',
     close_unmapped_tray: 'Cerrar bandeja de fotos sin mapa',
     no_date: 'Sin fecha',
+    place_here: 'Ubicar aquí',
+    place_photo_here: 'Ubicar foto aquí',
+    place_selected_photo_here: 'Ubicar foto seleccionada aquí',
+    place_photo_name_here: 'Ubicar "{name}" aquí',
+    place_n_photos_here: 'Ubicar {count} fotos seleccionadas aquí',
 
     // Timeline
     timeline: 'Línea de tiempo',
@@ -905,6 +915,11 @@ export const translations = {
     load_more_tray: 'Weitere Fotos in die Leiste laden',
     close_unmapped_tray: 'Leiste für Fotos ohne Geotag schließen',
     no_date: 'Kein Datum',
+    place_here: 'Hier platzieren',
+    place_photo_here: 'Foto hier platzieren',
+    place_selected_photo_here: 'Ausgewähltes Foto hier platzieren',
+    place_photo_name_here: '"{name}" hier platzieren',
+    place_n_photos_here: '{count} ausgewählte Fotos hier platzieren',
 
     // Timeline
     timeline: 'Zeitleiste',
@@ -1283,6 +1298,11 @@ export const translations = {
     load_more_tray: 'Загрузить больше фотографий в панель',
     close_unmapped_tray: 'Закрыть панель фото без геометок',
     no_date: 'Без даты',
+    place_here: 'Разместить здесь',
+    place_photo_here: 'Разместить фото здесь',
+    place_selected_photo_here: 'Разместить выбранное фото здесь',
+    place_photo_name_here: 'Разместить «{name}» здесь',
+    place_n_photos_here: 'Разместить {count} выбранных фото здесь',
 
     // Timeline
     timeline: 'Временная шкала',
@@ -1661,6 +1681,11 @@ export const translations = {
     load_more_tray: '加载更多照片到托盘',
     close_unmapped_tray: '关闭未标记照片托盘',
     no_date: '无日期',
+    place_here: '放置在此处',
+    place_photo_here: '将照片放置在此处',
+    place_selected_photo_here: '将选中的照片放置在此处',
+    place_photo_name_here: '将“{name}”放置在此处',
+    place_n_photos_here: '将选中的 {count} 张照片放置在此处',
 
     // Timeline
     timeline: '时间线',

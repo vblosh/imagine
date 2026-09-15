@@ -88,7 +88,8 @@ import {
   clearMapSearch,
   performMapPlaceSearch,
   selectMapSearchResult,
-  patchOpenMapPopup
+  patchOpenMapPopup,
+  updateOpenMapPopup
 } from './map-view.js';
 import {
   openLoupeForMedia,
@@ -1205,6 +1206,7 @@ export async function init() {
     }
     if (state.viewMode === 'map') {
       renderUnmappedTray();
+      updateOpenMapPopup();
     }
   });
   validateRequiredDom();

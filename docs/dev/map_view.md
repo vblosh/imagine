@@ -199,6 +199,7 @@ Clusters and individual pins generate interactive popup cards via `createMapPopu
 - Includes `<` / `>` cluster navigation buttons (`map-popup-nav`).
 - Directly binds star rating handlers (`updateItemRating`) and flag toggles (`updateItemFlag`).
 - Binds full-resolution preview transitions via `openLoupeForMedia(id)`.
+- When unmapped photos are selected (in placement mode), displays a "Place Here" button (`.place-here-btn`) to assign the coordinates of the currently active photo in the bubble to the selected unmapped photo(s).
 
 ### Geotag Placement Mode State Machine
 ```
@@ -214,6 +215,16 @@ Clusters and individual pins generate interactive popup cards via `createMapPopu
     │       │
     │       ▼
     │   applyGeotagBatch(ids, lat, lng)
+    │       │
+    │       ▼
+    │   POST /api/media/batch-gps
+    │       │
+    │       ▼
+    │
+    ├── Click Pin Bubble "Place Here" ([bubble_lat, bubble_lng])
+    │       │
+    │       ▼
+    │   applyGeotagBatch(ids, bubble_lat, bubble_lng)
     │       │
     │       ▼
     │   POST /api/media/batch-gps
@@ -258,3 +269,4 @@ pytest tests/ui/test_map_view.py -v
 - `test_map_clustering_zoom_combine_and_decombine`: Zoom-dependent clustering and decombining.
 - `test_geocode_backend_proxy_integration`: Location search via `/api/geocode` with place pinning and "Place Photo Here" flow.
 - `test_unmapped_photo_hover_tooltip`: Hover metadata tooltip preview on unmapped photo chips.
+- `test_map_bubble_place_here_for_unmapped_photo`: Assigning GPS of active photo in map bubble to selected unmapped photo(s).

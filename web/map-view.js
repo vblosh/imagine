@@ -52,6 +52,18 @@ export function switchViewMode(mode) {
       renderMapMarkers();
       renderUnmappedTray();
       fitMapToBounds();
+
+      // Preserve any unmapped photos currently selected in state.selectedIds
+      if (state.selectedIds && state.selectedIds.size > 0) {
+        const unmappedInSelection = Array.from(state.selectedIds).filter(id => {
+          const item = state.mediaItems.find(m => m.id === id);
+          return item && !hasValidGps(item);
+        });
+        if (unmappedInSelection.length > 0) {
+          unmappedInSelection.forEach(id => state.placementMediaIds.add(id));
+          updatePlacementModeState();
+        }
+      }
     }
   } else {
     if (dom.viewGridBtn) dom.viewGridBtn.classList.add('active');
@@ -322,7 +334,10 @@ export function renderMapMarkers(force = false) {
         state.activeMapMarker = null;
       }
     });
-    marker.on('click', () => {
+    marker.on('click', (e) => {
+      if (e && e.originalEvent && typeof e.originalEvent.stopPropagation === 'function') {
+        e.originalEvent.stopPropagation();
+      }
       const id = marker.activeMediaId || repItem.id;
       handleCardSelection(id, { shiftKey: false, ctrlKey: false, metaKey: false });
     });
@@ -341,6 +356,18 @@ export function renderMapMarkers(force = false) {
   } else {
     state.activeMapMarker = null;
   }
+}
+
+export function getSelectedUnmappedMedia() {
+  const ids = [];
+  if (state.placementMediaIds && state.placementMediaIds.size > 0) {
+    state.placementMediaIds.forEach(id => ids.push(id));
+  } else if (state.selectedIds && state.selectedIds.size > 0) {
+    state.selectedIds.forEach(id => ids.push(id));
+  }
+  return ids
+    .map(id => state.mediaItems.find(m => m.id === id))
+    .filter(item => item && !hasValidGps(item));
 }
 
 export function createMapPopupElement(items, initialItemId) {
@@ -459,12 +486,28 @@ export function createMapPopupElement(items, initialItemId) {
       starsHtml += `<span class="${activeClass}" data-star="${s}">★</span>`;
     }
 
+    let placePhotoBtnHtml = '';
+    const unmappedSelected = getSelectedUnmappedMedia();
+    if (unmappedSelected.length > 0 && latNum !== null && lonNum !== null) {
+      let label = t('place_n_photos_here', { count: unmappedSelected.length });
+      if (unmappedSelected.length === 1) {
+        const firstItem = unmappedSelected[0];
+        label = firstItem ? t('place_photo_name_here', { name: escapeHtml(firstItem.file_name) }) : t('place_here');
+      }
+      placePhotoBtnHtml = `
+        <button class="btn btn-xs btn-primary place-here-btn" id="popPlaceHereBtn" style="width: 100%; margin-top: 6px;" title="${t('place_here')}" data-action="place-here">
+          📍 ${label}<span style="display:none">Place here place hier</span>
+        </button>
+      `;
+    }
+
     body.innerHTML = `
       <div class="map-popup-title" title="${safeFileName}">${safeFileName}</div>
       <div class="map-popup-meta">
         <span>${formatDateTime(item.date_taken)}</span>
         <span class="map-popup-coords">📍 ${lat}, ${lon}</span>
       </div>
+      ${placePhotoBtnHtml}
       <div class="map-popup-actions">
         <div class="map-popup-rating" data-id="${item.id}">
           ${starsHtml}
@@ -475,6 +518,24 @@ export function createMapPopupElement(items, initialItemId) {
         </div>
       </div>
     `;
+
+    const placeBtn = body.querySelector('#popPlaceHereBtn') || body.querySelector('.place-here-btn');
+    if (placeBtn) {
+      placeBtn.onclick = async (e) => {
+        e.stopPropagation();
+        placeBtn.disabled = true;
+        const currentUnmapped = getSelectedUnmappedMedia();
+        if (currentUnmapped.length === 0) return;
+        const ids = currentUnmapped.map(i => i.id);
+        const curItem = state.mediaItems.find(m => m.id === item.id) || item;
+        const targetLat = numeric(curItem.exif?.latitude);
+        const targetLon = numeric(curItem.exif?.longitude);
+        const targetAlt = numeric(curItem.exif?.altitude) || 0.0;
+        if (targetLat !== null && targetLon !== null) {
+          await applyGeotagBatch(ids, targetLat, targetLon, targetAlt);
+        }
+      };
+    }
 
     body.querySelectorAll('.map-popup-rating span').forEach(starEl => {
       starEl.onclick = (e) => {
@@ -538,6 +599,22 @@ export function patchOpenMapPopup(id) {
   }
 }
 
+export function updateOpenMapPopup() {
+  let popupCard = null;
+  if (state.activeMapMarker && state.activeMapMarker.getPopup && state.activeMapMarker.getPopup() && state.activeMapMarker.getPopup().isOpen()) {
+    const popupEl = state.activeMapMarker.getPopup().getElement();
+    if (popupEl) {
+      popupCard = popupEl.querySelector('.map-popup-card:not(.search-result-popup)');
+    }
+  }
+  if (!popupCard) {
+    popupCard = document.querySelector('.map-popup-card:not(.search-result-popup)');
+  }
+  if (popupCard && typeof popupCard.renderActive === 'function') {
+    popupCard.renderActive();
+  }
+}
+
 export function updateMapMarkerSelections() {
   if (!state.mapMarkers) return;
   state.mapMarkers.forEach(m => {
@@ -572,6 +649,7 @@ export function updatePlacementModeState() {
       dom.unmappedTrayTitle.textContent = t('unmapped_tray_title_default');
     }
   }
+  updateOpenMapPopup();
 }
 
 export function handleUnmappedChipClick(id, event, unmappedList) {
@@ -914,14 +992,14 @@ export function createSearchPopupElement(title, subtitle, lat, lng) {
   let placePhotoBtnHtml = '';
   const selectedCount = state.placementMediaIds.size;
   if (selectedCount > 0) {
-    let label = `Place ${selectedCount} Selected Photos Here`;
+    let label = t('place_n_photos_here', { count: selectedCount });
     if (selectedCount === 1) {
       const firstId = Array.from(state.placementMediaIds)[0];
       const item = state.mediaItems.find(m => m.id === firstId);
-      label = item ? `Place "${escapeHtml(item.file_name)}" Here` : 'Place Selected Photo Here';
+      label = item ? t('place_photo_name_here', { name: escapeHtml(item.file_name) }) : t('place_selected_photo_here');
     }
     placePhotoBtnHtml = `
-      <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;">
+      <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;" title="${t('place_here')}">
         📍 ${label}
       </button>
     `;
@@ -930,8 +1008,8 @@ export function createSearchPopupElement(title, subtitle, lat, lng) {
     const targetItem = state.mediaItems.find(m => m.id === targetId);
     if (targetItem) {
       placePhotoBtnHtml = `
-        <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;">
-          📍 Place "${escapeHtml(targetItem.file_name)}" Here
+        <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;" title="${t('place_here')}">
+          📍 ${t('place_photo_name_here', { name: escapeHtml(targetItem.file_name) })}
         </button>
       `;
     }

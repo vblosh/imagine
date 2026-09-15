@@ -464,3 +464,51 @@ def test_language_menu_style_matches_sort_menu(server, page: Page):
     sort_border_radius = sort_select.evaluate("el => window.getComputedStyle(el).borderRadius")
     assert lang_border_radius == sort_border_radius, f"Expected {sort_border_radius}, got {lang_border_radius}"
 
+
+def test_i18n_map_view_place_images_here_translations(server, page: Page):
+    """Verify that Place image(s) here buttons in Map View are properly translated in all languages."""
+    page.goto(server["url"])
+
+    # Switch to Map View and open unmapped tray
+    page.locator("#viewMapBtn").click()
+    page.locator("#mapToggleUnmappedBtn").click()
+
+    # 1. English (default)
+    sunset_chip = page.locator(".unmapped-chip", has_text="sunset.bmp")
+    sunset_chip.click()
+    mountain_pin = page.locator(".photo-pin-inner", has=page.locator("img[alt='mountain.bmp']"))
+    mountain_pin.click()
+
+    popup = page.locator(".map-popup-card", has_text="mountain.bmp")
+    expect(popup).to_be_visible()
+    place_btn = popup.locator(".place-here-btn")
+    expect(place_btn).to_be_visible()
+    expect(place_btn).to_contain_text('Place "sunset.bmp" Here')
+
+    # 2. Spanish
+    page.locator("#langSelect").select_option("es")
+    expect(place_btn).to_contain_text('Ubicar "sunset.bmp" aquí')
+
+    # 3. German
+    page.locator("#langSelect").select_option("de")
+    expect(place_btn).to_contain_text('"sunset.bmp" hier platzieren')
+
+    # 4. Russian
+    page.locator("#langSelect").select_option("ru")
+    expect(place_btn).to_contain_text('Разместить «sunset.bmp» здесь')
+
+    # 5. Chinese
+    page.locator("#langSelect").select_option("zh")
+    expect(place_btn).to_contain_text('将“sunset.bmp”放置在此处')
+
+    # Test multi-selection translation in German
+    page.locator("#langSelect").select_option("de")
+    birthday_chip = page.locator(".unmapped-chip", has_text="birthday.bmp")
+    birthday_chip.click(modifiers=["Control"])
+    expect(place_btn).to_contain_text("2 ausgewählte Fotos hier platzieren")
+
+    # Multi-selection translation in Spanish
+    page.locator("#langSelect").select_option("es")
+    expect(place_btn).to_contain_text("Ubicar 2 fotos seleccionadas aquí")
+
+

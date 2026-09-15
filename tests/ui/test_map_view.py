@@ -560,4 +560,90 @@ def test_unmapped_photo_hover_tooltip(server, page: Page):
     expect(page.locator("#unmappedTooltipTitle")).to_have_text("birthday.bmp")
 
 
+def test_map_bubble_place_here_for_unmapped_photo(server, page: Page):
+    """When unmapped photos are selected in Map View, clicking an existing photo pin
+    displays a 'Place Here' button in the bubble popup. Clicking it assigns the bubble
+    photo's GPS coordinates to the selected unmapped photo.
+    """
+    page.goto(server["url"])
+
+    # Switch to Map View
+    page.locator("#viewMapBtn").click()
+    expect(page.locator("#mapViewContainer")).to_be_visible()
+    expect(page.locator("#mapPhotoCount")).to_have_text("2")
+
+    # Open unmapped tray
+    page.locator("#mapToggleUnmappedBtn").click()
+    expect(page.locator("#unmappedTray")).to_be_visible()
+
+    # 1. Verify popup bubble does NOT have Place Here button when nothing is selected
+    mountain_pin = page.locator(".photo-pin-inner", has=page.locator("img[alt='mountain.bmp']"))
+    mountain_pin.click()
+    popup = page.locator(".map-popup-card")
+    expect(popup).to_be_visible()
+    expect(popup.locator(".place-here-btn")).to_be_hidden()
+
+    # 2. Select sunset.bmp in unmapped tray while popup is already open -> Place Here button appears!
+    sunset_chip = page.locator(".unmapped-chip", has_text="sunset.bmp")
+    sunset_chip.click()
+    expect(sunset_chip).to_have_class(re.compile(r"\bactive\b"))
+
+    place_btn = popup.locator(".place-here-btn")
+    expect(place_btn).to_be_visible()
+    expect(place_btn).to_contain_text("sunset.bmp")
+
+    # 3. Click Place Here button in the bubble
+    place_btn.click()
+
+    # Photo count on map should increment from 2 to 3
+    expect(page.locator("#mapPhotoCount")).to_have_text("3")
+
+    # In unmapped tray, unmapped chips should decrease from 4 to 3
+    expect(page.locator(".unmapped-chip")).to_have_count(3)
+
+    # 4. Multi-select placement in bubble:
+    # Select birthday.bmp and portrait.bmp (2 photos)
+    birthday_chip = page.locator(".unmapped-chip", has_text="birthday.bmp")
+    portrait_chip = page.locator(".unmapped-chip", has_text="portrait.bmp")
+
+    birthday_chip.click()
+    portrait_chip.click(modifiers=["Control"])
+    expect(page.locator("#unmappedSelectedCount")).to_have_text("2 selected")
+
+    # Click beach.bmp pin on map
+    beach_pin = page.locator(".photo-pin-inner", has=page.locator("img[alt='beach.bmp']"))
+    beach_pin.click()
+
+    # Beach popup has 'Place 2 Selected Photos Here'
+    beach_popup = page.locator(".map-popup-card", has_text="beach.bmp")
+    expect(beach_popup).to_be_visible()
+    expect(beach_popup.locator(".map-popup-title")).to_have_text("beach.bmp")
+    multi_place_btn = beach_popup.locator(".place-here-btn")
+    expect(multi_place_btn).to_be_visible()
+    expect(multi_place_btn).to_contain_text("2 Selected")
+
+    # Click place button
+    multi_place_btn.click()
+
+    # Map photo count increments to 5
+    expect(page.locator("#mapPhotoCount")).to_have_text("5")
+    expect(page.locator(".unmapped-chip")).to_have_count(1)
+
+    # 5. Verify in-memory state and database GPS coordinates match the bubble images
+    sunset_gps = page.evaluate("() => window._imagineState.mediaItems.find(m => m.file_name === 'sunset.bmp')?.exif")
+    assert sunset_gps["has_gps"] is True
+    assert abs(sunset_gps["latitude"] - 46.5) < 0.001
+    assert abs(sunset_gps["longitude"] - 11.35) < 0.001
+
+    birthday_gps = page.evaluate("() => window._imagineState.mediaItems.find(m => m.file_name === 'birthday.bmp')?.exif")
+    portrait_gps = page.evaluate("() => window._imagineState.mediaItems.find(m => m.file_name === 'portrait.bmp')?.exif")
+    assert birthday_gps["has_gps"] is True
+    assert abs(birthday_gps["latitude"] - 21.30694) < 0.001
+    assert abs(birthday_gps["longitude"] - (-157.85833)) < 0.001
+    assert portrait_gps["has_gps"] is True
+    assert abs(portrait_gps["latitude"] - 21.30694) < 0.001
+    assert abs(portrait_gps["longitude"] - (-157.85833)) < 0.001
+
+
+
 
