@@ -57,8 +57,11 @@ export function patchInspectorRatingAndFlag(item) {
 
 export function renderInspectorContent(item) {
   if (!item) return;
+  const isSameItem = currentInspectorItem && currentInspectorItem.id === item.id;
   currentInspectorItem = item;
-  closeAllInlineEditors();
+  if (!isSameItem) {
+    closeAllInlineEditors();
+  }
   if (dom.inspectorNoSelection) dom.inspectorNoSelection.style.display = 'none';
   if (dom.inspectorSelection) dom.inspectorSelection.style.display = 'block';
 
@@ -89,13 +92,16 @@ export function renderInspectorContent(item) {
   }
 
   // File Properties
-  if (dom.infoFileName) dom.infoFileName.textContent = item.file_name || '-';
+  const renameOpen = dom.renameFileForm && dom.renameFileForm.style.display === 'flex';
+  if (dom.infoFileName && !renameOpen) dom.infoFileName.textContent = item.file_name || '-';
   const typeLabels = { photo: t('type_photo'), video: t('type_video'), audio: t('type_audio') };
   if (dom.infoMediaType) dom.infoMediaType.textContent = typeLabels[item.media_type] || item.media_type || t('type_photo');
   if (dom.infoDimensions) dom.infoDimensions.textContent = item.width && item.height ? `${item.width} × ${item.height} px` : '-';
   if (dom.infoFileSize) dom.infoFileSize.textContent = formatBytes(item.file_size);
-  if (dom.infoDateTaken) dom.infoDateTaken.textContent = formatDateTime(item.date_taken);
-  if (dom.infoCaption) dom.infoCaption.textContent = item.caption || '-';
+  const dateOpen = dom.editDateTakenForm && dom.editDateTakenForm.style.display === 'flex';
+  if (dom.infoDateTaken && !dateOpen) dom.infoDateTaken.textContent = formatDateTime(item.date_taken);
+  const captionOpen = dom.editCaptionForm && dom.editCaptionForm.style.display === 'flex';
+  if (dom.infoCaption && !captionOpen) dom.infoCaption.textContent = item.caption || '-';
   if (dom.infoFilePath) dom.infoFilePath.textContent = item.file_path || '-';
 
   // Audio / Video Media Properties

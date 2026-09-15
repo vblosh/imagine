@@ -613,7 +613,7 @@ def test_map_bubble_place_here_for_unmapped_photo(server, page: Page):
 
     # Click beach.bmp pin on map
     beach_pin = page.locator(".photo-pin-inner", has=page.locator("img[alt='beach.bmp']"))
-    beach_pin.click(force=True)
+    beach_pin.dispatch_event("click")
 
     # Beach popup has 'Place 2 Selected Photos Here'
     beach_popup = page.locator(".map-popup-card", has_text="beach.bmp")
