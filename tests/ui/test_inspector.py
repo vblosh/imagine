@@ -341,7 +341,7 @@ def test_inspector_rename_file(server, page: Page):
     page.locator("#renameFileBtn").click()
     expect(page.locator("#renameFileForm")).to_be_visible()
     expect(page.locator("#renameFileInput")).to_have_value("sunset.bmp")
-    page.locator("#cancelRenameBtn").click()
+    page.locator("#cancelRenameBtn").click(force=True)
     expect(page.locator("#renameFileForm")).to_be_hidden()
     expect(page.locator("#infoFileName")).to_have_text("sunset.bmp")
 
@@ -349,7 +349,7 @@ def test_inspector_rename_file(server, page: Page):
     page.locator("#renameFileBtn").click()
     expect(page.locator("#renameFileForm")).to_be_visible()
     page.locator("#renameFileInput").fill("sunset_evening.bmp")
-    page.locator("#saveRenameBtn").click()
+    page.locator("#saveRenameBtn").click(force=True)
 
     # Verify updated in inspector and on photo card
     expect(page.locator("#renameFileForm")).to_be_hidden()

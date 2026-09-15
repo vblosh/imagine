@@ -1342,7 +1342,17 @@ TEST_F(ServerTest, ServeRelocatedPhotosAndThumbnails) {
     // 6. Delete thumbnail on disk, verify on-demand generation regenerates it from movedPhotos into movedThumbs
     std::string smallThumbPath = cat2.cache().getThumbnailPath(hash, 256);
     EXPECT_TRUE(std::filesystem::exists(smallThumbPath));
-    std::filesystem::remove(smallThumbPath);
+    std::error_code ec;
+    bool removed = false;
+    for (int retry = 0; retry < 50; ++retry) {
+        ec.clear();
+        if (std::filesystem::remove(smallThumbPath, ec)) {
+            removed = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_TRUE(removed);
     EXPECT_FALSE(std::filesystem::exists(smallThumbPath));
 
     auto regenRes = client2.Get("/api/thumbnails/" + hash + "/256");
