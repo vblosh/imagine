@@ -44,6 +44,7 @@ inline std::string getMimeType(std::string_view path) {
     if (ext == ".aac") return "audio/aac";
     if (ext == ".wma") return "audio/x-ms-wma";
     if (ext == ".json") return "application/json";
+    if (ext == ".webmanifest") return "application/manifest+json";
     if (ext == ".woff") return "font/woff";
     if (ext == ".woff2") return "font/woff2";
     if (ext == ".ttf") return "font/ttf";

@@ -100,6 +100,16 @@ export function handleEscapeKey() {
     closeBatchMoveModal();
     return true;
   }
+  if (dom.iosInstallModal && dom.iosInstallModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    dom.iosInstallModal.style.display = 'none';
+    return true;
+  }
+  if (dom.leftSidebar && dom.leftSidebar.classList.contains('open')) {
+    dom.leftSidebar.classList.remove('open');
+    if (dom.sidebarBackdrop) dom.sidebarBackdrop.classList.remove('active');
+    return true;
+  }
 
   // 1b. Quick Edit Mode (cancel crop or exit quick edit)
   if (quickEditState.isOpen) {

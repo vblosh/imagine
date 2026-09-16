@@ -697,6 +697,52 @@ export function setupEventListeners() {
       }
     });
   }
+
+  // Fullscreen toggle
+  if (dom.toggleFullscreenBtn) {
+    dom.toggleFullscreenBtn.addEventListener('click', () => {
+      toggleFullscreen();
+    });
+  }
+
+  // Fullscreen change listeners
+  document.addEventListener('fullscreenchange', updateFullscreenBtnState);
+  document.addEventListener('webkitfullscreenchange', updateFullscreenBtnState);
+  document.addEventListener('mozfullscreenchange', updateFullscreenBtnState);
+  document.addEventListener('MSFullscreenChange', updateFullscreenBtnState);
+
+  // Mobile menu / sidebar drawer toggle
+  if (dom.mobileMenuBtn) {
+    dom.mobileMenuBtn.addEventListener('click', () => {
+      toggleMobileSidebar();
+    });
+  }
+  if (dom.sidebarBackdrop) {
+    dom.sidebarBackdrop.addEventListener('click', () => {
+      toggleMobileSidebar(false);
+    });
+  }
+  if (dom.leftSidebar) {
+    dom.leftSidebar.addEventListener('click', (e) => {
+      if (window.innerWidth <= 768) {
+        const item = e.target.closest('.menu-item, .album-item, .tag-tree-item');
+        if (item) {
+          toggleMobileSidebar(false);
+        }
+      }
+    });
+  }
+
+  // iOS Install Modal listeners
+  if (dom.closeIosInstallBtn) {
+    dom.closeIosInstallBtn.addEventListener('click', closeIosInstallModal);
+  }
+  if (dom.confirmIosInstallBtn) {
+    dom.confirmIosInstallBtn.addEventListener('click', closeIosInstallModal);
+  }
+  if (dom.iosInstallBackdrop) {
+    dom.iosInstallBackdrop.addEventListener('click', closeIosInstallModal);
+  }
   if (dom.openLoupeFromInspector) {
     dom.openLoupeFromInspector.addEventListener('click', () => {
       if (state.selectedIds.size > 0) {
@@ -962,6 +1008,109 @@ export function setupEventListeners() {
     }, { passive: false });
   }
 
+  // Mobile touch gestures: Drag Panning, Pinch-to-Zoom, Double-tap, and Swipe Navigation
+  let loupeTouchStartX = 0;
+  let loupeTouchStartY = 0;
+  let loupeTouchStartTime = 0;
+  let loupeLastTapTime = 0;
+  let isTouchPanning = false;
+  let initialPinchDistance = 0;
+  let initialPinchZoom = 1.0;
+  let pinchMidX = 0;
+  let pinchMidY = 0;
+
+  if (dom.loupeModal) {
+    dom.loupeModal.addEventListener('touchstart', (e) => {
+      if (e.target.closest('.loupe-toolbar')) return;
+
+      if (e.touches.length === 1) {
+        const touch = e.touches[0];
+        loupeTouchStartX = touch.clientX;
+        loupeTouchStartY = touch.clientY;
+        loupeTouchStartTime = Date.now();
+
+        if (state.loupeZoom > 1.0) {
+          isTouchPanning = true;
+          loupeDragStartX = touch.clientX - state.loupePanX;
+          loupeDragStartY = touch.clientY - state.loupePanY;
+        } else {
+          isTouchPanning = false;
+        }
+      } else if (e.touches.length === 2) {
+        isTouchPanning = false;
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        initialPinchDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        initialPinchZoom = state.loupeZoom || 1.0;
+        pinchMidX = (t1.clientX + t2.clientX) / 2;
+        pinchMidY = (t1.clientY + t2.clientY) / 2;
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    dom.loupeModal.addEventListener('touchmove', (e) => {
+      if (e.target.closest('.loupe-toolbar')) return;
+
+      if (e.touches.length === 1 && isTouchPanning && state.loupeZoom > 1.0) {
+        const touch = e.touches[0];
+        state.loupePanX = touch.clientX - loupeDragStartX;
+        state.loupePanY = touch.clientY - loupeDragStartY;
+        clampLoupePan();
+        applyLoupeTransform();
+        e.preventDefault();
+      } else if (e.touches.length === 2 && initialPinchDistance > 10) {
+        const t1 = e.touches[0];
+        const t2 = e.touches[1];
+        const currentDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+        const scaleFactor = currentDistance / initialPinchDistance;
+        const newZoom = initialPinchZoom * scaleFactor;
+        setLoupeZoom(newZoom, pinchMidX, pinchMidY);
+        e.preventDefault();
+      }
+    }, { passive: false });
+
+    dom.loupeModal.addEventListener('touchend', (e) => {
+      if (e.target.closest('.loupe-toolbar')) return;
+
+      if (e.touches.length === 0) {
+        isTouchPanning = false;
+        initialPinchDistance = 0;
+
+        if (e.changedTouches.length === 1) {
+          const touch = e.changedTouches[0];
+          const deltaX = touch.clientX - loupeTouchStartX;
+          const deltaY = touch.clientY - loupeTouchStartY;
+          const deltaTime = Date.now() - loupeTouchStartTime;
+          const dist = Math.hypot(deltaX, deltaY);
+
+          // Check for double-tap to toggle zoom
+          const now = Date.now();
+          if (dist < 15 && deltaTime < 250) {
+            if (now - loupeLastTapTime < 300) {
+              if (state.loupeZoom > 1.05) {
+                setLoupeZoom(1.0);
+              } else {
+                setLoupeZoom(2.0, touch.clientX, touch.clientY);
+              }
+              loupeLastTapTime = 0;
+              return;
+            }
+            loupeLastTapTime = now;
+          }
+
+          // Check for horizontal swipe when not zoomed in
+          if (state.loupeZoom <= 1.05 && Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5 && deltaTime < 600) {
+            if (deltaX < 0) {
+              loupeNext();
+            } else {
+              loupePrev();
+            }
+          }
+        }
+      }
+    }, { passive: true });
+  }
+
   window.addEventListener('mousemove', (e) => {
     if (!isLoupeDragging) return;
     loupeDragMoved = true;
@@ -1186,6 +1335,111 @@ export function setupEventListeners() {
   setupKeyboardShortcuts();
 }
 
+export function isFullscreenActive() {
+  return !!(
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.mozFullScreenElement ||
+    document.msFullscreenElement ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+    window.navigator.standalone === true
+  );
+}
+
+export function isIosSafari() {
+  const ua = window.navigator.userAgent;
+  return /iPad|iPhone|iPod/.test(ua) || (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
+}
+
+export function isStandaloneMode() {
+  return (
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+    window.navigator.standalone === true
+  );
+}
+
+export function openIosInstallModal() {
+  if (dom.iosInstallModal) {
+    dom.iosInstallModal.style.display = 'flex';
+  }
+}
+
+export function closeIosInstallModal() {
+  if (dom.iosInstallModal) {
+    dom.iosInstallModal.style.display = 'none';
+  }
+}
+
+export function updateFullscreenBtnState() {
+  if (!dom.toggleFullscreenBtn) return;
+  const active = isFullscreenActive();
+  const maxIcon = dom.toggleFullscreenBtn.querySelector('.icon-maximize');
+  const minIcon = dom.toggleFullscreenBtn.querySelector('.icon-minimize');
+  if (maxIcon && minIcon) {
+    maxIcon.style.display = active ? 'none' : 'block';
+    minIcon.style.display = active ? 'block' : 'none';
+  }
+  const title = active ? t('fullscreen_exit') : t('toggle_fullscreen');
+  dom.toggleFullscreenBtn.setAttribute('title', title);
+  dom.toggleFullscreenBtn.setAttribute('aria-label', title);
+}
+
+export function toggleFullscreen() {
+  if (isFullscreenActive()) {
+    const exitFn = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msExitFullscreen;
+    if (exitFn) {
+      try {
+        const res = exitFn.call(document);
+        if (res && typeof res.catch === 'function') {
+          res.catch(err => console.warn('Error exiting fullscreen:', err));
+        }
+      } catch (err) {
+        console.warn('Error exiting fullscreen:', err);
+      }
+    }
+  } else {
+    const root = document.documentElement;
+    const reqFn = root.requestFullscreen || root.webkitRequestFullscreen || root.mozRequestFullScreen || root.msRequestFullscreen;
+    if (reqFn && typeof reqFn === 'function') {
+      try {
+        const promise = reqFn.call(root);
+        if (promise && typeof promise.catch === 'function') {
+          promise.catch(err => {
+            console.warn('Error entering fullscreen:', err);
+            if (isIosSafari() && !isStandaloneMode()) {
+              openIosInstallModal();
+            }
+          });
+        }
+      } catch (err) {
+        console.warn('Error entering fullscreen:', err);
+        if (isIosSafari() && !isStandaloneMode()) {
+          openIosInstallModal();
+        }
+      }
+    } else {
+      if (isIosSafari() && !isStandaloneMode()) {
+        openIosInstallModal();
+      } else {
+        showToast(t('toggle_fullscreen'));
+      }
+    }
+  }
+  setTimeout(updateFullscreenBtnState, 50);
+}
+
+export function toggleMobileSidebar(force) {
+  if (!dom.leftSidebar) return;
+  const shouldOpen = force !== undefined ? !!force : !dom.leftSidebar.classList.contains('open');
+  dom.leftSidebar.classList.toggle('open', shouldOpen);
+  if (dom.sidebarBackdrop) {
+    dom.sidebarBackdrop.classList.toggle('active', shouldOpen);
+  }
+  if (dom.mobileMenuBtn) {
+    dom.mobileMenuBtn.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+  }
+}
+
 let initialized = false;
 
 export async function init() {
@@ -1196,6 +1450,7 @@ export async function init() {
     updateFilterLabel();
     updateBatchBar();
     renderTimeline();
+    updateFullscreenBtnState();
     if (state.activeTab && state.activeTab !== 'media') {
       renderCategoryView(state.activeTab);
     } else {
@@ -1213,6 +1468,7 @@ export async function init() {
   restoreLayoutPreferences();
   restoreNavigationPreferences();
   setupEventListeners();
+  updateFullscreenBtnState();
 
   const savedMode = getSavedViewMode();
   if (savedMode === 'map') {
@@ -1291,5 +1547,13 @@ window._imagineApp = {
   SUPPORTED_LANGUAGES,
   restoreLayoutPreferences,
   restoreNavigationPreferences,
-  clearFilterPreferences
+  clearFilterPreferences,
+  isFullscreenActive,
+  isIosSafari,
+  isStandaloneMode,
+  openIosInstallModal,
+  closeIosInstallModal,
+  updateFullscreenBtnState,
+  toggleFullscreen,
+  toggleMobileSidebar
 };

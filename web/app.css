@@ -49,7 +49,12 @@ body, html {
   flex-direction: column;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 /* Top Bar */
@@ -1689,6 +1694,7 @@ body.resizing-horizontal * {
   left: 0;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   z-index: 1000;
   display: flex;
   align-items: center;
@@ -2150,6 +2156,7 @@ body.resizing-horizontal * {
   left: 0;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   z-index: 2000;
   display: flex;
   align-items: center;
@@ -3611,3 +3618,255 @@ body.resizing-horizontal * {
   padding: 8px 10px;
   line-height: 1.4;
 }
+
+/* ==========================================================================
+   Mobile Responsive Layout, Fullscreen & Safe Areas
+   ========================================================================== */
+
+/* Mobile Hamburger Menu Button */
+.mobile-menu-btn {
+  display: none;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  padding: 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mobile-menu-btn:hover {
+  background-color: var(--border-color);
+}
+
+/* Sidebar Backdrop for Mobile Drawer */
+.sidebar-backdrop {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 1150;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.sidebar-backdrop.active {
+  display: block;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* iOS Fullscreen / PWA Install Guide Modal */
+.ios-install-dialog {
+  max-width: 440px;
+  width: 90vw;
+}
+
+.ios-install-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.ios-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.ios-step-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.ios-step-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.ios-step-icon {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: var(--accent-color);
+  vertical-align: middle;
+}
+
+/* Responsive Media Queries for Mobile Screens */
+@media (max-width: 768px) {
+  /* Show Hamburger button */
+  .mobile-menu-btn {
+    display: inline-flex;
+  }
+
+  /* Compact Top Bar */
+  .top-bar {
+    padding: 0 8px;
+    gap: 8px;
+    height: 50px;
+  }
+
+  .top-bar-left {
+    gap: 8px;
+  }
+
+  .logo-text {
+    font-size: 13px;
+  }
+
+  .logo-sub {
+    display: none;
+  }
+
+  /* Move/hide items on mobile top bar */
+  .zoom-control {
+    display: none !important;
+  }
+
+  .lang-selector label {
+    display: none;
+  }
+
+  .lang-select {
+    max-width: 45px;
+    padding: 2px 4px;
+    font-size: 11px;
+  }
+
+  #importBtn span {
+    display: none;
+  }
+
+  #importBtn {
+    padding: 6px 10px;
+  }
+
+  .view-tabs .tab-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  /* Left Sidebar Drawer */
+  .left-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    max-width: 85vw;
+    z-index: 1200;
+    transform: translateX(-100%);
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.6);
+    background-color: var(--bg-sidebar);
+  }
+
+  .left-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sidebar-resizer-right {
+    display: none;
+  }
+
+  /* Right Inspector as Drawer / Overlay on Mobile */
+  .right-inspector {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 320px;
+    max-width: 90vw;
+    z-index: 1100;
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.6);
+  }
+
+  .right-inspector.collapsed {
+    display: none !important;
+  }
+
+  .inspector-resizer-left {
+    display: none;
+  }
+
+  /* Touch Target minimums (at least 40-44px) */
+  .btn-icon,
+  .mobile-menu-btn,
+  .clear-search,
+  .modal-close,
+  .loupe-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  /* Loupe Mobile Toolbar */
+  .loupe-header {
+    padding: 8px 12px;
+  }
+
+  .loupe-footer {
+    padding: 10px 12px;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .loupe-zoom-controls {
+    display: none;
+  }
+
+  /* Media Grid responsive columns */
+  .grid-viewport {
+    padding: 8px;
+  }
+
+  /* Batch Action Bar on mobile: fit safe bottom */
+  .batch-action-bar {
+    left: 10px;
+    right: 10px;
+    transform: none;
+    width: auto;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .view-tabs .tab-btn span {
+    display: none;
+  }
+
+  .top-bar-center {
+    flex: 1;
+    min-width: 80px;
+  }
+
+  .search-box input {
+    font-size: 12px;
+    padding-left: 28px;
+  }
+}
+

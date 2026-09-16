@@ -178,10 +178,10 @@ export function restoreLayoutPreferences() {
 
   // 5. Inspector collapsed state
   const inspectorCollapsed = safeGetItem(STORAGE_KEYS.INSPECTOR_COLLAPSED);
-  if (inspectorCollapsed !== null && dom.rightInspector) {
-    if (inspectorCollapsed === 'true') {
+  if (dom.rightInspector) {
+    if (inspectorCollapsed === 'true' || (inspectorCollapsed === null && window.innerWidth <= 768)) {
       dom.rightInspector.classList.add('collapsed');
-    } else {
+    } else if (inspectorCollapsed === 'false') {
       dom.rightInspector.classList.remove('collapsed');
     }
   }

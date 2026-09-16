@@ -29,6 +29,14 @@ export const translations = {
     refresh_media: 'Refresh media',
     import_folder: 'Import Folder',
     toggle_inspector: 'Toggle Inspector Panel',
+    toggle_fullscreen: 'Toggle Fullscreen',
+    fullscreen_exit: 'Exit Fullscreen',
+    toggle_sidebar: 'Toggle Navigation Menu',
+    ios_install_title: 'Fullscreen on iOS',
+    ios_install_step1: 'Tap the Share icon at the bottom of Safari',
+    ios_install_step2: 'Scroll down and tap "Add to Home Screen"',
+    ios_install_step3: 'Launch IMAGINE from your Home Screen for a clean, full-screen experience with no address bar.',
+    ios_install_close: 'Got it',
     language_select: 'Language',
 
     // Left Sidebar Navigation
@@ -412,6 +420,14 @@ export const translations = {
     refresh_media: 'Actualizar medios',
     import_folder: 'Importar carpeta',
     toggle_inspector: 'Alternar panel Inspector',
+    toggle_fullscreen: 'Pantalla completa',
+    fullscreen_exit: 'Salir de pantalla completa',
+    toggle_sidebar: 'Alternar menú de navegación',
+    ios_install_title: 'Pantalla completa en iOS',
+    ios_install_step1: 'Toca el botón Compartir en la barra de Safari',
+    ios_install_step2: 'Desplázate hacia abajo y selecciona "Añadir a pantalla de inicio"',
+    ios_install_step3: 'Abre IMAGINE desde tu pantalla de inicio para disfrutar de la experiencia sin barra de direcciones.',
+    ios_install_close: 'Entendido',
     language_select: 'Idioma',
 
     // Left Sidebar Navigation
@@ -795,6 +811,14 @@ export const translations = {
     refresh_media: 'Medien aktualisieren',
     import_folder: 'Ordner importieren',
     toggle_inspector: 'Inspektor-Bedienfeld umschalten',
+    toggle_fullscreen: 'Vollbildmodus umschalten',
+    fullscreen_exit: 'Vollbild beenden',
+    toggle_sidebar: 'Navigationsmenü umschalten',
+    ios_install_title: 'Vollbild unter iOS',
+    ios_install_step1: 'Tippe auf das Teilen-Symbol in Safari',
+    ios_install_step2: 'Scrolle nach unten und tippe auf "Zum Home-Bildschirm"',
+    ios_install_step3: 'Öffne IMAGINE von deinem Home-Bildschirm für ein Vollbild-Erlebnis ohne Adressleiste.',
+    ios_install_close: 'Verstanden',
     language_select: 'Sprache',
 
     // Left Sidebar Navigation
@@ -1178,6 +1202,14 @@ export const translations = {
     refresh_media: 'Обновить медиа',
     import_folder: 'Импорт папки',
     toggle_inspector: 'Панель инспектора',
+    toggle_fullscreen: 'Полноэкранный режим',
+    fullscreen_exit: 'Выйти из полноэкранного режима',
+    toggle_sidebar: 'Меню навигации',
+    ios_install_title: 'Полноэкранный режим в iOS',
+    ios_install_step1: 'Нажмите кнопку «Поделиться» внизу Safari',
+    ios_install_step2: 'Прокрутите вниз и выберите «На экран „Домой“»',
+    ios_install_step3: 'Запустите IMAGINE с главного экрана для работы на весь экран без адресной строки.',
+    ios_install_close: 'Понятно',
     language_select: 'Язык',
 
     // Left Sidebar Navigation
@@ -1561,6 +1593,14 @@ export const translations = {
     refresh_media: '刷新媒体',
     import_folder: '导入文件夹',
     toggle_inspector: '切换检查器面板',
+    toggle_fullscreen: '切换全屏模式',
+    fullscreen_exit: '退出全屏',
+    toggle_sidebar: '切换导航菜单',
+    ios_install_title: '在 iOS 上全屏使用',
+    ios_install_step1: '点击 Safari 底部的“分享”按钮',
+    ios_install_step2: '向下滚动并选择“添加到主屏幕”',
+    ios_install_step3: '从主屏幕启动 IMAGINE，即可享受无地址栏的沉浸式全屏体验。',
+    ios_install_close: '知道了',
     language_select: '语言',
 
     // Left Sidebar Navigation

@@ -2,8 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1e1e1e">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="IMAGINE">
   <title>IMAGINE Organizer</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.svg">
+  <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="app.css?v=10">
 </head>
@@ -12,6 +20,13 @@
     <!-- Top Bar -->
     <header class="top-bar">
       <div class="top-bar-left">
+        <button class="mobile-menu-btn" id="mobileMenuBtn" title="Toggle Navigation Menu" data-i18n-title="toggle_sidebar" aria-label="Toggle Navigation Menu">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
         <div class="logo">
           <svg class="logo-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
@@ -87,11 +102,23 @@
         <button class="btn btn-icon" id="toggleInspectorBtn" title="Toggle Inspector Panel" data-i18n-title="toggle_inspector">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
         </button>
+
+        <button class="btn btn-icon" id="toggleFullscreenBtn" title="Toggle Fullscreen" data-i18n-title="toggle_fullscreen" aria-label="Toggle Fullscreen">
+          <svg class="icon-maximize" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+          </svg>
+          <svg class="icon-minimize" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+            <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
+          </svg>
+        </button>
       </div>
     </header>
 
     <!-- Main Workspace -->
     <div class="main-container">
+      <!-- Backdrop for mobile drawer -->
+      <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
       <!-- Left Sidebar (Folders, Albums, Tags) -->
       <aside class="left-sidebar" id="leftSidebar">
         <!-- Sidebar Navigation Accordion -->
@@ -1321,6 +1348,54 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" id="cancelBatchMoveBtn" data-i18n="cancel">Cancel</button>
           <button class="btn btn-primary" id="confirmBatchMoveBtn" data-i18n="confirm_move">Move</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- iOS Fullscreen & Standalone Guide Modal -->
+    <div class="modal" id="iosInstallModal" style="display: none;">
+      <div class="modal-backdrop" id="iosInstallBackdrop"></div>
+      <div class="modal-dialog ios-install-dialog">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+            </svg>
+            <h3 data-i18n="ios_install_title">Fullscreen on iOS</h3>
+          </div>
+          <button class="btn-icon-sm" id="closeIosInstallBtn" title="Close" data-i18n-title="close_panel">&times;</button>
+        </div>
+        <div class="modal-body ios-install-body">
+          <div class="ios-install-steps">
+            <div class="ios-step">
+              <div class="ios-step-num">1</div>
+              <div class="ios-step-content">
+                <strong data-i18n="ios_install_step1">Tap the Share icon at the bottom of Safari</strong>
+                <span class="ios-step-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                </span>
+              </div>
+            </div>
+            <div class="ios-step">
+              <div class="ios-step-num">2</div>
+              <div class="ios-step-content">
+                <strong data-i18n="ios_install_step2">Scroll down and tap "Add to Home Screen"</strong>
+                <span class="ios-step-icon">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                </span>
+              </div>
+            </div>
+            <div class="ios-step">
+              <div class="ios-step-num">3</div>
+              <div class="ios-step-content">
+                <span data-i18n="ios_install_step3">Launch IMAGINE from your Home Screen for a clean, full-screen experience with no address bar.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary" id="confirmIosInstallBtn" data-i18n="ios_install_close">Got it</button>
         </div>
       </div>
     </div>

@@ -109,6 +109,9 @@ export const dom = {
   rightInspector: document.getElementById('rightInspector'),
   inspectorResizerLeft: document.getElementById('inspectorResizerLeft'),
   toggleInspectorBtn: document.getElementById('toggleInspectorBtn'),
+  toggleFullscreenBtn: document.getElementById('toggleFullscreenBtn'),
+  mobileMenuBtn: document.getElementById('mobileMenuBtn'),
+  sidebarBackdrop: document.getElementById('sidebarBackdrop'),
   closeInspectorBtn: document.getElementById('closeInspectorBtn'),
   inspectorNoSelection: document.getElementById('inspectorNoSelection'),
   inspectorSelection: document.getElementById('inspectorSelection'),
@@ -328,7 +331,11 @@ export const dom = {
   batchMoveModalTitle: document.getElementById('batchMoveModalTitle'),
   batchMoveTargetCount: document.getElementById('batchMoveTargetCount'),
   batchMovePathInput: document.getElementById('batchMovePathInput'),
-  batchMoveFolderSuggestions: document.getElementById('batchMoveFolderSuggestions')
+  batchMoveFolderSuggestions: document.getElementById('batchMoveFolderSuggestions'),
+  iosInstallModal: document.getElementById('iosInstallModal'),
+  iosInstallBackdrop: document.getElementById('iosInstallBackdrop'),
+  closeIosInstallBtn: document.getElementById('closeIosInstallBtn'),
+  confirmIosInstallBtn: document.getElementById('confirmIosInstallBtn')
 };
 
 export function refreshDomReferences() {
