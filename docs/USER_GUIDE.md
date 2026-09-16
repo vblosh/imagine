@@ -506,6 +506,7 @@ The embedded C++ HTTP server provides a full REST API for developers and externa
 - **Location**: Default is `catalog.db` in your working directory (or any path specified via `--catalog`).
 - **WAL Mode**: Write-Ahead Logging (`PRAGMA journal_mode = WAL`) is enabled, allowing concurrent reads while imports or tag updates are writing to disk.
 - **Transactions**: Multi-photo operations are wrapped in atomic transactions for ACID safety and high write throughput.
+- **Developer Documentation**: For complete technical specifications of tables, columns, indexes, migrations (v1–v4), and C++ data access APIs, see the [Database Schema Documentation](dev/database_schema.md).
 
 ### Thumbnail Cache
 - **Location**: Default is `~/.cache/imagine/thumbs` (or `$XDG_CACHE_HOME/imagine/thumbs`).

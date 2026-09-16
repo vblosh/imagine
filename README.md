@@ -95,6 +95,9 @@ imagine/
 ├── docs/
 │   ├── USER_GUIDE.md           # Comprehensive user guide, CLI & REST API reference
 │   └── dev/                    # Developer documentation & UI test plans
+│       ├── database_schema.md  # SQLite relational schema, migrations, indices & DB architecture
+│       ├── map_view.md         # Map View & Geotagging developer documentation
+│       └── ui_test_plan.md     # Deterministic UI test harness architecture
 ├── include/imagine/            # Public C++20 header architecture
 │   ├── common/                 # Types, Error, Logger
 │   ├── concurrency/            # ThreadPool (std::jthread)
