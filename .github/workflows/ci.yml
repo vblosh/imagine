@@ -44,15 +44,17 @@ jobs:
         run: cmake --build build -j$(nproc)
 
       - name: Run C++ unit tests
-        run: ./build/imagine_tests
+        run: ./build/imagine_tests --gtest_output=xml:build/unit-test-results.xml
 
       - name: Step Summary
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
+            unit_tests=$(python3 -c "import xml.etree.ElementTree as ET; print(ET.parse('build/unit-test-results.xml').getroot().attrib['tests'])")
             echo "### Unit Tests (GCC) :white_check_mark:" >> $GITHUB_STEP_SUMMARY
             echo "- **Compiler:** GCC (\`g++\`)" >> $GITHUB_STEP_SUMMARY
             echo "- **Build Type:** Release" >> $GITHUB_STEP_SUMMARY
+            echo "- **Unit Tests:** $unit_tests unit tests passed" >> $GITHUB_STEP_SUMMARY
           else
             echo "### Unit Tests (GCC) :x:" >> $GITHUB_STEP_SUMMARY
             echo "- **Status:** Job failed" >> $GITHUB_STEP_SUMMARY
@@ -125,12 +127,12 @@ jobs:
         env:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
-        run: ./build/imagine_tests
+        run: ./build/imagine_tests --gtest_output=xml:build/unit-test-results.xml
 
       - name: Run Playwright UI Tests
         env:
           ASAN_OPTIONS: detect_leaks=0
-        run: pytest tests/ui -n 4 --dist loadfile -v
+        run: pytest tests/ui -n 4 --dist loadfile --junitxml=build/ui-test-results.xml -v
 
       - name: Upload Artifacts on Failure
         if: failure()
@@ -145,11 +147,13 @@ jobs:
         if: always()
         run: |
           if [ "${{ job.status }}" == "success" ]; then
+            unit_tests=$(python -c "import xml.etree.ElementTree as ET; print(ET.parse('build/unit-test-results.xml').getroot().attrib['tests'])")
+            ui_tests=$(python -c "import xml.etree.ElementTree as ET; print(sum(int(s.attrib.get('tests', 0)) for s in ET.parse('build/ui-test-results.xml').getroot().iter('testsuite')))")
             echo "### Clang + Sanitizers + UI Tests Completed :white_check_mark:" >> $GITHUB_STEP_SUMMARY
             echo "- **Compiler:** Clang (\`clang++\`)" >> $GITHUB_STEP_SUMMARY
             echo "- **Sanitizers:** AddressSanitizer & UndefinedBehaviorSanitizer (Clean, 0 errors/leaks)" >> $GITHUB_STEP_SUMMARY
-            echo "- **Unit Tests:** 131 unit tests passed under ASan & UBSan" >> $GITHUB_STEP_SUMMARY
-            echo "- **UI Tests:** 187 deterministic Playwright browser tests passed" >> $GITHUB_STEP_SUMMARY
+            echo "- **Unit Tests:** $unit_tests unit tests passed under ASan & UBSan" >> $GITHUB_STEP_SUMMARY
+            echo "- **UI Tests:** $ui_tests deterministic Playwright browser tests passed" >> $GITHUB_STEP_SUMMARY
           else
             echo "### Clang + Sanitizers + UI Tests :x:" >> $GITHUB_STEP_SUMMARY
             echo "- **Status:** Job failed" >> $GITHUB_STEP_SUMMARY
@@ -205,17 +209,19 @@ jobs:
         run: .\build\imagine.exe --help
 
       - name: Run C++ unit tests
-        run: .\build\imagine_tests.exe
+        run: .\build\imagine_tests.exe --gtest_output=xml:build/unit-test-results.xml
 
       - name: Step Summary
         if: always()
         run: |
           if ("${{ job.status }}" -eq "success") {
+            [xml]$testResults = Get-Content "build/unit-test-results.xml"
+            $unitTests = $testResults.testsuites.tests
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows Build & Tests (MSVC) :white_check_mark:"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Compiler:** MSVC (\`cl.exe\`)"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Build Type:** Release"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Dependencies:** vcpkg manifest mode (OpenSSL, Zlib)"
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Unit Tests:** 131 unit tests passed"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Unit Tests:** $unitTests unit tests passed"
           } else {
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Windows Build & Tests (MSVC) :x:"
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Status:** Job failed"
