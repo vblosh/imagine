@@ -89,17 +89,17 @@ def test_import_invalid_directory_path(empty_server, page: Page):
     # Enter non-existent directory path
     page.locator("#importPathInput").fill("/path/that/does/not/exist/for/import_test_xyz")
 
-    with page.expect_event("dialog") as dialog_info:
-        page.locator("#startImportBtn").click()
-
-    dialog = dialog_info.value
-    assert "Import error" in dialog.message
-    dialog.accept()
+    dialog_messages = []
+    page.once("dialog", lambda dialog: (dialog_messages.append(dialog.message), dialog.accept()))
+    page.locator("#startImportBtn").click(no_wait_after=True)
 
     # Modal remains open, Start Import button re-enabled, progress box hidden
-    expect(page.locator("#importModal")).to_be_visible()
     expect(page.locator("#startImportBtn")).to_be_enabled()
+    expect(page.locator("#importModal")).to_be_visible()
     expect(page.locator("#importProgressBox")).to_be_hidden()
+
+    assert len(dialog_messages) == 1
+    assert "Import error" in dialog_messages[0]
 
     # Close modal
     page.locator("#cancelImportBtn").click()
