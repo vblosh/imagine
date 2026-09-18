@@ -2230,6 +2230,55 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
         }
     });
 
+    // DELETE /api/albums/:id/media
+    server.Delete(R"(/api/albums/(\d+)/media)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        AlbumId albumId = std::stoll(req.matches[1]);
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::vector<MediaId> mediaIds;
+            if (body.contains("media_id") && body["media_id"].is_number()) {
+                mediaIds.push_back(body["media_id"].get<MediaId>());
+            } else if (body.contains("media_ids") && body["media_ids"].is_array()) {
+                for (const auto& mid : body["media_ids"]) {
+                    if (mid.is_number()) {
+                        mediaIds.push_back(mid.get<MediaId>());
+                    }
+                }
+            } else {
+                sendError(res, "Missing media_id or media_ids array");
+                return;
+            }
+
+            if (mediaIds.empty()) {
+                sendError(res, "At least one media ID is required");
+                return;
+            }
+            if (mediaIds.size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
+
+            auto albumRes = catalog_ ? catalog_->getAlbum(albumId) : db().getAlbumById(albumId);
+            if (!albumRes.isOk()) {
+                sendStatusError(res, albumRes.status());
+                return;
+            }
+
+            for (MediaId mediaId : mediaIds) {
+                Status s = catalog_ ? catalog_->removeMediaFromAlbum(albumId, mediaId) : db().removeMediaFromAlbum(albumId, mediaId);
+                if (!s.isOk()) {
+                    sendStatusError(res, s);
+                    return;
+                }
+            }
+
+            sendJson(res, { {"status", "ok"}, {"album_id", albumId}, {"removed_count", mediaIds.size()} });
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
     // DELETE /api/albums/:id
     server.Delete(R"(/api/albums/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;

@@ -47,8 +47,13 @@ export const api = {
     return res.json();
   },
 
-  async del(endpoint) {
-    const res = await fetch(endpoint, { method: 'DELETE' });
+  async del(endpoint, data = null) {
+    const fetchOpts = { method: 'DELETE' };
+    if (data !== null && data !== undefined) {
+      fetchOpts.headers = { 'Content-Type': 'application/json' };
+      fetchOpts.body = JSON.stringify(data);
+    }
+    const res = await fetch(endpoint, fetchOpts);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || 'Delete failed');

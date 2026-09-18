@@ -832,6 +832,37 @@ TEST_F(ServerTest, ValidationAndErrorEndpoints) {
                           nlohmann::json{{"media_id", videoId}}.dump(),
                           "application/json")->status, 404);
 
+    // DELETE /api/albums/:id/media with validation, single, and batch payloads
+    const std::string albumMediaPath = "/api/albums/" + std::to_string(aid) + "/media";
+    EXPECT_EQ(client.Delete(albumMediaPath)->status, 400);
+    EXPECT_EQ(client.Delete(albumMediaPath, "{}", "application/json")->status, 400);
+    EXPECT_EQ(client.Delete("/api/albums/99999/media",
+                            nlohmann::json{{"media_id", mid}}.dump(),
+                            "application/json")->status, 404);
+
+    nlohmann::json oversizedRemove = nlohmann::json::array();
+    for (int i = 0; i < 1001; ++i) {
+        oversizedRemove.push_back(i);
+    }
+    EXPECT_EQ(client.Delete(albumMediaPath,
+                            nlohmann::json{{"media_ids", oversizedRemove}}.dump(),
+                            "application/json")->status, 400);
+
+    auto removeSingle = client.Delete(albumMediaPath,
+                                      nlohmann::json{{"media_id", mid}}.dump(),
+                                      "application/json");
+    ASSERT_TRUE(removeSingle);
+    EXPECT_EQ(removeSingle->status, 200);
+
+    auto removeBatch = client.Delete(albumMediaPath,
+                                     nlohmann::json{{"media_ids", {videoId}}}.dump(),
+                                     "application/json");
+    ASSERT_TRUE(removeBatch);
+    EXPECT_EQ(removeBatch->status, 200);
+    auto emptyAlbumMedia = client.Get("/api/media?album_id=" + std::to_string(aid));
+    ASSERT_TRUE(emptyAlbumMedia);
+    EXPECT_EQ(nlohmann::json::parse(emptyAlbumMedia->body)["total"], 0);
+
     // DELETE /api/albums/:id
     auto delAlb = client.Delete("/api/albums/" + std::to_string(aid));
     ASSERT_TRUE(delAlb);

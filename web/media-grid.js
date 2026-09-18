@@ -734,6 +734,13 @@ export function updateBatchBar() {
   if (!dom.batchActionBar) return;
   const count = state.selectedIds.size;
   const sortSelector = document.querySelector('.sort-selector');
+  if (dom.batchAddAlbumBtn) {
+    const labelKey = state.activeAlbumId ? 'remove_from_album' : 'add_to_album';
+    dom.batchAddAlbumBtn.dataset.i18n = labelKey;
+    dom.batchAddAlbumBtn.dataset.i18nTitle = labelKey;
+    dom.batchAddAlbumBtn.textContent = t(labelKey);
+    dom.batchAddAlbumBtn.title = t(labelKey);
+  }
   if (count > 1) {
     dom.batchActionBar.style.display = 'flex';
     if (dom.batchSelectedCount) dom.batchSelectedCount.textContent = t('n_selected', { count });

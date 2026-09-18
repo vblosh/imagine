@@ -199,6 +199,59 @@ def test_add_photo_to_album_inspector(server, page: Page):
     expect(modal).to_be_hidden()
 
 
+def test_remove_photo_from_album_inspector(server, page: Page):
+    """The inspector removes one selected photo from the active album."""
+    page.goto(server["url"])
+
+    album = page.locator("#albumsList .menu-item", has_text="Best of 2026")
+    album.click()
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(2)
+
+    cards.first.click()
+    add_btn = page.locator("#inspectorAddToAlbumBtn")
+    expect(add_btn).to_have_text("Add to Album")
+    add_btn.click()
+    expect(page.locator("#addToAlbumModal")).to_be_visible()
+    page.locator("#cancelAddToAlbumBtn").click()
+
+    remove_btn = page.locator("#inspectorRemoveFromAlbumBtn")
+    expect(remove_btn).to_be_visible()
+    expect(remove_btn).to_have_text("Remove from Album")
+
+    with page.expect_response(lambda response: "/api/albums/" in response.url and response.url.endswith("/media") and response.request.method == "DELETE") as response_info:
+        remove_btn.click()
+    assert response_info.value.ok
+
+    expect(cards).to_have_count(1)
+    expect(album.locator(".count-badge")).to_have_text("1")
+
+
+def test_remove_photos_from_album_batch_toolbar(server, page: Page):
+    """The batch toolbar removes all selected photos from the active album."""
+    page.goto(server["url"])
+
+    album = page.locator("#albumsList .menu-item", has_text="Best of 2026")
+    album.click()
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(2)
+
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=["Control"])
+    expect(page.locator("#inspectorAddToAlbumBtn")).to_have_text("Add to Album")
+    expect(page.locator("#inspectorRemoveFromAlbumBtn")).to_be_visible()
+    remove_btn = page.locator("#batchAddAlbumBtn")
+    expect(remove_btn).to_have_text("Remove from Album")
+
+    with page.expect_response(lambda response: "/api/albums/" in response.url and response.url.endswith("/media") and response.request.method == "DELETE") as response_info:
+        remove_btn.click()
+    assert response_info.value.ok
+
+    expect(cards).to_have_count(0)
+    expect(album.locator(".count-badge")).to_have_text("0")
+    expect(page.locator("#batchActionBar")).to_be_hidden()
+
+
 def test_set_album_cover_from_inspector(server, page: Page):
     """Setting a selected album photo as its cover persists the selected media ID."""
     page.goto(server["url"])

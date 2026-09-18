@@ -162,6 +162,28 @@ import {
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
 import { renderCategoryView, initCategoryView, navigateBackToCategory } from './category-view.js';
 
+async function removeSelectedFromActiveAlbum() {
+  const albumId = state.activeAlbumId;
+  const mediaIds = Array.from(state.selectedIds);
+  if (!albumId || mediaIds.length === 0) return;
+
+  const actionButtons = [dom.inspectorRemoveFromAlbumBtn, dom.batchAddAlbumBtn].filter(Boolean);
+  actionButtons.forEach(button => { button.disabled = true; });
+  try {
+    await api.del(`/api/albums/${albumId}/media`, { media_ids: mediaIds });
+    clearCardSelections();
+    await loadMetadata();
+    await loadMedia();
+    showToast(t('toast_removed_from_album'), 'success');
+  } catch (err) {
+    showToast(`${t('remove_from_album_failed')}: ${err.message}`, 'error');
+  } finally {
+    actionButtons.forEach(button => { button.disabled = false; });
+    updateBatchBar();
+    updateInspectorAlbumActions();
+  }
+}
+
 export function setupEventListeners() {
   initCategoryView();
 
@@ -815,6 +837,12 @@ export function setupEventListeners() {
     });
   }
 
+  if (dom.inspectorRemoveFromAlbumBtn) {
+    dom.inspectorRemoveFromAlbumBtn.addEventListener('click', () => {
+      removeSelectedFromActiveAlbum();
+    });
+  }
+
   if (dom.inspectorSetAsCoverBtn) {
     dom.inspectorSetAsCoverBtn.addEventListener('click', async () => {
       if (!state.activeAlbumId || state.selectedIds.size !== 1) return;
@@ -874,7 +902,11 @@ export function setupEventListeners() {
 
   if (dom.batchAddAlbumBtn) {
     dom.batchAddAlbumBtn.addEventListener('click', () => {
-      openAddToAlbumModal(Array.from(state.selectedIds));
+      if (state.activeAlbumId) {
+        removeSelectedFromActiveAlbum();
+      } else {
+        openAddToAlbumModal(Array.from(state.selectedIds));
+      }
     });
   }
 

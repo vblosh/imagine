@@ -56,8 +56,26 @@ export function patchInspectorRatingAndFlag(item) {
 }
 
 export function updateInspectorAlbumActions(item = currentInspectorItem) {
-  if (!dom.inspectorSetAsCoverBtn) return;
   const activeAlbum = state.albums.find(album => album.id === state.activeAlbumId);
+  const canRemoveFromAlbum = Boolean(
+    activeAlbum &&
+    state.selectedIds.size > 0
+  );
+  if (dom.inspectorAddToAlbumBtn) {
+    dom.inspectorAddToAlbumBtn.dataset.i18n = 'add_to_album';
+    dom.inspectorAddToAlbumBtn.dataset.i18nTitle = 'add_to_album';
+    dom.inspectorAddToAlbumBtn.textContent = t('add_to_album');
+    dom.inspectorAddToAlbumBtn.title = t('add_to_album');
+  }
+  if (dom.inspectorRemoveFromAlbumBtn) {
+    dom.inspectorRemoveFromAlbumBtn.dataset.i18n = 'remove_from_album';
+    dom.inspectorRemoveFromAlbumBtn.dataset.i18nTitle = 'remove_from_album';
+    dom.inspectorRemoveFromAlbumBtn.textContent = t('remove_from_album');
+    dom.inspectorRemoveFromAlbumBtn.title = t('remove_from_album');
+    dom.inspectorRemoveFromAlbumBtn.style.display = canRemoveFromAlbum ? 'block' : 'none';
+  }
+
+  if (!dom.inspectorSetAsCoverBtn) return;
   const isCurrentCover = Boolean(
     item &&
     activeAlbum &&
