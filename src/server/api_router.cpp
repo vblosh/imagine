@@ -171,9 +171,60 @@ bool isSensitiveSystemPath(const std::filesystem::path& canonicalPath) {
     return false;
 }
 
+#if defined(_WIN32)
+constexpr char kImportRootsDelimiter = ';';
+#else
+constexpr char kImportRootsDelimiter = ':';
+#endif
+
+bool isDescendantOrEqual(const std::filesystem::path& target, const std::filesystem::path& root) {
+    auto pNormal = target.lexically_normal();
+    auto rNormal = root.lexically_normal();
+
+    if (pNormal.filename() == ".") {
+        pNormal = pNormal.parent_path();
+    }
+    if (rNormal.filename() == ".") {
+        rNormal = rNormal.parent_path();
+    }
+
+    auto itP = pNormal.begin();
+    auto endP = pNormal.end();
+    auto itR = rNormal.begin();
+    auto endR = rNormal.end();
+
+    while (itR != endR) {
+        if (itP == endP) {
+            return false;
+        }
+
+#if defined(_WIN32)
+        std::string sP = itP->string();
+        std::string sR = itR->string();
+        if (sP.size() != sR.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < sP.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(sP[i])) !=
+                std::tolower(static_cast<unsigned char>(sR[i]))) {
+                return false;
+            }
+        }
+#else
+        if (*itP != *itR) {
+            return false;
+        }
+#endif
+        ++itP;
+        ++itR;
+    }
+
+    return true;
+}
+
 bool isWithinAllowedRoots(const std::filesystem::path& canonicalPath, std::string& outError) {
     if (isSensitiveSystemPath(canonicalPath)) {
-        outError = "Importing sensitive system directory is forbidden: " + canonicalPath.string();
+        outError = "Importing sensitive system directory is forbidden: " + pathToUtf8(canonicalPath);
         return false;
     }
 
@@ -183,21 +234,30 @@ bool isWithinAllowedRoots(const std::filesystem::path& canonicalPath, std::strin
         std::stringstream ss(envStr);
         std::string root;
         bool matched = false;
-        while (std::getline(ss, root, ':')) {
+        while (std::getline(ss, root, kImportRootsDelimiter)) {
+            while (!root.empty() && (root.front() == ' ' || root.front() == '\t' || root.front() == '\r' || root.front() == '\n')) {
+                root.erase(0, 1);
+            }
+            while (!root.empty() && (root.back() == ' ' || root.back() == '\t' || root.back() == '\r' || root.back() == '\n')) {
+                root.pop_back();
+            }
             if (root.empty()) continue;
             std::error_code ec;
-            auto cRoot = std::filesystem::canonical(root, ec);
+            auto rootPath = pathFromUtf8(root);
+            auto cRoot = stripExtendedPrefix(std::filesystem::canonical(rootPath, ec));
+            if (ec) {
+                ec.clear();
+                cRoot = stripExtendedPrefix(std::filesystem::weakly_canonical(rootPath, ec));
+            }
             if (!ec) {
-                std::string cRootStr = cRoot.lexically_normal().string();
-                std::string cPathStr = canonicalPath.lexically_normal().string();
-                if (cPathStr == cRootStr || (cPathStr.rfind(cRootStr + "/", 0) == 0)) {
+                if (isDescendantOrEqual(canonicalPath, cRoot)) {
                     matched = true;
                     break;
                 }
             }
         }
         if (!matched) {
-            outError = "Directory is not within allowed import roots: " + canonicalPath.string();
+            outError = "Directory is not within allowed import roots: " + pathToUtf8(canonicalPath);
             return false;
         }
     }
@@ -1815,6 +1875,9 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                         return;
                     }
                     auto img = loadRes.value();
+                    if (item.exif.orientation > 1 && item.exif.orientation <= 8) {
+                        img = thumbnail::Generator::rotate(img, item.exif.orientation);
+                    }
                     const auto& ops = body["operations"];
                     if (ops.contains("crop") && ops["crop"].is_object()) {
                         int x = ops["crop"].value("x", 0);
@@ -1897,6 +1960,19 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                     return;
                 }
                 ofs.write(reinterpret_cast<const char*>(newImageBytes.data()), newImageBytes.size());
+                ofs.flush();
+                if (!ofs) {
+                    ofs.close();
+                    std::filesystem::remove(destPath, ec);
+                    sendError(res, "Failed to write new file: " + destPath.string(), 500);
+                    return;
+                }
+                ofs.close();
+                if (ofs.fail()) {
+                    std::filesystem::remove(destPath, ec);
+                    sendError(res, "Failed to close new file: " + destPath.string(), 500);
+                    return;
+                }
             }
 
             if (catalog_) {
@@ -1928,6 +2004,19 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                     return;
                 }
                 ofs.write(reinterpret_cast<const char*>(newImageBytes.data()), newImageBytes.size());
+                ofs.flush();
+                if (!ofs) {
+                    ofs.close();
+                    std::filesystem::remove(tmpPath, ec);
+                    sendError(res, "Failed to write temporary file for saving", 500);
+                    return;
+                }
+                ofs.close();
+                if (ofs.fail()) {
+                    std::filesystem::remove(tmpPath, ec);
+                    sendError(res, "Failed to close temporary file for saving", 500);
+                    return;
+                }
             }
 
             std::filesystem::rename(tmpPath, photoPath, ec);
@@ -1947,6 +2036,7 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
             auto mtime = std::filesystem::last_write_time(photoPath, ec);
             int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
 
+            item.exif.orientation = 1;
             cache().ensureDualThumbnails(photoPath, newHash, item.exif.orientation);
 
             item.content_hash = newHash;

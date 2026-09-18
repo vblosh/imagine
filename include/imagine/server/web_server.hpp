@@ -4,6 +4,7 @@
 #include <memory>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include "imagine/common/error.hpp"
 
@@ -55,6 +56,7 @@ private:
     void setupStaticFileServing();
 
     mutable std::mutex lifecycleMutex_;
+    std::condition_variable cv_;
     core::Catalog& catalog_;
     std::string webRoot_;
     std::string host_{"0.0.0.0"};
@@ -64,8 +66,9 @@ private:
     size_t payloadMaxLength_{kDefaultPayloadMaxLength};
     std::unique_ptr<httplib::Server> server_;
     std::unique_ptr<ApiRouter> router_;
-    std::shared_ptr<std::thread> thread_;
+    std::unique_ptr<std::thread> thread_;
     std::atomic<bool> isRunning_{false};
+    bool stopping_{false};
 };
 
 } // namespace imagine::server

@@ -188,24 +188,34 @@ Status WebServer::start(const std::string& host, int port, const std::string& we
     }
 
     isRunning_ = true;
-    thread_ = std::make_shared<std::thread>([this, s = server_.get()]() {
+    stopping_ = false;
+    thread_ = std::make_unique<std::thread>([this, s = server_.get()]() {
         IMAGINE_LOG_INFO("Web server started at http://" + host_ + ":" + std::to_string(port_));
         s->listen_after_bind();
-        isRunning_ = false;
+        {
+            std::lock_guard<std::mutex> lock(lifecycleMutex_);
+            isRunning_ = false;
+        }
+        cv_.notify_all();
     });
 
     return Status::ok();
 }
 
 void WebServer::stop() {
-    std::shared_ptr<std::thread> t;
+    std::unique_ptr<std::thread> t;
     std::unique_ptr<httplib::Server> s;
     std::unique_ptr<ApiRouter> r;
     {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
-        if (!isRunning_ && !server_) {
+        std::unique_lock<std::mutex> lock(lifecycleMutex_);
+        if (stopping_) {
+            cv_.wait(lock, [this]() { return !stopping_; });
             return;
         }
+        if (!isRunning_ && !server_ && !thread_) {
+            return;
+        }
+        stopping_ = true;
         r = std::move(router_);
         s = std::move(server_);
         t = std::move(thread_);
@@ -219,22 +229,29 @@ void WebServer::stop() {
     }
     if (t && t->joinable()) {
         try {
-            t->join();
+            if (t->get_id() != std::this_thread::get_id()) {
+                t->join();
+            } else {
+                t->detach();
+            }
         } catch (...) {}
     }
+    {
+        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        stopping_ = false;
+    }
+    cv_.notify_all();
     IMAGINE_LOG_INFO("Web server stopped");
 }
 
 void WebServer::wait() {
-    std::shared_ptr<std::thread> t;
-    {
-        std::lock_guard<std::mutex> lock(lifecycleMutex_);
-        t = thread_;
-    }
-    if (t && t->joinable()) {
-        try {
-            t->join();
-        } catch (...) {}
+    std::unique_lock<std::mutex> lock(lifecycleMutex_);
+    cv_.wait(lock, [this]() {
+        return !isRunning_ && !stopping_;
+    });
+    if (thread_) {
+        lock.unlock();
+        stop();
     }
 }
 

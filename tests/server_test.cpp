@@ -1699,4 +1699,256 @@ TEST_F(ServerTest, MediaFilterOrModeTagsAndFolders) {
     EXPECT_EQ(j3["items"].size(), 2);
 }
 
+TEST_F(ServerTest, FailedWritePreservesOriginalPhoto) {
+    auto photosDir = testDir_ / "photos_write_fail";
+    std::filesystem::create_directories(photosDir);
+    std::string photoPath = (photosDir / "preserve_test.jpg").string();
+
+    ImageBuffer buf;
+    buf.width = 100;
+    buf.height = 100;
+    buf.channels = 3;
+    buf.data.resize(100 * 100 * 3, 200);
+    ASSERT_TRUE(Generator::saveJpeg(buf, photoPath).isOk());
+
+    auto origSize = std::filesystem::file_size(photoPath);
+    ASSERT_GT(origSize, 0u);
+
+    ASSERT_TRUE(catalog_->importDirectory(photosDir.string(), true, nullptr).isOk());
+    auto mRes = catalog_->getMediaByPath(photoPath);
+    ASSERT_TRUE(mRes.isOk());
+    MediaId id = mRes.value().id;
+
+    // Simulate write failure by creating a directory where the temporary file needs to go
+    std::string tmpPath = photoPath + ".edit.tmp";
+    std::filesystem::create_directories(tmpPath);
+
+    httplib::Client client("127.0.0.1", port_);
+    nlohmann::json editPayload = {
+        {"mode", "overwrite"},
+        {"operations", {
+            {"rotation", 90}
+        }}
+    };
+
+    auto editRes = client.Post("/api/photos/" + std::to_string(id) + "/edit", editPayload.dump(), "application/json");
+    ASSERT_TRUE(editRes);
+    EXPECT_EQ(editRes->status, 500);
+
+    // Verify original photo was preserved intact
+    std::error_code ec;
+    EXPECT_TRUE(std::filesystem::exists(photoPath, ec));
+    EXPECT_EQ(std::filesystem::file_size(photoPath, ec), origSize);
+
+    // Clean up temporary directory
+    std::filesystem::remove_all(tmpPath, ec);
+}
+
+TEST_F(ServerTest, WebServerConcurrentStopAndWait) {
+    auto testCatalog = std::make_unique<Catalog>(1);
+    std::string cDb = (testDir_ / "concurrent_cat.db").string();
+    std::string cCache = (testDir_ / "concurrent_cache").string();
+    ASSERT_TRUE(testCatalog->open(cDb, cCache).isOk());
+
+    int p = 19800 + (std::rand() % 4000);
+    WebServer ws(*testCatalog, webDir_.string());
+    ASSERT_TRUE(ws.start("127.0.0.1", p, webDir_.string()).isOk());
+
+    std::atomic<bool> waitFinished{false};
+    std::thread waitThread([&ws, &waitFinished]() {
+        ws.wait();
+        waitFinished = true;
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(waitFinished.load());
+
+    // Concurrently stop the server from multiple threads
+    std::vector<std::thread> stopThreads;
+    for (int i = 0; i < 4; ++i) {
+        stopThreads.emplace_back([&ws]() {
+            ws.stop();
+        });
+    }
+
+    for (auto& t : stopThreads) {
+        t.join();
+    }
+    waitThread.join();
+
+    EXPECT_TRUE(waitFinished.load());
+    EXPECT_FALSE(ws.isRunning());
+
+    // Calling wait() again on already stopped server returns immediately
+    ws.wait();
+
+    // Calling run on a background thread and stopping concurrently
+    int p2 = 19800 + (std::rand() % 4000);
+    std::atomic<bool> runFinished{false};
+    std::thread runThread([&ws, p2, &runFinished, this]() {
+        auto status = ws.run("127.0.0.1", p2, webDir_.string());
+        EXPECT_TRUE(status.isOk());
+        runFinished = true;
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_TRUE(ws.isRunning());
+    ws.stop();
+    runThread.join();
+    EXPECT_TRUE(runFinished.load());
+}
+
+TEST_F(ServerTest, ImportRootRestrictionsWindowsPaths) {
+    auto allowedDir1 = testDir_ / "allowed_root1";
+    auto allowedDir2 = testDir_ / "allowed_root2";
+    auto disallowedDir = testDir_ / "disallowed_dir";
+    std::filesystem::create_directories(allowedDir1 / "subfolder");
+    std::filesystem::create_directories(allowedDir2);
+    std::filesystem::create_directories(disallowedDir);
+
+#if defined(_WIN32)
+    std::string envVal = allowedDir1.string() + ";" + allowedDir2.string();
+    _putenv_s("IMAGINE_ALLOWED_IMPORT_ROOTS", envVal.c_str());
+#else
+    std::string envVal = allowedDir1.string() + ":" + allowedDir2.string();
+    setenv("IMAGINE_ALLOWED_IMPORT_ROOTS", envVal.c_str(), 1);
+#endif
+
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Importing within allowed root 1 (subfolder) should succeed
+    nlohmann::json body1 = {{"path", (allowedDir1 / "subfolder").string()}};
+    auto res1 = client.Post("/api/import", body1.dump(), "application/json");
+    ASSERT_TRUE(res1);
+    EXPECT_EQ(res1->status, 200);
+
+    // 2. Importing allowed root 2 itself should succeed
+    nlohmann::json body2 = {{"path", allowedDir2.string()}};
+    auto res2 = client.Post("/api/import", body2.dump(), "application/json");
+    ASSERT_TRUE(res2);
+    EXPECT_EQ(res2->status, 200);
+
+    // 3. Importing outside allowed roots should be rejected with 403 Forbidden
+    nlohmann::json body3 = {{"path", disallowedDir.string()}};
+    auto res3 = client.Post("/api/import", body3.dump(), "application/json");
+    ASSERT_TRUE(res3);
+    EXPECT_EQ(res3->status, 403);
+    auto errJson = nlohmann::json::parse(res3->body);
+    EXPECT_NE(errJson["error"].get<std::string>().find("not within allowed import roots"), std::string::npos);
+
+#if defined(_WIN32)
+    _putenv_s("IMAGINE_ALLOWED_IMPORT_ROOTS", "");
+#else
+    unsetenv("IMAGINE_ALLOWED_IMPORT_ROOTS");
+#endif
+}
+
+TEST_F(ServerTest, EditedPortraitThumbnailNormalizesOrientation) {
+    auto photosDir = testDir_ / "photos_portrait";
+    std::filesystem::create_directories(photosDir);
+    std::string photoPath = (photosDir / "portrait.jpg").string();
+
+    // 1. Create raw image on disk that is LANDSCAPE (400x300) with colored halves:
+    // Top half (y < 150): Red (255, 0, 0)
+    // Bottom half (y >= 150): Blue (0, 0, 255)
+    ImageBuffer buf;
+    buf.width = 400;
+    buf.height = 300;
+    buf.channels = 3;
+    buf.data.resize(400 * 300 * 3);
+    for (int y = 0; y < 300; ++y) {
+        for (int x = 0; x < 400; ++x) {
+            int idx = (y * 400 + x) * 3;
+            if (y < 150) {
+                buf.data[idx] = 255; buf.data[idx + 1] = 0; buf.data[idx + 2] = 0; // Red
+            } else {
+                buf.data[idx] = 0; buf.data[idx + 1] = 0; buf.data[idx + 2] = 255; // Blue
+            }
+        }
+    }
+    ASSERT_TRUE(Generator::saveJpeg(buf, photoPath).isOk());
+
+    ASSERT_TRUE(catalog_->importDirectory(photosDir.string(), true, nullptr).isOk());
+    auto mRes = catalog_->getMediaByPath(photoPath);
+    ASSERT_TRUE(mRes.isOk());
+    MediaId id = mRes.value().id;
+
+    // Simulate original photo having EXIF orientation 6 (Rotate 90 CW).
+    // Visually, rotating 90 CW turns 400x300 landscape into 300x400 portrait:
+    // Top (Red) moves to Right half (x >= 150), Bottom (Blue) moves to Left half (x < 150).
+    auto item = mRes.value();
+    item.exif.orientation = 6;
+    ASSERT_TRUE(catalog_->db().updateMedia(item).isOk());
+
+    auto checkBefore = catalog_->db().getMediaById(id);
+    ASSERT_TRUE(checkBefore.isOk());
+    EXPECT_EQ(checkBefore.value().exif.orientation, 6);
+
+    // 2. Perform an operation-based edit with rotation: 0 (and overwrite mode).
+    // The server must normalize the raw pixels using EXIF orientation 6 before applying operations,
+    // saving an upright 300x400 image and resetting orientation to 1.
+    httplib::Client client("127.0.0.1", port_);
+    nlohmann::json editPayload = {
+        {"mode", "overwrite"},
+        {"operations", {
+            {"rotation", 0}
+        }}
+    };
+
+    auto editRes = client.Post("/api/photos/" + std::to_string(id) + "/edit", editPayload.dump(), "application/json");
+    ASSERT_TRUE(editRes);
+    EXPECT_EQ(editRes->status, 200);
+
+    auto resJson = nlohmann::json::parse(editRes->body);
+    EXPECT_EQ(resJson["exif"]["orientation"].get<int>(), 1);
+    // Visual portrait dimensions
+    EXPECT_EQ(resJson["width"].get<int>(), 300);
+    EXPECT_EQ(resJson["height"].get<int>(), 400);
+
+    // Verify DB orientation and dimensions
+    auto checkAfter = catalog_->db().getMediaById(id);
+    ASSERT_TRUE(checkAfter.isOk());
+    EXPECT_EQ(checkAfter.value().exif.orientation, 1);
+    EXPECT_EQ(checkAfter.value().width, 300);
+    EXPECT_EQ(checkAfter.value().height, 400);
+
+    // 3. Verify pixel orientation of the overwritten photo on disk
+    auto diskImgRes = Generator::loadImage(photoPath);
+    ASSERT_TRUE(diskImgRes.isOk());
+    const auto& diskImg = diskImgRes.value();
+    EXPECT_EQ(diskImg.width, 300);
+    EXPECT_EQ(diskImg.height, 400);
+
+    // Check pixel colors: Left half is Blue, Right half is Red
+    int leftPixelIdx = (200 * 300 + 50) * 3;
+    int rightPixelIdx = (200 * 300 + 250) * 3;
+    EXPECT_GT(diskImg.data[leftPixelIdx + 2], 180); // Blue high
+    EXPECT_LT(diskImg.data[leftPixelIdx], 80);       // Red low
+    EXPECT_GT(diskImg.data[rightPixelIdx], 180);     // Red high
+    EXPECT_LT(diskImg.data[rightPixelIdx + 2], 80);   // Blue low
+
+    // 4. Verify thumbnail generated in cache is portrait and correctly oriented
+    std::string newHash = resJson["content_hash"].get<std::string>();
+    auto thumbRes = client.Get("/api/thumbnails/" + newHash + "/256");
+    ASSERT_TRUE(thumbRes);
+    EXPECT_EQ(thumbRes->status, 200);
+
+    auto thumbImgRes = Generator::loadImageFromMemory(reinterpret_cast<const uint8_t*>(thumbRes->body.data()), thumbRes->body.size());
+    ASSERT_TRUE(thumbImgRes.isOk());
+    const auto& thumb = thumbImgRes.value();
+    // Portrait thumbnail: height is 256, width is 192 (300/400 * 256)
+    EXPECT_LT(thumb.width, thumb.height);
+    EXPECT_EQ(thumb.height, 256);
+    EXPECT_EQ(thumb.width, 192);
+
+    // Pixel colors in thumbnail: Left half is Blue, Right half is Red
+    int thumbLeftIdx = (128 * thumb.width + 40) * 3;
+    int thumbRightIdx = (128 * thumb.width + (thumb.width - 40)) * 3;
+    EXPECT_GT(thumb.data[thumbLeftIdx + 2], 150); // Blue
+    EXPECT_LT(thumb.data[thumbLeftIdx], 100);
+    EXPECT_GT(thumb.data[thumbRightIdx], 150);     // Red
+    EXPECT_LT(thumb.data[thumbRightIdx + 2], 100);
+}
+
+
 
