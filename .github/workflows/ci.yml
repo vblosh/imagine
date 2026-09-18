@@ -130,7 +130,7 @@ jobs:
       - name: Run Playwright UI Tests
         env:
           ASAN_OPTIONS: detect_leaks=0
-        run: pytest tests/ui -v
+        run: pytest tests/ui -n 4 --dist loadfile -v
 
       - name: Upload Artifacts on Failure
         if: failure()
@@ -159,6 +159,7 @@ jobs:
     name: Windows Build & Tests (MSVC)
     runs-on: windows-latest
     env:
+      SCCACHE_GHA_ENABLED: "true"
       VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-cache,readwrite"
     steps:
       - name: Checkout repository
@@ -169,22 +170,31 @@ jobs:
         with:
           arch: x64
 
+      - name: Get MSVC toolset version
+        id: msvc-toolset
+        run: '"version=$env:VCToolsVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append'
+
       - name: Cache vcpkg dependencies
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/vcpkg-cache
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          key: ${{ runner.os }}-vcpkg-${{ steps.msvc-toolset.outputs.version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-
+            ${{ runner.os }}-vcpkg-${{ steps.msvc-toolset.outputs.version }}-
 
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/vcpkg-cache" | Out-Null
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Configure CMake (MSVC Release)
         run: |
           $vcpkgRoot = if ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:/vcpkg" }
           cmake -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache `
             -DCMAKE_TOOLCHAIN_FILE="$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" `
             -DBUILD_TESTING=ON
 
