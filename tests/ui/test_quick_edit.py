@@ -339,3 +339,119 @@ def test_after_save_original_file_not_loaded_from_browser_cache(server, page: Pa
     expect(loupe).to_be_hidden()
 
 
+def test_save_copy_preserves_loupe_photo_identity(server, page: Page):
+    """Save Copy preserves loupeIndex so subsequent actions target the displayed original photo."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="birthday.bmp")
+    card.dblclick()
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+    expect(page.locator("#loupeFileName")).to_have_text("birthday.bmp")
+
+    # Open Quick Edit
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Rotate and Save Copy
+    page.locator("#quickEditRotateRightBtn").click()
+    page.locator("#quickEditSaveCopyBtn").click()
+    expect(page.locator("#toastContainer .toast", has_text="Saved as new copy")).to_be_visible()
+
+    # Loupe should still be viewing birthday.bmp, not the newly created copy or previous item
+    expect(page.locator("#loupeFileName")).to_have_text("birthday.bmp")
+
+    # Rate the displayed photo with '5'
+    page.keyboard.press("5")
+    expect(page.locator("#toastContainer .toast", has_text="Rating: 5★")).to_be_visible()
+
+    # Close loupe and verify that birthday.bmp has 5 stars, while the copy does not
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+
+    expect(card.locator(".card-stars span.active")).to_have_count(5)
+    copy_card = page.locator(".photo-card", has_text="birthday_edited")
+    expect(copy_card).to_be_visible()
+    expect(copy_card.locator(".card-stars span.active")).to_have_count(0)
+
+
+def test_quick_edit_save_requires_successful_original_load(server, page: Page):
+    """Saving edits requires the original image to load successfully and does not overwrite with preview pixels."""
+    page.goto(server["url"])
+
+    # Intercept original photo endpoint to return 500 error
+    page.route("**/api/photos/*/original", lambda route: route.fulfill(status=500, body=b"Error"))
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    dialog_message = []
+    page.on("dialog", lambda d: (dialog_message.append(d.message), d.accept()))
+
+    page.locator("#quickEditSaveBtn").click()
+
+    # Verify that an alert was triggered indicating failure to load original image
+    page.wait_for_timeout(500)
+    assert len(dialog_message) > 0
+    assert "Failed to load" in dialog_message[0] or "original image" in dialog_message[0].lower()
+    page.unroute("**/api/photos/*/original")
+
+
+def test_quick_edit_cancel_while_loading_settles_and_restores_buttons(server, page: Page):
+    """Cancelling Quick Edit while original image is loading settles the promise and restores save buttons."""
+    page.goto(server["url"])
+
+    pending_routes = []
+    page.route("**/api/photos/*/original", lambda route: pending_routes.append(route))
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    save_btn = page.locator("#quickEditSaveBtn")
+    save_copy_btn = page.locator("#quickEditSaveCopyBtn")
+
+    # Click Save while image is pending load
+    save_btn.click()
+    expect(save_btn).to_be_disabled()
+    expect(save_copy_btn).to_be_disabled()
+
+    # Cancel Quick Edit
+    page.locator("#quickEditCancelBtn").click()
+    expect(loupe).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
+
+    # Both buttons should be restored (enabled)
+    expect(save_btn).to_be_enabled()
+    expect(save_copy_btn).to_be_enabled()
+
+    # Unroute and release held routes cleanly
+    page.unroute("**/api/photos/*/original")
+    for r in pending_routes:
+        try:
+            r.fulfill(status=200, body=b"")
+        except Exception:
+            pass
+
+    # Open Quick Edit on next photo (sunset.bmp)
+    page.locator("#loupeNextBtn").click()
+    expect(page.locator("#loupeFileName")).to_have_text("sunset.bmp")
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Buttons must be enabled
+    expect(save_btn).to_be_enabled()
+    expect(save_copy_btn).to_be_enabled()
+
+
+
+
+

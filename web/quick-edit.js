@@ -19,12 +19,14 @@ import { renderGrid } from "./media-grid.js";
 export const quickEditState = {
   isOpen: false,
   isDirty: false,
+  isOriginalLoaded: false,
   photoId: null,
   originalImage: null,
   workingCanvas: null,
   workingCtx: null,
   hasCropped: false,
   imageLoadedPromise: null,
+  imageLoadedReject: null,
   rotation: 0,
   cropActive: false,
   cropRatio: "original",
@@ -156,6 +158,7 @@ export function openQuickEdit() {
 
   quickEditState.isOpen = true;
   quickEditState.isDirty = false;
+  quickEditState.isOriginalLoaded = false;
   quickEditState.photoId = item.id;
   quickEditState.rotation = 0;
   quickEditState.cropActive = false;
@@ -194,22 +197,48 @@ export function openQuickEdit() {
 
   renderQuickEditCanvas();
 
+  if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = false;
+  if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.disabled = false;
+
   let resolveImageLoaded;
-  quickEditState.imageLoadedPromise = new Promise((resolve) => {
+  let rejectImageLoaded;
+  quickEditState.imageLoadedPromise = new Promise((resolve, reject) => {
     resolveImageLoaded = resolve;
+    rejectImageLoaded = reject;
   });
+  quickEditState.imageLoadedReject = rejectImageLoaded;
+  quickEditState.imageLoadedPromise.catch(() => {});
 
   let fullImageLoaded = false;
   const onImageReady = (loadedImg) => {
     if (fullImageLoaded) return;
-    if (!quickEditState.isOpen || quickEditState.photoId !== item.id) return;
+    if (!quickEditState.isOpen || quickEditState.photoId !== item.id) {
+      if (rejectImageLoaded) {
+        try { rejectImageLoaded(new Error("Quick edit cancelled")); } catch (_) {}
+      }
+      return;
+    }
     fullImageLoaded = true;
+    quickEditState.isOriginalLoaded = true;
     quickEditState.originalImage = loadedImg;
     if (!quickEditState.hasCropped) {
       initWorkingCanvas(loadedImg);
     }
     renderQuickEditCanvas();
+    quickEditState.imageLoadedReject = null;
     if (resolveImageLoaded) resolveImageLoaded(loadedImg);
+  };
+
+  const onImageError = (err) => {
+    if (fullImageLoaded) return;
+    if (!quickEditState.isOpen || quickEditState.photoId !== item.id) {
+      if (rejectImageLoaded) {
+        try { rejectImageLoaded(new Error("Quick edit cancelled")); } catch (_) {}
+      }
+      return;
+    }
+    quickEditState.imageLoadedReject = null;
+    if (rejectImageLoaded) rejectImageLoaded(err || new Error("Failed to load original image"));
   };
 
   const targetOriginalUrl = (dom.loupeImg && dom.loupeImg.src && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`))
@@ -220,11 +249,13 @@ export function openQuickEdit() {
     onImageReady(dom.loupeImg);
   } else if (dom.loupeImg && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`)) {
     dom.loupeImg.addEventListener("load", () => onImageReady(dom.loupeImg), { once: true });
+    dom.loupeImg.addEventListener("error", () => onImageError(), { once: true });
   }
 
   const img = new Image();
   img.crossOrigin = "anonymous";
   img.onload = () => onImageReady(img);
+  img.onerror = () => onImageError();
   img.src = targetOriginalUrl;
 }
 
@@ -237,8 +268,16 @@ export function closeQuickEdit(promptIfDirty = true) {
     }
   }
 
+  if (quickEditState.imageLoadedReject) {
+    try {
+      quickEditState.imageLoadedReject(new Error("Quick edit cancelled"));
+    } catch (_) {}
+    quickEditState.imageLoadedReject = null;
+  }
+
   quickEditState.isOpen = false;
   quickEditState.isDirty = false;
+  quickEditState.isOriginalLoaded = false;
   quickEditState.cropActive = false;
   quickEditState.hasCropped = false;
   quickEditState.imageLoadedPromise = null;
@@ -249,6 +288,9 @@ export function closeQuickEdit(promptIfDirty = true) {
   if (dom.quickEditContainer) dom.quickEditContainer.style.display = "none";
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
   if (dom.loupeImg) dom.loupeImg.style.display = "";
+
+  if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = false;
+  if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.disabled = false;
 
   quickEditState.originalImage = null;
   quickEditState.workingCanvas = null;
@@ -571,25 +613,29 @@ export function renderQuickEditCanvas() {
 export async function saveEdits(mode = "overwrite") {
   if (!quickEditState.isOpen || !dom.quickEditCanvas) return;
 
-  if (quickEditState.imageLoadedPromise) {
-    try {
-      await Promise.race([
-        quickEditState.imageLoadedPromise,
-        new Promise((res) => setTimeout(res, 2000)),
-      ]);
-    } catch (_) {}
-  }
-
   const id = quickEditState.photoId;
   const currentItem = state.mediaItems.find(m => m.id === id);
   if (currentItem && (currentItem.media_type === "video" || currentItem.media_type === "audio")) {
     return;
   }
-  const canvas = dom.quickEditCanvas;
 
   try {
     if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = true;
     if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.disabled = true;
+
+    if (quickEditState.imageLoadedPromise) {
+      await quickEditState.imageLoadedPromise;
+    }
+
+    if (!quickEditState.isOpen || !dom.quickEditCanvas || quickEditState.photoId !== id) {
+      return;
+    }
+
+    if (!quickEditState.isOriginalLoaded) {
+      throw new Error("Failed to load original image");
+    }
+
+    const canvas = dom.quickEditCanvas;
 
     let res;
     if (typeof canvas.toBlob === "function") {
@@ -663,6 +709,21 @@ export async function saveEdits(mode = "overwrite") {
       state.mediaItems.unshift(updatedItem);
       state.totalCount++;
       if (dom.totalMediaCount) dom.totalMediaCount.textContent = state.totalCount;
+      if (state.loupeIndex >= 0) {
+        const newIdx = state.mediaItems.findIndex(m => m.id === id);
+        if (newIdx !== -1) {
+          state.loupeIndex = newIdx;
+        } else {
+          state.loupeIndex++;
+        }
+        if (dom.loupeIndex) {
+          if (state.totalCount > state.mediaItems.length) {
+            dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length} (${state.totalCount} total)`;
+          } else {
+            dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length}`;
+          }
+        }
+      }
       renderGrid();
       if (window._imagineApp?.renderCurrentView) {
         window._imagineApp.renderCurrentView();
@@ -673,7 +734,9 @@ export async function saveEdits(mode = "overwrite") {
     quickEditState.isDirty = false;
     closeQuickEdit(false);
   } catch (err) {
-    alert(`Error saving edits: ${err.message}`);
+    if (err.message !== "Quick edit cancelled" && quickEditState.isOpen) {
+      alert(`Error saving edits: ${err.message}`);
+    }
   } finally {
     if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = false;
     if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.disabled = false;

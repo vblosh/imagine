@@ -301,3 +301,30 @@ def test_shift_range_selection_after_filter_prunes_last_selected(server, page: P
     expect(cards.nth(0)).not_to_have_class(re.compile(r"\bselected\b"))
     expect(page.locator("#batchActionBar")).to_be_hidden()
 
+
+def test_loupe_u_shortcut_clears_flag(server, page: Page):
+    """Pressing U in loupe view clears the photo's flag without exception."""
+    page.goto(server["url"])
+
+    # mountain.bmp has flag=1 (Pick) by default
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    expect(card.locator(".flag-badge.pick")).to_be_visible()
+
+    card.dblclick()
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+
+    # Loupe flag should show Pick active
+    expect(page.locator("#loupeFlag .flag-pick")).to_have_class(re.compile(r"\bactive\b"))
+
+    # Press U to clear flag
+    page.keyboard.press("u")
+    expect(page.locator("#toastContainer .toast", has_text="Flag cleared")).to_be_visible()
+    expect(page.locator("#loupeFlag .flag-pick")).not_to_have_class(re.compile(r"\bactive\b"))
+
+    # Close loupe and verify card flag badge is gone
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+    expect(card.locator(".flag-badge")).to_have_count(0)
+
+

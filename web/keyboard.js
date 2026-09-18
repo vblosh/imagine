@@ -8,6 +8,7 @@ import { dom, showToast } from './dom.js';
 import {
   clearCardSelections,
   updateItemRating,
+  updateItemFlag,
   toggleItemFlag,
   toggleFlagsForIds,
   batchUpdateRatings,
