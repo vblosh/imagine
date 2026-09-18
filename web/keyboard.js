@@ -58,9 +58,14 @@ import {
   saveEdits
 } from './quick-edit.js';
 import { navigateBackToCategory } from './category-view.js';
+import { isAutoEventOpen, cancelAutoEventReview } from './auto-events.js';
 
 export function handleEscapeKey() {
   // 1. Modals (highest priority)
+  if (isAutoEventOpen()) {
+    cancelAutoEventReview();
+    return true;
+  }
   if (dom.deleteTagModal && dom.deleteTagModal.style.display === 'flex') {
     if (document.activeElement?.blur) document.activeElement.blur();
     closeDeleteTagModal();
@@ -194,6 +199,21 @@ export function setupKeyboardShortcuts() {
     if (e.key === 'Escape') {
       if (handleEscapeKey()) {
         e.preventDefault();
+      }
+      return;
+    }
+
+    if (isAutoEventOpen() && dom.autoEventModal && dom.autoEventModal.style.display === 'flex' && e.key === 'Tab') {
+      const focusable = Array.from(dom.autoEventModal.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).filter(el => el.offsetParent !== null || el.offsetWidth > 0 || el.offsetHeight > 0);
+      if (focusable.length) {
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if ((!e.shiftKey && document.activeElement === last) || (e.shiftKey && document.activeElement === first) || !dom.autoEventModal.contains(document.activeElement)) {
+          e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+        }
       }
       return;
     }

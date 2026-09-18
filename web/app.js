@@ -160,6 +160,7 @@ import {
   updateBatchDatePreview
 } from './modals.js';
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
+import { setupAutoEventListeners } from './auto-events.js';
 import { renderCategoryView, initCategoryView, navigateBackToCategory } from './category-view.js';
 
 async function removeSelectedFromActiveAlbum() {
@@ -186,6 +187,7 @@ async function removeSelectedFromActiveAlbum() {
 
 export function setupEventListeners() {
   initCategoryView();
+  setupAutoEventListeners();
 
   // Deselect on actual background click
   if (dom.gridScrollContainer) {

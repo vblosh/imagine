@@ -3,6 +3,7 @@
 #include "imagine/core/catalog.hpp"
 #include "imagine/core/query.hpp"
 #include "imagine/core/importer.hpp"
+#include "imagine/core/event_suggestions.hpp"
 #include "imagine/metadata/hasher.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/logger.hpp"
@@ -1635,6 +1636,105 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }
     });
+
+    // POST /api/media/event-suggestions
+    // Build a read-only, deterministic preview from the selected catalog items.
+    server.Post("/api/media/event-suggestions", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            const auto body = nlohmann::json::parse(req.body);
+            if (!body.contains("ids") || !body["ids"].is_array()) {
+                sendError(res, "Missing or invalid 'ids' array", 400);
+                return;
+            }
+            if (body["ids"].empty()) {
+                sendError(res, "At least one media ID is required", 400);
+                return;
+            }
+            if (body["ids"].size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
+
+            std::vector<MediaId> ids;
+            ids.reserve(body["ids"].size());
+            std::unordered_set<MediaId> seen;
+            for (const auto& value : body["ids"]) {
+                if (!value.is_number_integer()) {
+                    sendError(res, "Each media ID must be a positive integer", 400);
+                    return;
+                }
+                const MediaId id = value.get<MediaId>();
+                if (id <= 0) {
+                    sendError(res, "Each media ID must be a positive integer", 400);
+                    return;
+                }
+                if (seen.insert(id).second) ids.push_back(id);
+            }
+            if (ids.empty()) {
+                sendError(res, "At least one media ID is required", 400);
+                return;
+            }
+
+            std::vector<MediaItem> media;
+            std::vector<MediaId> missingIds;
+            media.reserve(ids.size());
+            for (const MediaId id : ids) {
+                auto itemRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
+                if (!itemRes.isOk()) {
+                    missingIds.push_back(id);
+                    continue;
+                }
+                auto item = std::move(itemRes.value());
+                auto tagsRes = catalog_ ? catalog_->getTagsForMedia(id) : db().getTagsForMedia(id);
+                if (tagsRes.isOk()) item.tags = std::move(tagsRes.value());
+                media.push_back(std::move(item));
+            }
+
+            auto suggestions = core::EventSuggestionEngine::suggest(media);
+            nlohmann::json groups = nlohmann::json::array();
+            for (const auto& group : suggestions.groups) {
+                nlohmann::json photoJson = nlohmann::json::array();
+                for (const auto& photo : group.photos) {
+                    photoJson.push_back({
+                        {"id", photo.id},
+                        {"file_name", photo.file_name},
+                        {"thumb_small", thumbnail::Cache::getRelativeThumbnailPath(photo.content_hash, thumbnail::Cache::SmallSize)},
+                        {"thumb_large", thumbnail::Cache::getRelativeThumbnailPath(photo.content_hash, thumbnail::Cache::LargeSize)},
+                        {"content_hash", photo.content_hash},
+                        {"date_taken", photo.date_taken}
+                    });
+                }
+                groups.push_back({
+                    {"media_ids", [&]() {
+                        nlohmann::json result = nlohmann::json::array();
+                        for (const auto& photo : group.photos) result.push_back(photo.id);
+                        return result;
+                    }()},
+                    {"start_date", group.start_date},
+                    {"end_date", group.end_date},
+                    {"name_source", core::eventSuggestionNameSourceString(group.name_source)},
+                    {"name_value", group.name_value},
+                    {"existing_event_tag_id", group.existing_event_tag_id.has_value() ? nlohmann::json(*group.existing_event_tag_id) : nlohmann::json(nullptr)},
+                    {"people", group.people},
+                    {"places", group.places},
+                    {"keywords", group.keywords},
+                    {"photos", photoJson}
+                });
+            }
+
+            nlohmann::json skipped = nlohmann::json::array();
+            for (const auto& id : missingIds) {
+                skipped.push_back({{"id", id}, {"reason", "missing"}});
+            }
+            for (const auto& item : suggestions.skipped) {
+                skipped.push_back({{"id", item.id}, {"reason", item.reason}});
+            }
+            sendJson(res, {{"groups", groups}, {"skipped", skipped}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what(), 400);
+        }
+    });
 }
 
 void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
@@ -2060,6 +2160,7 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
 
     server.Post(R"(/api/photos/(\d+)/edit)", handleEditPhoto);
     server.Post(R"(/api/media/(\d+)/edit)", handleEditPhoto);
+
 }
 
 void ApiRouter::registerTagRoutes(httplib::Server& server) {

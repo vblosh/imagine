@@ -34,12 +34,16 @@ export const api = {
     return res.json();
   },
 
-  async post(endpoint, data = {}) {
-    const res = await fetch(endpoint, {
+  async post(endpoint, data = {}, options = {}) {
+    const fetchOpts = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
-    });
+    };
+    if (options && options.signal) {
+      fetchOpts.signal = options.signal;
+    }
+    const res = await fetch(endpoint, fetchOpts);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || 'Request failed');

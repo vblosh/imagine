@@ -57,6 +57,7 @@ set(IMAGINE_LIB_SOURCES
     src/thumbnail/cache.cpp
     src/concurrency/thread_pool.cpp
     src/core/query.cpp
+    src/core/event_suggestions.cpp
     src/core/importer.cpp
     src/core/catalog.cpp
     src/server/api_router.cpp
@@ -108,6 +109,7 @@ if (BUILD_TESTING)
         tests/thumbnail_test.cpp
         tests/importer_test.cpp
         tests/query_test.cpp
+        tests/event_suggestions_test.cpp
         tests/server_test.cpp
         tests/media_test.cpp
     )

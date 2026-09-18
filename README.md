@@ -16,6 +16,7 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Media Grid**: Smooth, responsive thumbnail layout with dynamic zoom slider.
   - **Timeline Scrubber**: Interactive histogram of photos by year and month.
   - **Sidebars**: Collapsible Folders tree, Standard/Smart Albums, and Tag categories (People, Places, Events, Keywords).
+  - **Auto Event**: Suggest outings from selected photos using local dates, GPS, captions, and tags; review names and included photos before creating event tags.
   - **Inspector Panel**: EXIF breakdown (camera, lens, shutter speed, aperture, ISO, focal length, GPS map link), 5-star ratings, pick/reject flags, and tag editor.
   - **Fullscreen Loupe / Slideshow**: Keyboard-driven full-resolution viewer (0–5 star ratings, P/X flags, Arrow navigation).
   - **Multilingual Support (i18n)**: 5 built-in languages (English, Spanish, German, Russian, Chinese) with instant switching, `localStorage` persistence, and URL parameter override (`?lang=...`).
@@ -122,6 +123,7 @@ imagine/
 │   ├── map-view.js             # Leaflet map, spatial clustering & photo pinning
 │   ├── loupe.js                # Fullscreen viewer with pan/zoom & slideshow
 │   ├── modals.js               # Modal dialogs (Import, Album, Tag, Delete)
+│   ├── auto-events.js          # Local metadata event suggestions and review/apply dialog
 │   ├── keyboard.js             # Keyboard shortcuts & priority Escape manager
 │   └── vendor/leaflet/         # Embedded Leaflet mapping assets
 ├── tests/                      # Automated test suites

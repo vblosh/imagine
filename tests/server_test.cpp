@@ -129,6 +129,50 @@ TEST_F(ServerTest, TagsApi) {
     EXPECT_EQ(tagsAfter.size(), 0u);
 }
 
+TEST_F(ServerTest, EventSuggestionsApiIsReadOnlyAndReportsSkippedItems) {
+    MediaItem first;
+    first.file_path = "trip/first.jpg";
+    first.file_name = "first.jpg";
+    first.content_hash = "event-first";
+    first.media_type = "photo";
+    first.date_taken = 1700000000;
+    first.caption = "Museum";
+    const auto firstId = catalog_->db().insertMedia(first).value();
+
+    MediaItem second = first;
+    second.file_path = "trip/second.jpg";
+    second.file_name = "second.jpg";
+    second.content_hash = "event-second";
+    second.date_taken = 1700000100;
+    const auto secondId = catalog_->db().insertMedia(second).value();
+
+    MediaItem video = second;
+    video.file_path = "trip/video.mp4";
+    video.file_name = "video.mp4";
+    video.content_hash = "event-video";
+    video.media_type = "video";
+    const auto videoId = catalog_->db().insertMedia(video).value();
+
+    httplib::Client client("127.0.0.1", port_);
+    const auto body = nlohmann::json{{"ids", {firstId, secondId, videoId, 999999}}}.dump();
+    auto response = client.Post("/api/media/event-suggestions", body, "application/json");
+    ASSERT_TRUE(response);
+    ASSERT_EQ(response->status, 200);
+    const auto result = nlohmann::json::parse(response->body);
+    ASSERT_EQ(result["groups"].size(), 1u);
+    EXPECT_EQ(result["groups"][0]["media_ids"].size(), 2u);
+    EXPECT_EQ(result["groups"][0]["name_source"], "caption");
+    EXPECT_EQ(result["groups"][0]["name_value"], "Museum");
+    ASSERT_EQ(result["skipped"].size(), 2u);
+
+    auto invalid = client.Post("/api/media/event-suggestions", R"({"ids":[0]})", "application/json");
+    ASSERT_TRUE(invalid);
+    EXPECT_EQ(invalid->status, 400);
+
+    auto tags = catalog_->db().getAllTags().value();
+    EXPECT_TRUE(tags.empty());
+}
+
 TEST_F(ServerTest, AlbumsApi) {
     httplib::Client client("127.0.0.1", port_);
 

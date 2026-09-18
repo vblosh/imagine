@@ -220,6 +220,16 @@ Adopt the professional Lightroom/Elements culling workflow:
 6. To detach a tag from an individual photo, click the `×` button on any tag pill badge in the Inspector.
 7. To delete a tag entirely from the catalog and all photos, click the `×` button next to the tag in the left sidebar under **Keyword Tags**.
 
+### Auto Event Suggestions
+
+Select photos and click **Auto Event** in the batch action bar, or use the Auto Event action in the Inspector for a single photo. Review the suggested groups, edit their names, and uncheck any groups or individual photos you want to exclude. Click **Apply** to attach event tags; cancelling the preview makes no changes.
+
+Suggestions run locally using catalog metadata. Photos are ordered by capture time and separated when the gap exceeds four hours, the group spans more than twelve hours, or the next located photo is more than 25 km from the preceding located photo. Missing GPS and midnight alone do not split an outing. Dates follow the application's UTC convention and may reflect filesystem timestamps when no capture date was available during import.
+
+Names favor an event tag shared by the entire group, then a caption shared by a majority, a shared place tag, or a descriptive folder name. Otherwise, the suggestion uses **Photos** and the date. Common people, places, and keywords provide context in the preview. Videos, audio, missing catalog items, and photos without a valid date are reported as skipped.
+
+Applying suggestions preserves existing tags and reuses an existing event with the same name. If some assignments fail, the dialog retains the failed items for retry. Suggestions do not analyze image contents or contact external services.
+
 ### Creating Categories & Hierarchies
 Click the `+` button next to **Keyword Tags** in the left sidebar to create a tag with a designated category:
 - `People`: Friends, family members, models.
@@ -247,6 +257,7 @@ To organize multiple photos simultaneously:
    - **Pick / Reject**: Flag all selected photos with a single click.
    - **Delete**: Remove selected photos from catalog (and optionally disk).
    - **Add Tag**: Attach a tag to all selected photos at once.
+   - **Auto Event**: Review suggested event groups and names for the selected photos before applying event tags.
    - **Album**: Add selected photos to an album. When viewing an active album, this becomes **Remove from Album** and removes the selected photos from that album only.
    - **Date**: Open Change Date dialog to shift timestamps by hours, adjust time zones, or set a specified date & time.
    - **Move**: Open Move Media dialog to prompt for a destination folder inside the photos directory, physically move files on disk, and update catalog database records. Moving outside the photos directory is strictly prohibited.
@@ -488,6 +499,8 @@ The embedded C++ HTTP server provides a full REST API for developers and externa
 | `POST` | `/api/media/batch-gps` | Batch assign GPS coordinates (`{"ids": [...], "has_gps": true, "latitude": ..., "longitude": ...}`) |
 | `GET` | `/api/geocode` | Search locations via OpenStreetMap Nominatim proxy (`?q=<query>&limit=5`) |
 | `POST` | `/api/media/:id/tags` | Attach tag (`{"name": "...", "category": "..."}`) |
+| `POST` | `/api/media/event-suggestions` | Preview local event groups for selected photos (`{"ids": [1, 2, ...]}`, maximum 1000 IDs); returns `groups` with naming evidence and `skipped` items without modifying tags |
+| `POST` | `/api/media/batch-tags` | Apply a tag to selected photos (`{"ids": [...], "name": "...", "category": "events"}`); returns assignment counts and `failed_ids` |
 | `DELETE` | `/api/media/:id/tags/:tag_id` | Detach tag from photo |
 | `GET` | `/api/thumbnails/:hash/:size` | Fetch cached JPEG thumbnail (`size`: 256 or 1024) |
 | `GET` | `/api/photos/:id/original` | Fetch original full-resolution image |

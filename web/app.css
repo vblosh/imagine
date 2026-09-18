@@ -1669,6 +1669,27 @@ body.resizing-horizontal * {
   border-color: var(--accent-color);
 }
 
+/* Auto Event review dialog */
+.modal-dialog.auto-event-dialog { width: min(500px, calc(100vw - 28px)); min-width: min(420px, calc(100vw - 28px)); height: min(700px, 86vh); min-height: 420px; max-width: calc(100vw - 28px); max-height: calc(100vh - 28px); resize: both; overflow: hidden; }
+.auto-event-body { min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.auto-event-state { padding: 24px 8px; text-align: center; color: var(--text-secondary); }
+.auto-event-error { color: var(--reject-color); }
+.auto-event-group { border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+.auto-event-group.disabled { opacity: .62; }
+.auto-event-group-header { display: flex; align-items: center; gap: 8px; }
+.auto-event-group-header .auto-event-name { flex: 1; min-width: 120px; background: var(--bg-input); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; padding: 5px 7px; }
+.auto-event-group-header .auto-event-name.invalid { border-color: var(--reject-color); }
+.auto-event-count, .auto-event-meta, .auto-event-evidence { color: var(--text-secondary); font-size: 12px; }
+.auto-event-meta { margin: 6px 0 4px 25px; }
+.auto-event-evidence { margin-left: 25px; display: flex; flex-wrap: wrap; gap: 5px; }
+.auto-event-evidence span { background: var(--bg-card-hover); border-radius: 3px; padding: 2px 5px; }
+.auto-event-photos { margin: 9px 0 0 25px; display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--thumb-size), 1fr)); gap: 8px; }
+.auto-event-photo { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; min-width: 0; padding: 6px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 12px; color: var(--text-secondary); }
+.auto-event-photo img { width: 100%; aspect-ratio: 1 / 1; height: auto; object-fit: cover; border-radius: 3px; background: var(--bg-input); }
+.auto-event-photo span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.auto-event-photo.completed { opacity: .45; }
+.auto-event-skipped { margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
+
 .add-tag-inline select,
 .tag-category-select {
   background-color: var(--bg-input);
