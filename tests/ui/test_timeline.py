@@ -109,6 +109,11 @@ def test_timeline_wheel_scrolls_horizontally(server, page: Page):
     """Wheel scrolling on timelineContainer translates vertical deltaY into horizontal scroll."""
     page.goto(server["url"])
 
+    timeline = page.locator("#timelineContainer")
+    expect(timeline).to_be_visible()
+    expect(page.locator(".photo-card")).to_have_count(6)
+    expect(timeline.locator(".timeline-bar-wrap")).to_have_count(3)
+
     # Provide 60 months of data so timeline overflows and can scroll
     months_data = [{"year": 2026 - i // 12, "month": 12 - (i % 12), "count": 10} for i in range(60)]
     page.evaluate(
@@ -118,9 +123,7 @@ def test_timeline_wheel_scrolls_horizontally(server, page: Page):
     }""",
         months_data,
     )
-
-    timeline = page.locator("#timelineContainer")
-    expect(timeline).to_be_visible()
+    expect(timeline.locator(".timeline-bar-wrap")).to_have_count(60)
 
     scroll_result = page.evaluate(
         """() => {

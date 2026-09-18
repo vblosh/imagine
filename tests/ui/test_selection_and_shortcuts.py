@@ -258,7 +258,8 @@ def test_selection_pruned_on_search(server, page: Page):
     # Search for "beach"
     search_input = page.locator("#searchInput")
     search_input.fill("beach")
-    expect(cards).to_have_count(1)
+    expect(cards).to_have_count(1, timeout=10000)
+    expect(cards.first.locator(".card-filename")).to_have_text("beach.bmp", timeout=10000)
 
     # mountain.bmp should be pruned from selection
     expect(page.locator(".photo-card.selected")).to_have_count(0)

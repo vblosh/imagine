@@ -14,7 +14,10 @@ import sqlite3
 import pytest
 from typing import Generator, Dict, Any, List
 
-from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
+from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page, expect
+
+# Configure expect assertions timeout to 10s for heavy CI runner environments
+expect.set_options(timeout=10000)
 
 from fixtures import init_schema, seed_default_catalog, create_import_photos, seed_media_catalog
 
@@ -411,6 +414,7 @@ def context(browser: Browser) -> Generator[BrowserContext, None, None]:
 def page(context: BrowserContext) -> Generator[Page, None, None]:
     """Provide a new Page with error and console listeners to guard against JS exceptions."""
     p = context.new_page()
+    p.set_default_timeout(10000)
     page_errors = []
     console_errors = []
 
