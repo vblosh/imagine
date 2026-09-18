@@ -807,6 +807,31 @@ TEST_F(ServerTest, ValidationAndErrorEndpoints) {
     ASSERT_TRUE(addRes);
     EXPECT_EQ(addRes->status, 200);
 
+    nlohmann::json coverBody = {{"media_id", mid}};
+    auto coverRes = client.Post("/api/albums/" + std::to_string(aid) + "/cover", coverBody.dump(), "application/json");
+    ASSERT_TRUE(coverRes);
+    EXPECT_EQ(coverRes->status, 200);
+    auto albumsWithCover = nlohmann::json::parse(client.Get("/api/albums")->body);
+    ASSERT_EQ(albumsWithCover.size(), 1u);
+    EXPECT_EQ(albumsWithCover[0]["cover_media_id"].get<MediaId>(), mid);
+
+    EXPECT_EQ(client.Post("/api/albums/" + std::to_string(aid) + "/cover", "{}", "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/albums/" + std::to_string(aid) + "/cover", "{\"media_id\":99999}", "application/json")->status, 404);
+    EXPECT_EQ(client.Post("/api/albums/99999/cover", coverBody.dump(), "application/json")->status, 404);
+
+    MediaItem video;
+    video.file_path = (testDir_ / "dummy.mp4").string();
+    video.file_name = "dummy.mp4";
+    video.file_size = 200;
+    video.content_hash = "fake_video_hash_123456";
+    video.date_taken = 1700000001;
+    video.media_type = "video";
+    auto videoId = catalog_->db().insertMedia(video).value();
+    ASSERT_TRUE(catalog_->db().addMediaToAlbum(aid, videoId).isOk());
+    EXPECT_EQ(client.Post("/api/albums/" + std::to_string(aid) + "/cover",
+                          nlohmann::json{{"media_id", videoId}}.dump(),
+                          "application/json")->status, 404);
+
     // DELETE /api/albums/:id
     auto delAlb = client.Delete("/api/albums/" + std::to_string(aid));
     ASSERT_TRUE(delAlb);

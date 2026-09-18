@@ -118,6 +118,7 @@ export const dom = {
   inspectorImg: document.getElementById('inspectorImg'),
   openLoupeFromInspector: document.getElementById('openLoupeFromInspector'),
   inspectorAddToAlbumBtn: document.getElementById('inspectorAddToAlbumBtn'),
+  inspectorSetAsCoverBtn: document.getElementById('inspectorSetAsCoverBtn'),
   inspectorMoveBtn: document.getElementById('inspectorMoveBtn'),
   inspectorDeleteBtn: document.getElementById('inspectorDeleteBtn'),
   inspectorRating: document.getElementById('inspectorRating'),

@@ -2208,6 +2208,28 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
         }
     });
 
+    // POST /api/albums/:id/cover
+    server.Post(R"(/api/albums/(\d+)/cover)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        AlbumId albumId = std::stoll(req.matches[1]);
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.contains("media_id") || !body["media_id"].is_number_integer()) {
+                sendError(res, "Missing or invalid media_id", 400);
+                return;
+            }
+            MediaId mediaId = body["media_id"].get<MediaId>();
+            Status s = catalog_ ? catalog_->setAlbumCover(albumId, mediaId) : db().setAlbumCover(albumId, mediaId);
+            if (!s.isOk()) {
+                sendStatusError(res, s);
+                return;
+            }
+            sendJson(res, {{"status", "ok"}, {"album_id", albumId}, {"media_id", mediaId}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
     // DELETE /api/albums/:id
     server.Delete(R"(/api/albums/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;

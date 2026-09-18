@@ -231,7 +231,9 @@ Click the `+` button next to **Keyword Tags** in the left sidebar to create a ta
 1. Click the `+` button next to **Albums** in the left sidebar.
 2. Give the album a name (e.g., *"Best of 2026"*) and optional description.
 3. Select one or more photos in the grid and click **"Add to Album"** to populate it.
-4. To delete an album, hover over its name in the sidebar and click the `×` delete button. Deleting an album does not delete the photos from your catalog.
+4. Click an album in the sidebar to filter the grid to that album's photos.
+5. To choose the album's cover, select one photo from the active album. In the Inspector's **Albums** section, click **"Set as cover"**. The button is available only when an album is active and exactly one album photo is selected.
+6. To delete an album, hover over its name in the sidebar and click the `×` delete button. Deleting an album does not delete the photos from your catalog.
 
 ### Batch Operations
 To organize multiple photos simultaneously:
@@ -494,6 +496,7 @@ The embedded C++ HTTP server provides a full REST API for developers and externa
 | `POST` | `/api/albums` | Create a new album |
 | `DELETE` | `/api/albums/:id` | Delete an album |
 | `POST` | `/api/albums/:id/media` | Add photo to album (`{"media_id": N}`) |
+| `POST` | `/api/albums/:id/cover` | Set an album member photo as its cover (`{"media_id": N}`) |
 | `GET` | `/api/timeline` | Get photo counts grouped by year and month |
 | `GET` | `/api/stats` | Get catalog statistics |
 | `POST` | `/api/import` | Start asynchronous background folder import |

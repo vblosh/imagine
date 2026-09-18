@@ -54,6 +54,7 @@ public:
     Result<Album> getAlbumById(AlbumId id);
     Status deleteAlbum(AlbumId id);
     Status addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position = 0);
+    Status setAlbumCover(AlbumId albumId, MediaId mediaId);
     Status removeMediaFromAlbum(AlbumId albumId, MediaId mediaId);
     Result<std::vector<MediaItem>> getMediaInAlbum(AlbumId albumId);
 

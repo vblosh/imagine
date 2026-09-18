@@ -199,6 +199,37 @@ def test_add_photo_to_album_inspector(server, page: Page):
     expect(modal).to_be_hidden()
 
 
+def test_set_album_cover_from_inspector(server, page: Page):
+    """Setting a selected album photo as its cover persists the selected media ID."""
+    page.goto(server["url"])
+
+    album = page.locator("#albumsList .menu-item", has_text="Best of 2026")
+    album.click()
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(2)
+
+    selected_card = cards.nth(1)
+    selected_media_id = selected_card.get_attribute("data-id")
+    selected_card.click()
+
+    set_cover_btn = page.locator("#inspectorSetAsCoverBtn")
+    expect(set_cover_btn).to_be_visible()
+    expect(set_cover_btn).to_have_text("Set as cover")
+
+    with page.expect_response(lambda response: "/api/albums/" in response.url and response.url.endswith("/cover") and response.request.method == "POST") as response_info:
+        set_cover_btn.click()
+    assert response_info.value.ok
+    expect(set_cover_btn).to_have_text("Current cover")
+    expect(set_cover_btn).to_be_disabled()
+
+    albums = page.evaluate("""async () => {
+        const response = await fetch('/api/albums');
+        return response.json();
+    }""")
+    best_album = next(item for item in albums if item["name"] == "Best of 2026")
+    assert str(best_album["cover_media_id"]) == selected_media_id
+
+
 def test_albums_top_selector_tab_display_and_drilldown(server, page: Page):
     """Clicking Albums tab in the top selector opens the visual grid of album cards, and clicking a card drills down."""
     import re

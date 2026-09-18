@@ -250,6 +250,12 @@ TEST_F(CatalogDbTest, AlbumManagementAndQueries) {
     EXPECT_TRUE(db.addMediaToAlbum(aid, mid1, 0).isOk());
     EXPECT_EQ(db.getMediaInAlbum(aid).value().size(), 1u);
 
+    EXPECT_TRUE(db.setAlbumCover(aid, mid1).isOk());
+    auto albumWithCover = db.getAlbumById(aid);
+    ASSERT_TRUE(albumWithCover.isOk());
+    ASSERT_TRUE(albumWithCover.value().cover_media_id.has_value());
+    EXPECT_EQ(*albumWithCover.value().cover_media_id, mid1);
+
     // Timeline check
     auto timeline = db.getTimeline();
     ASSERT_TRUE(timeline.isOk());
@@ -267,6 +273,36 @@ TEST_F(CatalogDbTest, AlbumManagementAndQueries) {
     auto queryEmptyOrder = db.queryMedia("", {}, "", 10, 0);
     ASSERT_TRUE(queryEmptyOrder.isOk());
     EXPECT_EQ(queryEmptyOrder.value().size(), 1u);
+
+    // Covers must refer to photos that are members of the album.
+    MediaItem video;
+    video.file_path = "/videos/1.mp4";
+    video.file_name = "1.mp4";
+    video.file_size = 2048;
+    video.file_modified_time = 1001;
+    video.content_hash = "hash_video_1";
+    video.date_taken = 1700000001;
+    video.media_type = "video";
+    auto videoId = db.insertMedia(video).value();
+    EXPECT_TRUE(db.addMediaToAlbum(aid, videoId, 1).isOk());
+    EXPECT_FALSE(db.setAlbumCover(aid, videoId).isOk());
+
+    MediaItem unassociatedPhoto;
+    unassociatedPhoto.file_path = "/photos/2.jpg";
+    unassociatedPhoto.file_name = "2.jpg";
+    unassociatedPhoto.file_size = 1024;
+    unassociatedPhoto.file_modified_time = 1002;
+    unassociatedPhoto.content_hash = "hash_2";
+    unassociatedPhoto.date_taken = 1700000002;
+    auto unassociatedPhotoId = db.insertMedia(unassociatedPhoto).value();
+    EXPECT_FALSE(db.setAlbumCover(aid, unassociatedPhotoId).isOk());
+    EXPECT_FALSE(db.setAlbumCover(99999, mid1).isOk());
+
+    // Removing the current cover also clears the album's cover reference.
+    EXPECT_TRUE(db.removeMediaFromAlbum(aid, mid1).isOk());
+    auto albumAfterCoverRemoval = db.getAlbumById(aid);
+    ASSERT_TRUE(albumAfterCoverRemoval.isOk());
+    EXPECT_FALSE(albumAfterCoverRemoval.value().cover_media_id.has_value());
 
     // deleteAlbum
     EXPECT_TRUE(db.deleteAlbum(aid).isOk());

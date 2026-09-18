@@ -55,10 +55,34 @@ export function patchInspectorRatingAndFlag(item) {
   }
 }
 
+export function updateInspectorAlbumActions(item = currentInspectorItem) {
+  if (!dom.inspectorSetAsCoverBtn) return;
+  const activeAlbum = state.albums.find(album => album.id === state.activeAlbumId);
+  const isCurrentCover = Boolean(
+    item &&
+    activeAlbum &&
+    Number(activeAlbum.cover_media_id) === Number(item.id)
+  );
+  const canSetCover = Boolean(
+    item &&
+    item.media_type === 'photo' &&
+    state.activeAlbumId &&
+    state.selectedIds.size === 1
+  );
+  const labelKey = isCurrentCover ? 'current_cover' : 'set_as_cover';
+  dom.inspectorSetAsCoverBtn.dataset.i18n = labelKey;
+  dom.inspectorSetAsCoverBtn.dataset.i18nTitle = labelKey;
+  dom.inspectorSetAsCoverBtn.textContent = t(labelKey);
+  dom.inspectorSetAsCoverBtn.title = t(labelKey);
+  dom.inspectorSetAsCoverBtn.style.display = canSetCover ? 'block' : 'none';
+  dom.inspectorSetAsCoverBtn.disabled = canSetCover && isCurrentCover;
+}
+
 export function renderInspectorContent(item) {
   if (!item) return;
   const isSameItem = currentInspectorItem && currentInspectorItem.id === item.id;
   currentInspectorItem = item;
+  updateInspectorAlbumActions(item);
   if (!isSameItem) {
     closeAllInlineEditors();
   }
@@ -171,6 +195,7 @@ export function renderInspectorContent(item) {
 export async function updateInspector() {
   if (state.selectedIds.size === 0) {
     currentInspectorItem = null;
+    updateInspectorAlbumActions(null);
     closeAllInlineEditors();
     if (inspectorAbortController) {
       inspectorAbortController.abort();

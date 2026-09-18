@@ -913,18 +913,62 @@ Status CatalogDb::addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position
     return Status::ok();
 }
 
+Status CatalogDb::setAlbumCover(AlbumId albumId, MediaId mediaId) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const char* sql = R"SQL(
+        UPDATE albums
+        SET cover_media_id = ?
+        WHERE id = ?
+          AND EXISTS (
+              SELECT 1
+              FROM album_media AS am
+              JOIN media_items AS mi ON mi.id = am.media_id
+              WHERE am.album_id = ?
+                AND am.media_id = ?
+                AND mi.media_type = 'photo'
+          );
+    )SQL";
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+    stmt.bind(1, mediaId);
+    stmt.bind(2, albumId);
+    stmt.bind(3, albumId);
+    stmt.bind(4, mediaId);
+
+    if (stmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to set album cover: " + conn_.lastErrorMessage());
+    }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Album or media item is not found in the album");
+    }
+    return Status::ok();
+}
+
 Status CatalogDb::removeMediaFromAlbum(AlbumId albumId, MediaId mediaId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Transaction tx(conn_);
+
+    auto clearCoverRes = conn_.prepare(
+        "UPDATE albums SET cover_media_id = NULL WHERE id = ? AND cover_media_id = ?;");
+    if (!clearCoverRes.isOk()) return clearCoverRes.status();
+    auto clearCover = std::move(clearCoverRes.value());
+    clearCover.bind(1, albumId);
+    clearCover.bind(2, mediaId);
+    if (clearCover.step() != StepResult::Done) {
+        return Status::databaseError("Failed to clear album cover: " + conn_.lastErrorMessage());
+    }
+
     auto stmtRes = conn_.prepare("DELETE FROM album_media WHERE album_id = ? AND media_id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
     stmt.bind(1, albumId);
     stmt.bind(2, mediaId);
-
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to remove media from album: " + conn_.lastErrorMessage());
     }
-    return Status::ok();
+
+    return tx.commit();
 }
 
 Result<std::vector<MediaItem>> CatalogDb::getMediaInAlbum(AlbumId albumId) {

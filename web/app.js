@@ -68,6 +68,7 @@ import {
 } from './persistence.js';
 import {
   updateInspector,
+  updateInspectorAlbumActions,
   openInspector,
   renderStarWidget,
   setupResizablePanels,
@@ -810,6 +811,26 @@ export function setupEventListeners() {
       const ids = state.selectedIds.size > 0 ? Array.from(state.selectedIds) : [];
       if (ids.length > 0) {
         openAddToAlbumModal(ids);
+      }
+    });
+  }
+
+  if (dom.inspectorSetAsCoverBtn) {
+    dom.inspectorSetAsCoverBtn.addEventListener('click', async () => {
+      if (!state.activeAlbumId || state.selectedIds.size !== 1) return;
+      const mediaId = Array.from(state.selectedIds)[0];
+      const item = state.mediaItems.find(media => media.id === mediaId);
+      if (!item || item.media_type !== 'photo') return;
+
+      dom.inspectorSetAsCoverBtn.disabled = true;
+      try {
+        await api.post(`/api/albums/${state.activeAlbumId}/cover`, { media_id: mediaId });
+        await loadMetadata();
+        showToast(t('album_cover_updated'), 'success');
+      } catch (err) {
+        showToast(`${t('set_cover_failed')}: ${err.message}`, 'error');
+      } finally {
+        updateInspectorAlbumActions(item);
       }
     });
   }
