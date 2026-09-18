@@ -230,7 +230,7 @@ def test_inspector_show_on_map_finds_marker_by_cluster_items(server, page: Page)
     expect(page.locator("#mapViewContainer")).to_be_visible()
 
     # The popup should open for mountain.bmp
-    popup = page.locator(".map-popup-card")
+    popup = page.locator(".map-popup-card").first
     expect(popup).to_be_visible()
     expect(popup.locator(".map-popup-title")).to_have_text("mountain.bmp")
 

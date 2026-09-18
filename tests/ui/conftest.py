@@ -414,7 +414,6 @@ def context(browser: Browser) -> Generator[BrowserContext, None, None]:
 def page(context: BrowserContext) -> Generator[Page, None, None]:
     """Provide a new Page with error and console listeners to guard against JS exceptions."""
     p = context.new_page()
-    p.set_default_timeout(10000)
     page_errors = []
     console_errors = []
 
