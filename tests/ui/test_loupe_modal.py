@@ -22,7 +22,7 @@ def test_open_loupe_via_double_click_and_inspector_overlay(server, page: Page):
     expect(page.locator("#loupeImg")).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
 
     # Clicking on the image loads the full-resolution original
-    page.locator("#loupeImg").click(force=True)
+    page.locator("#loupeImageViewport").click(position={"x": 10, "y": 10})
     expect(page.locator("#loupeImg")).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
 
     # Close loupe
@@ -85,7 +85,7 @@ def test_loupe_arrow_navigation_preserves_original_image_mode(server, page: Page
     expect(loupe_img).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
 
     # 2. Click on image to load full original
-    loupe_img.click(force=True)
+    page.locator("#loupeImageViewport").click(position={"x": 10, "y": 10})
     expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
 
     # 3. Navigate right with ArrowRight -> new image should directly show original
