@@ -91,7 +91,9 @@ export function buildMediaParams() {
     }
     params.tag_folder_mode = 'or';
   } else if (state.activeTab && state.activeTab !== 'media') {
-    params.tag_category = state.activeTab.toLowerCase();
+    if (state.activeTab !== 'albums') {
+      params.tag_category = state.activeTab.toLowerCase();
+    }
   }
   if (state.activeAlbumId) params.album_id = state.activeAlbumId;
 
@@ -149,7 +151,7 @@ export async function loadMedia(append = false) {
   const abortController = new AbortController();
   loadMediaAbortController = abortController;
 
-  if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
+  if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId && !state.activeAlbumId) {
     state.isLoadingMedia = false;
     renderCategoryView(state.activeTab);
     updateFilterLabel();
@@ -380,7 +382,7 @@ export async function loadMetadata() {
     renderSidebarFolders();
     renderTimeline();
     updateSidebarActive();
-    if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
+    if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId && !state.activeAlbumId) {
       renderCategoryView(state.activeTab);
     }
     if (typeof updateModalTagSuggestions === 'function') {
@@ -1174,7 +1176,7 @@ export function updateSidebarActive() {
 
 export function updateFilterLabel() {
   if (state.activeTab && state.activeTab !== 'media') {
-    if (state.activeTagId) {
+    if (state.activeTagId || (state.activeTab === 'albums' && state.activeAlbumId)) {
       if (dom.categoryBackBtn) {
         dom.categoryBackBtn.style.display = 'inline-flex';
         const tabKey = `tab_${state.activeTab}`;
@@ -1189,12 +1191,19 @@ export function updateFilterLabel() {
       }
       const tabKey = `tab_${state.activeTab}`;
       const tabName = t(tabKey);
-      const catTags = (state.tags || []).filter(t => (t.category || 'keyword').toLowerCase() === state.activeTab.toLowerCase());
-      const singularKey = state.activeTab === 'people' ? 'person_singular' : state.activeTab === 'places' ? 'place_singular' : 'event_singular';
-      const pluralKey = state.activeTab === 'people' ? 'person_plural' : state.activeTab === 'places' ? 'place_plural' : 'event_plural';
-      const noun = catTags.length === 1 ? t(singularKey) : t(pluralKey);
-      if (dom.filterLabel) {
-        dom.filterLabel.innerHTML = `<strong>${escapeHtml(tabName)}</strong> (${catTags.length} ${noun})`;
+      if (state.activeTab === 'albums') {
+        const noun = state.albums.length === 1 ? t('album_singular') : t('album_plural');
+        if (dom.filterLabel) {
+          dom.filterLabel.innerHTML = `<strong>${escapeHtml(tabName)}</strong> (${state.albums.length} ${noun})`;
+        }
+      } else {
+        const catTags = (state.tags || []).filter(t => (t.category || 'keyword').toLowerCase() === state.activeTab.toLowerCase());
+        const singularKey = state.activeTab === 'people' ? 'person_singular' : state.activeTab === 'places' ? 'place_singular' : 'event_singular';
+        const pluralKey = state.activeTab === 'people' ? 'person_plural' : state.activeTab === 'places' ? 'place_plural' : 'event_plural';
+        const noun = catTags.length === 1 ? t(singularKey) : t(pluralKey);
+        if (dom.filterLabel) {
+          dom.filterLabel.innerHTML = `<strong>${escapeHtml(tabName)}</strong> (${catTags.length} ${noun})`;
+        }
       }
       if (dom.clearFiltersBtn) {
         dom.clearFiltersBtn.style.display = state.searchText ? 'inline-block' : 'none';

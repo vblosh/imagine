@@ -139,6 +139,7 @@ Use the `imagine import` command:
 - **People**: Shows photos tagged under the *People* category.
 - **Places**: Shows photos tagged with geographic locations or containing GPS metadata.
 - **Events**: Shows photos organized into specific events (e.g., *Birthdays*, *Conferences*, *Holidays*).
+- **Albums**: Displays all user-created photo albums as visual collection cards. Click any album to view and manage its photos.
 
 ### Thumbnail Zoom Slider
 In the top right bar, slide the thumbnail zoom controller:

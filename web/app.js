@@ -516,7 +516,7 @@ export function setupEventListeners() {
     });
   }
 
-  // Tab Switcher (Media, People, Places, Events)
+  // Tab Switcher (Media, People, Places, Events, Albums)
   if (dom.viewTabs) {
     dom.viewTabs.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', () => {

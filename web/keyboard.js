@@ -155,9 +155,9 @@ export function handleEscapeKey() {
     return true;
   }
 
-  // 6b. Category Drilldown (People, Places, Events: Back button active)
+  // 6b. Category Drilldown (People, Places, Events, Albums: Back button active)
   if ((dom.categoryBackBtn && dom.categoryBackBtn.style.display !== 'none') ||
-      (state.activeTab && state.activeTab !== 'media' && state.activeTagId)) {
+      (state.activeTab && state.activeTab !== 'media' && (state.activeTagId || state.activeAlbumId))) {
     if (state.selectedIds && state.selectedIds.size > 0) {
       clearCardSelections();
     }

@@ -155,8 +155,8 @@ Helper utilities for programmatically creating:
     - "Not Rejects" (`#navNotRejects` - items with flag != -1, with `#totalNotRejectsCount`)
     - "Unrated" (`#navUnrated` - items with rating = 0)
   - View tabs in top bar:
-    - "Media", "People", "Places", "Events".
-    - Switching tabs filters by corresponding tag category.
+    - "Media", "People", "Places", "Events", "Albums".
+    - Switching tabs filters by corresponding category or displays collection overview.
   - Filter indicator & breadcrumb `#filterIndicator` and `#clearFiltersBtn`.
   - Folder tree navigation: extracting folder paths and filtering on click.
 

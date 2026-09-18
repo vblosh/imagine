@@ -10,7 +10,7 @@ export const state = {
   totalCount: 0,
   selectedIds: new Set(),
   lastSelectedId: null,
-  activeTab: 'media',      // 'media', 'people', 'places', 'events'
+  activeTab: 'media',      // 'media', 'people', 'places', 'events', 'albums'
   activeMediaType: 'all',  // 'all', 'photos', 'videos', 'audio'
   activeStatusFilter: null,// null, 'picks', 'rejects', 'not_rejects', 'unrated'
   get activeNavFilter() {
@@ -58,7 +58,8 @@ export const state = {
   categorySort: {
     people: 'count-desc',
     places: 'name-asc',
-    events: 'last_date-desc'
+    events: 'last_date-desc',
+    albums: 'name-asc'
   },
   tags: [],
   albums: [],

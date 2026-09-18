@@ -239,7 +239,7 @@ export function restoreNavigationPreferences() {
   } catch (_) {}
 
   const savedTab = queryTab || safeGetItem(STORAGE_KEYS.ACTIVE_TAB);
-  if (savedTab && ['media', 'people', 'places', 'events'].includes(savedTab)) {
+  if (savedTab && ['media', 'people', 'places', 'events', 'albums'].includes(savedTab)) {
     state.activeTab = savedTab;
     if (dom.viewTabs) {
       dom.viewTabs.querySelectorAll('.tab-btn').forEach(btn => {

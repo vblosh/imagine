@@ -24,6 +24,7 @@ def test_i18n_default_language_is_english(server, page: Page):
     expect(page.locator('.tab-btn[data-tab="people"] span')).to_have_text("People")
     expect(page.locator('.tab-btn[data-tab="places"] span')).to_have_text("Places")
     expect(page.locator('.tab-btn[data-tab="events"] span')).to_have_text("Events")
+    expect(page.locator('.tab-btn[data-tab="albums"] span')).to_have_text("Albums")
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("All Media")
@@ -58,6 +59,7 @@ def test_i18n_switch_to_spanish(server, page: Page):
     expect(page.locator('.tab-btn[data-tab="people"] span')).to_have_text("Personas")
     expect(page.locator('.tab-btn[data-tab="places"] span')).to_have_text("Lugares")
     expect(page.locator('.tab-btn[data-tab="events"] span')).to_have_text("Eventos")
+    expect(page.locator('.tab-btn[data-tab="albums"] span')).to_have_text("Álbumes")
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("Todos los medios")
@@ -99,6 +101,7 @@ def test_i18n_switch_to_german(server, page: Page):
     expect(page.locator('.tab-btn[data-tab="people"] span')).to_have_text("Personen")
     expect(page.locator('.tab-btn[data-tab="places"] span')).to_have_text("Orte")
     expect(page.locator('.tab-btn[data-tab="events"] span')).to_have_text("Ereignisse")
+    expect(page.locator('.tab-btn[data-tab="albums"] span')).to_have_text("Alben")
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("Alle Medien")
@@ -127,6 +130,7 @@ def test_i18n_switch_to_russian(server, page: Page):
     expect(page.locator('.tab-btn[data-tab="people"] span')).to_have_text("Люди")
     expect(page.locator('.tab-btn[data-tab="places"] span')).to_have_text("Места")
     expect(page.locator('.tab-btn[data-tab="events"] span')).to_have_text("События")
+    expect(page.locator('.tab-btn[data-tab="albums"] span')).to_have_text("Альбомы")
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("Все медиа")
@@ -156,6 +160,7 @@ def test_i18n_switch_to_chinese(server, page: Page):
     expect(page.locator('.tab-btn[data-tab="people"] span')).to_have_text("人物")
     expect(page.locator('.tab-btn[data-tab="places"] span')).to_have_text("地点")
     expect(page.locator('.tab-btn[data-tab="events"] span')).to_have_text("事件")
+    expect(page.locator('.tab-btn[data-tab="albums"] span')).to_have_text("相册")
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("所有媒体")

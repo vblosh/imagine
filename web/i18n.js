@@ -21,6 +21,7 @@ export const translations = {
     tab_people: 'People',
     tab_places: 'Places',
     tab_events: 'Events',
+    tab_albums: 'Albums',
 
     // Top Bar
     search_placeholder: 'Search photos, camera, tags...',
@@ -120,20 +121,26 @@ export const translations = {
     place_plural: 'places',
     event_singular: 'event',
     event_plural: 'events',
+    album_singular: 'album',
+    album_plural: 'albums',
     type_photo: 'Photo',
     type_video: 'Video',
     type_audio: 'Audio',
 
-    // Category Views (People, Places, Events)
+    // Category Views (People, Places, Events, Albums)
     add_person: 'Add Person',
     add_place: 'Add Place',
     add_event: 'Add Event',
+    add_album: 'Add Album',
     no_people_found: 'No People Found',
     tag_people_prompt: "Tag photos with people's names to organize them here.",
     no_places_found: 'No Places Found',
     tag_places_prompt: 'Tag photos with places or locations to organize them here.',
     no_events_found: 'No Events Found',
     tag_events_prompt: 'Tag photos with events (e.g. Birthday, Vacation) to organize them here.',
+    no_albums_found: 'No Albums Found',
+    create_albums_prompt: 'Create albums to organize your favorite photos.',
+    back_to_albums: 'Back to Albums',
 
     // Map View
     map_search_placeholder: 'Search place, city, or coordinates...',
@@ -412,6 +419,7 @@ export const translations = {
     tab_people: 'Personas',
     tab_places: 'Lugares',
     tab_events: 'Eventos',
+    tab_albums: 'Álbumes',
 
     // Top Bar
     search_placeholder: 'Buscar fotos, cámaras, etiquetas...',
@@ -511,20 +519,26 @@ export const translations = {
     place_plural: 'lugares',
     event_singular: 'evento',
     event_plural: 'eventos',
+    album_singular: 'álbum',
+    album_plural: 'álbumes',
     type_photo: 'Foto',
     type_video: 'Vídeo',
     type_audio: 'Audio',
 
-    // Category Views (People, Places, Events)
+    // Category Views (People, Places, Events, Albums)
     add_person: 'Añadir persona',
     add_place: 'Añadir lugar',
     add_event: 'Añadir evento',
+    add_album: 'Añadir álbum',
     no_people_found: 'No se encontraron personas',
     tag_people_prompt: 'Etiqueta fotos con nombres de personas para organizarlas aquí.',
     no_places_found: 'No se encontraron lugares',
     tag_places_prompt: 'Etiqueta fotos con lugares o ubicaciones para organizarlas aquí.',
     no_events_found: 'No se encontraron eventos',
     tag_events_prompt: 'Etiqueta fotos con eventos (ej. Cumpleaños, Vacaciones) para organizarlas aquí.',
+    no_albums_found: 'No se encontraron álbumes',
+    create_albums_prompt: 'Crea álbumes para organizar tus fotos favoritas.',
+    back_to_albums: 'Volver a Álbumes',
 
     // Map View
     map_search_placeholder: 'Buscar lugar, ciudad o coordenadas...',
@@ -803,6 +817,7 @@ export const translations = {
     tab_people: 'Personen',
     tab_places: 'Orte',
     tab_events: 'Ereignisse',
+    tab_albums: 'Alben',
 
     // Top Bar
     search_placeholder: 'Fotos, Kameras, Tags suchen...',
@@ -902,20 +917,26 @@ export const translations = {
     place_plural: 'Orte',
     event_singular: 'Ereignis',
     event_plural: 'Ereignisse',
+    album_singular: 'Album',
+    album_plural: 'Alben',
     type_photo: 'Foto',
     type_video: 'Video',
     type_audio: 'Audio',
 
-    // Category Views (People, Places, Events)
+    // Category Views (People, Places, Events, Albums)
     add_person: 'Person hinzufügen',
     add_place: 'Ort hinzufügen',
     add_event: 'Ereignis hinzufügen',
+    add_album: 'Album hinzufügen',
     no_people_found: 'Keine Personen gefunden',
     tag_people_prompt: 'Markieren Sie Fotos mit den Namen von Personen, um sie hier zu organisieren.',
     no_places_found: 'Keine Orte gefunden',
     tag_places_prompt: 'Markieren Sie Fotos mit Orten oder Standorten, um sie hier zu organisieren.',
     no_events_found: 'Keine Ereignisse gefunden',
     tag_events_prompt: 'Markieren Sie Fotos mit Ereignissen (z. B. Geburtstag, Urlaub), um sie hier zu organisieren.',
+    no_albums_found: 'Keine Alben gefunden',
+    create_albums_prompt: 'Erstelle Alben, um deine Lieblingsfotos zu organisieren.',
+    back_to_albums: 'Zurück zu Alben',
 
     // Map View
     map_search_placeholder: 'Ort, Stadt oder Koordinaten suchen...',
@@ -1194,6 +1215,7 @@ export const translations = {
     tab_people: 'Люди',
     tab_places: 'Места',
     tab_events: 'События',
+    tab_albums: 'Альбомы',
 
     // Top Bar
     search_placeholder: 'Поиск фото, камер, тегов...',
@@ -1293,20 +1315,26 @@ export const translations = {
     place_plural: 'мест',
     event_singular: 'событие',
     event_plural: 'событий',
+    album_singular: 'альбом',
+    album_plural: 'альбомов',
     type_photo: 'Фото',
     type_video: 'Видео',
     type_audio: 'Аудио',
 
-    // Category Views (People, Places, Events)
+    // Category Views (People, Places, Events, Albums)
     add_person: 'Добавить человека',
     add_place: 'Добавить место',
     add_event: 'Добавить событие',
+    add_album: 'Добавить альбом',
     no_people_found: 'Люди не найдены',
     tag_people_prompt: 'Отмечайте фотографии именами людей, чтобы систематизировать их здесь.',
     no_places_found: 'Места не найдены',
     tag_places_prompt: 'Отмечайте фотографии местами или локациями, чтобы систематизировать их здесь.',
     no_events_found: 'События не найдены',
     tag_events_prompt: 'Отмечайте фотографии событиями (например: День рождения, Отпуск), чтобы систематизировать их здесь.',
+    no_albums_found: 'Альбомы не найдены',
+    create_albums_prompt: 'Создавайте альбомы для организации любимых фотографий.',
+    back_to_albums: 'Назад к альбомам',
 
     // Map View
     map_search_placeholder: 'Поиск места, города или координат...',
@@ -1585,6 +1613,7 @@ export const translations = {
     tab_people: '人物',
     tab_places: '地点',
     tab_events: '事件',
+    tab_albums: '相册',
 
     // Top Bar
     search_placeholder: '搜索照片、相机、标签...',
@@ -1684,20 +1713,26 @@ export const translations = {
     place_plural: '地点',
     event_singular: '事件',
     event_plural: '事件',
+    album_singular: '个相册',
+    album_plural: '个相册',
     type_photo: '照片',
     type_video: '视频',
     type_audio: '音频',
 
-    // Category Views (People, Places, Events)
+    // Category Views (People, Places, Events, Albums)
     add_person: '添加人物',
     add_place: '添加地点',
     add_event: '添加事件',
+    add_album: '添加相册',
     no_people_found: '未找到人物',
     tag_people_prompt: '用人名标记照片以便在此管理。',
     no_places_found: '未找到地点',
     tag_places_prompt: '用地点或位置标记照片以便在此管理。',
     no_events_found: '未找到事件',
     tag_events_prompt: '用事件（如生日、旅行）标记照片以便在此管理。',
+    no_albums_found: '未找到相册',
+    create_albums_prompt: '创建相册以整理您喜爱的照片。',
+    back_to_albums: '返回相册',
 
     // Map View
     map_search_placeholder: '搜索地点、城市或坐标...',

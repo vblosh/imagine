@@ -5,14 +5,14 @@
 
 import { state } from './state.js';
 import { dom } from './dom.js';
-import { escapeHtml } from './api.js';
+import { escapeHtml, api } from './api.js';
 import { t } from './i18n.js';
 import {
   loadMedia,
   updateSidebarActive,
   updateFilterLabel
 } from './media-grid.js';
-import { openTagModal } from './modals.js';
+import { openTagModal, openAlbumModal } from './modals.js';
 import { saveActiveTagIdsPreference } from './persistence.js';
 
 export function getCategoryConfig(cat) {
@@ -41,6 +41,19 @@ export function getCategoryConfig(cat) {
       emptyText: t('tag_events_prompt'),
       iconSvg: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
       thumbPlaceholderSvg: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'
+    };
+  }
+  if (c === 'albums') {
+    return {
+      category: 'albums',
+      title: t('tab_albums'),
+      singular: t('album_singular'),
+      plural: t('album_plural'),
+      addLabel: t('add_album'),
+      emptyTitle: t('no_albums_found'),
+      emptyText: t('create_albums_prompt'),
+      iconSvg: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
+      thumbPlaceholderSvg: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>'
     };
   }
   // Default: People
@@ -81,10 +94,45 @@ export function getTagCoverUrl(tag) {
   return null;
 }
 
+export const albumCoverCache = new Map();
+
+export function getAlbumCoverUrl(album) {
+  if (album.cover_hash) {
+    return `/api/thumbnails/${encodeURIComponent(album.cover_hash)}/256`;
+  }
+  if (album.cover_media_id) {
+    return `/api/photos/${album.cover_media_id}/original`;
+  }
+  if (albumCoverCache.has(album.id)) {
+    return albumCoverCache.get(album.id);
+  }
+  return null;
+}
+
+export async function fetchAlbumCover(albumId) {
+  if (albumCoverCache.has(albumId)) {
+    return albumCoverCache.get(albumId);
+  }
+  try {
+    const res = await api.get(`/api/media?album_id=${albumId}&limit=1`);
+    const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+    const item = items[0];
+    if (item) {
+      const url = item.content_hash
+        ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
+        : `/api/photos/${item.id}/original`;
+      albumCoverCache.set(albumId, url);
+      return url;
+    }
+  } catch (_) {}
+  return null;
+}
+
 export const DEFAULT_CATEGORY_SORTS = {
   people: 'count-desc',
   places: 'name-asc',
-  events: 'last_date-desc'
+  events: 'last_date-desc',
+  albums: 'name-asc'
 };
 
 export function getCategorySort(category) {
@@ -135,19 +183,26 @@ export function getTagDates(tag) {
   return { firstDate: first, lastDate: last };
 }
 
-export function sortCategoryTags(tags, sortKey) {
-  const items = tags.map(tag => {
-    const dates = getTagDates(tag);
+export function getAlbumDates(album) {
+  let created = (album.created_at != null && Number.isFinite(Number(album.created_at)) && Number(album.created_at) > 0)
+    ? Number(album.created_at)
+    : null;
+  return { firstDate: created, lastDate: created };
+}
+
+export function sortCategoryItems(items, sortKey, isAlbum = false) {
+  const mapped = items.map(item => {
+    const dates = isAlbum ? getAlbumDates(item) : getTagDates(item);
     return {
-      tag,
+      raw: item,
       firstDate: dates.firstDate,
       lastDate: dates.lastDate,
-      count: Number(tag.media_count) || 0,
-      name: String(tag.name || '')
+      count: Number(isAlbum ? item.item_count : item.media_count) || 0,
+      name: String(item.name || '')
     };
   });
 
-  items.sort((a, b) => {
+  mapped.sort((a, b) => {
     switch (sortKey) {
       case 'date':
       case 'date-desc':
@@ -224,10 +279,14 @@ export function sortCategoryTags(tags, sortKey) {
     }
   });
 
-  for (let i = 0; i < items.length; i++) {
-    tags[i] = items[i].tag;
+  for (let i = 0; i < mapped.length; i++) {
+    items[i] = mapped[i].raw;
   }
-  return tags;
+  return items;
+}
+
+export function sortCategoryTags(tags, sortKey) {
+  return sortCategoryItems(tags, sortKey, false);
 }
 
 export function renderCategoryView(category) {
@@ -235,6 +294,7 @@ export function renderCategoryView(category) {
 
   const cat = (category || state.activeTab || 'people').toLowerCase();
   const config = getCategoryConfig(cat);
+  const isAlbum = cat === 'albums';
 
   // Switch display containers and toolbars
   dom.categoryViewContainer.style.display = 'flex';
@@ -246,13 +306,15 @@ export function renderCategoryView(category) {
   if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
   if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
 
-  // Filter tags by category
-  let tags = (state.tags || []).filter(t => (t.category || 'keyword').toLowerCase() === cat);
+  // Filter items by category (albums vs tags)
+  let items = isAlbum
+    ? [...(state.albums || [])]
+    : (state.tags || []).filter(t => (t.category || 'keyword').toLowerCase() === cat);
 
   // Search query filtering
   if (state.searchText) {
     const q = state.searchText.toLowerCase().trim();
-    tags = tags.filter(t => (t.name || '').toLowerCase().includes(q));
+    items = items.filter(t => (t.name || '').toLowerCase().includes(q));
   }
 
   // Update combobox selection to reflect active sort for this category
@@ -261,22 +323,22 @@ export function renderCategoryView(category) {
     dom.categorySortSelect.value = currentSort;
   }
 
-  // Sort tags using active sort
-  sortCategoryTags(tags, currentSort);
+  // Sort items using active sort
+  sortCategoryItems(items, currentSort, isAlbum);
 
   // Update header labels
   if (dom.categoryViewTitle) {
     dom.categoryViewTitle.textContent = config.title;
   }
   if (dom.categoryViewSubtitle) {
-    dom.categoryViewSubtitle.textContent = `${tags.length} ${tags.length === 1 ? config.singular : config.plural}`;
+    dom.categoryViewSubtitle.textContent = `${items.length} ${items.length === 1 ? config.singular : config.plural}`;
   }
   if (dom.categoryAddBtnLabel) {
     dom.categoryAddBtnLabel.textContent = config.addLabel;
   }
 
-  // If no tags found
-  if (tags.length === 0) {
+  // If no items found
+  if (items.length === 0) {
     if (dom.categoryCardsGrid) {
       dom.categoryCardsGrid.innerHTML = '';
       dom.categoryCardsGrid.style.display = 'none';
@@ -291,26 +353,27 @@ export function renderCategoryView(category) {
     return;
   }
 
-  // Tags exist: hide empty state, populate grid
+  // Items exist: hide empty state, populate grid
   if (dom.categoryEmptyState) {
     dom.categoryEmptyState.style.display = 'none';
   }
   dom.categoryCardsGrid.style.display = 'grid';
   dom.categoryCardsGrid.innerHTML = '';
 
-  tags.forEach(tag => {
+  items.forEach(item => {
     const card = document.createElement('div');
     card.className = 'category-card-item';
-    card.dataset.id = String(tag.id);
+    card.dataset.id = String(item.id);
     card.dataset.category = cat;
     card.tabIndex = 0;
     card.setAttribute('role', 'button');
-    card.setAttribute('aria-label', `${tag.name} (${tag.media_count || 0} photos)`);
 
-    const safeName = escapeHtml(tag.name || 'Unnamed');
-    const coverUrl = getTagCoverUrl(tag);
-    const count = tag.media_count || 0;
+    const safeName = escapeHtml(item.name || 'Unnamed');
+    const count = isAlbum ? (item.item_count || 0) : (item.media_count || 0);
     const countText = `${count} ${count === 1 ? 'photo' : 'photos'}`;
+    card.setAttribute('aria-label', `${item.name} (${countText})`);
+
+    const coverUrl = isAlbum ? getAlbumCoverUrl(item) : getTagCoverUrl(item);
 
     card.innerHTML = `
       <div class="category-card-thumb-wrapper">
@@ -335,21 +398,79 @@ export function renderCategoryView(category) {
       });
     }
 
-    // Click handler: select category item and show its photos
+    // Dynamic cover loading for albums without explicit cover
+    if (isAlbum && count > 0 && !coverUrl) {
+      fetchAlbumCover(item.id).then(url => {
+        if (!url || card.dataset.id !== String(item.id)) return;
+        const placeholder = card.querySelector('.category-card-placeholder');
+        let cardImg = card.querySelector('.category-card-thumb');
+        if (!cardImg) {
+          cardImg = document.createElement('img');
+          cardImg.className = 'category-card-thumb';
+          cardImg.alt = safeName;
+          cardImg.loading = 'lazy';
+          cardImg.addEventListener('error', () => {
+            cardImg.style.display = 'none';
+            if (placeholder) placeholder.style.display = 'flex';
+          });
+          const wrapper = card.querySelector('.category-card-thumb-wrapper');
+          if (wrapper) wrapper.prepend(cardImg);
+        }
+        cardImg.src = url;
+        cardImg.style.display = 'block';
+        if (placeholder) placeholder.style.display = 'none';
+      }).catch(() => {});
+    }
+
+    // Click handler: select category item / album and show its photos
     card.addEventListener('click', () => {
-      selectCategoryItem(tag);
+      if (isAlbum) {
+        selectCategoryAlbum(item);
+      } else {
+        selectCategoryItem(item);
+      }
     });
 
     // Keyboard accessibility
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        selectCategoryItem(tag);
+        if (isAlbum) {
+          selectCategoryAlbum(item);
+        } else {
+          selectCategoryItem(item);
+        }
       }
     });
 
     dom.categoryCardsGrid.appendChild(card);
   });
+}
+
+export function selectCategoryAlbum(album) {
+  if (!album) return;
+
+  state.activeAlbumId = album.id;
+  state.activeTagId = null;
+  state.activeFolder = null;
+  state.activeTimelinePeriod = null;
+  state.activeMediaType = 'all';
+  state.activeStatusFilter = null;
+
+  // Clear previous grid contents immediately so previous photos don't flash
+  if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
+  if (dom.emptyState) dom.emptyState.style.display = 'none';
+
+  // Transition from category view to photo grid
+  if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+  if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
+  if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
+  if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+  if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
+
+  updateSidebarActive();
+  updateFilterLabel();
+  loadMedia();
 }
 
 export function selectCategoryItem(tag) {
@@ -381,6 +502,7 @@ export function selectCategoryItem(tag) {
 
 export function navigateBackToCategory() {
   state.activeTagId = null;
+  state.activeAlbumId = null;
   saveActiveTagIdsPreference(state.activeTagIds);
   if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
   if (dom.emptyState) dom.emptyState.style.display = 'none';
@@ -398,13 +520,21 @@ export function initCategoryView() {
 
   if (dom.categoryAddBtn) {
     dom.categoryAddBtn.addEventListener('click', () => {
-      openTagModal();
+      if (state.activeTab === 'albums') {
+        openAlbumModal();
+      } else {
+        openTagModal();
+      }
     });
   }
 
   if (dom.categoryEmptyActionBtn) {
     dom.categoryEmptyActionBtn.addEventListener('click', () => {
-      openTagModal();
+      if (state.activeTab === 'albums') {
+        openAlbumModal();
+      } else {
+        openTagModal();
+      }
     });
   }
 

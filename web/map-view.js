@@ -70,7 +70,7 @@ export function switchViewMode(mode) {
     if (dom.viewMapBtn) dom.viewMapBtn.classList.remove('active');
     if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
     exitPlacementMode();
-    if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId) {
+    if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId && !state.activeAlbumId) {
       if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'flex';
       if (dom.contentToolbar) dom.contentToolbar.style.display = 'none';
       if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'flex';

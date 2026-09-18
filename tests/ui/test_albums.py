@@ -199,3 +199,132 @@ def test_add_photo_to_album_inspector(server, page: Page):
     expect(modal).to_be_hidden()
 
 
+def test_albums_top_selector_tab_display_and_drilldown(server, page: Page):
+    """Clicking Albums tab in the top selector opens the visual grid of album cards, and clicking a card drills down."""
+    import re
+    page.goto(server["url"])
+
+    category_view = page.locator("#categoryViewContainer")
+    media_grid = page.locator("#mediaGrid")
+    content_toolbar = page.locator("#contentToolbar")
+    category_toolbar = page.locator("#categoryToolbar")
+    back_btn = page.locator("#categoryBackBtn")
+    cards = page.locator(".photo-card")
+
+    # Initial state: Media view active
+    expect(page.locator('.tab-btn[data-tab="media"]')).to_have_class(re.compile(r"\bactive\b"))
+    expect(category_view).to_be_hidden()
+
+    # Click Albums tab on top selector
+    albums_tab = page.locator('.tab-btn[data-tab="albums"]')
+    expect(albums_tab).to_be_visible()
+    expect(albums_tab.locator("span")).to_have_text("Albums")
+    albums_tab.click()
+
+    # Verify tab is active and category view is displayed
+    expect(albums_tab).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator('.tab-btn[data-tab="media"]')).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(category_view).to_be_visible()
+    expect(content_toolbar).to_be_hidden()
+    expect(category_toolbar).to_be_visible()
+    expect(page.locator("#categoryViewTitle")).to_have_text("Albums")
+    expect(page.locator("#categoryViewSubtitle")).to_contain_text("2 albums")
+
+    # Check album cards in the grid
+    album_cards = page.locator(".category-card-item")
+    expect(album_cards).to_have_count(2)
+
+    best_card = page.locator('.category-card-item', has_text="Best of 2026")
+    vacation_card = page.locator('.category-card-item', has_text="Vacation")
+    expect(best_card).to_be_visible()
+    expect(vacation_card).to_be_visible()
+    expect(best_card.locator(".category-card-badge")).to_contain_text("2 photos")
+    expect(vacation_card.locator(".category-card-badge")).to_contain_text("2 photos")
+
+    # Click Best of 2026 album card to drill down
+    best_card.click()
+    expect(category_view).to_be_hidden()
+    expect(media_grid).to_be_visible()
+    expect(content_toolbar).to_be_visible()
+    expect(category_toolbar).to_be_hidden()
+    expect(cards).to_have_count(2)
+    expect(page.locator("#filterLabel")).to_contain_text("Album: Best of 2026")
+    expect(back_btn).to_be_visible()
+    expect(page.locator("#categoryBackBtnLabel")).to_have_text("Back to Albums")
+
+    # Verify sidebar album item is highlighted active
+    sidebar_album = page.locator('#albumsList .menu-item', has_text="Best of 2026")
+    expect(sidebar_album).to_have_class(re.compile(r"\bactive\b"))
+
+    # Click Back to Albums button
+    back_btn.click()
+    expect(category_view).to_be_visible()
+    expect(media_grid).to_be_hidden()
+    expect(category_toolbar).to_be_visible()
+    expect(content_toolbar).to_be_hidden()
+    expect(albums_tab).to_have_class(re.compile(r"\bactive\b"))
+
+
+def test_albums_top_selector_create_album_and_search(server, page: Page):
+    """Creating an album via toolbar Add Album updates the grid, and search filters album cards."""
+    page.goto(server["url"])
+
+    page.locator('.tab-btn[data-tab="albums"]').click()
+    expect(page.locator("#categoryViewTitle")).to_have_text("Albums")
+
+    # Click Add Album in toolbar
+    add_btn = page.locator("#categoryAddBtn")
+    expect(add_btn).to_be_visible()
+    expect(page.locator("#categoryAddBtnLabel")).to_have_text("Add Album")
+    add_btn.click()
+
+    # Modal opens
+    modal = page.locator("#newAlbumModal")
+    expect(modal).to_be_visible()
+
+    # Create new album
+    page.locator("#albumNameInput").fill("Holiday 2026")
+    page.locator("#createAlbumSubmitBtn").click()
+    expect(modal).to_be_hidden()
+
+    # Verify new album card in grid
+    holiday_card = page.locator('.category-card-item', has_text="Holiday 2026")
+    expect(holiday_card).to_be_visible()
+    expect(holiday_card.locator(".category-card-badge")).to_contain_text("0 photos")
+
+    # Search filtering in Albums view
+    search_input = page.locator("#searchInput")
+    search_input.fill("Holiday")
+    page.wait_for_timeout(350)
+    expect(page.locator('.category-card-item', has_text="Holiday 2026")).to_be_visible()
+    expect(page.locator('.category-card-item', has_text="Best of 2026")).to_be_hidden()
+
+    # Clear search
+    page.locator("#clearSearchBtn").click()
+    page.wait_for_timeout(350)
+    expect(page.locator('.category-card-item', has_text="Best of 2026")).to_be_visible()
+    expect(page.locator('.category-card-item', has_text="Holiday 2026")).to_be_visible()
+
+
+def test_albums_top_selector_keyboard_navigation(server, page: Page):
+    """Pressing Enter on an album card drills down and Escape navigates back to Albums grid."""
+    page.goto(server["url"])
+
+    page.locator('.tab-btn[data-tab="albums"]').click()
+    best_card = page.locator('.category-card-item', has_text="Best of 2026")
+    expect(best_card).to_be_visible()
+
+    # Focus card and press Enter
+    best_card.focus()
+    page.keyboard.press("Enter")
+    expect(page.locator("#categoryViewContainer")).to_be_hidden()
+    expect(page.locator(".photo-card")).to_have_count(2)
+    expect(page.locator("#categoryBackBtn")).to_be_visible()
+
+    # Press Escape to return to Albums view
+    page.keyboard.press("Escape")
+    expect(page.locator("#categoryViewContainer")).to_be_visible()
+    expect(page.locator('.category-card-item', has_text="Best of 2026")).to_be_visible()
+
+
+
