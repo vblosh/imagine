@@ -69,6 +69,61 @@ export function clearCardSelections() {
 let currentLoadMediaId = 0;
 let loadMediaAbortController = null;
 let loadMoreAbortController = null;
+let albumOrderSaveInFlight = false;
+
+function isAlbumOrderMode() {
+  return Boolean(state.activeAlbumId && state.sortBy === 'album_order');
+}
+
+export function enterAlbumOrderMode() {
+  if (state.sortBy !== 'album_order') {
+    state.albumOrderFallback = { sortBy: state.sortBy, sortDesc: state.sortDesc };
+    state.sortBy = 'album_order';
+    state.sortDesc = false;
+  }
+  if (dom.sortSelect) dom.sortSelect.value = 'album_order-asc';
+}
+
+function prepareAlbumOrderMode() {
+  if (!isAlbumOrderMode()) return;
+  const filtersWereActive = state.activeMediaType !== 'all'
+    || Boolean(state.activeStatusFilter)
+    || state.activeTagIds.size > 0
+    || state.activeFolders.size > 0
+    || Boolean(state.activeTimelinePeriod)
+    || Boolean(state.searchText);
+  state.activeMediaType = 'all';
+  state.activeStatusFilter = null;
+  state.activeTagIds.clear();
+  state.activeFolders.clear();
+  state.activeTimelinePeriod = null;
+  state.searchText = '';
+  if (dom.searchInput) dom.searchInput.value = '';
+  if (filtersWereActive) {
+    clearFilterPreferences();
+    updateSidebarActive();
+    renderTimeline();
+  }
+}
+
+function syncAlbumOrderSortOption() {
+  if (!dom.sortSelect) return;
+
+  const option = dom.sortSelect.querySelector('option[value="album_order-asc"]');
+  const albumIsActive = Boolean(state.activeAlbumId);
+  if (option) {
+    option.hidden = !albumIsActive;
+    option.disabled = !albumIsActive;
+  }
+
+  if (!albumIsActive && state.sortBy === 'album_order') {
+    const fallback = state.albumOrderFallback || { sortBy: 'date_taken', sortDesc: true };
+    state.sortBy = fallback.sortBy;
+    state.sortDesc = fallback.sortDesc;
+    state.albumOrderFallback = null;
+    dom.sortSelect.value = `${state.sortBy}-${state.sortDesc ? 'desc' : 'asc'}`;
+  }
+}
 
 export function buildMediaParams() {
   const params = {
@@ -133,6 +188,9 @@ export function buildMediaParams() {
 }
 
 export async function loadMedia(append = false) {
+  syncAlbumOrderSortOption();
+  prepareAlbumOrderMode();
+
   if (append) {
     return loadMoreMedia();
   }
@@ -168,19 +226,34 @@ export async function loadMedia(append = false) {
     if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
     if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
 
+    const albumOrderMode = isAlbumOrderMode();
+    const pageLimit = albumOrderMode ? 1000 : state.mediaLimit;
     const params = {
       ...buildMediaParams(),
-      limit: state.mediaLimit,
+      limit: pageLimit,
       offset: 0
     };
 
     const res = await api.get('/api/media', params, { signal: abortController.signal });
     if (fetchId !== currentLoadMediaId) return;
 
+    let rawList = (res && Array.isArray(res.items)) ? [...res.items] : [];
+    const reportedTotal = (res && Number.isFinite(Number(res.total))) ? Number(res.total) : rawList.length;
+    while (albumOrderMode && rawList.length < reportedTotal) {
+      const nextPage = await api.get('/api/media', {
+        ...buildMediaParams(),
+        limit: pageLimit,
+        offset: rawList.length
+      }, { signal: abortController.signal });
+      if (fetchId !== currentLoadMediaId) return;
+      const nextItems = (nextPage && Array.isArray(nextPage.items)) ? nextPage.items : [];
+      if (nextItems.length === 0) break;
+      rawList.push(...nextItems);
+    }
+
     // Deduplicate initial items by ID and normalize schema
     const seenIds = new Set();
     const items = [];
-    const rawList = (res && Array.isArray(res.items)) ? res.items : [];
     for (const raw of rawList) {
       const item = normalizeMediaItem(raw);
       if (item && !seenIds.has(item.id)) {
@@ -189,7 +262,7 @@ export async function loadMedia(append = false) {
       }
     }
 
-    state.totalCount = (res && Number.isFinite(Number(res.total))) ? Number(res.total) : items.length;
+    state.totalCount = reportedTotal;
     state.mediaItems = items;
     state.mediaOffset = items.length;
 
@@ -435,6 +508,20 @@ export function renderGrid() {
   }
   if (dom.emptyState) dom.emptyState.style.display = 'none';
 
+  if (isAlbumOrderMode()) {
+    const cardsWrap = document.createElement('div');
+    cardsWrap.className = 'group-cards album-order-grid';
+    state.mediaItems.forEach(item => {
+      const card = createPhotoCard(item);
+      cardMap.set(item.id, card);
+      cardsWrap.appendChild(card);
+    });
+    dom.mediaGrid.innerHTML = '';
+    dom.mediaGrid.appendChild(cardsWrap);
+    previousSelectedIds = new Set(state.selectedIds);
+    return;
+  }
+
   // Group items by Month & Year in UTC
   const groups = {};
   state.mediaItems.forEach(item => {
@@ -496,6 +583,11 @@ export function renderGrid() {
 
 export function appendMediaToGrid(newItems) {
   if (!dom.mediaGrid) return;
+
+  if (isAlbumOrderMode()) {
+    renderGrid();
+    return;
+  }
 
   // Remove existing load more wrap
   const existingLoadMore = dom.mediaGrid.querySelector('.grid-load-more-wrap');
@@ -628,6 +720,17 @@ export function createPhotoCard(item) {
   card.dataset.id = item.id;
   card.dataset.mediaType = item.media_type || 'photo';
 
+  if (isAlbumOrderMode()) {
+    card.classList.add('album-order-card');
+    card.draggable = !albumOrderSaveInFlight;
+    card.setAttribute('aria-grabbed', 'false');
+    card.addEventListener('dragstart', handleAlbumOrderDragStart);
+    card.addEventListener('dragover', handleAlbumOrderDragOver);
+    card.addEventListener('dragleave', handleAlbumOrderDragLeave);
+    card.addEventListener('drop', handleAlbumOrderDrop);
+    card.addEventListener('dragend', handleAlbumOrderDragEnd);
+  }
+
   // Thumbnail URL with fallback
   const thumbUrl = item.content_hash
     ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
@@ -658,7 +761,7 @@ export function createPhotoCard(item) {
   const safeFileName = escapeHtml(item.file_name);
   card.innerHTML = `
     <div class="photo-thumb-wrap">
-      <img src="${thumbUrl}" alt="${safeFileName}" loading="lazy" onerror="this.onerror=null;this.src='/api/photos/${item.id}/original';">
+      <img src="${thumbUrl}" alt="${safeFileName}" loading="lazy" draggable="false" onerror="this.onerror=null;this.src='/api/photos/${item.id}/original';">
       <div class="card-badges">
         ${flagBadge}
         ${mediaBadge}
@@ -676,6 +779,76 @@ export function createPhotoCard(item) {
   `;
 
   return card;
+}
+
+function handleAlbumOrderDragStart(event) {
+  if (!isAlbumOrderMode() || albumOrderSaveInFlight) {
+    event.preventDefault();
+    return;
+  }
+  const card = event.currentTarget;
+  card.classList.add('dragging');
+  card.setAttribute('aria-grabbed', 'true');
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', card.dataset.id);
+}
+
+function handleAlbumOrderDragOver(event) {
+  if (!isAlbumOrderMode() || albumOrderSaveInFlight) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  event.currentTarget.classList.add('drop-target');
+}
+
+function handleAlbumOrderDragLeave(event) {
+  event.currentTarget.classList.remove('drop-target');
+}
+
+async function handleAlbumOrderDrop(event) {
+  event.preventDefault();
+  const targetCard = event.currentTarget;
+  targetCard.classList.remove('drop-target');
+  if (!isAlbumOrderMode() || albumOrderSaveInFlight) return;
+
+  const sourceId = Number(event.dataTransfer.getData('text/plain'));
+  const targetId = Number(targetCard.dataset.id);
+  if (!Number.isFinite(sourceId) || !Number.isFinite(targetId) || sourceId === targetId) return;
+
+  const previousItems = [...state.mediaItems];
+  const sourceIndex = previousItems.findIndex(item => item.id === sourceId);
+  const originalTargetIndex = previousItems.findIndex(item => item.id === targetId);
+  if (sourceIndex < 0 || originalTargetIndex < 0) return;
+
+  const reordered = [...previousItems];
+  const [movedItem] = reordered.splice(sourceIndex, 1);
+  const targetIndex = reordered.findIndex(item => item.id === targetId);
+  const insertIndex = sourceIndex < originalTargetIndex ? targetIndex + 1 : targetIndex;
+  reordered.splice(insertIndex, 0, movedItem);
+
+  const albumId = state.activeAlbumId;
+  state.mediaItems = reordered;
+  albumOrderSaveInFlight = true;
+  renderGrid();
+  try {
+    await api.post(`/api/albums/${albumId}/order`, {
+      media_ids: reordered.map(item => item.id)
+    });
+  } catch (err) {
+    if (state.activeAlbumId === albumId && state.sortBy === 'album_order') {
+      state.mediaItems = previousItems;
+      renderGrid();
+      showToast(`${t('album_reorder_failed')}: ${err.message || 'Server error'}`, 'error');
+    }
+  } finally {
+    albumOrderSaveInFlight = false;
+    if (isAlbumOrderMode() && state.activeAlbumId === albumId) renderGrid();
+  }
+}
+
+function handleAlbumOrderDragEnd(event) {
+  event.currentTarget.classList.remove('dragging');
+  event.currentTarget.setAttribute('aria-grabbed', 'false');
+  dom.mediaGrid?.querySelectorAll('.drop-target').forEach(card => card.classList.remove('drop-target'));
 }
 
 export function handleCardSelection(id, event) {
@@ -1013,6 +1186,7 @@ export function renderSidebarAlbums() {
         state.activeAlbumId = null;
       } else {
         state.activeAlbumId = album.id;
+        enterAlbumOrderMode();
         state.activeFolders.clear();
         state.activeTimelinePeriod = null;
       }
@@ -1142,6 +1316,8 @@ export function renderTimeline() {
 }
 
 export function updateSidebarActive() {
+  syncAlbumOrderSortOption();
+
   const hasTag = state.activeTagIds && state.activeTagIds.size > 0;
   const hasFolder = state.activeFolders && state.activeFolders.size > 0;
   const isAllMedia = (!state.activeMediaType || state.activeMediaType === 'all')

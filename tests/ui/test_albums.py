@@ -2,6 +2,8 @@
 Deterministic UI tests for Album management and filtering.
 """
 
+import sqlite3
+
 from playwright.sync_api import Page, expect
 
 
@@ -35,6 +37,66 @@ def test_albums_sidebar_display_and_filtering(server, page: Page):
     # Click "Best of 2026" again to toggle filter off
     best_album.click()
     expect(cards).to_have_count(6)
+
+
+def test_album_order_sort_uses_album_media_position(server, page: Page):
+    """Album order is available only in an album and follows album_media.position."""
+    with sqlite3.connect(server["env"]["db_path"]) as conn:
+        conn.execute("""
+            UPDATE album_media
+            SET position = CASE
+                WHEN media_id = (SELECT id FROM media_items WHERE file_name = 'sunset.bmp') THEN 10
+                WHEN media_id = (SELECT id FROM media_items WHERE file_name = 'mountain.bmp') THEN 20
+                ELSE position
+            END
+            WHERE album_id = (SELECT id FROM albums WHERE name = 'Best of 2026')
+        """)
+
+    page.goto(server["url"])
+    sort_select = page.locator("#sortSelect")
+    album_order = sort_select.locator('option[value="album_order-asc"]')
+    expect(album_order).to_be_disabled()
+    expect(album_order).to_have_attribute("hidden", "")
+
+    search_input = page.locator("#searchInput")
+    search_input.fill("sunset.bmp")
+    expect(page.locator(".photo-card")).to_have_count(1)
+
+    album = page.locator("#albumsList .menu-item", has_text="Best of 2026")
+    album.click()
+    expect(album_order).to_be_enabled()
+    expect(album_order).not_to_have_attribute("hidden", "")
+    expect(album_order).to_have_text("Album order")
+    expect(sort_select).to_have_value("album_order-asc")
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(2)
+    expect(search_input).to_have_value("")
+    assert page.evaluate("() => localStorage.getItem('imagine_search_text')") is None
+    expect(page.locator(".date-header")).to_have_count(0)
+    expect(page.locator(".album-order-grid")).to_have_count(1)
+    expect(cards.nth(0)).to_have_attribute("draggable", "true")
+    expect(cards.nth(0).locator(".card-filename")).to_have_text("sunset.bmp")
+    expect(cards.nth(1).locator(".card-filename")).to_have_text("mountain.bmp")
+
+    with page.expect_response(lambda response: response.url.endswith("/order") and response.request.method == "POST") as response_info:
+        cards.nth(0).drag_to(cards.nth(1))
+    assert response_info.value.ok
+    expect(cards.nth(0).locator(".card-filename")).to_have_text("mountain.bmp")
+    expect(cards.nth(1).locator(".card-filename")).to_have_text("sunset.bmp")
+
+    with sqlite3.connect(server["env"]["db_path"]) as conn:
+        saved_order = conn.execute("""
+            SELECT m.file_name
+            FROM album_media am
+            JOIN media_items m ON m.id = am.media_id
+            WHERE am.album_id = (SELECT id FROM albums WHERE name = 'Best of 2026')
+            ORDER BY am.position
+        """).fetchall()
+    assert [row[0] for row in saved_order] == ["mountain.bmp", "sunset.bmp"]
+
+    album.click()
+    expect(album_order).to_be_disabled()
+    expect(sort_select).to_have_value("date_taken-desc")
 
 
 def test_create_album_modal_validation_and_creation(server, page: Page):

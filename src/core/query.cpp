@@ -437,13 +437,19 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
 }
 
 std::string QueryBuilder::buildOrderBy() const {
+    std::string direction = criteria_.sort_descending ? "DESC" : "ASC";
+    if (criteria_.sort_by == "album_order" && criteria_.album_id.has_value()) {
+        return "(SELECT position FROM album_media WHERE album_id = " +
+               std::to_string(*criteria_.album_id) +
+               " AND media_id = media_items.id) " + direction + ", id " + direction;
+    }
+
     std::string column = "date_taken";
     if (criteria_.sort_by == "date_taken" || criteria_.sort_by == "rating" ||
         criteria_.sort_by == "file_name" || criteria_.sort_by == "file_size" ||
         criteria_.sort_by == "duration") {
         column = criteria_.sort_by;
     }
-    std::string direction = criteria_.sort_descending ? "DESC" : "ASC";
     return column + " " + direction + ", id " + direction;
 }
 

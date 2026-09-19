@@ -79,6 +79,7 @@ public:
     Result<Album> getAlbum(AlbumId id);
     Status deleteAlbum(AlbumId id);
     Status addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position = 0);
+    Status reorderAlbumMedia(AlbumId albumId, const std::vector<MediaId>& mediaIds);
     Status setAlbumCover(AlbumId albumId, MediaId mediaId);
     Status removeMediaFromAlbum(AlbumId albumId, MediaId mediaId);
     Result<std::vector<MediaItem>> getMediaInAlbum(AlbumId albumId);

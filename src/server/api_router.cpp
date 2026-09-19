@@ -106,6 +106,7 @@ constexpr size_t kMaxNameLength = 100;
 constexpr size_t kMaxCategoryLength = 50;
 constexpr size_t kMaxAlbumNameLength = 200;
 constexpr size_t kMaxAlbumDescLength = 2000;
+constexpr size_t kMaxAlbumOrderSize = 100000;
 
 void sendJson(httplib::Response& res, const nlohmann::json& j, int status = 200) {
     res.status = status;
@@ -667,10 +668,14 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 desc = (dir != "asc");
             }
             static const std::unordered_set<std::string> allowedSortCols = {
-                "date_taken", "rating", "file_name", "file_size", "duration"
+                "date_taken", "rating", "file_name", "file_size", "duration", "album_order"
             };
             if (allowedSortCols.find(col) == allowedSortCols.end()) {
                 sendError(res, "Invalid sort column: " + col, 400);
+                return;
+            }
+            if (col == "album_order" && !criteria.album_id.has_value()) {
+                sendError(res, "Sort column 'album_order' requires 'album_id'", 400);
                 return;
             }
             criteria.sort_by = col;
@@ -2304,6 +2309,45 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
             }
 
             sendJson(res, {{"status", "ok"}, {"album_id", albumId}, {"added_count", mediaIds.size()}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
+    // POST /api/albums/:id/order
+    server.Post(R"(/api/albums/(\d+)/order)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        AlbumId albumId = std::stoll(req.matches[1]);
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.contains("media_ids") || !body["media_ids"].is_array()) {
+                sendError(res, "Missing or invalid media_ids array", 400);
+                return;
+            }
+            if (body["media_ids"].size() > kMaxAlbumOrderSize) {
+                sendError(res, "Album order exceeds maximum limit of " +
+                               std::to_string(kMaxAlbumOrderSize) + " items", 400);
+                return;
+            }
+
+            std::vector<MediaId> mediaIds;
+            mediaIds.reserve(body["media_ids"].size());
+            for (const auto& value : body["media_ids"]) {
+                if (!value.is_number_integer()) {
+                    sendError(res, "media_ids must contain only integers", 400);
+                    return;
+                }
+                mediaIds.push_back(value.get<MediaId>());
+            }
+
+            Status s = catalog_
+                ? catalog_->reorderAlbumMedia(albumId, mediaIds)
+                : db().reorderAlbumMedia(albumId, mediaIds);
+            if (!s.isOk()) {
+                sendStatusError(res, s);
+                return;
+            }
+            sendJson(res, {{"status", "ok"}, {"album_id", albumId}, {"ordered_count", mediaIds.size()}});
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
         }

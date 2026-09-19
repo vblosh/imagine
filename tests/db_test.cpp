@@ -287,6 +287,16 @@ TEST_F(CatalogDbTest, AlbumManagementAndQueries) {
     EXPECT_TRUE(db.addMediaToAlbum(aid, videoId, 1).isOk());
     EXPECT_FALSE(db.setAlbumCover(aid, videoId).isOk());
 
+    EXPECT_TRUE(db.reorderAlbumMedia(aid, {videoId, mid1}).isOk());
+    auto reorderedAlbum = db.getMediaInAlbum(aid);
+    ASSERT_TRUE(reorderedAlbum.isOk());
+    ASSERT_EQ(reorderedAlbum.value().size(), 2u);
+    EXPECT_EQ(reorderedAlbum.value()[0].id, videoId);
+    EXPECT_EQ(reorderedAlbum.value()[1].id, mid1);
+    EXPECT_FALSE(db.reorderAlbumMedia(aid, {mid1, mid1}).isOk());
+    EXPECT_FALSE(db.reorderAlbumMedia(aid, {mid1}).isOk());
+    EXPECT_EQ(db.reorderAlbumMedia(99999, {}).code(), StatusCode::NotFound);
+
     MediaItem unassociatedPhoto;
     unassociatedPhoto.file_path = "/photos/2.jpg";
     unassociatedPhoto.file_name = "2.jpg";

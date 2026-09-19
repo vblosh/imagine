@@ -300,6 +300,22 @@ TEST_F(QueryTest, SortVariants) {
     EXPECT_EQ(res2.value().items[2].file_size, 1000);
 }
 
+TEST_F(QueryTest, SortByAlbumPosition) {
+    ASSERT_TRUE(db.addMediaToAlbum(albumVacation, id1, 20).isOk());
+    ASSERT_TRUE(db.addMediaToAlbum(albumVacation, id3, 10).isOk());
+
+    QueryCriteria criteria;
+    criteria.album_id = albumVacation;
+    criteria.sort_by = "album_order";
+    criteria.sort_descending = false;
+
+    auto result = QueryBuilder::execute(db, criteria);
+    ASSERT_TRUE(result.isOk());
+    ASSERT_EQ(result.value().items.size(), 2u);
+    EXPECT_EQ(result.value().items[0].id, id3);
+    EXPECT_EQ(result.value().items[1].id, id1);
+}
+
 TEST_F(QueryTest, QueryResultJsonSerialization) {
     QueryResult qr;
     qr.total_count = 1;

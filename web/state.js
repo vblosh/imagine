@@ -55,6 +55,7 @@ export const state = {
   searchText: '',
   sortBy: 'date_taken',
   sortDesc: true,
+  albumOrderFallback: null,
   categorySort: {
     people: 'count-desc',
     places: 'name-asc',

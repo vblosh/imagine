@@ -8,6 +8,7 @@ import { dom } from './dom.js';
 import { escapeHtml, api } from './api.js';
 import { t } from './i18n.js';
 import {
+  enterAlbumOrderMode,
   loadMedia,
   updateSidebarActive,
   updateFilterLabel
@@ -451,6 +452,7 @@ export function selectCategoryAlbum(album) {
   if (!album) return;
 
   state.activeAlbumId = album.id;
+  enterAlbumOrderMode();
   state.activeTagId = null;
   state.activeFolder = null;
   state.activeTimelinePeriod = null;

@@ -306,9 +306,15 @@ export function setupEventListeners() {
   if (dom.sortSelect) {
     dom.sortSelect.addEventListener('change', (e) => {
       const [field, dir] = e.target.value.split('-');
+      if (field === 'album_order' && state.sortBy !== 'album_order') {
+        state.albumOrderFallback = { sortBy: state.sortBy, sortDesc: state.sortDesc };
+      }
       state.sortBy = field;
       state.sortDesc = (dir === 'desc');
-      saveSortPreference(e.target.value);
+      if (field !== 'album_order') {
+        state.albumOrderFallback = null;
+        saveSortPreference(e.target.value);
+      }
       loadMedia();
     });
   }

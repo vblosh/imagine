@@ -953,6 +953,27 @@ body, html {
   gap: 12px;
 }
 
+.album-order-grid {
+  padding-bottom: 30px;
+}
+
+.album-order-card {
+  cursor: grab;
+}
+
+.album-order-card:active {
+  cursor: grabbing;
+}
+
+.album-order-card.dragging {
+  opacity: 0.45;
+}
+
+.album-order-card.drop-target {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 35%, transparent);
+}
+
 /* Photo Card */
 .photo-card {
   position: relative;

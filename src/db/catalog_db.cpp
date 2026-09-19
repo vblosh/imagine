@@ -3,6 +3,7 @@
 #include "imagine/common/logger.hpp"
 #include <chrono>
 #include <set>
+#include <unordered_set>
 
 namespace imagine::db {
 
@@ -911,6 +912,55 @@ Status CatalogDb::addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position
         return Status::databaseError("Failed to add media to album: " + conn_.lastErrorMessage());
     }
     return Status::ok();
+}
+
+Status CatalogDb::reorderAlbumMedia(AlbumId albumId, const std::vector<MediaId>& mediaIds) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Transaction tx(conn_);
+
+    auto albumStmtRes = conn_.prepare("SELECT 1 FROM albums WHERE id = ?;");
+    if (!albumStmtRes.isOk()) return albumStmtRes.status();
+    auto albumStmt = std::move(albumStmtRes.value());
+    albumStmt.bind(1, albumId);
+    if (albumStmt.step() != StepResult::Row) {
+        return Status::notFound("Album not found: " + std::to_string(albumId));
+    }
+
+    std::unordered_set<MediaId> requestedIds;
+    requestedIds.reserve(mediaIds.size());
+    for (MediaId mediaId : mediaIds) {
+        if (mediaId <= 0 || !requestedIds.insert(mediaId).second) {
+            return Status::invalidArgument("Album order must contain unique positive media IDs");
+        }
+    }
+
+    auto membersStmtRes = conn_.prepare("SELECT media_id FROM album_media WHERE album_id = ?;");
+    if (!membersStmtRes.isOk()) return membersStmtRes.status();
+    auto membersStmt = std::move(membersStmtRes.value());
+    membersStmt.bind(1, albumId);
+    std::unordered_set<MediaId> memberIds;
+    while (membersStmt.step() == StepResult::Row) {
+        memberIds.insert(membersStmt.getInt64(0));
+    }
+    if (requestedIds != memberIds) {
+        return Status::invalidArgument("Album order must contain every album media ID exactly once");
+    }
+
+    auto updateStmtRes = conn_.prepare(
+        "UPDATE album_media SET position = ? WHERE album_id = ? AND media_id = ?;");
+    if (!updateStmtRes.isOk()) return updateStmtRes.status();
+    auto updateStmt = std::move(updateStmtRes.value());
+    for (size_t position = 0; position < mediaIds.size(); ++position) {
+        updateStmt.bind(1, static_cast<int64_t>(position));
+        updateStmt.bind(2, albumId);
+        updateStmt.bind(3, mediaIds[position]);
+        if (updateStmt.step() != StepResult::Done) {
+            return Status::databaseError("Failed to update album order: " + conn_.lastErrorMessage());
+        }
+        updateStmt.reset();
+    }
+
+    return tx.commit();
 }
 
 Status CatalogDb::setAlbumCover(AlbumId albumId, MediaId mediaId) {

@@ -851,6 +851,19 @@ TEST_F(ServerTest, ValidationAndErrorEndpoints) {
     ASSERT_TRUE(addRes);
     EXPECT_EQ(addRes->status, 200);
 
+    auto albumOrderRes = client.Get("/api/media?album_id=" + std::to_string(aid) + "&sort=album_order-asc");
+    ASSERT_TRUE(albumOrderRes);
+    EXPECT_EQ(albumOrderRes->status, 200);
+    EXPECT_EQ(client.Get("/api/media?sort=album_order-asc")->status, 400);
+
+    const std::string albumOrderPath = "/api/albums/" + std::to_string(aid) + "/order";
+    EXPECT_EQ(client.Post(albumOrderPath, "bad json", "application/json")->status, 400);
+    EXPECT_EQ(client.Post(albumOrderPath, "{}", "application/json")->status, 400);
+    EXPECT_EQ(client.Post(albumOrderPath, R"({"media_ids":"invalid"})", "application/json")->status, 400);
+    EXPECT_EQ(client.Post(albumOrderPath, R"({"media_ids":["invalid"]})", "application/json")->status, 400);
+    EXPECT_EQ(client.Post(albumOrderPath, nlohmann::json{{"media_ids", {mid, mid}}}.dump(), "application/json")->status, 400);
+    EXPECT_EQ(client.Post("/api/albums/99999/order", R"({"media_ids":[]})", "application/json")->status, 404);
+
     nlohmann::json coverBody = {{"media_id", mid}};
     auto coverRes = client.Post("/api/albums/" + std::to_string(aid) + "/cover", coverBody.dump(), "application/json");
     ASSERT_TRUE(coverRes);
@@ -872,6 +885,24 @@ TEST_F(ServerTest, ValidationAndErrorEndpoints) {
     video.media_type = "video";
     auto videoId = catalog_->db().insertMedia(video).value();
     ASSERT_TRUE(catalog_->db().addMediaToAlbum(aid, videoId).isOk());
+
+    auto reorderRes = client.Post(albumOrderPath,
+                                  nlohmann::json{{"media_ids", {videoId, mid}}}.dump(),
+                                  "application/json");
+    ASSERT_TRUE(reorderRes);
+    EXPECT_EQ(reorderRes->status, 200);
+    auto reorderedMedia = nlohmann::json::parse(
+        client.Get("/api/media?album_id=" + std::to_string(aid) + "&sort=album_order-asc")->body);
+    ASSERT_EQ(reorderedMedia["items"].size(), 2u);
+    EXPECT_EQ(reorderedMedia["items"][0]["id"].get<MediaId>(), videoId);
+    EXPECT_EQ(reorderedMedia["items"][1]["id"].get<MediaId>(), mid);
+
+    nlohmann::json oversizedOrder = nlohmann::json::array();
+    for (int i = 0; i < 100001; ++i) oversizedOrder.push_back(i + 1);
+    EXPECT_EQ(client.Post(albumOrderPath,
+                          nlohmann::json{{"media_ids", oversizedOrder}}.dump(),
+                          "application/json")->status, 400);
+
     EXPECT_EQ(client.Post("/api/albums/" + std::to_string(aid) + "/cover",
                           nlohmann::json{{"media_id", videoId}}.dump(),
                           "application/json")->status, 404);

@@ -800,6 +800,14 @@ Status Catalog::addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position) 
     return db_->addMediaToAlbum(albumId, mediaId, position);
 }
 
+Status Catalog::reorderAlbumMedia(AlbumId albumId, const std::vector<MediaId>& mediaIds) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+    return db_->reorderAlbumMedia(albumId, mediaIds);
+}
+
 Status Catalog::setAlbumCover(AlbumId albumId, MediaId mediaId) {
     std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
