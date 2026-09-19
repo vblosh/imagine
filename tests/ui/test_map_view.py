@@ -107,7 +107,10 @@ def test_inspector_show_on_map(server, page: Page):
 
     # Should switch to Map View and open popup
     expect(page.locator("#mapViewContainer")).to_be_visible()
-    popup = page.locator("#mapViewContainer .leaflet-popup-content:visible")
+    popup = page.locator(
+        "#mapViewContainer .map-popup-card:not(.search-result-popup):visible",
+        has_text="mountain.bmp",
+    )
     expect(popup).to_be_visible()
     expect(popup.locator(".map-popup-title")).to_have_text("mountain.bmp")
 
