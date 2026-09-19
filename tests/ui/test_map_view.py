@@ -107,8 +107,9 @@ def test_inspector_show_on_map(server, page: Page):
 
     # Should switch to Map View and open popup
     expect(page.locator("#mapViewContainer")).to_be_visible()
-    expect(page.locator(".map-popup-card")).to_be_visible()
-    expect(page.locator(".map-popup-title")).to_have_text("mountain.bmp")
+    popup = page.locator("#mapViewContainer .leaflet-popup-content:visible")
+    expect(popup).to_be_visible()
+    expect(popup.locator(".map-popup-title")).to_have_text("mountain.bmp")
 
 
 def test_geotag_placement_on_map(server, page: Page):

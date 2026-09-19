@@ -288,6 +288,19 @@ def test_combine_navigation_filters_albums_and_tags(server, page: Page):
     # 3. Combine with Album: Best of 2026 (contains mountain.bmp and sunset.bmp)
     best_album = page.locator("#albumsList .menu-item", has_text="Best of 2026")
     best_album.click()
+
+    # Album order is the default album view and intentionally shows every album
+    # item, so entering it clears filters that could hide or reorder items.
+    expect(page.locator("#sortSelect")).to_have_value("album_order-asc")
+    expect(page.locator("#navPhotos")).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPicks")).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(best_album).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(2)
+
+    # Other album sort modes continue to support combined filters.
+    page.locator("#sortSelect").select_option("date_taken-desc")
+    page.locator("#navPhotos").click()
+    page.locator("#navPicks").click()
     expect(page.locator("#navPhotos")).to_have_class(re.compile(r"\bactive\b"))
     expect(page.locator("#navPicks")).to_have_class(re.compile(r"\bactive\b"))
     expect(best_album).to_have_class(re.compile(r"\bactive\b"))
@@ -339,6 +352,7 @@ def test_combine_navigation_filters_albums_and_tags(server, page: Page):
     vacation_album = page.locator("#albumsList .menu-item", has_text="Vacation")
     vacation_album.click()
     expect(cards).to_have_count(2)  # beach.bmp, birthday.bmp
+    page.locator("#sortSelect").select_option("date_taken-desc")
 
     page.locator('.tag-category-group[data-category="people"] .category-header').click()
     alice_tag = page.locator("#tagCategoryPeople .tag-item", has_text="Alice")

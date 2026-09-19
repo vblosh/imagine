@@ -44,6 +44,7 @@ def test_auto_event_group_and_photo_controls(server, page: Page):
     with page.expect_response(lambda response: response.url.endswith("/api/media/event-suggestions")):
         page.locator("#batchAutoEventBtn").click()
     expect(page.locator("#autoEventModal")).to_be_visible()
+    expect(page.locator("#autoEventLoading")).to_be_hidden()
 
     groups = page.locator(".auto-event-group")
     if groups.count() == 0:
@@ -86,6 +87,7 @@ def test_auto_event_apply_creates_event_tags(server, page: Page):
     with page.expect_response(lambda response: response.url.endswith("/api/media/event-suggestions")):
         page.locator("#batchAutoEventBtn").click()
     expect(page.locator("#autoEventModal")).to_be_visible()
+    expect(page.locator("#autoEventLoading")).to_be_hidden()
     if page.locator(".auto-event-group").count() == 0:
         page.locator("#cancelAutoEventsBtn").click()
         return
