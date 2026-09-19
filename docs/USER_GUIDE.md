@@ -9,7 +9,7 @@ Imagine combines a high-speed C++20 core engine with an interactive Command-Line
 ## Table of Contents
 1. [System Requirements & Installation](#1-system-requirements--installation)
 2. [Quick Start Tutorial](#2-quick-start-tutorial)
-3. [Importing Photos](#3-importing-photos)
+3. [Importing Media](#3-importing-media)
 4. [Browsing & Navigation (including Language / i18n)](#4-browsing--navigation)
 5. [Organizing & Tagging](#5-organizing--tagging)
 6. [Fullscreen Loupe Viewer](#6-fullscreen-loupe-viewer)
@@ -63,10 +63,10 @@ Imagine combines a high-speed C++20 core engine with an interactive Command-Line
 
 ## 2. Quick Start Tutorial
 
-Get your photo collection organized in three simple steps:
+Get your photo, video, and audio collection organized in three simple steps:
 
-### Step 1: Import Photos
-Import your existing folders of photos into an Imagine catalog:
+### Step 1: Import Media
+Import your existing folders of photos, videos, and audio into an Imagine catalog:
 ```bash
 ./build/imagine import /path/to/my/photos --catalog my_catalog.db
 ```
@@ -82,16 +82,42 @@ Open [http://localhost:8080](http://localhost:8080) in Chrome, Firefox, Safari, 
 
 ---
 
-## 3. Importing Photos
+## 3. Importing Media
 
-Imagine includes an asynchronous, multi-threaded importer capable of scanning thousands of photos per second.
+Imagine includes an asynchronous, multi-threaded importer capable of scanning thousands of media files per second.
 
 ### Supported File Formats
+File extensions are matched case-insensitively.
+
+**Photos**
 - JPEG (`.jpg`, `.jpeg`)
 - PNG (`.png`)
 - BMP (`.bmp`)
 - WebP (`.webp`)
 - TIFF (`.tiff`, `.tif`)
+
+**Videos**
+- MPEG-4 (`.mp4`, `.m4v`)
+- QuickTime (`.mov`)
+- WebM (`.webm`)
+- Matroska (`.mkv`)
+- AVI (`.avi`)
+- AVCHD / MPEG transport stream (`.mts`, `.m2ts`, `.m2t`)
+- MPEG video (`.mpg`, `.mpeg`)
+- Windows Media Video (`.wmv`)
+- Flash Video (`.flv`)
+- 3GPP (`.3gp`)
+
+**Audio**
+- MP3 (`.mp3`)
+- WAV (`.wav`)
+- FLAC (`.flac`)
+- Ogg Vorbis (`.ogg`)
+- MPEG-4 audio (`.m4a`)
+- AAC (`.aac`)
+- Windows Media Audio (`.wma`)
+
+Videos and audio appear alongside photos in the catalog and can be filtered from the **Videos** and **Audio** navigation entries. Imagine extracts video-frame thumbnails when FFmpeg is available, uses embedded cover art when present, and otherwise generates a placeholder thumbnail. Playback uses the browser’s built-in media support.
 
 ### Importing via the Web UI
 1. Click the blue **"Import Folder"** button in the top navigation bar.
@@ -102,7 +128,7 @@ Imagine includes an asynchronous, multi-threaded importer capable of scanning th
 
 ```
 +-------------------------------------------------------------+
-| Import Photos to Catalog                                [X] |
+| Import Media to Catalog                                 [X] |
 |-------------------------------------------------------------|
 | Directory Path on Server:                                   |
 | [/home/slava/Pictures/Vacation2026                        ] |
@@ -127,8 +153,8 @@ Use the `imagine import` command:
 ```
 
 ### Deduplication & Change Detection
-- **Fast Rescan**: If you run import on a folder that has already been indexed, Imagine inspects file modification times (`mtime`) and skips unchanged photos in **0 milliseconds**.
-- **SHA-256 Hashing**: Each imported photo receives a cryptographic content hash. If you move a file to a new folder or import duplicates, Imagine recognizes the content hash and prevents duplicate thumbnail generation.
+- **Fast Rescan**: If you run import on a folder that has already been indexed, Imagine inspects file modification times (`mtime`) and skips unchanged media files.
+- **SHA-256 Hashing**: Each imported media file receives a cryptographic content hash. If you move a file to a new folder or import duplicates, Imagine recognizes the content hash and prevents duplicate thumbnail generation.
 
 ---
 
