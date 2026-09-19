@@ -81,6 +81,8 @@ export const dom = {
   navNotRejects: document.getElementById('navNotRejects'),
   navUnrated: document.getElementById('navUnrated'),
   albumsList: document.getElementById('albumsList'),
+  albumsHeader: document.getElementById('albumsHeader'),
+  albumsArrow: document.getElementById('albumsArrow'),
   newAlbumBtn: document.getElementById('newAlbumBtn'),
   newTagBtn: document.getElementById('newTagBtn'),
   leftSidebar: document.getElementById('leftSidebar'),

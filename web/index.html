@@ -177,10 +177,13 @@
         <!-- Albums Section -->
         <div class="sidebar-section">
           <div class="sidebar-section-header">
-            <span class="section-title" data-i18n="albums_section">Albums</span>
+            <div class="sidebar-section-header-title collapsible" id="albumsHeader" role="button" tabindex="0" aria-expanded="true" aria-controls="albumsList" title="Albums" data-i18n-title="albums_section">
+              <span class="arrow" id="albumsArrow">▼</span>
+              <span class="section-title" data-i18n="albums_section">Albums</span>
+            </div>
             <button class="section-action-btn" id="newAlbumBtn" title="Create New Album" data-i18n-title="new_album">+</button>
           </div>
-          <ul class="sidebar-menu" id="albumsList">
+          <ul class="sidebar-menu" id="albumsList" style="display: block;">
             <!-- Dynamic Album items -->
           </ul>
         </div>

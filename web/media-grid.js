@@ -35,6 +35,7 @@ import {
   saveActiveTagIdsPreference,
   clearFilterPreferences,
   saveActiveTabPreference,
+  saveAlbumsCollapsedState,
   saveFoldersCollapsedState,
   saveTagCategoryCollapsedState
 } from './persistence.js';
@@ -1090,6 +1091,26 @@ export function collapseTagCategory(category, save = true) {
   }
 }
 
+export function expandAlbums(save = true) {
+  if (dom.albumsList) {
+    dom.albumsList.style.display = 'block';
+    const arrow = dom.albumsHeader?.querySelector('.arrow') || dom.albumsArrow;
+    if (arrow) arrow.textContent = '▼';
+    if (dom.albumsHeader) dom.albumsHeader.setAttribute('aria-expanded', 'true');
+    if (save) saveAlbumsCollapsedState(false);
+  }
+}
+
+export function collapseAlbums(save = true) {
+  if (dom.albumsList) {
+    dom.albumsList.style.display = 'none';
+    const arrow = dom.albumsHeader?.querySelector('.arrow') || dom.albumsArrow;
+    if (arrow) arrow.textContent = '▶';
+    if (dom.albumsHeader) dom.albumsHeader.setAttribute('aria-expanded', 'false');
+    if (save) saveAlbumsCollapsedState(true);
+  }
+}
+
 export function expandFolders(save = true) {
   if (dom.foldersTree) {
     dom.foldersTree.style.display = 'block';
@@ -1354,6 +1375,9 @@ export function updateSidebarActive() {
   }
   if (hasFolder) {
     expandFolders();
+  }
+  if (state.activeAlbumId) {
+    expandAlbums();
   }
 }
 

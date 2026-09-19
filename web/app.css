@@ -438,6 +438,27 @@ body, html {
   gap: 6px;
 }
 
+.sidebar-section-header-title.collapsible {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sidebar-section-header-title.collapsible:hover .section-title {
+  color: var(--text-primary);
+}
+
+.sidebar-section-header-title.collapsible .arrow {
+  font-size: 9px;
+  color: var(--text-dim);
+  transition: transform 0.15s;
+}
+
+.sidebar-section-header-title.collapsible:hover .arrow {
+  color: var(--text-secondary);
+}
+
 .sidebar-section-header.collapsible .arrow {
   font-size: 9px;
   color: var(--text-dim);

@@ -6,9 +6,17 @@
 
 import { state } from './state.js';
 import { dom } from './dom.js';
-import { expandTagCategory, collapseTagCategory, expandFolders, collapseFolders } from './media-grid.js';
+import {
+  expandAlbums,
+  collapseAlbums,
+  expandTagCategory,
+  collapseTagCategory,
+  expandFolders,
+  collapseFolders
+} from './media-grid.js';
 
 export const STORAGE_KEYS = {
+  ALBUMS_COLLAPSED: 'imagine_albums_collapsed',
   FOLDERS_COLLAPSED: 'imagine_folders_collapsed',
   TAG_CATEGORY_COLLAPSED_PREFIX: 'imagine_tag_category_collapsed_',
   THUMB_ZOOM: 'imagine_thumb_zoom',
@@ -48,6 +56,10 @@ function safeRemoveItem(key) {
 
 export function saveFoldersCollapsedState(isCollapsed) {
   safeSetItem(STORAGE_KEYS.FOLDERS_COLLAPSED, isCollapsed ? 'true' : 'false');
+}
+
+export function saveAlbumsCollapsedState(isCollapsed) {
+  safeSetItem(STORAGE_KEYS.ALBUMS_COLLAPSED, isCollapsed ? 'true' : 'false');
 }
 
 export function saveTagCategoryCollapsedState(category, isCollapsed) {
@@ -142,7 +154,15 @@ export function clearFilterPreferences() {
 // --- Restoration ---
 
 export function restoreLayoutPreferences() {
-  // 1. Folders collapse state (default is collapsed)
+  // 1. Albums collapse state (default is expanded to preserve the existing layout)
+  const albumsCollapsed = safeGetItem(STORAGE_KEYS.ALBUMS_COLLAPSED);
+  if (albumsCollapsed === 'false') {
+    expandAlbums(false);
+  } else if (albumsCollapsed === 'true') {
+    collapseAlbums(false);
+  }
+
+  // 2. Folders collapse state (default is collapsed)
   const foldersCollapsed = safeGetItem(STORAGE_KEYS.FOLDERS_COLLAPSED);
   if (foldersCollapsed === 'false') {
     expandFolders(false);
@@ -150,7 +170,7 @@ export function restoreLayoutPreferences() {
     collapseFolders(false);
   }
 
-  // 2. Tag categories collapse states (default is collapsed)
+  // 3. Tag categories collapse states (default is collapsed)
   ['people', 'places', 'events', 'keyword'].forEach(cat => {
     const catCollapsed = safeGetItem(`${STORAGE_KEYS.TAG_CATEGORY_COLLAPSED_PREFIX}${cat}`);
     if (catCollapsed === 'false') {
@@ -160,14 +180,14 @@ export function restoreLayoutPreferences() {
     }
   });
 
-  // 3. Thumbnail zoom
+  // 4. Thumbnail zoom
   const savedZoom = safeGetItem(STORAGE_KEYS.THUMB_ZOOM);
   if (savedZoom && dom.zoomSlider) {
     dom.zoomSlider.value = savedZoom;
     document.documentElement.style.setProperty('--thumb-size', `${savedZoom}px`);
   }
 
-  // 4. Main grid sort
+  // 5. Main grid sort
   const savedSort = safeGetItem(STORAGE_KEYS.MAIN_SORT);
   if (savedSort && dom.sortSelect) {
     dom.sortSelect.value = savedSort;
@@ -176,7 +196,7 @@ export function restoreLayoutPreferences() {
     state.sortDesc = (dir === 'desc');
   }
 
-  // 5. Inspector collapsed state
+  // 6. Inspector collapsed state
   const inspectorCollapsed = safeGetItem(STORAGE_KEYS.INSPECTOR_COLLAPSED);
   if (dom.rightInspector) {
     if (inspectorCollapsed === 'true' || (inspectorCollapsed === null && window.innerWidth <= 768)) {

@@ -7,6 +7,34 @@ import sqlite3
 from playwright.sync_api import Page, expect
 
 
+def test_albums_sidebar_accordion_toggle_and_persistence(server, page: Page):
+    """The Albums sidebar list can be collapsed and expanded like tag categories."""
+    page.goto(server["url"])
+
+    albums_header = page.locator("#albumsHeader")
+    albums_list = page.locator("#albumsList")
+    albums_arrow = page.locator("#albumsArrow")
+
+    expect(albums_list).to_be_visible()
+    expect(albums_header).to_have_attribute("aria-expanded", "true")
+    expect(albums_arrow).to_have_text("▼")
+
+    albums_header.click()
+    expect(albums_list).to_be_hidden()
+    expect(albums_header).to_have_attribute("aria-expanded", "false")
+    expect(albums_arrow).to_have_text("▶")
+    assert page.evaluate("() => localStorage.getItem('imagine_albums_collapsed')") == "true"
+
+    page.reload()
+    expect(page.locator("#albumsList")).to_be_hidden()
+    expect(page.locator("#albumsHeader")).to_have_attribute("aria-expanded", "false")
+
+    page.locator("#albumsHeader").press("Enter")
+    expect(page.locator("#albumsList")).to_be_visible()
+    expect(page.locator("#albumsHeader")).to_have_attribute("aria-expanded", "true")
+    assert page.evaluate("() => localStorage.getItem('imagine_albums_collapsed')") == "false"
+
+
 def test_albums_sidebar_display_and_filtering(server, page: Page):
     """Verify pre-seeded albums in sidebar, item count badges, and filtering photos by album."""
     page.goto(server["url"])

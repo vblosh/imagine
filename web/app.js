@@ -44,6 +44,8 @@ import {
   batchUpdateRatings,
   toggleItemFlag,
   toggleFlagsForIds,
+  expandAlbums,
+  collapseAlbums,
   expandTagCategory,
   collapseTagCategory,
   expandFolders,
@@ -51,6 +53,7 @@ import {
 } from './media-grid.js';
 import {
   saveFoldersCollapsedState,
+  saveAlbumsCollapsedState,
   saveTagCategoryCollapsedState,
   saveZoomPreference,
   saveViewModePreference,
@@ -669,6 +672,24 @@ export function setupEventListeners() {
       updateSidebarActive();
       renderTimeline();
       loadMedia();
+    });
+  }
+
+  // Albums section collapsible
+  if (dom.albumsHeader) {
+    dom.albumsHeader.addEventListener('click', () => {
+      const isCurrentlyCollapsed = dom.albumsList && dom.albumsList.style.display === 'none';
+      if (isCurrentlyCollapsed) {
+        expandAlbums(true);
+      } else {
+        collapseAlbums(true);
+      }
+    });
+    dom.albumsHeader.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        dom.albumsHeader.click();
+      }
     });
   }
 
@@ -1550,6 +1571,7 @@ if (document.readyState === 'loading') {
 // Expose state and API for UI test assertions and debugging
 window._imagineState = state;
 window._imaginePersistence = {
+  saveAlbumsCollapsedState,
   saveFoldersCollapsedState,
   saveTagCategoryCollapsedState,
   saveZoomPreference,
