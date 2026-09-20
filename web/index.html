@@ -310,6 +310,7 @@
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> <span data-i18n="delete">Delete</span>
             </button>
             <button class="btn btn-sm" id="batchAddTagBtn" data-i18n="add_tag">Add Tag</button>
+            <button class="btn btn-sm btn-danger-outline" id="batchRemoveTagBtn" data-i18n="remove_tag">Remove Tag</button>
             <button class="btn btn-sm" id="batchAutoEventBtn" data-i18n-title="auto_event_title" title="Suggest events for selected photos">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="17" rx="2"/><path d="m9 15 2 2 4-5"/></svg>
               <span data-i18n="auto_event">Auto Event</span>
@@ -998,7 +999,7 @@
           </div>
 
           <!-- Tag Name Input Group with Search Help -->
-          <div class="form-group">
+          <div class="form-group" id="tagNameInputGroup">
             <div class="tag-modal-label-row">
               <label for="tagNameInput" class="tag-modal-label" data-i18n="tag_name_label">Tag Name:</label>
               <span class="tag-modal-category-badge" id="tagDetectedBadge" style="display: none;"></span>
@@ -1014,6 +1015,15 @@
               <datalist id="tagModalSuggestions"></datalist>
               <button type="button" class="tag-search-clear-btn" id="tagModalClearInputBtn" title="Clear input" style="display: none;">&times;</button>
             </div>
+          </div>
+
+          <div class="form-group" id="removeTagSelectGroup" style="display: none;">
+            <div class="tag-modal-label-row">
+              <label for="removeTagSelect" class="tag-modal-label" data-i18n="remove_tag_label">Tag to remove:</label>
+            </div>
+            <select id="removeTagSelect" class="form-control tag-category-select-control">
+              <option value="" data-i18n="remove_tag_select_placeholder">Select a tag</option>
+            </select>
           </div>
 
           <!-- Choose Category: People, Events, Places, Keyword -->
@@ -1097,7 +1107,7 @@
           </div>
 
           <!-- Search Help & Suggestions Section -->
-          <div class="tag-search-help-box">
+          <div class="tag-search-help-box" id="tagSearchHelpBox">
             <div class="tag-search-help-header">
               <span class="tag-search-help-title" id="tagSearchHelpTitle" data-i18n="search_help_title">Search Help & Suggestions</span>
               <span class="tag-search-help-sub" id="tagSearchHelpSub" data-i18n="search_help_sub">Click to select tag</span>

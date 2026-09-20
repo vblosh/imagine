@@ -287,6 +287,7 @@ To organize multiple photos simultaneously:
    - **Pick / Reject**: Flag all selected photos with a single click.
    - **Delete**: Remove selected photos from catalog (and optionally disk).
    - **Add Tag**: Attach a tag to all selected photos at once.
+   - **Remove Tag**: Choose a category and one of the tags present on the selected photos, then detach it from every selected photo where it exists.
    - **Auto Event**: Review suggested event groups and names for the selected photos before applying event tags.
    - **Album**: Add selected photos to an album. When viewing an active album, this becomes **Remove from Album** and removes the selected photos from that album only.
    - **Date**: Open Change Date dialog to shift timestamps by hours, adjust time zones, or set a specified date & time.
@@ -533,6 +534,7 @@ When `IMAGINE_API_TOKEN` is configured, catalog-changing `POST` and `DELETE` end
 | `POST` | `/api/media/:id/tags` | Attach tag (`{"name": "...", "category": "..."}`) |
 | `POST` | `/api/media/event-suggestions` | Preview local event groups for selected photos (`{"ids": [1, 2, ...]}`, maximum 1000 IDs); returns `groups` with naming evidence and `skipped` items without modifying tags |
 | `POST` | `/api/media/batch-tags` | Apply a tag to selected photos (`{"ids": [...], "name": "...", "category": "events"}`); returns assignment counts and `failed_ids` |
+| `DELETE` | `/api/media/batch-tags` | Remove a tag from selected photos (`{"ids": [...], "tag_id": 123}`); returns `removed_count`, `unchanged_count`, and `failed_ids` |
 | `DELETE` | `/api/media/:id/tags/:tag_id` | Detach tag from photo |
 | `GET` | `/api/thumbnails/:hash/:size` | Fetch cached JPEG thumbnail (`size`: 256 or 1024) |
 | `GET` | `/api/photos/:id/original` | Fetch original full-resolution image |

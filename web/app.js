@@ -140,6 +140,7 @@ import {
   closeAddToAlbumModal,
   submitAddToAlbum,
   openTagModal,
+  openRemoveTagModal,
   closeTagModal,
   setModalCategory,
   renderModalSearchHelp,
@@ -933,6 +934,12 @@ export function setupEventListeners() {
     });
   }
 
+  if (dom.batchRemoveTagBtn) {
+    dom.batchRemoveTagBtn.addEventListener('click', () => {
+      openRemoveTagModal(Array.from(state.selectedIds));
+    });
+  }
+
   if (dom.batchAddAlbumBtn) {
     dom.batchAddAlbumBtn.addEventListener('click', () => {
       if (state.activeAlbumId) {
@@ -1321,6 +1328,14 @@ export function setupEventListeners() {
   if (dom.tagCategorySelect) {
     dom.tagCategorySelect.addEventListener('change', () => {
       setModalCategory(dom.tagCategorySelect.value);
+    });
+  }
+
+  if (dom.removeTagSelect) {
+    dom.removeTagSelect.addEventListener('change', () => {
+      if (dom.createTagSubmitBtn) {
+        dom.createTagSubmitBtn.disabled = !dom.removeTagSelect.value;
+      }
     });
   }
 

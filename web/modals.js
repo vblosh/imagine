@@ -25,6 +25,8 @@ import { t } from './i18n.js';
 // Internal pending state
 let pendingAddToAlbumIds = [];
 let pendingTagTargetMediaIds = [];
+let pendingTagModalMode = 'add';
+let pendingRemoveTagOptions = [];
 let pendingDeleteMediaIds = [];
 let pendingDeleteTag = null;
 let pendingBatchMoveIds = [];
@@ -275,14 +277,60 @@ export async function submitAddToAlbum() {
 }
 
 // --- Tag Modal Dialog ---
-export function openTagModal(targetMediaIds = null) {
+function getRemoveTagOptions(mediaIds) {
+  const byId = new Map();
+  mediaIds.forEach(id => {
+    const item = state.mediaItems.find(media => media.id === id);
+    if (!item || !Array.isArray(item.tags)) return;
+    item.tags.forEach(tag => {
+      if (tag && Number.isFinite(Number(tag.id))) {
+        byId.set(Number(tag.id), {
+          ...tag,
+          id: Number(tag.id),
+          category: (tag.category || 'keyword').toLowerCase()
+        });
+      }
+    });
+  });
+  return Array.from(byId.values()).sort((a, b) => {
+    const categoryCompare = a.category.localeCompare(b.category);
+    return categoryCompare || a.name.localeCompare(b.name);
+  });
+}
+
+function updateRemoveTagSubmitState() {
+  if (!dom.createTagSubmitBtn || pendingTagModalMode !== 'remove') return;
+  dom.createTagSubmitBtn.disabled = !(dom.removeTagSelect && dom.removeTagSelect.value);
+}
+
+function renderRemoveTagOptions() {
+  if (pendingTagModalMode !== 'remove' || !dom.removeTagSelect) return;
+  const category = dom.tagCategorySelect ? dom.tagCategorySelect.value.toLowerCase() : 'keyword';
+  const options = pendingRemoveTagOptions.filter(tag => tag.category === category);
+  const previousValue = dom.removeTagSelect.value;
+  dom.removeTagSelect.innerHTML = `<option value="">${escapeHtml(t('remove_tag_select_placeholder'))}</option>` + options
+    .map(tag => `<option value="${tag.id}">${escapeHtml(tag.name)}</option>`)
+    .join('');
+  if (options.some(tag => String(tag.id) === previousValue)) {
+    dom.removeTagSelect.value = previousValue;
+  }
+  updateRemoveTagSubmitState();
+}
+
+export function openTagModal(targetMediaIds = null, mode = 'add') {
   if (!dom.newTagModal) return;
+
+  pendingTagModalMode = mode === 'remove' ? 'remove' : 'add';
 
   if (targetMediaIds === null) {
     pendingTagTargetMediaIds = state.selectedIds.size > 0 ? Array.from(state.selectedIds) : [];
   } else {
     pendingTagTargetMediaIds = Array.isArray(targetMediaIds) ? [...targetMediaIds] : [];
   }
+
+  pendingRemoveTagOptions = pendingTagModalMode === 'remove'
+    ? getRemoveTagOptions(pendingTagTargetMediaIds)
+    : [];
 
   const hasTargets = pendingTagTargetMediaIds.length > 0;
   if (dom.tagModalPhotoTarget) {
@@ -301,10 +349,14 @@ export function openTagModal(targetMediaIds = null) {
     const count = pendingTagTargetMediaIds.length;
 
     if (dom.tagModalHeading) {
-      dom.tagModalHeading.textContent = count === 1 ? t('tag_modal_title_single') : t('tag_modal_title_n', { count });
+      dom.tagModalHeading.textContent = pendingTagModalMode === 'remove'
+        ? t('remove_tag_modal_title_n', { count })
+        : (count === 1 ? t('tag_modal_title_single') : t('tag_modal_title_n', { count }));
     }
     if (dom.createTagSubmitBtn) {
-      dom.createTagSubmitBtn.textContent = count === 1 ? t('add_tag_btn_single') : t('add_tag_btn_n');
+      dom.createTagSubmitBtn.textContent = pendingTagModalMode === 'remove'
+        ? t('remove_tag_btn')
+        : (count === 1 ? t('add_tag_btn_single') : t('add_tag_btn_n'));
     }
     if (dom.tagModalApplyLabel) {
       dom.tagModalApplyLabel.textContent = count === 1
@@ -373,6 +425,17 @@ export function openTagModal(targetMediaIds = null) {
     if (dom.createTagSubmitBtn) dom.createTagSubmitBtn.textContent = t('create_tag_btn');
   }
 
+  const removeMode = pendingTagModalMode === 'remove';
+  if (dom.tagNameInputGroup) dom.tagNameInputGroup.style.display = removeMode ? 'none' : '';
+  if (dom.removeTagSelectGroup) dom.removeTagSelectGroup.style.display = removeMode ? '' : 'none';
+  if (dom.tagSearchHelpBox) dom.tagSearchHelpBox.style.display = removeMode ? 'none' : '';
+  if (dom.tagModalApplyGroup) dom.tagModalApplyGroup.style.display = removeMode ? 'none' : (hasTargets ? 'block' : 'none');
+  if (dom.createTagSubmitBtn) {
+    dom.createTagSubmitBtn.classList.toggle('btn-danger', removeMode);
+    dom.createTagSubmitBtn.classList.toggle('btn-primary', !removeMode);
+    dom.createTagSubmitBtn.disabled = removeMode;
+  }
+
   // Reset inputs
   if (dom.tagNameInput) {
     dom.tagNameInput.value = '';
@@ -389,7 +452,14 @@ export function openTagModal(targetMediaIds = null) {
   if (['people', 'places', 'events', 'keyword'].includes(state.activeTab)) {
     initialCat = state.activeTab;
   }
+  if (removeMode && !pendingRemoveTagOptions.some(tag => tag.category === initialCat)) {
+    initialCat = ['people', 'places', 'events', 'keyword'].find(cat => pendingRemoveTagOptions.some(tag => tag.category === cat)) || 'keyword';
+  }
   setModalCategory(initialCat);
+
+  if (removeMode) {
+    renderRemoveTagOptions();
+  }
 
   // Populate datalist suggestions
   updateModalTagSuggestions();
@@ -398,17 +468,25 @@ export function openTagModal(targetMediaIds = null) {
   renderModalSearchHelp();
 
   dom.newTagModal.style.display = 'flex';
-  if (dom.tagNameInput) {
+  if (dom.tagNameInput && !removeMode) {
     dom.tagNameInput.focus();
+  } else if (removeMode && dom.removeTagSelect) {
+    dom.removeTagSelect.focus();
   }
 }
 export const openNewTagModal = openTagModal;
+
+export function openRemoveTagModal(targetMediaIds = null) {
+  openTagModal(targetMediaIds, 'remove');
+}
 
 export function closeTagModal() {
   if (dom.newTagModal) {
     dom.newTagModal.style.display = 'none';
   }
   pendingTagTargetMediaIds = [];
+  pendingTagModalMode = 'add';
+  pendingRemoveTagOptions = [];
 }
 
 export function setModalCategory(category) {
@@ -418,13 +496,18 @@ export function setModalCategory(category) {
   }
   if (dom.tagCategoryCards) {
     dom.tagCategoryCards.querySelectorAll('.category-card').forEach(btn => {
+      const btnCat = btn.getAttribute('data-cat');
       if (btn.getAttribute('data-cat') === cat) {
         btn.classList.add('active');
       } else {
         btn.classList.remove('active');
       }
+      const available = pendingTagModalMode !== 'remove' || pendingRemoveTagOptions.some(tag => tag.category === btnCat);
+      btn.disabled = !available;
+      btn.setAttribute('aria-disabled', available ? 'false' : 'true');
     });
   }
+  if (pendingTagModalMode === 'remove') renderRemoveTagOptions();
   renderModalSearchHelp();
 }
 
@@ -454,6 +537,7 @@ export function getCategoryDisplayName(category) {
 }
 
 export function renderModalSearchHelp() {
+  if (pendingTagModalMode === 'remove') return;
   if (!dom.tagSearchHelpChips || !dom.tagNameInput) return;
 
   const query = dom.tagNameInput.value.trim().toLowerCase();
@@ -554,6 +638,9 @@ export function renderModalSearchHelp() {
 }
 
 export async function submitCreateTag() {
+  if (pendingTagModalMode === 'remove') {
+    return submitRemoveTag();
+  }
   const name = dom.tagNameInput ? dom.tagNameInput.value.trim() : '';
   if (!name) {
     alert('Tag name is required');
@@ -586,6 +673,36 @@ export async function submitCreateTag() {
   updateInspector();
   if (state.activeTab === category) {
     await loadMedia();
+  }
+}
+
+export async function submitRemoveTag() {
+  const tagId = dom.removeTagSelect ? Number(dom.removeTagSelect.value) : 0;
+  if (!tagId || pendingTagTargetMediaIds.length === 0) {
+    return;
+  }
+
+  if (dom.createTagSubmitBtn) dom.createTagSubmitBtn.disabled = true;
+  try {
+    const result = await api.del('/api/media/batch-tags', {
+      ids: pendingTagTargetMediaIds,
+      tag_id: tagId
+    });
+    closeTagModal();
+    await loadMetadata();
+    await loadMedia();
+    updateInspector();
+
+    const removedCount = Number(result && result.removed_count) || 0;
+    const failedCount = Array.isArray(result && result.failed_ids) ? result.failed_ids.length : 0;
+    if (failedCount > 0) {
+      showToast(t('remove_tag_partial', { removed: removedCount, failed: failedCount }), 'info');
+    } else {
+      showToast(t('remove_tag_success', { count: removedCount }), 'success');
+    }
+  } catch (err) {
+    if (dom.createTagSubmitBtn) dom.createTagSubmitBtn.disabled = false;
+    showToast(`${t('remove_tag_failed')}: ${err.message || 'Server error'}`, 'error');
   }
 }
 

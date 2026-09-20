@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <unordered_set>
 #include <unordered_map>
+#include <algorithm>
 #include <cstdlib>
 #include <cctype>
 
@@ -1387,6 +1388,94 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
+        }
+    });
+
+    // DELETE /api/media/batch-tags
+    server.Delete("/api/media/batch-tags", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            const auto body = nlohmann::json::parse(req.body);
+            if (!body.contains("ids") || !body["ids"].is_array() || body["ids"].empty()) {
+                sendError(res, "Missing or invalid non-empty 'ids' array", 400);
+                return;
+            }
+            if (body["ids"].size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
+            if (!body.contains("tag_id") || !body["tag_id"].is_number_integer()) {
+                sendError(res, "Missing or invalid tag_id field", 400);
+                return;
+            }
+
+            const TagId tagId = body["tag_id"].get<TagId>();
+            if (tagId <= 0) {
+                sendError(res, "tag_id must be a positive integer", 400);
+                return;
+            }
+
+            std::vector<MediaId> ids;
+            ids.reserve(body["ids"].size());
+            std::unordered_set<MediaId> seenIds;
+            for (const auto& value : body["ids"]) {
+                if (!value.is_number_integer()) {
+                    sendError(res, "ids must contain only integer media IDs", 400);
+                    return;
+                }
+                const MediaId id = value.get<MediaId>();
+                if (seenIds.insert(id).second) {
+                    ids.push_back(id);
+                }
+            }
+
+            auto tagsRes = catalog_ ? catalog_->getTags() : db().getAllTags();
+            if (!tagsRes.isOk()) {
+                sendStatusError(res, tagsRes.status());
+                return;
+            }
+            const auto tagIt = std::find_if(tagsRes.value().begin(), tagsRes.value().end(),
+                [tagId](const Tag& tag) { return tag.id == tagId; });
+            if (tagIt == tagsRes.value().end()) {
+                sendStatusError(res, Status::notFound("Tag not found: " + std::to_string(tagId)));
+                return;
+            }
+
+            int removedCount = 0;
+            int unchangedCount = 0;
+            std::vector<MediaId> failedIds;
+            for (const MediaId id : ids) {
+                auto mediaRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
+                if (!mediaRes.isOk()) {
+                    failedIds.push_back(id);
+                    continue;
+                }
+
+                const auto& mediaTags = mediaRes.value().tags;
+                const bool hasTag = std::any_of(mediaTags.begin(), mediaTags.end(),
+                    [tagId](const Tag& tag) { return tag.id == tagId; });
+                if (!hasTag) {
+                    unchangedCount++;
+                    continue;
+                }
+
+                Status status = catalog_ ? catalog_->removeTag(id, tagId) : db().removeTagFromMedia(id, tagId);
+                if (status.isOk()) {
+                    removedCount++;
+                } else {
+                    failedIds.push_back(id);
+                }
+            }
+
+            sendJson(res, {
+                {"status", failedIds.empty() ? "ok" : (removedCount > 0 ? "partial" : "error")},
+                {"tag_id", tagId},
+                {"removed_count", removedCount},
+                {"unchanged_count", unchangedCount},
+                {"failed_ids", failedIds}
+            });
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what(), 400);
         }
     });
 

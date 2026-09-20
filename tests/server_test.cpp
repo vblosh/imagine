@@ -443,10 +443,39 @@ TEST_F(ServerTest, BatchRatingFlagTagsGps) {
     auto tagJson = nlohmann::json::parse(tagRes->body);
     EXPECT_EQ(tagJson["tagged_count"].get<int>(), 2);
     EXPECT_EQ(tagJson["name"].get<std::string>(), "Vacation2026");
+    const TagId vacationTagId = tagJson["tag_id"].get<TagId>();
 
     get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
     EXPECT_EQ(get1["tags"].size(), 1u);
     EXPECT_EQ(get1["tags"][0]["name"].get<std::string>(), "Vacation2026");
+
+    // 3b. Batch remove tag: remove where present, ignore unchanged media, report missing media.
+    ASSERT_EQ(client.Delete("/api/media/" + std::to_string(id2) + "/tags/" + std::to_string(vacationTagId))->status, 200);
+    nlohmann::json removeTagBody = { {"ids", {id1, id2, id2, 999999999}}, {"tag_id", vacationTagId} };
+    auto removeTagRes = client.Delete("/api/media/batch-tags", removeTagBody.dump(), "application/json");
+    ASSERT_TRUE(removeTagRes);
+    EXPECT_EQ(removeTagRes->status, 200);
+    auto removeTagJson = nlohmann::json::parse(removeTagRes->body);
+    EXPECT_EQ(removeTagJson["status"].get<std::string>(), "partial");
+    EXPECT_EQ(removeTagJson["removed_count"].get<int>(), 1);
+    EXPECT_EQ(removeTagJson["unchanged_count"].get<int>(), 1);
+    ASSERT_EQ(removeTagJson["failed_ids"].size(), 1u);
+    EXPECT_EQ(removeTagJson["failed_ids"][0].get<MediaId>(), 999999999);
+    EXPECT_EQ(nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body)["tags"].size(), 0u);
+    EXPECT_EQ(nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id2))->body)["tags"].size(), 0u);
+
+    // Invalid, unknown-tag, and oversized requests are rejected.
+    auto invalidRemoveRes = client.Delete("/api/media/batch-tags", R"({"ids":[],"tag_id":1})", "application/json");
+    ASSERT_TRUE(invalidRemoveRes);
+    EXPECT_EQ(invalidRemoveRes->status, 400);
+    auto unknownTagRes = client.Delete("/api/media/batch-tags", nlohmann::json({{"ids", {id1}}, {"tag_id", 999999999}}).dump(), "application/json");
+    ASSERT_TRUE(unknownTagRes);
+    EXPECT_EQ(unknownTagRes->status, 404);
+    nlohmann::json oversizedIds = nlohmann::json::array();
+    for (int i = 0; i < 1001; ++i) oversizedIds.push_back(id1);
+    auto oversizedRemoveRes = client.Delete("/api/media/batch-tags", nlohmann::json({{"ids", oversizedIds}, {"tag_id", vacationTagId}}).dump(), "application/json");
+    ASSERT_TRUE(oversizedRemoveRes);
+    EXPECT_EQ(oversizedRemoveRes->status, 400);
 
     // 4. Batch GPS
     nlohmann::json gpsBody = {{"ids", {id1, id2}}, {"has_gps", true}, {"latitude", 48.8566}, {"longitude", 2.3522}};

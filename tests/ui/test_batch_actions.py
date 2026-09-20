@@ -107,6 +107,41 @@ def test_batch_add_tag(server, page: Page):
     expect(page.locator("#inspectorTags")).to_contain_text("WeekendTrip")
 
 
+def test_batch_remove_tag_uses_selected_tag_union(server, page: Page):
+    """Remove Tag reuses the tag dialog and offers only tags attached to selected photos."""
+    page.goto(server["url"])
+
+    mountain = page.locator(".photo-card", has_text="mountain.bmp")
+    sunset = page.locator(".photo-card", has_text="sunset.bmp")
+    mountain.click()
+    sunset.click(modifiers=["Control"])
+
+    page.locator("#batchRemoveTagBtn").click()
+    modal = page.locator("#newTagModal")
+    expect(modal).to_be_visible()
+    expect(page.locator("#tagModalHeading")).to_have_text("Remove Tag from 2 Photos")
+    expect(page.locator("#tagNameInputGroup")).to_be_hidden()
+    expect(page.locator("#removeTagSelectGroup")).to_be_visible()
+
+    page.locator("#catBtnPlaces").click()
+    # Places contains Alps from mountain.bmp; unrelated and empty categories are unavailable.
+    expect(page.locator("#removeTagSelect option")).to_have_count(2)
+    expect(page.locator("#removeTagSelect option").nth(1)).to_have_text("Alps")
+    expect(page.locator("#catBtnEvents")).to_be_disabled()
+    expect(page.locator("#catBtnKeyword")).to_be_enabled()
+
+    page.locator("#removeTagSelect").select_option(label="Alps")
+    expect(page.locator("#createTagSubmitBtn")).to_be_enabled()
+    with page.expect_response(lambda r: "/api/media/batch-tags" in r.url and r.request.method == "DELETE" and r.ok):
+        page.locator("#createTagSubmitBtn").click()
+    expect(modal).to_be_hidden()
+
+    mountain.click()
+    expect(page.locator("#inspectorTags")).not_to_contain_text("Alps")
+    sunset.click()
+    expect(page.locator("#inspectorTags")).to_contain_text("Sunset")
+
+
 def test_batch_operations_single_http_call(server, page: Page):
     """Batch rating, flag, and tag actions send a single batch HTTP request rather than N individual calls."""
     page.goto(server["url"])

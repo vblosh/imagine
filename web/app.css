@@ -2580,6 +2580,12 @@ body.resizing-horizontal * {
   background-color: rgba(170, 170, 170, 0.1);
 }
 
+.category-card:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+
 .category-card-top {
   display: flex;
   justify-content: space-between;
