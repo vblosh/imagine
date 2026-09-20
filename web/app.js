@@ -160,7 +160,11 @@ import {
   adjustBatchDateShift,
   onBatchDateTimezoneSelectChange,
   onBatchDateTzCalcChange,
-  updateBatchDatePreview
+  updateBatchDatePreview,
+  openSettingsModal,
+  closeSettingsModal,
+  saveSettings,
+  clearSettingsToken
 } from './modals.js';
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
 import { setupAutoEventListeners } from './auto-events.js';
@@ -1243,6 +1247,19 @@ export function setupEventListeners() {
   if (dom.cancelImportBtn) dom.cancelImportBtn.addEventListener('click', cancelImport);
   if (dom.importBackdrop) dom.importBackdrop.addEventListener('click', closeImportModal);
 
+  // Settings modal
+  if (dom.settingsBtn) dom.settingsBtn.addEventListener('click', openSettingsModal);
+  if (dom.closeSettingsModalBtn) dom.closeSettingsModalBtn.addEventListener('click', closeSettingsModal);
+  if (dom.cancelSettingsBtn) dom.cancelSettingsBtn.addEventListener('click', closeSettingsModal);
+  if (dom.settingsBackdrop) dom.settingsBackdrop.addEventListener('click', closeSettingsModal);
+  if (dom.clearApiTokenBtn) dom.clearApiTokenBtn.addEventListener('click', clearSettingsToken);
+  if (dom.settingsForm) {
+    dom.settingsForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      saveSettings();
+    });
+  }
+
   if (dom.startImportBtn) {
     dom.startImportBtn.addEventListener('click', () => {
       const path = dom.importPathInput ? dom.importPathInput.value.trim() : '';
@@ -1591,6 +1608,7 @@ window._imaginePersistence = {
 window._imagineApp = {
   state,
   dom,
+  api,
   numeric,
   formatBytes,
   normalizeMediaItem,

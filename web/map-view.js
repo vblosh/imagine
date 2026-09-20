@@ -10,7 +10,8 @@ import {
   hasValidGps,
   formatDateTime,
   formatBytes,
-  getOriginalMediaUrl
+  getOriginalMediaUrl,
+  getAuthHeaders
 } from './api.js';
 import { state, getGpsMediaItems, invalidateGpsCache } from './state.js';
 import { dom, showToast } from './dom.js';
@@ -1134,7 +1135,10 @@ export async function performMapPlaceSearch(rawQuery) {
         lastNominatimRequestTime = Date.now();
 
         const url = `/api/geocode?q=${encodeURIComponent(query)}&limit=5`;
-        const resp = await fetch(url, { signal: abortController.signal, headers: { 'Accept': 'application/json' } });
+        const resp = await fetch(url, {
+          signal: abortController.signal,
+          headers: { ...getAuthHeaders(), 'Accept': 'application/json' }
+        });
         if (searchId !== currentMapSearchId) return;
         if (resp.ok) {
           const rawJson = await resp.json();

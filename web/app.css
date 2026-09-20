@@ -2275,6 +2275,17 @@ body.resizing-horizontal * {
   background-color: #242424;
 }
 
+.settings-dialog {
+  width: 520px;
+  max-width: calc(100vw - 28px);
+}
+
+.settings-hint {
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .form-group {
   display: flex;
   flex-direction: column;

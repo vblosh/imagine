@@ -11,7 +11,7 @@
  * - Save (in-place overwrite with thumbnail & DB update) and Save Copy
  */
 
-import { normalizeMediaItem, getOriginalMediaUrl } from "./api.js";
+import { normalizeMediaItem, getOriginalMediaUrl, getAuthHeaders } from "./api.js";
 import { state } from "./state.js";
 import { dom, showToast } from "./dom.js";
 import { renderGrid } from "./media-grid.js";
@@ -645,6 +645,7 @@ export async function saveEdits(mode = "overwrite") {
           res = await fetch(`/api/photos/${id}/edit?mode=${encodeURIComponent(mode)}`, {
             method: "POST",
             headers: {
+              ...getAuthHeaders(),
               "Content-Type": "image/jpeg",
               "X-Edit-Mode": mode,
             },
@@ -660,7 +661,7 @@ export async function saveEdits(mode = "overwrite") {
       const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
       res = await fetch(`/api/photos/${id}/edit`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({
           mode,
           image_data: dataUrl,

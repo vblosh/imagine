@@ -148,7 +148,13 @@ def test_setup_event_listeners_safe_with_missing_optional_elements(server, page:
             'deleteMediaBackdrop',
             'confirmDeleteMediaBtn',
             'deleteFromDiskCheckbox',
-            'deleteMediaWarningText'
+            'deleteMediaWarningText',
+            'settingsBtn',
+            'closeSettingsModalBtn',
+            'cancelSettingsBtn',
+            'settingsBackdrop',
+            'clearApiTokenBtn',
+            'settingsForm'
         ];
 
         for (const k of optionalKeys) {

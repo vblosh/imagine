@@ -10,7 +10,10 @@ import {
   formatDateTime,
   formatBytes,
   normalizeImportProgress,
-  getOriginalMediaUrl
+  getOriginalMediaUrl,
+  getApiToken,
+  setApiToken,
+  clearApiToken
 } from './api.js';
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
@@ -25,6 +28,33 @@ let pendingTagTargetMediaIds = [];
 let pendingDeleteMediaIds = [];
 let pendingDeleteTag = null;
 let pendingBatchMoveIds = [];
+
+// --- Settings Modal ---
+export function openSettingsModal() {
+  if (!dom.settingsModal) return;
+  if (dom.settingsApiTokenInput) {
+    dom.settingsApiTokenInput.value = getApiToken();
+  }
+  dom.settingsModal.style.display = 'flex';
+  if (dom.settingsApiTokenInput) dom.settingsApiTokenInput.focus();
+}
+
+export function closeSettingsModal() {
+  if (dom.settingsModal) dom.settingsModal.style.display = 'none';
+}
+
+export function saveSettings() {
+  const token = dom.settingsApiTokenInput ? dom.settingsApiTokenInput.value : '';
+  setApiToken(token);
+  closeSettingsModal();
+  showToast(t(token.trim() ? 'settings_saved' : 'settings_token_cleared'), 'success');
+}
+
+export function clearSettingsToken() {
+  clearApiToken();
+  if (dom.settingsApiTokenInput) dom.settingsApiTokenInput.value = '';
+  showToast(t('settings_token_cleared'), 'success');
+}
 
 // --- Import Modal & Workflow ---
 export function openImportModal() {

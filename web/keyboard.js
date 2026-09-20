@@ -32,6 +32,7 @@ import {
   closeAddToAlbumModal,
   closeBatchDateModal,
   closeBatchMoveModal,
+  closeSettingsModal,
   openDeleteMediaModal
 } from './modals.js';
 import {
@@ -104,6 +105,11 @@ export function handleEscapeKey() {
   if (dom.batchMoveModal && dom.batchMoveModal.style.display === 'flex') {
     if (document.activeElement?.blur) document.activeElement.blur();
     closeBatchMoveModal();
+    return true;
+  }
+  if (dom.settingsModal && dom.settingsModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeSettingsModal();
     return true;
   }
   if (dom.iosInstallModal && dom.iosInstallModal.style.display === 'flex') {

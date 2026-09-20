@@ -80,6 +80,9 @@ Start the local server:
 ### Step 3: Open the Browser
 Open [http://localhost:8080](http://localhost:8080) in Chrome, Firefox, Safari, or Edge. You will be greeted with the Photoshop Elements Organizer dark-room workspace!
 
+### Browser API Authentication
+If the server was started with `IMAGINE_API_TOKEN`, open **Settings** (the gear button in the top bar) and enter the same token under **API token**. Click **Save** to store it in this browser. The token is sent as a Bearer token with API requests that modify the catalog. **Clear** removes it from browser storage. The setting does not change the server environment, and browser storage is not encrypted.
+
 ---
 
 ## 3. Importing Media
@@ -513,6 +516,8 @@ imagine delete <media_id...> [options]
 ## 10. REST API Reference
 
 The embedded C++ HTTP server provides a full REST API for developers and external integrations.
+
+When `IMAGINE_API_TOKEN` is configured, catalog-changing `POST` and `DELETE` endpoints require either `Authorization: Bearer <token>` or `X-API-Key: <token>`. Read-only `GET` endpoints remain available without authentication. The browser Settings dialog adds the Bearer header automatically for API requests.
 
 | Method | Endpoint | Description |
 |---|---|---|

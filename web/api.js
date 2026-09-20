@@ -5,6 +5,39 @@
 
 import { t, getLocaleCode, getMonthName as i18nGetMonthName } from './i18n.js';
 
+export const API_TOKEN_STORAGE_KEY = 'imagine_api_token';
+
+export function getApiToken() {
+  try {
+    return localStorage.getItem(API_TOKEN_STORAGE_KEY) || '';
+  } catch (_) {
+    return '';
+  }
+}
+
+export function setApiToken(token) {
+  const value = typeof token === 'string' ? token.trim() : '';
+  try {
+    if (value) {
+      localStorage.setItem(API_TOKEN_STORAGE_KEY, value);
+    } else {
+      localStorage.removeItem(API_TOKEN_STORAGE_KEY);
+    }
+  } catch (_) {
+    // A browser may disable storage; requests will simply be sent without a token.
+  }
+  return value;
+}
+
+export function clearApiToken() {
+  setApiToken('');
+}
+
+export function getAuthHeaders() {
+  const token = getApiToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export const api = {
   async get(endpoint, params = {}, options = {}) {
     const url = new URL(endpoint, window.location.origin);
@@ -22,7 +55,7 @@ export const api = {
         }
       }
     });
-    const fetchOpts = {};
+    const fetchOpts = { headers: getAuthHeaders() };
     if (options && options.signal) {
       fetchOpts.signal = options.signal;
     }
@@ -37,7 +70,7 @@ export const api = {
   async post(endpoint, data = {}, options = {}) {
     const fetchOpts = {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     };
     if (options && options.signal) {
@@ -52,9 +85,9 @@ export const api = {
   },
 
   async del(endpoint, data = null) {
-    const fetchOpts = { method: 'DELETE' };
+    const fetchOpts = { method: 'DELETE', headers: getAuthHeaders() };
     if (data !== null && data !== undefined) {
-      fetchOpts.headers = { 'Content-Type': 'application/json' };
+      fetchOpts.headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' };
       fetchOpts.body = JSON.stringify(data);
     }
     const res = await fetch(endpoint, fetchOpts);
