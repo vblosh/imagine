@@ -12,7 +12,7 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
 
 ## Key Features
 
-- **Photoshop Elements-Inspired Web UI**:
+- **Photoshop Elements-Inspired Web and Mobile Web UI**:
   - **Media Grid**: Smooth, responsive thumbnail layout with dynamic zoom slider.
   - **Timeline Scrubber**: Interactive histogram of photos by year and month.
   - **Sidebars**: Collapsible Folders tree, Standard/Smart Albums, and Tag categories (People, Places, Events, Keywords).
@@ -127,9 +127,9 @@ imagine/
 │   ├── keyboard.js             # Keyboard shortcuts & priority Escape manager
 │   └── vendor/leaflet/         # Embedded Leaflet mapping assets
 ├── tests/                      # Automated test suites
-│   ├── ui/                     # 110 deterministic Playwright UI tests (18 test suites)
+│   ├── ui/                     # Deterministic Playwright UI tests (18 test suites)
 │   ├── fixtures/               # Test image assets (JPEG with EXIF, etc.)
 │   ├── web_server_benchmark.py # Web server concurrency benchmark script
-│   └── *.cpp                   # 81 C++ unit tests across 14 test suites
+│   └── *.cpp                   # C++ unit tests across 14 test suites
 └── sample_photos/              # Sample images for testing & quick evaluation
 ```
