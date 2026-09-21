@@ -2,6 +2,7 @@
 #include "imagine/core/importer.hpp"
 #include "imagine/core/catalog.hpp"
 #include "imagine/thumbnail/generator.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -90,6 +91,63 @@ TEST_F(ImporterTest, ImportDirectoryAndSkipUnchanged) {
     db.close();
 }
 
+TEST_F(ImporterTest, DirectoryImportMaintainsLastImportedTagForNewItemsOnly) {
+    CatalogDb db;
+    ASSERT_TRUE(db.open(dbPath).isOk());
+    Cache cache(thumbsDir.string());
+    Importer importer(db, cache, nullptr);
+
+    ASSERT_TRUE(importer.importDirectory(photosDir.string(), true, nullptr).isOk());
+    QueryCriteria lastImported;
+    lastImported.last_imported = true;
+    auto first = QueryBuilder::execute(db, lastImported);
+    ASSERT_TRUE(first.isOk());
+    EXPECT_EQ(first.value().total_count, 2);
+
+    // An empty rescan preserves the previous collection.
+    ASSERT_TRUE(importer.importDirectory(photosDir.string(), true, nullptr).isOk());
+    EXPECT_EQ(QueryBuilder::execute(db, lastImported).value().total_count, 2);
+
+    // A changed existing file is processed but excluded; only the new file is tagged.
+    {
+        std::ofstream ofs(img1Path, std::ios::binary | std::ios::app);
+        ofs << "modified";
+    }
+    ImageBuffer buf;
+    buf.width = 64;
+    buf.height = 64;
+    buf.channels = 3;
+    buf.data.resize(64 * 64 * 3, 180);
+    std::string img3Path = (photosDir / "img3.jpg").string();
+    ASSERT_TRUE(Generator::saveJpeg(buf, img3Path).isOk());
+    ASSERT_TRUE(importer.importDirectory(photosDir.string(), true, nullptr).isOk());
+
+    auto second = QueryBuilder::execute(db, lastImported);
+    ASSERT_TRUE(second.isOk());
+    ASSERT_EQ(second.value().items.size(), 1u);
+    EXPECT_EQ(second.value().items[0].file_name, "img3.jpg");
+
+    // Single-file imports (including Save Copy's path) do not replace the collection.
+    buf.data[0] = 42;
+    std::string img4Path = (photosDir / "img4.jpg").string();
+    ASSERT_TRUE(Generator::saveJpeg(buf, img4Path).isOk());
+    ASSERT_TRUE(importer.importFile(img4Path).isOk());
+    auto afterSingle = QueryBuilder::execute(db, lastImported);
+    ASSERT_TRUE(afterSingle.isOk());
+    ASSERT_EQ(afterSingle.value().items.size(), 1u);
+    EXPECT_EQ(afterSingle.value().items[0].file_name, "img3.jpg");
+
+    // Cancelling a later directory import also preserves the prior assignments.
+    importer.setFileHook([&importer](const std::string&) { importer.cancel(); });
+    ASSERT_TRUE(importer.importDirectory(photosDir.string(), true, nullptr).isOk());
+    auto afterCancel = QueryBuilder::execute(db, lastImported);
+    ASSERT_TRUE(afterCancel.isOk());
+    ASSERT_EQ(afterCancel.value().items.size(), 1u);
+    EXPECT_EQ(afterCancel.value().items[0].file_name, "img3.jpg");
+
+    db.close();
+}
+
 TEST_F(ImporterTest, CatalogFacadeE2E) {
     Catalog catalog(2);
     ASSERT_TRUE(catalog.open(dbPath, thumbsDir.string()).isOk());
@@ -120,13 +178,18 @@ TEST_F(ImporterTest, CatalogFacadeE2E) {
     // Tagging
     EXPECT_TRUE(catalog.addTag(mid, "SummerVacation", "events").isOk());
     auto tags = catalog.getTags().value();
-    EXPECT_EQ(tags.size(), 1);
-    EXPECT_EQ(tags[0].name, "SummerVacation");
+    EXPECT_EQ(tags.size(), 2);
+    EXPECT_TRUE(std::any_of(tags.begin(), tags.end(), [](const Tag& tag) {
+        return tag.name == "SummerVacation";
+    }));
+    EXPECT_TRUE(std::any_of(tags.begin(), tags.end(), [](const Tag& tag) {
+        return tag.name == "Last Imported";
+    }));
 
     // Stats
     auto stats = catalog.getStats().value();
     EXPECT_EQ(stats.total_media, 2);
-    EXPECT_EQ(stats.total_tags, 1);
+    EXPECT_EQ(stats.total_tags, 2);
 
     catalog.close();
     EXPECT_FALSE(catalog.isOpen());

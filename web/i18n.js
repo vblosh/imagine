@@ -52,6 +52,7 @@ export const translations = {
     // Left Sidebar Navigation
     nav_section: 'Navigation',
     nav_all_media: 'All Media',
+    nav_last_imported: 'Last Imported',
     nav_photos: 'Photos',
     nav_videos: 'Videos',
     nav_audio: 'Audio',
@@ -497,6 +498,7 @@ export const translations = {
     // Left Sidebar Navigation
     nav_section: 'Navegación',
     nav_all_media: 'Todos los medios',
+    nav_last_imported: 'Última importación',
     nav_photos: 'Fotos',
     nav_videos: 'Vídeos',
     nav_audio: 'Audio',
@@ -942,6 +944,7 @@ export const translations = {
     // Left Sidebar Navigation
     nav_section: 'Navigation',
     nav_all_media: 'Alle Medien',
+    nav_last_imported: 'Zuletzt importiert',
     nav_photos: 'Fotos',
     nav_videos: 'Videos',
     nav_audio: 'Audio',
@@ -1387,6 +1390,7 @@ export const translations = {
     // Left Sidebar Navigation
     nav_section: 'Навигация',
     nav_all_media: 'Все медиа',
+    nav_last_imported: 'Последний импорт',
     nav_photos: 'Фотографии',
     nav_videos: 'Видео',
     nav_audio: 'Аудио',
@@ -1832,6 +1836,7 @@ export const translations = {
     // Left Sidebar Navigation
     nav_section: '导航',
     nav_all_media: '所有媒体',
+    nav_last_imported: '最近导入',
     nav_photos: '照片',
     nav_videos: '视频',
     nav_audio: '音频',

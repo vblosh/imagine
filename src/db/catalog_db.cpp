@@ -768,6 +768,43 @@ Status CatalogDb::removeTagFromMedia(MediaId mediaId, TagId tagId) {
     return Status::ok();
 }
 
+Result<TagId> CatalogDb::replaceTagAssignments(
+    const std::string& name,
+    const std::string& category,
+    const std::vector<MediaId>& mediaIds
+) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Transaction tx(conn_);
+
+    auto tagRes = createOrGetTag(name, category);
+    if (!tagRes.isOk()) return tagRes.status();
+    TagId tagId = tagRes.value();
+
+    auto deleteRes = conn_.prepare("DELETE FROM media_tags WHERE tag_id = ?;");
+    if (!deleteRes.isOk()) return deleteRes.status();
+    auto deleteStmt = std::move(deleteRes.value());
+    deleteStmt.bind(1, tagId);
+    if (deleteStmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to clear tag assignments: " + conn_.lastErrorMessage());
+    }
+
+    auto insertRes = conn_.prepare("INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?);");
+    if (!insertRes.isOk()) return insertRes.status();
+    auto insertStmt = std::move(insertRes.value());
+    for (MediaId mediaId : mediaIds) {
+        insertStmt.bind(1, mediaId);
+        insertStmt.bind(2, tagId);
+        if (insertStmt.step() != StepResult::Done) {
+            return Status::databaseError("Failed to replace tag assignments: " + conn_.lastErrorMessage());
+        }
+        insertStmt.reset();
+    }
+
+    Status commitStatus = tx.commit();
+    if (!commitStatus.isOk()) return commitStatus;
+    return tagId;
+}
+
 Status CatalogDb::deleteTag(TagId tagId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto s1 = conn_.prepare("DELETE FROM media_tags WHERE tag_id = ?;");

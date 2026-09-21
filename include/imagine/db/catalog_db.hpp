@@ -46,6 +46,11 @@ public:
     Result<std::unordered_map<MediaId, std::vector<Tag>>> getTagsForMediaBatch(const std::vector<MediaId>& mediaIds);
     Status addTagToMedia(MediaId mediaId, TagId tagId);
     Status removeTagFromMedia(MediaId mediaId, TagId tagId);
+    Result<TagId> replaceTagAssignments(
+        const std::string& name,
+        const std::string& category,
+        const std::vector<MediaId>& mediaIds
+    );
     Status deleteTag(TagId tagId);
 
     // Albums

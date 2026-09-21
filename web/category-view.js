@@ -458,6 +458,7 @@ export function selectCategoryAlbum(album) {
   state.activeTimelinePeriod = null;
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
+  state.activeLastImported = false;
 
   // Clear previous grid contents immediately so previous photos don't flash
   if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
@@ -484,6 +485,7 @@ export function selectCategoryItem(tag) {
   state.activeAlbumId = null;
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
+  state.activeLastImported = false;
   saveActiveTagIdsPreference(state.activeTagIds);
 
   // Clear previous grid contents immediately so previous person's photos don't flash

@@ -178,6 +178,7 @@ In the top right bar, slide the thumbnail zoom controller:
 ### The Left Navigation Sidebar
 - **Navigation & Quick Filters**:
   - **All Media**: Resets all active filters and displays the entire catalog.
+  - **Last Imported**: Shows media newly added by the latest completed folder import. Imagine maintains this collection through the visible **Last Imported** keyword tag; empty rescans, cancelled imports, changed existing files, and Quick Edit copies do not replace it. Manual tag edits immediately affect the filter and the next qualifying import replaces its assignments.
   - **Media Types**: Choose between **Photos**, **Videos**, and **Audio** (each includes live count badges).
   - **Status & Rating Flags**:
     - **Picks**: Displays only media marked with the green Pick flag (includes live item count).
@@ -188,6 +189,7 @@ In the top right bar, slide the thumbnail zoom controller:
   - Navigation filters can be combined cumulatively across multiple dimensions simultaneously:
     - **Media Type** (e.g., Photos) `AND`
     - **Status / Flag** (e.g., Picks or Unrated) `AND`
+    - **Last Imported** `AND`
     - **Album** (e.g., *Best of 2026*) `AND`
     - **Keyword Tag** (e.g., *Vacation*)
   - The filter banner displays a breadcrumb summary of all active criteria (e.g., `Photos • Picks • Album: Best of 2026 • Tag: Vacation`).
@@ -523,7 +525,7 @@ When `IMAGINE_API_TOKEN` is configured, catalog-changing `POST` and `DELETE` end
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/media` | Query photos with filtering, sorting, and pagination |
+| `GET` | `/api/media` | Query photos with filtering, sorting, and pagination; use `last_imported=true` for the tag-backed latest-import collection |
 | `GET` | `/api/media/:id` | Get single photo details and EXIF |
 | `DELETE` | `/api/media/:id` | Delete photo from catalog database (optional query `delete_from_disk=true`) |
 | `POST` | `/api/media/batch-delete` | Batch delete photos (`{"ids": [1, 2, ...], "delete_from_disk": false}`) |

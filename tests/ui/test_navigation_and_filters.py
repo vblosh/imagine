@@ -66,6 +66,45 @@ def test_sidebar_quick_filters(server, page: Page):
     expect(cards).to_have_count(6)
 
 
+def test_last_imported_navigation_uses_visible_tag_and_combines_filters(server, page: Page):
+    """Last Imported is backed by the visible keyword tag and remains an AND filter."""
+    media_response = page.request.get(f"{server['url']}/api/media?limit=100")
+    assert media_response.ok
+    items = media_response.json()["items"]
+    by_name = {item["file_name"]: item for item in items}
+    for name in ("mountain.bmp", "sunset.bmp"):
+        response = page.request.post(
+            f"{server['url']}/api/media/{by_name[name]['id']}/tags",
+            data={"name": "Last Imported", "category": "keyword"},
+        )
+        assert response.ok
+
+    page.goto(server["url"])
+    cards = page.locator(".photo-card")
+    expect(page.locator("#totalLastImportedCount")).to_have_text("2")
+    expect(page.locator('#tagCategoryKeyword .tag-item', has_text="Last Imported")).to_have_count(1)
+
+    page.locator("#navLastImported").click()
+    expect(page.locator("#navLastImported")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#filterLabel")).to_contain_text("Last Imported")
+    expect(cards).to_have_count(2)
+
+    page.locator("#navPicks").click()
+    expect(page.locator("#filterLabel")).to_contain_text("Last Imported")
+    expect(page.locator("#filterLabel")).to_contain_text("Picks")
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("mountain.bmp")
+
+    page.reload()
+    expect(page.locator("#navLastImported")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPicks")).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(1)
+
+    page.locator("#navAllMedia").click()
+    expect(page.locator("#navAllMedia")).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(6)
+
+
 def test_sidebar_collection_search_on_enter_and_clear(server, page: Page):
     """Sidebar search filters albums, tags, and full folder paths without changing media results."""
     page.goto(server["url"])

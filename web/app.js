@@ -569,6 +569,7 @@ export function setupEventListeners() {
         state.activeTimelinePeriod = null;
         state.activeMediaType = 'all';
         state.activeStatusFilter = null;
+        state.activeLastImported = false;
         clearFilterPreferences();
         saveActiveTabPreference(state.activeTab);
         updateSidebarActive();
@@ -594,6 +595,18 @@ export function setupEventListeners() {
   if (dom.navAllMedia) {
     dom.navAllMedia.addEventListener('click', () => {
       clearAllFilters();
+    });
+  }
+  if (dom.navLastImported) {
+    dom.navLastImported.addEventListener('click', () => {
+      state.activeLastImported = !state.activeLastImported;
+      state.activeFolder = null;
+      state.activeTimelinePeriod = null;
+      saveNavFilterPreference(state.activeNavFilter);
+      saveActiveFoldersPreference(state.activeFolders);
+      updateSidebarActive();
+      renderTimeline();
+      loadMedia();
     });
   }
   if (dom.navPhotos) {

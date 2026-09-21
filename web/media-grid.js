@@ -71,6 +71,8 @@ let currentLoadMediaId = 0;
 let loadMediaAbortController = null;
 let loadMoreAbortController = null;
 let albumOrderSaveInFlight = false;
+const LAST_IMPORTED_TAG_NAME = 'Last Imported';
+const LAST_IMPORTED_TAG_CATEGORY = 'keyword';
 
 function isAlbumOrderMode() {
   return Boolean(state.activeAlbumId && state.sortBy === 'album_order');
@@ -89,12 +91,14 @@ function prepareAlbumOrderMode() {
   if (!isAlbumOrderMode()) return;
   const filtersWereActive = state.activeMediaType !== 'all'
     || Boolean(state.activeStatusFilter)
+    || state.activeLastImported
     || state.activeTagIds.size > 0
     || state.activeFolders.size > 0
     || Boolean(state.activeTimelinePeriod)
     || Boolean(state.searchText);
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
+  state.activeLastImported = false;
   state.activeTagIds.clear();
   state.activeFolders.clear();
   state.activeTimelinePeriod = null;
@@ -174,6 +178,10 @@ export function buildMediaParams() {
   } else if (state.activeStatusFilter === 'unrated') {
     params.rating = 0;
     params.max_rating = 0;
+  }
+
+  if (state.activeLastImported) {
+    params.last_imported = true;
   }
 
   // Timeline filter in UTC
@@ -468,6 +476,13 @@ export async function loadMetadata() {
 
     if (dom.totalMediaCount) {
       dom.totalMediaCount.textContent = state.stats.total_media || 0;
+    }
+    if (dom.totalLastImportedCount) {
+      const lastImportedTag = state.tags.find(tag =>
+        tag.name === LAST_IMPORTED_TAG_NAME
+        && (tag.category || 'keyword').toLowerCase() === LAST_IMPORTED_TAG_CATEGORY
+      );
+      dom.totalLastImportedCount.textContent = lastImportedTag?.media_count || 0;
     }
     if (dom.totalPhotosCount) {
       dom.totalPhotosCount.textContent = state.stats.total_photos || 0;
@@ -1435,6 +1450,7 @@ export function updateSidebarActive() {
   const hasFolder = state.activeFolders && state.activeFolders.size > 0;
   const isAllMedia = (!state.activeMediaType || state.activeMediaType === 'all')
     && !state.activeStatusFilter
+    && !state.activeLastImported
     && !hasTag
     && !state.activeAlbumId
     && !hasFolder
@@ -1443,6 +1459,7 @@ export function updateSidebarActive() {
     && !state.activeTimelinePeriod;
 
   if (dom.navAllMedia) dom.navAllMedia.classList.toggle('active', isAllMedia);
+  if (dom.navLastImported) dom.navLastImported.classList.toggle('active', state.activeLastImported);
   if (dom.navPhotos) dom.navPhotos.classList.toggle('active', state.activeMediaType === 'photos');
   if (dom.navVideos) dom.navVideos.classList.toggle('active', state.activeMediaType === 'videos');
   if (dom.navAudio) dom.navAudio.classList.toggle('active', state.activeMediaType === 'audio');
@@ -1535,6 +1552,10 @@ export function updateFilterLabel() {
     parts.push(t('unrated_photos'));
   }
 
+  if (state.activeLastImported) {
+    parts.push(t('nav_last_imported'));
+  }
+
   if (state.activeAlbumId) {
     const album = state.albums.find(a => a.id === state.activeAlbumId);
     parts.push(`${t('album')}: ${album ? album.name : state.activeAlbumId}`);
@@ -1596,6 +1617,7 @@ export function updateFilterLabel() {
 export function clearAllFilters() {
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
+  state.activeLastImported = false;
   state.activeTagIds.clear();
   state.activeAlbumId = null;
   state.activeFolders.clear();

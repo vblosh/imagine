@@ -498,6 +498,17 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
             criteria.media_type = std::move(mt);
         }
+        if (req.has_param("last_imported")) {
+            std::string value = req.get_param_value("last_imported");
+            if (value == "1" || value == "true") {
+                criteria.last_imported = true;
+            } else if (value == "0" || value == "false") {
+                criteria.last_imported = false;
+            } else {
+                sendError(res, "Query parameter 'last_imported' must be 'true', 'false', '1', or '0'", 400);
+                return;
+            }
+        }
         if (req.has_param("search")) {
             std::string search = req.get_param_value("search");
             if (search.size() > kMaxSearchLength) {

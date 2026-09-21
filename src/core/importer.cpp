@@ -1,4 +1,5 @@
 #include "imagine/core/importer.hpp"
+#include "imagine/core/import_tags.hpp"
 #include "imagine/metadata/hasher.hpp"
 #include "imagine/metadata/exif_reader.hpp"
 #include "imagine/metadata/media_reader.hpp"
@@ -731,6 +732,7 @@ Result<ImportProgress> Importer::importDirectory(
     std::mutex batchMutex;
     std::vector<MediaItem> pendingInserts;
     std::vector<MediaItem> pendingUpdates;
+    std::vector<MediaId> newlyInsertedIds;
     constexpr size_t kBatchSize = 64;
     pendingInserts.reserve(kBatchSize);
     pendingUpdates.reserve(kBatchSize);
@@ -776,6 +778,9 @@ Result<ImportProgress> Importer::importDirectory(
             if (bRes.isOk()) {
                 size_t count = bRes.value();
                 result.persisted_count += count;
+                for (const auto& item : pendingInserts) {
+                    if (item.id > 0) newlyInsertedIds.push_back(item.id);
+                }
                 std::lock_guard<std::mutex> pLock(progress_mutex_);
                 current_progress_.imported_files += static_cast<int64_t>(count);
                 current_progress_.processed_files += static_cast<int64_t>(count);
@@ -786,6 +791,7 @@ Result<ImportProgress> Importer::importDirectory(
                     auto insRes = db_.insertMedia(item);
                     if (insRes.isOk()) {
                         ++result.persisted_count;
+                        newlyInsertedIds.push_back(insRes.value());
                         std::lock_guard<std::mutex> pLock(progress_mutex_);
                         ++current_progress_.imported_files;
                         ++current_progress_.processed_files;
@@ -964,6 +970,20 @@ Result<ImportProgress> Importer::importDirectory(
     auto finalFlushRes = flushBatch();
     if (finalFlushRes.failed_count > 0 || finalFlushRes.batch_transaction_failed) {
         IMAGINE_LOG_WARN("Final batch flush completed with " + std::to_string(finalFlushRes.failed_count) + " failures");
+    }
+
+    // Publish the completed import atomically. Empty rescans and cancelled imports
+    // intentionally preserve the previous Last Imported tag assignments.
+    if (!cancelled_.load() && !newlyInsertedIds.empty()) {
+        auto tagRes = db_.replaceTagAssignments(
+            kLastImportedTagName,
+            kLastImportedTagCategory,
+            newlyInsertedIds
+        );
+        if (!tagRes.isOk()) {
+            IMAGINE_LOG_ERROR("Failed to update Last Imported tag: " + tagRes.status().message());
+            return tagRes.status();
+        }
     }
 
     {

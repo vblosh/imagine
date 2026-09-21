@@ -28,6 +28,7 @@ def test_i18n_default_language_is_english(server, page: Page):
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("All Media")
+    expect(page.locator('#navLastImported [data-i18n="nav_last_imported"]')).to_have_text("Last Imported")
     expect(page.locator('#navPicks [data-i18n="nav_picks"]')).to_have_text("Picks")
     expect(page.locator('#navRejects [data-i18n="nav_rejects"]')).to_have_text("Rejects")
     expect(page.locator('#navNotRejects [data-i18n="nav_not_rejects"]')).to_have_text("Not Rejects")
@@ -64,6 +65,7 @@ def test_i18n_switch_to_spanish(server, page: Page):
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("Todos los medios")
+    expect(page.locator('#navLastImported [data-i18n="nav_last_imported"]')).to_have_text("Última importación")
     expect(page.locator('#navPicks [data-i18n="nav_picks"]')).to_have_text("Seleccionadas")
     expect(page.locator('#navRejects [data-i18n="nav_rejects"]')).to_have_text("Rechazadas")
     expect(page.locator('#navNotRejects [data-i18n="nav_not_rejects"]')).to_have_text("No rechazadas")
@@ -108,6 +110,7 @@ def test_i18n_switch_to_german(server, page: Page):
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("Alle Medien")
+    expect(page.locator('#navLastImported [data-i18n="nav_last_imported"]')).to_have_text("Zuletzt importiert")
     expect(page.locator('#navPicks [data-i18n="nav_picks"]')).to_have_text("Ausgewählte")
     expect(page.locator('#navRejects [data-i18n="nav_rejects"]')).to_have_text("Abgelehnte")
     expect(page.locator('#navUnrated [data-i18n="nav_unrated"]')).to_have_text("Unbewertet")
@@ -137,6 +140,7 @@ def test_i18n_switch_to_russian(server, page: Page):
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("Все медиа")
+    expect(page.locator('#navLastImported [data-i18n="nav_last_imported"]')).to_have_text("Последний импорт")
     expect(page.locator('#navPicks [data-i18n="nav_picks"]')).to_have_text("Избранные")
     expect(page.locator('#navRejects [data-i18n="nav_rejects"]')).to_have_text("Отклонённые")
     expect(page.locator('#navNotRejects [data-i18n="nav_not_rejects"]')).to_have_text("Не отклонённые")
@@ -167,6 +171,7 @@ def test_i18n_switch_to_chinese(server, page: Page):
 
     # Sidebar Navigation
     expect(page.locator('#navAllMedia [data-i18n="nav_all_media"]')).to_have_text("所有媒体")
+    expect(page.locator('#navLastImported [data-i18n="nav_last_imported"]')).to_have_text("最近导入")
     expect(page.locator('#navPicks [data-i18n="nav_picks"]')).to_have_text("精选")
     expect(page.locator('#navRejects [data-i18n="nav_rejects"]')).to_have_text("已排除")
     expect(page.locator('#navNotRejects [data-i18n="nav_not_rejects"]')).to_have_text("未排除")
@@ -518,4 +523,3 @@ def test_i18n_map_view_place_images_here_translations(server, page: Page):
     # Multi-selection translation in Spanish
     page.locator("#langSelect").select_option("es")
     expect(place_btn).to_contain_text("Ubicar 2 fotos seleccionadas aquí")
-

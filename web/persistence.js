@@ -27,6 +27,7 @@ export const STORAGE_KEYS = {
   ACTIVE_NAV_FILTER: 'imagine_active_nav_filter',
   ACTIVE_MEDIA_TYPE: 'imagine_active_media_type',
   ACTIVE_STATUS_FILTER: 'imagine_active_status_filter',
+  ACTIVE_LAST_IMPORTED: 'imagine_active_last_imported',
   ACTIVE_FOLDERS: 'imagine_active_folders',
   ACTIVE_TAG_IDS: 'imagine_active_tag_ids',
   SEARCH_TEXT: 'imagine_search_text'
@@ -116,6 +117,12 @@ export function saveNavFilterPreference(filter) {
   } else {
     safeRemoveItem(STORAGE_KEYS.ACTIVE_STATUS_FILTER);
   }
+
+  if (state.activeLastImported) {
+    safeSetItem(STORAGE_KEYS.ACTIVE_LAST_IMPORTED, 'true');
+  } else {
+    safeRemoveItem(STORAGE_KEYS.ACTIVE_LAST_IMPORTED);
+  }
 }
 
 export function saveActiveFoldersPreference(foldersSet) {
@@ -146,6 +153,7 @@ export function clearFilterPreferences() {
   safeRemoveItem(STORAGE_KEYS.ACTIVE_NAV_FILTER);
   safeRemoveItem(STORAGE_KEYS.ACTIVE_MEDIA_TYPE);
   safeRemoveItem(STORAGE_KEYS.ACTIVE_STATUS_FILTER);
+  safeRemoveItem(STORAGE_KEYS.ACTIVE_LAST_IMPORTED);
   safeRemoveItem(STORAGE_KEYS.ACTIVE_FOLDERS);
   safeRemoveItem(STORAGE_KEYS.ACTIVE_TAG_IDS);
   safeRemoveItem(STORAGE_KEYS.SEARCH_TEXT);
@@ -228,6 +236,7 @@ export function restoreNavigationPreferences() {
   if (savedStatusFilter && ['picks', 'rejects', 'not_rejects', 'unrated'].includes(savedStatusFilter)) {
     state.activeStatusFilter = savedStatusFilter;
   }
+  state.activeLastImported = safeGetItem(STORAGE_KEYS.ACTIVE_LAST_IMPORTED) === 'true';
 
   // 3. Active folders
   const savedFoldersRaw = safeGetItem(STORAGE_KEYS.ACTIVE_FOLDERS);

@@ -38,6 +38,7 @@ struct QueryCriteria {
     std::optional<double> min_lon{std::nullopt};
     std::optional<double> max_lon{std::nullopt};
     std::optional<std::string> media_type{std::nullopt};
+    bool last_imported{false};
 };
 
 void to_json(nlohmann::json& j, const QueryCriteria& c);

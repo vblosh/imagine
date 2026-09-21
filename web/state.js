@@ -13,9 +13,11 @@ export const state = {
   activeTab: 'media',      // 'media', 'people', 'places', 'events', 'albums'
   activeMediaType: 'all',  // 'all', 'photos', 'videos', 'audio'
   activeStatusFilter: null,// null, 'picks', 'rejects', 'not_rejects', 'unrated'
+  activeLastImported: false,
   get activeNavFilter() {
     if (this.activeStatusFilter) return this.activeStatusFilter;
     if (this.activeMediaType && this.activeMediaType !== 'all') return this.activeMediaType;
+    if (this.activeLastImported) return 'last_imported';
     return 'all';
   },
   set activeNavFilter(val) {
@@ -23,9 +25,12 @@ export const state = {
       this.activeMediaType = val;
     } else if (['picks', 'rejects', 'not_rejects', 'unrated'].includes(val)) {
       this.activeStatusFilter = val;
+    } else if (val === 'last_imported') {
+      this.activeLastImported = true;
     } else {
       this.activeMediaType = 'all';
       this.activeStatusFilter = null;
+      this.activeLastImported = false;
     }
   },
   activeTagIds: new Set(),

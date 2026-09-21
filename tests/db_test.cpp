@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/db/connection.hpp"
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 
@@ -210,6 +211,29 @@ TEST_F(CatalogDbTest, TagManagementAndBatch) {
     ASSERT_TRUE(batchRes.isOk());
     EXPECT_EQ(batchRes.value()[mid1].size(), 2u);
     EXPECT_EQ(batchRes.value()[mid2].size(), 1u);
+
+    // Replacing a managed tag's assignments is atomic and reuses the tag.
+    auto managedTag = db.replaceTagAssignments("Last Imported", "keyword", {mid1});
+    ASSERT_TRUE(managedTag.isOk());
+    auto replacedTag = db.replaceTagAssignments("Last Imported", "keyword", {mid2});
+    ASSERT_TRUE(replacedTag.isOk());
+    EXPECT_EQ(replacedTag.value(), managedTag.value());
+    auto managedTags1 = db.getTagsForMedia(mid1).value();
+    auto managedTags2 = db.getTagsForMedia(mid2).value();
+    EXPECT_TRUE(std::none_of(managedTags1.begin(), managedTags1.end(), [](const Tag& tag) {
+        return tag.name == "Last Imported";
+    }));
+    EXPECT_TRUE(std::any_of(managedTags2.begin(), managedTags2.end(), [](const Tag& tag) {
+        return tag.name == "Last Imported";
+    }));
+
+    // A failed replacement rolls back the cleared assignments.
+    auto invalidReplace = db.replaceTagAssignments("Last Imported", "keyword", {999999});
+    EXPECT_FALSE(invalidReplace.isOk());
+    auto tagsAfterRollback = db.getTagsForMedia(mid2).value();
+    EXPECT_TRUE(std::any_of(tagsAfterRollback.begin(), tagsAfterRollback.end(), [](const Tag& tag) {
+        return tag.name == "Last Imported";
+    }));
 
     // Remove one tag
     EXPECT_TRUE(db.removeTagFromMedia(mid1, tagPeople.value()).isOk());

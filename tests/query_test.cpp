@@ -300,6 +300,21 @@ TEST_F(QueryTest, SortVariants) {
     EXPECT_EQ(res2.value().items[2].file_size, 1000);
 }
 
+TEST_F(QueryTest, FilterLastImportedTagAndCombineWithOtherCriteria) {
+    auto tagRes = db.createOrGetTag("Last Imported", "keyword");
+    ASSERT_TRUE(tagRes.isOk());
+    ASSERT_TRUE(db.addTagToMedia(id1, tagRes.value()).isOk());
+    ASSERT_TRUE(db.addTagToMedia(id2, tagRes.value()).isOk());
+
+    QueryCriteria criteria;
+    criteria.last_imported = true;
+    criteria.max_rating = 3;
+    auto res = QueryBuilder::execute(db, criteria);
+    ASSERT_TRUE(res.isOk());
+    ASSERT_EQ(res.value().items.size(), 1u);
+    EXPECT_EQ(res.value().items[0].id, id2);
+}
+
 TEST_F(QueryTest, SortByAlbumPosition) {
     ASSERT_TRUE(db.addMediaToAlbum(albumVacation, id1, 20).isOk());
     ASSERT_TRUE(db.addMediaToAlbum(albumVacation, id3, 10).isOk());
@@ -354,11 +369,13 @@ TEST_F(QueryTest, FullQueryCriteriaJsonSerialization) {
     c.limit = 25;
     c.offset = 5;
     c.tag_ids = {10, 20};
+    c.last_imported = true;
 
     nlohmann::json j = c;
     EXPECT_EQ(j["max_rating"], 4);
     EXPECT_EQ(j["flag"], -1);
     EXPECT_EQ(j["album_id"], 42);
+    EXPECT_TRUE(j["last_imported"]);
 
     QueryCriteria d = j.get<QueryCriteria>();
     ASSERT_TRUE(d.max_rating.has_value());
@@ -367,6 +384,7 @@ TEST_F(QueryTest, FullQueryCriteriaJsonSerialization) {
     EXPECT_EQ(*d.flag, FlagState::Reject);
     ASSERT_TRUE(d.album_id.has_value());
     EXPECT_EQ(*d.album_id, 42);
+    EXPECT_TRUE(d.last_imported);
     EXPECT_EQ(d.camera_make, "Leica");
     EXPECT_EQ(d.camera_model, "M11");
 }

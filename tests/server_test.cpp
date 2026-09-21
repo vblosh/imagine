@@ -992,6 +992,9 @@ TEST_F(ServerTest, ValidationAndErrorEndpoints) {
     auto qSortDesc = client.Get("/api/media?sort=file_name");
     ASSERT_TRUE(qSortDesc);
     EXPECT_EQ(qSortDesc->status, 200);
+
+    EXPECT_EQ(client.Get("/api/media?last_imported=true")->status, 200);
+    EXPECT_EQ(client.Get("/api/media?last_imported=0")->status, 200);
 }
 
 TEST_F(ServerTest, PhotosOriginalAndThumbnailsEndpoints) {
@@ -1353,6 +1356,9 @@ TEST_F(ServerTest, QueryParameterStrictValidation) {
     EXPECT_EQ(client.Get("/api/media?flag=not_a_num")->status, 400);
     EXPECT_EQ(client.Get("/api/media?not_flag=5")->status, 400);
     EXPECT_EQ(client.Get("/api/media?not_flag=not_a_num")->status, 400);
+
+    // Invalid last-imported boolean query
+    EXPECT_EQ(client.Get("/api/media?last_imported=yes")->status, 400);
     EXPECT_EQ(client.Get("/api/media?flag=1&not_flag=1")->status, 400);
 }
 

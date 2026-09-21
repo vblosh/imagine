@@ -1,4 +1,5 @@
 #include "imagine/core/query.hpp"
+#include "imagine/core/import_tags.hpp"
 #include <algorithm>
 
 namespace imagine::core {
@@ -57,6 +58,9 @@ void to_json(nlohmann::json& j, const QueryCriteria& c) {
     if (c.media_type.has_value()) {
         j["media_type"] = *c.media_type;
     }
+    if (c.last_imported) {
+        j["last_imported"] = true;
+    }
 }
 
 void from_json(const nlohmann::json& j, QueryCriteria& c) {
@@ -89,6 +93,9 @@ void from_json(const nlohmann::json& j, QueryCriteria& c) {
     }
     if (j.contains("media_type") && j["media_type"].is_string()) {
         c.media_type = j["media_type"].get<std::string>();
+    }
+    if (j.contains("last_imported") && j["last_imported"].is_boolean()) {
+        c.last_imported = j["last_imported"].get<bool>();
     }
     if (j.contains("sort_by") && j["sort_by"].is_string()) {
         c.sort_by = j["sort_by"].get<std::string>();
@@ -299,6 +306,12 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
     if (criteria_.not_flag.has_value()) {
         clauses.push_back("flag != ?");
         params.push_back(std::to_string(static_cast<int32_t>(*criteria_.not_flag)));
+    }
+
+    if (criteria_.last_imported) {
+        clauses.push_back("id IN (SELECT mt.media_id FROM media_tags mt JOIN tags t ON t.id = mt.tag_id WHERE t.name = ? AND t.category = ?)");
+        params.push_back(kLastImportedTagName);
+        params.push_back(kLastImportedTagCategory);
     }
 
     if (criteria_.tag_folder_or_mode) {
