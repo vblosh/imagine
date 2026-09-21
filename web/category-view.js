@@ -9,6 +9,7 @@ import { escapeHtml, api } from './api.js';
 import { t } from './i18n.js';
 import {
   enterAlbumOrderMode,
+  clearTimelineSelection,
   loadMedia,
   updateSidebarActive,
   updateFilterLabel
@@ -455,7 +456,7 @@ export function selectCategoryAlbum(album) {
   enterAlbumOrderMode();
   state.activeTagId = null;
   state.activeFolder = null;
-  state.activeTimelinePeriod = null;
+  clearTimelineSelection();
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
   state.activeLastImported = false;
@@ -481,7 +482,7 @@ export function selectCategoryItem(tag) {
 
   state.activeTagId = tag.id;
   state.activeFolder = null;
-  state.activeTimelinePeriod = null;
+  clearTimelineSelection();
   state.activeAlbumId = null;
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;

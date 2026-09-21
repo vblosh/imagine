@@ -209,6 +209,10 @@ export const translations = {
     reset: 'Reset',
     reset_timeline: 'Reset date range',
     no_timeline_data: 'No timeline data',
+    all_years: 'All years',
+    custom_range: 'Custom range',
+    timeline_year_select: 'Filter timeline by year',
+    timeline_range: '{start} – {end}',
 
     // Right Inspector Panel
     inspector: 'Inspector',
@@ -655,6 +659,10 @@ export const translations = {
     reset: 'Restablecer',
     reset_timeline: 'Restablecer rango de fechas',
     no_timeline_data: 'Sin datos de línea de tiempo',
+    all_years: 'Todos los años',
+    custom_range: 'Rango personalizado',
+    timeline_year_select: 'Filtrar la línea de tiempo por año',
+    timeline_range: '{start} – {end}',
 
     // Right Inspector Panel
     inspector: 'Inspector',
@@ -1101,6 +1109,10 @@ export const translations = {
     reset: 'Zurücksetzen',
     reset_timeline: 'Datumsbereich zurücksetzen',
     no_timeline_data: 'Keine Zeitleistendaten',
+    all_years: 'Alle Jahre',
+    custom_range: 'Benutzerdefinierter Bereich',
+    timeline_year_select: 'Zeitleiste nach Jahr filtern',
+    timeline_range: '{start} – {end}',
 
     // Right Inspector Panel
     inspector: 'Inspektor',
@@ -1547,6 +1559,10 @@ export const translations = {
     reset: 'Сбросить',
     reset_timeline: 'Сбросить диапазон дат',
     no_timeline_data: 'Нет данных временной шкалы',
+    all_years: 'Все годы',
+    custom_range: 'Пользовательский диапазон',
+    timeline_year_select: 'Фильтровать временную шкалу по году',
+    timeline_range: '{start} – {end}',
 
     // Right Inspector Panel
     inspector: 'Инспектор',
@@ -1993,6 +2009,10 @@ export const translations = {
     reset: '重置',
     reset_timeline: '重置日期范围',
     no_timeline_data: '无时间线数据',
+    all_years: '所有年份',
+    custom_range: '自定义范围',
+    timeline_year_select: '按年份筛选时间线',
+    timeline_range: '{start} – {end}',
 
     // Right Inspector Panel
     inspector: '检查器',

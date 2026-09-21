@@ -26,6 +26,7 @@ def test_empty_catalog_ui_state(empty_server, page: Page):
 
     # Timeline container shows no timeline data
     expect(page.locator("#timelineContainer")).to_contain_text("No timeline data")
+    expect(page.locator("#timelineYearSelect")).to_be_disabled()
 
     # Albums list shows empty message
     expect(page.locator("#albumsList")).to_contain_text("No albums")

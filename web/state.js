@@ -57,7 +57,9 @@ export const state = {
     }
   },
   allFolders: new Set(),
-  activeTimelinePeriod: null, // { year, month }
+  // { startYear, startMonth, endYear, endMonth }, inclusive calendar months
+  activeTimelinePeriod: null,
+  timelineAnchor: null, // Last normally clicked { year, month }
   searchText: '',
   sortBy: 'date_taken',
   sortDesc: true,

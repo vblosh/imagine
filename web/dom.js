@@ -115,6 +115,7 @@ export const dom = {
   batchMoveBtn: document.getElementById('batchMoveBtn'),
   batchClearBtn: document.getElementById('batchClearBtn'),
   timelineContainer: document.getElementById('timelineContainer'),
+  timelineYearSelect: document.getElementById('timelineYearSelect'),
   resetTimelineBtn: document.getElementById('resetTimelineBtn'),
   rightInspector: document.getElementById('rightInspector'),
   inspectorResizerLeft: document.getElementById('inspectorResizerLeft'),

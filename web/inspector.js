@@ -21,6 +21,7 @@ import { dom, showToast } from './dom.js';
 import { updateItemRating, loadMetadata, renderGrid, loadMedia } from './media-grid.js';
 import { t } from './i18n.js';
 import { saveInspectorCollapsedState } from './persistence.js';
+import { timelinePeriodContainsTimestamp } from './timeline-range.js';
 
 let currentInspectorFetchId = 0;
 let inspectorAbortController = null;
@@ -851,10 +852,7 @@ export async function handleSaveDateTaken() {
 
       // If active timeline filter is set and item moved outside the period, reload media
       if (state.activeTimelinePeriod) {
-        const itemDate = new Date(res.date_taken * 1000);
-        const itemYear = itemDate.getUTCFullYear();
-        const itemMonth = itemDate.getUTCMonth() + 1;
-        if (itemYear !== state.activeTimelinePeriod.year || itemMonth !== state.activeTimelinePeriod.month) {
+        if (!timelinePeriodContainsTimestamp(state.activeTimelinePeriod, res.date_taken)) {
           closeDateTakenForm();
           showToast('Date updated', 'success');
           await loadMedia();

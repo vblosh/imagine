@@ -36,6 +36,7 @@ import {
   renderSidebarFolders,
   applySidebarSearch,
   clearSidebarSearch,
+  clearTimelineSelection,
   renderTimeline,
   updateSidebarActive,
   updateFilterLabel,
@@ -335,8 +336,28 @@ export function setupEventListeners() {
   }
   if (dom.resetTimelineBtn) {
     dom.resetTimelineBtn.addEventListener('click', () => {
-      state.activeTimelinePeriod = null;
+      clearTimelineSelection();
       renderTimeline();
+      updateSidebarActive();
+      loadMedia();
+    });
+  }
+  if (dom.timelineYearSelect) {
+    dom.timelineYearSelect.addEventListener('change', (e) => {
+      if (e.target.value === 'all') {
+        clearTimelineSelection();
+      } else if (e.target.value !== 'custom') {
+        const year = Number(e.target.value);
+        state.activeTimelinePeriod = {
+          startYear: year,
+          startMonth: 1,
+          endYear: year,
+          endMonth: 12
+        };
+        state.timelineAnchor = null;
+      }
+      renderTimeline();
+      updateSidebarActive();
       loadMedia();
     });
   }
@@ -566,7 +587,7 @@ export function setupEventListeners() {
         state.activeTagId = null;
         state.activeAlbumId = null;
         state.activeFolder = null;
-        state.activeTimelinePeriod = null;
+        clearTimelineSelection();
         state.activeMediaType = 'all';
         state.activeStatusFilter = null;
         state.activeLastImported = false;
@@ -601,7 +622,7 @@ export function setupEventListeners() {
     dom.navLastImported.addEventListener('click', () => {
       state.activeLastImported = !state.activeLastImported;
       state.activeFolder = null;
-      state.activeTimelinePeriod = null;
+      clearTimelineSelection();
       saveNavFilterPreference(state.activeNavFilter);
       saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
@@ -613,7 +634,7 @@ export function setupEventListeners() {
     dom.navPhotos.addEventListener('click', () => {
       state.activeMediaType = (state.activeMediaType === 'photos') ? 'all' : 'photos';
       state.activeFolder = null;
-      state.activeTimelinePeriod = null;
+      clearTimelineSelection();
       saveNavFilterPreference(state.activeNavFilter);
       saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
@@ -625,7 +646,7 @@ export function setupEventListeners() {
     dom.navVideos.addEventListener('click', () => {
       state.activeMediaType = (state.activeMediaType === 'videos') ? 'all' : 'videos';
       state.activeFolder = null;
-      state.activeTimelinePeriod = null;
+      clearTimelineSelection();
       saveNavFilterPreference(state.activeNavFilter);
       saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
@@ -637,7 +658,7 @@ export function setupEventListeners() {
     dom.navAudio.addEventListener('click', () => {
       state.activeMediaType = (state.activeMediaType === 'audio') ? 'all' : 'audio';
       state.activeFolder = null;
-      state.activeTimelinePeriod = null;
+      clearTimelineSelection();
       saveNavFilterPreference(state.activeNavFilter);
       saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
@@ -649,7 +670,7 @@ export function setupEventListeners() {
     dom.navPicks.addEventListener('click', () => {
       state.activeStatusFilter = (state.activeStatusFilter === 'picks') ? null : 'picks';
       state.activeFolder = null;
-      state.activeTimelinePeriod = null;
+      clearTimelineSelection();
       saveNavFilterPreference(state.activeNavFilter);
       saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
@@ -661,7 +682,7 @@ export function setupEventListeners() {
     dom.navRejects.addEventListener('click', () => {
       state.activeStatusFilter = (state.activeStatusFilter === 'rejects') ? null : 'rejects';
       state.activeFolder = null;
-      state.activeTimelinePeriod = null;
+      clearTimelineSelection();
       saveNavFilterPreference(state.activeNavFilter);
       saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
@@ -673,7 +694,7 @@ export function setupEventListeners() {
     dom.navNotRejects.addEventListener('click', () => {
       state.activeStatusFilter = (state.activeStatusFilter === 'not_rejects') ? null : 'not_rejects';
       state.activeFolder = null;
-      state.activeTimelinePeriod = null;
+      clearTimelineSelection();
       saveNavFilterPreference(state.activeNavFilter);
       saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();
@@ -685,7 +706,7 @@ export function setupEventListeners() {
     dom.navUnrated.addEventListener('click', () => {
       state.activeStatusFilter = (state.activeStatusFilter === 'unrated') ? null : 'unrated';
       state.activeFolder = null;
-      state.activeTimelinePeriod = null;
+      clearTimelineSelection();
       saveNavFilterPreference(state.activeNavFilter);
       saveActiveFoldersPreference(state.activeFolders);
       updateSidebarActive();

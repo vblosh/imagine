@@ -642,7 +642,13 @@ def test_filter_switching_resets_folder_and_timeline_filters(server, page: Page)
     # Set up an active folder and active timeline period
     page.evaluate("""() => {
         window._imagineApp.state.activeFolder = 'family';
-        window._imagineApp.state.activeTimelinePeriod = { year: 2026, month: 1 };
+        window._imagineApp.state.activeTimelinePeriod = {
+            startYear: 2026,
+            startMonth: 1,
+            endYear: 2026,
+            endMonth: 1
+        };
+        window._imagineApp.state.timelineAnchor = { year: 2026, month: 1 };
         window._imagineApp.renderTimeline();
     }""")
 
@@ -658,12 +664,14 @@ def test_filter_switching_resets_folder_and_timeline_filters(server, page: Page)
     state = page.evaluate("""() => ({
         activeTagId: window._imagineApp.state.activeTagId,
         activeFolder: window._imagineApp.state.activeFolder,
-        activeTimelinePeriod: window._imagineApp.state.activeTimelinePeriod
+        activeTimelinePeriod: window._imagineApp.state.activeTimelinePeriod,
+        timelineAnchor: window._imagineApp.state.timelineAnchor
     })""")
 
     assert state["activeTagId"] is not None
     assert state["activeFolder"] is None
     assert state["activeTimelinePeriod"] is None
+    assert state["timelineAnchor"] is None
     expect(page.locator("#timelineContainer .timeline-bar-wrap.active")).to_have_count(0)
 
 

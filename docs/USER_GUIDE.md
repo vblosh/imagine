@@ -200,10 +200,11 @@ In the top right bar, slide the thumbnail zoom controller:
 - **Folders Tree**: Physical directory tree showing the file system layout of your imported photos and media.
 
 ### Bottom Timeline Scrubber
-At the bottom of the screen is an interactive year and month scrub bar:
-- Vertical bars represent the concentration of photos taken in each month.
-- Click on any bar (e.g., *Sep 2026*) to jump directly to photos taken during that period.
-- Click **"Reset"** to return to the full unconstrained catalog.
+At the bottom of the screen is a compact year and month scrub bar:
+- Tightly spaced vertical bars represent the concentration of photos taken in each populated month. Hover a bar to see its month, year, and photo count; the visible labels show each year once.
+- Click a month bar to filter to that month. Shift-click another month to filter the inclusive interval between the two months.
+- Use the year selector before **"Reset"** to filter January through December of a specific year, or choose **"All years"** to clear the timeline filter.
+- Click **"Reset"** to clear the selected month or interval without changing other active filters.
 
 ### Language & Internationalization (i18n)
 Imagine features native multi-language internationalization supporting 5 languages:
