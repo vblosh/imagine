@@ -60,6 +60,15 @@ def get_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _clean_proc_env() -> Dict[str, str]:
+    """Return process environment without overrides that interfere with test servers."""
+    proc_env = os.environ.copy()
+    proc_env.pop("IMAGINE_PHOTOS_DIR", None)
+    proc_env.pop("IMAGINE_THUMBS_DIR", None)
+    proc_env.pop("IMAGINE_API_TOKEN", None)
+    return proc_env
+
+
 def wait_for_server(url: str, port: int = 0, timeout_sec: float = 6.0) -> bool:
     """Fast poll using non-blocking TCP socket connect loop before verifying HTTP 200."""
     if not port:
@@ -167,7 +176,7 @@ def golden_seeded_template(imagine_bin: str, web_dir: str) -> Generator[Dict[str
         "--port", str(port),
         "--web-dir", web_dir
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_clean_proc_env())
     url = f"http://127.0.0.1:{port}"
     if wait_for_server(url, port, timeout_sec=5.0):
         for item in items:
@@ -219,7 +228,7 @@ def golden_media_template(imagine_bin: str, web_dir: str) -> Generator[Dict[str,
         "--port", str(port),
         "--web-dir", web_dir
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_clean_proc_env())
     url = f"http://127.0.0.1:{port}"
     if wait_for_server(url, port, timeout_sec=5.0):
         for item in items:
@@ -333,9 +342,7 @@ def start_backend(imagine_bin: str, web_dir: str, env: Dict[str, Any]) -> Genera
         "--port", str(env["port"]),
         "--web-dir", web_dir
     ]
-    proc_env = os.environ.copy()
-    proc_env.pop("IMAGINE_PHOTOS_DIR", None)
-    proc_env.pop("IMAGINE_THUMBS_DIR", None)
+    proc_env = _clean_proc_env()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=proc_env)
     url = f"http://127.0.0.1:{env['port']}"
 

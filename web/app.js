@@ -525,16 +525,15 @@ export function setupEventListeners() {
         const targetLat = numeric(item.exif.latitude);
         const targetLng = numeric(item.exif.longitude);
         if (targetLat === null || targetLng === null) return;
-        state.mapInstance.flyTo([targetLat, targetLng], 14, { duration: 0.5 });
-        setTimeout(() => {
-          const marker = state.mapMarkers.find(marker =>
-            marker.clusterItems?.some(candidate => candidate.id === item.id)
-          );
-          if (marker) {
-            marker.activeMediaId = item.id;
-            marker.openPopup();
-          }
-        }, 300);
+        state.mapInstance.setView([targetLat, targetLng], 14);
+        renderMapMarkers();
+        const marker = state.mapMarkers.find(marker =>
+          marker.clusterItems?.some(candidate => candidate.id === item.id)
+        );
+        if (marker) {
+          marker.activeMediaId = item.id;
+          marker.openPopup();
+        }
       }
     });
   }
