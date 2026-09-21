@@ -1061,6 +1061,72 @@ export function handleSidebarItemClick(itemType, itemValue, e) {
   loadMedia();
 }
 
+const SIDEBAR_TAG_CATEGORIES = ['people', 'places', 'events', 'keyword'];
+let sidebarExpansionSnapshot = null;
+
+function normalizedSidebarSearch() {
+  return String(state.sidebarSearchText || '').trim().toLocaleLowerCase();
+}
+
+function matchesSidebarSearch(value) {
+  const query = normalizedSidebarSearch();
+  return !query || String(value || '').toLocaleLowerCase().includes(query);
+}
+
+function captureSidebarExpansionState() {
+  sidebarExpansionSnapshot = {
+    albums: dom.albumsList?.style.display !== 'none',
+    folders: dom.foldersTree?.style.display !== 'none',
+    tags: Object.fromEntries(SIDEBAR_TAG_CATEGORIES.map(category => {
+      const group = document.querySelector(`.tag-category-group[data-category="${category}"]`);
+      return [category, group?.querySelector('.tag-items')?.style.display !== 'none'];
+    }))
+  };
+}
+
+function restoreSidebarExpansionState() {
+  if (!sidebarExpansionSnapshot) return;
+  if (sidebarExpansionSnapshot.albums) expandAlbums(false);
+  else collapseAlbums(false);
+  if (sidebarExpansionSnapshot.folders) expandFolders(false);
+  else collapseFolders(false);
+  SIDEBAR_TAG_CATEGORIES.forEach(category => {
+    if (sidebarExpansionSnapshot.tags[category]) expandTagCategory(category, false);
+    else collapseTagCategory(category, false);
+  });
+  sidebarExpansionSnapshot = null;
+}
+
+function updateSidebarSearchStatus() {
+  if (!dom.sidebarSearchStatus) return;
+  const query = normalizedSidebarSearch();
+  const matchCount = query
+    ? state.albums.filter(album => matchesSidebarSearch(album.name)).length
+      + state.tags.filter(tag => matchesSidebarSearch(tag.name)).length
+      + Array.from(state.allFolders).filter(folder => matchesSidebarSearch(folder)).length
+    : 0;
+  dom.sidebarSearchStatus.hidden = !query || matchCount > 0;
+}
+
+export function applySidebarSearch(value) {
+  const nextSearch = String(value || '').trim();
+  if (!state.sidebarSearchText && nextSearch) {
+    captureSidebarExpansionState();
+  }
+  state.sidebarSearchText = nextSearch;
+  renderSidebarTags();
+  renderSidebarAlbums();
+  renderSidebarFolders();
+  if (!nextSearch) {
+    restoreSidebarExpansionState();
+  }
+  updateSidebarSearchStatus();
+}
+
+export function clearSidebarSearch() {
+  applySidebarSearch('');
+}
+
 export function expandTagCategory(category, save = true) {
   const cat = (category || 'keyword').toLowerCase();
   const group = document.querySelector(`.tag-category-group[data-category="${cat}"]`);
@@ -1140,7 +1206,11 @@ export function renderSidebarTags() {
   };
 
   Object.values(categories).forEach(el => {
-    if (el) el.innerHTML = '';
+    if (el) {
+      el.innerHTML = '';
+      const group = el.closest('.tag-category-group');
+      if (group) group.hidden = false;
+    }
   });
 
   if (dom.tagSuggestions) {
@@ -1153,7 +1223,7 @@ export function renderSidebarTags() {
     });
   }
 
-  state.tags.forEach(tag => {
+  state.tags.filter(tag => matchesSidebarSearch(tag.name)).forEach(tag => {
     const cat = (tag.category || 'keyword').toLowerCase();
     const container = categories[cat] || categories.keyword;
     if (!container) return;
@@ -1181,6 +1251,17 @@ export function renderSidebarTags() {
 
     container.appendChild(li);
   });
+
+  if (normalizedSidebarSearch()) {
+    Object.entries(categories).forEach(([category, container]) => {
+      if (!container) return;
+      const hasMatches = container.children.length > 0;
+      const group = container.closest('.tag-category-group');
+      if (group) group.hidden = !hasMatches;
+      if (hasMatches) expandTagCategory(category, false);
+    });
+  }
+  updateSidebarSearchStatus();
 }
 
 export function renderSidebarAlbums() {
@@ -1189,10 +1270,12 @@ export function renderSidebarAlbums() {
 
   if (state.albums.length === 0) {
     dom.albumsList.innerHTML = '<li class="menu-item" style="color:var(--text-dim);font-style:italic;">No albums</li>';
+    updateSidebarSearchStatus();
     return;
   }
 
-  state.albums.forEach(album => {
+  const matchingAlbums = state.albums.filter(album => matchesSidebarSearch(album.name));
+  matchingAlbums.forEach(album => {
     const li = document.createElement('li');
     li.className = 'menu-item' + (state.activeAlbumId === album.id ? ' active' : '');
     const safeAlbumName = escapeHtml(album.name);
@@ -1240,6 +1323,10 @@ export function renderSidebarAlbums() {
 
     dom.albumsList.appendChild(li);
   });
+  if (normalizedSidebarSearch() && matchingAlbums.length > 0) {
+    expandAlbums(false);
+  }
+  updateSidebarSearchStatus();
 }
 
 export function renderSidebarFolders() {
@@ -1260,10 +1347,11 @@ export function renderSidebarFolders() {
 
   if (state.allFolders.size === 0) {
     dom.foldersTree.innerHTML = '<div style="color:var(--text-dim);font-style:italic;">No folders</div>';
+    updateSidebarSearchStatus();
     return;
   }
 
-  const sortedFolders = Array.from(state.allFolders).sort();
+  const sortedFolders = Array.from(state.allFolders).filter(matchesSidebarSearch).sort();
   sortedFolders.forEach(folder => {
     const el = document.createElement('div');
     el.className = 'folder-item' + (state.activeFolders.has(folder) ? ' active' : '');
@@ -1280,6 +1368,10 @@ export function renderSidebarFolders() {
     });
     dom.foldersTree.appendChild(el);
   });
+  if (normalizedSidebarSearch() && sortedFolders.length > 0) {
+    expandFolders(false);
+  }
+  updateSidebarSearchStatus();
 }
 
 export function renderTimeline() {

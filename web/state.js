@@ -41,6 +41,7 @@ export const state = {
     }
   },
   activeAlbumId: null,
+  sidebarSearchText: '',
   get activeFolder() {
     return this.activeFolders.size > 0 ? this.activeFolders.values().next().value : null;
   },

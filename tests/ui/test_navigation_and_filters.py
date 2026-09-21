@@ -66,6 +66,77 @@ def test_sidebar_quick_filters(server, page: Page):
     expect(cards).to_have_count(6)
 
 
+def test_sidebar_collection_search_on_enter_and_clear(server, page: Page):
+    """Sidebar search filters albums, tags, and full folder paths without changing media results."""
+    page.goto(server["url"])
+
+    search = page.locator("#sidebarSearchInput")
+    clear = page.locator("#clearSidebarSearchBtn")
+    cards = page.locator(".photo-card")
+    family_path = page.locator("#foldersTree .folder-item", has_text="family").get_attribute("data-folder-path")
+    assert family_path
+    parent_segment = re.split(r"[\\/]", family_path)[-2]
+
+    # Input changes are drafts until Enter is pressed.
+    search.fill("sun")
+    expect(page.locator("#albumsList .menu-item")).to_have_count(2)
+    expect(page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")).to_have_count(1)
+    expect(cards).to_have_count(6)
+
+    search.press("Enter")
+    expect(page.locator("#albumsList .menu-item")).to_have_count(0)
+    expect(page.locator("#tagsTree .tag-item")).to_have_count(1)
+    expect(page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")).to_be_visible()
+    expect(page.locator('.tag-category-group[data-category="keyword"] .category-header')).to_have_attribute("aria-expanded", "true")
+    expect(page.locator('#tagsTree .tag-category-group:not([hidden])')).to_have_count(1)
+    expect(page.locator("#foldersTree .folder-item")).to_have_count(0)
+    expect(cards).to_have_count(6)
+
+    # Selecting a result keeps the sidebar search separate from the media filter.
+    page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset").click()
+    expect(cards).to_have_count(2)
+
+    # The full folder path is searchable even though only its final component is displayed.
+    search.fill(parent_segment)
+    search.press("Enter")
+    expect(page.locator("#foldersTree .folder-item")).to_have_count(2)
+    expect(page.locator("#foldersTree")).to_be_visible()
+    expect(page.locator("#foldersHeader")).to_have_attribute("aria-expanded", "true")
+    expect(cards).to_have_count(2)
+
+    # Active selections survive being hidden, and metadata refresh preserves the query.
+    search.fill("vacation")
+    search.press("Enter")
+    expect(page.locator("#albumsList .menu-item", has_text="Vacation")).to_be_visible()
+    expect(page.locator("#tagsTree .tag-item")).to_have_count(0)
+    assert page.evaluate("() => window._imagineState.activeTagIds.size") == 1
+    page.locator("#refreshBtn").click()
+    expect(page.locator("#albumsList .menu-item")).to_have_count(1)
+
+    search.fill("does-not-exist")
+    search.press("Enter")
+    expect(page.locator("#sidebarSearchStatus")).to_be_visible()
+
+    # Empty Enter is another way to clear the committed search.
+    search.fill("")
+    search.press("Enter")
+    expect(page.locator("#sidebarSearchStatus")).to_be_hidden()
+    expect(page.locator("#albumsList .menu-item")).to_have_count(2)
+
+    search.fill("does-not-exist")
+    search.press("Enter")
+    clear.click()
+    expect(search).to_have_value("")
+    expect(clear).to_be_hidden()
+    expect(page.locator("#sidebarSearchStatus")).to_be_hidden()
+    expect(page.locator("#albumsList .menu-item")).to_have_count(2)
+    expect(page.locator("#albumsList")).to_be_visible()
+    expect(page.locator("#foldersTree .folder-item")).to_have_count(2)
+    expect(page.locator("#foldersTree")).to_be_hidden()
+    expect(page.locator('#tagCategoryKeyword')).to_be_hidden()
+    expect(page.locator("#tagCategoryKeyword .tag-item", has_text="Sunset")).to_have_class(re.compile(r"\bactive\b"))
+    expect(cards).to_have_count(2)
+
 def test_view_tabs_category_filtering(server, page: Page):
     """Clicking top tabs (People, Places, Events) opens grid with photo and name; clicking photo selects and shows photos."""
     page.goto(server["url"])

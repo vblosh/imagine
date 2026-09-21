@@ -192,6 +192,7 @@ In the top right bar, slide the thumbnail zoom controller:
     - **Keyword Tag** (e.g., *Vacation*)
   - The filter banner displays a breadcrumb summary of all active criteria (e.g., `Photos • Picks • Album: Best of 2026 • Tag: Vacation`).
   - **Independent Toggling**: Clicking an already active filter toggles it off without clearing the rest of your active criteria. Click **"All Media"** or the **"Clear Filter"** button to reset all filters at once.
+- **Sidebar Search**: Use **Search Albums, Tags, Folders** below Navigation and press `Enter` to show only matching sidebar items. Matching is case-insensitive and includes complete folder paths. Matching sections expand automatically; click `×` (or press `Enter` with an empty field) to show everything again and restore the previous expanded/collapsed state. This search only narrows the sidebar—it does not filter media until you select an album, tag, or folder.
 - **Albums**: Custom user collections. Click any album to filter media by collection.
 - **Keyword Tags**: Categorized tree of tags (People, Places, Events, Keywords). Click any tag to filter.
 - **Folders Tree**: Physical directory tree showing the file system layout of your imported photos and media.

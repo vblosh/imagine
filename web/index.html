@@ -181,6 +181,16 @@
           </ul>
         </div>
 
+        <!-- Sidebar collection search -->
+        <div class="sidebar-collection-search">
+          <div class="sidebar-search-box">
+            <svg class="sidebar-search-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="sidebarSearchInput" placeholder="Search Albums, Tags, Folders" data-i18n-placeholder="sidebar_search_placeholder" autocomplete="off" aria-label="Search Albums, Tags, Folders" data-i18n-aria-label="sidebar_search_placeholder">
+            <button type="button" class="sidebar-search-clear" id="clearSidebarSearchBtn" title="Clear sidebar search" data-i18n-title="clear_sidebar_search" aria-label="Clear sidebar search" data-i18n-aria-label="clear_sidebar_search">&times;</button>
+          </div>
+          <div class="sidebar-search-status" id="sidebarSearchStatus" role="status" aria-live="polite" hidden data-i18n="no_sidebar_search_results">No matching albums, tags, or folders</div>
+        </div>
+
         <!-- Albums Section -->
         <div class="sidebar-section">
           <div class="sidebar-section-header">

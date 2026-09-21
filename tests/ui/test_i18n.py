@@ -32,6 +32,7 @@ def test_i18n_default_language_is_english(server, page: Page):
     expect(page.locator('#navRejects [data-i18n="nav_rejects"]')).to_have_text("Rejects")
     expect(page.locator('#navNotRejects [data-i18n="nav_not_rejects"]')).to_have_text("Not Rejects")
     expect(page.locator('#navUnrated [data-i18n="nav_unrated"]')).to_have_text("Unrated")
+    expect(page.locator("#sidebarSearchInput")).to_have_attribute("placeholder", "Search Albums, Tags, Folders")
 
     # Toolbar
     expect(page.locator("#filterLabel")).to_contain_text("All Photos")
@@ -67,6 +68,8 @@ def test_i18n_switch_to_spanish(server, page: Page):
     expect(page.locator('#navRejects [data-i18n="nav_rejects"]')).to_have_text("Rechazadas")
     expect(page.locator('#navNotRejects [data-i18n="nav_not_rejects"]')).to_have_text("No rechazadas")
     expect(page.locator('#navUnrated [data-i18n="nav_unrated"]')).to_have_text("Sin calificar")
+    expect(page.locator("#sidebarSearchInput")).to_have_attribute("placeholder", "Buscar álbumes, etiquetas y carpetas")
+    expect(page.locator("#clearSidebarSearchBtn")).to_have_attribute("title", "Borrar búsqueda lateral")
 
     # Sidebar headers
     expect(page.locator('.sidebar-section:has(#albumsList) .section-title')).to_have_text("Álbumes")
@@ -515,5 +518,4 @@ def test_i18n_map_view_place_images_here_translations(server, page: Page):
     # Multi-selection translation in Spanish
     page.locator("#langSelect").select_option("es")
     expect(place_btn).to_contain_text("Ubicar 2 fotos seleccionadas aquí")
-
 

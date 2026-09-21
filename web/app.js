@@ -34,6 +34,8 @@ import {
   renderSidebarTags,
   renderSidebarAlbums,
   renderSidebarFolders,
+  applySidebarSearch,
+  clearSidebarSearch,
   renderTimeline,
   updateSidebarActive,
   updateFilterLabel,
@@ -679,6 +681,32 @@ export function setupEventListeners() {
       loadMedia();
     });
   }
+
+  const updateSidebarSearchClearVisibility = () => {
+    if (!dom.clearSidebarSearchBtn) return;
+    const hasText = Boolean(dom.sidebarSearchInput?.value || state.sidebarSearchText);
+    dom.clearSidebarSearchBtn.classList.toggle('visible', hasText);
+  };
+  if (dom.sidebarSearchInput) {
+    dom.sidebarSearchInput.addEventListener('input', updateSidebarSearchClearVisibility);
+    dom.sidebarSearchInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      applySidebarSearch(dom.sidebarSearchInput.value);
+      updateSidebarSearchClearVisibility();
+    });
+  }
+  if (dom.clearSidebarSearchBtn) {
+    dom.clearSidebarSearchBtn.addEventListener('click', () => {
+      if (dom.sidebarSearchInput) {
+        dom.sidebarSearchInput.value = '';
+        dom.sidebarSearchInput.focus();
+      }
+      clearSidebarSearch();
+      updateSidebarSearchClearVisibility();
+    });
+  }
+  updateSidebarSearchClearVisibility();
 
   // Albums section collapsible
   if (dom.albumsHeader) {
