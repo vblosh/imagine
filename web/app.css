@@ -3921,11 +3921,12 @@ body.resizing-horizontal * {
   .top-bar {
     padding: 0 8px;
     gap: 8px;
-    height: 50px;
+    height: 48px;
   }
 
   .top-bar-left {
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .logo-text {
@@ -3936,32 +3937,204 @@ body.resizing-horizontal * {
     display: none;
   }
 
-  /* Move/hide items on mobile top bar */
+  .top-bar-center {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .search-box input {
+    height: 32px;
+    font-size: 12px;
+    padding-left: 30px;
+    padding-right: 26px;
+  }
+
+  .top-bar-right {
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  /* Hide zoom and overflowed actions on mobile top bar; accessible via drawer */
   .zoom-control {
     display: none !important;
   }
 
-  .lang-selector label {
+  .top-bar-right .lang-selector,
+  .top-bar-right #importBtn,
+  .top-bar-right #refreshBtn,
+  .top-bar-right #settingsBtn {
     display: none;
   }
 
-  .lang-select {
-    max-width: 45px;
-    padding: 2px 4px;
-    font-size: 11px;
-  }
-
-  #importBtn span {
-    display: none;
-  }
-
-  #importBtn {
-    padding: 6px 10px;
+  /* Bottom Navigation Bar for Primary View Tabs */
+  .view-tabs {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 52px;
+    z-index: 1000;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    background-color: var(--bg-topbar);
+    border-top: 1px solid var(--border-color);
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    padding: 0 4px calc(env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.45);
   }
 
   .view-tabs .tab-btn {
-    padding: 4px 8px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 4px 2px;
+    font-size: 10px;
+    height: 100%;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    border: none;
+  }
+
+  .view-tabs .tab-btn:hover {
+    color: var(--text-primary);
+  }
+
+  .view-tabs .tab-btn.active {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: var(--accent-color);
+  }
+
+  .view-tabs .tab-btn span {
+    display: block !important;
+    font-size: 10px;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  .view-tabs .tab-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  /* Safe bottom padding for center-content to avoid being covered by bottom nav bar */
+  .center-content {
+    padding-bottom: calc(52px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Content Toolbar on Mobile */
+  .content-toolbar {
+    height: 40px;
+    padding: 0 8px;
+    gap: 6px;
+  }
+
+  .filter-indicator {
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    gap: 6px;
+  }
+
+  .filter-indicator #filterLabel {
+    display: inline-block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  /* View Mode Toggle: Prevent shrinking to 0px width */
+  .view-mode-toggle {
+    flex-shrink: 0 !important;
+    margin-right: 0;
+  }
+
+  .view-mode-toggle .btn-toggle {
+    padding: 5px 8px;
+    min-width: 32px;
+    min-height: 32px;
+    justify-content: center;
+  }
+
+  .view-mode-toggle .btn-toggle span {
+    display: none; /* Hide 'Grid' and 'Map' labels on mobile */
+  }
+
+  .view-mode-toggle .btn-toggle svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  /* Sort Selector: Hide label and fit neatly */
+  .sort-selector {
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .sort-selector label {
+    display: none; /* Hide 'Sort:' label on mobile */
+  }
+
+  .sort-selector select {
+    max-width: 130px;
+    font-size: 11px;
+    padding: 3px 6px;
+    height: 28px;
+  }
+
+  /* Category Toolbar on Mobile */
+  .category-toolbar {
+    height: 40px;
+    padding: 0 8px;
+    gap: 6px;
+  }
+
+  .category-view-info {
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .category-view-title {
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .category-view-subtitle {
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .category-sort-selector label {
+    display: none;
+  }
+
+  .category-sort-selector select {
+    max-width: 115px;
+    font-size: 11px;
+    padding: 3px 6px;
+    height: 28px;
+  }
+
+  #categoryAddBtn span {
+    display: none;
+  }
+
+  #categoryAddBtn {
+    padding: 5px 8px;
+    min-width: 32px;
   }
 
   /* Left Sidebar Drawer */
@@ -4038,28 +4211,49 @@ body.resizing-horizontal * {
     padding: 8px;
   }
 
-  /* Batch Action Bar on mobile: fit safe bottom */
+  /* Floating Batch Action Bar on mobile: fit safe bottom */
   .batch-action-bar {
-    left: 10px;
-    right: 10px;
-    transform: none;
-    width: auto;
-    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    position: fixed !important;
+    left: 8px;
+    right: 8px;
+    bottom: calc(60px + env(safe-area-inset-bottom, 0px)) !important;
+    z-index: 1100;
+    background-color: rgba(26, 26, 26, 0.95);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.7);
     flex-wrap: wrap;
     justify-content: center;
     gap: 6px;
+    padding: 8px 10px;
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+
+  /* Sidebar Mobile Utility Actions */
+  .sidebar-mobile-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-top: 1px solid #333333;
+    margin-top: auto;
+    background-color: var(--bg-sidebar);
+  }
+
+  .sidebar-mobile-actions .btn {
+    width: 100%;
+    justify-content: flex-start;
     padding: 8px 12px;
+    font-size: 12px;
   }
 }
 
 @media (max-width: 480px) {
-  .view-tabs .tab-btn span {
-    display: none;
-  }
-
   .top-bar-center {
     flex: 1;
-    min-width: 80px;
+    min-width: 0;
   }
 
   .search-box input {

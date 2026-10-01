@@ -142,3 +142,149 @@ def test_loupe_mobile_touch_pan_and_zoom(server, page: Page):
     pan_after = page.evaluate("() => ({ x: window._imagineApp.state.loupePanX, y: window._imagineApp.state.loupePanY })")
     assert pan_after["x"] != 0 or pan_after["y"] != 0
 
+
+def test_mobile_top_bar_and_search_layout(server, page: Page):
+    """On mobile viewport, top bar does not overflow horizontally and search input is usable."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(server["url"])
+
+    # Search input is visible and has comfortable typing width (>= 120px)
+    search_input = page.locator("#searchInput")
+    expect(search_input).to_be_visible()
+    box = search_input.bounding_box()
+    assert box is not None
+    assert box["width"] >= 120, f"Search input too narrow: {box['width']}px"
+
+    # Quick action buttons on the right are visible
+    expect(page.locator("#toggleFullscreenBtn")).to_be_visible()
+    expect(page.locator("#toggleInspectorBtn")).to_be_visible()
+
+    # Document body does not overflow horizontally (no horizontal scrollbar)
+    scroll_width = page.evaluate("() => document.documentElement.scrollWidth")
+    client_width = page.evaluate("() => document.documentElement.clientWidth")
+    assert scroll_width <= client_width + 1, f"Horizontal overflow: scrollWidth={scroll_width}, clientWidth={client_width}"
+
+
+def test_mobile_content_toolbar_controls(server, page: Page):
+    """On mobile viewport, view mode toggle (Grid/Map) is not squished and functions properly."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(server["url"])
+
+    # Both Grid and Map buttons are visible and not squished to 0px
+    grid_btn = page.locator("#viewGridBtn")
+    map_btn = page.locator("#viewMapBtn")
+    expect(grid_btn).to_be_visible()
+    expect(map_btn).to_be_visible()
+
+    grid_box = grid_btn.bounding_box()
+    map_box = map_btn.bounding_box()
+    assert grid_box is not None and grid_box["width"] >= 28, f"Grid btn crushed: {grid_box}"
+    assert map_box is not None and map_box["width"] >= 28, f"Map btn crushed: {map_box}"
+
+    # Sort selector is visible and usable
+    sort_select = page.locator("#sortSelect")
+    expect(sort_select).to_be_visible()
+    sort_box = sort_select.bounding_box()
+    assert sort_box is not None and sort_box["width"] >= 80
+
+    # Switch to Map view
+    map_btn.click()
+    expect(page.locator("#mapViewContainer")).to_be_visible()
+    expect(map_btn).to_have_class(re.compile(r"\bactive\b"))
+
+    # Switch back to Grid view
+    grid_btn.click()
+    expect(page.locator("#gridScrollContainer")).to_be_visible()
+    expect(grid_btn).to_have_class(re.compile(r"\bactive\b"))
+
+
+def test_mobile_bottom_navigation_bar(server, page: Page):
+    """On mobile viewport, view tabs act as a fixed bottom navigation bar."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(server["url"])
+
+    tabs = page.locator("#viewTabs")
+    expect(tabs).to_be_visible()
+
+    # Verify fixed at bottom
+    tabs_box = tabs.bounding_box()
+    assert tabs_box is not None
+    assert tabs_box["y"] + tabs_box["height"] >= 840, f"Tabs not at bottom: {tabs_box}"
+
+    # Tap People tab -> opens People category view
+    page.locator('.tab-btn[data-tab="people"]').click()
+    expect(page.locator("#categoryToolbar")).to_be_visible()
+    expect(page.locator("#categoryViewTitle")).to_have_text("People")
+
+    # Tap Places tab
+    page.locator('.tab-btn[data-tab="places"]').click()
+    expect(page.locator("#categoryViewTitle")).to_have_text("Places")
+
+    # Tap Events tab
+    page.locator('.tab-btn[data-tab="events"]').click()
+    expect(page.locator("#categoryViewTitle")).to_have_text("Events")
+
+    # Tap Albums tab
+    page.locator('.tab-btn[data-tab="albums"]').click()
+    expect(page.locator("#categoryViewTitle")).to_have_text("Albums")
+
+    # Tap Media tab -> returns to photo grid
+    page.locator('.tab-btn[data-tab="media"]').click()
+    expect(page.locator("#contentToolbar")).to_be_visible()
+    expect(page.locator("#gridScrollContainer")).to_be_visible()
+
+
+def test_mobile_batch_action_bar_floating(server, page: Page):
+    """Batch action bar floats above bottom navigation bar when >=2 photos are selected on mobile."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=["Control"])
+
+    # Batch action bar appears
+    batch_bar = page.locator("#batchActionBar")
+    expect(batch_bar).to_be_visible()
+
+    # Position is fixed and floats above bottom nav bar
+    pos = page.evaluate("""() => {
+        const el = document.getElementById('batchActionBar');
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return { position: style.position, bottom: rect.bottom, top: rect.top };
+    }""")
+    assert pos["position"] == "fixed"
+    # Should be floating near bottom (above bottom nav ~792px)
+    assert pos["bottom"] <= 844
+
+
+def test_mobile_sidebar_drawer_utilities(server, page: Page):
+    """Sidebar drawer provides mobile quick actions for Settings, Import, and Language."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(server["url"])
+
+    # Open sidebar drawer
+    page.locator("#mobileMenuBtn").click()
+    expect(page.locator("#leftSidebar")).to_have_class(re.compile(r"\bopen\b"))
+
+    # Mobile actions section is visible
+    actions = page.locator("#sidebarMobileActions")
+    expect(actions).to_be_visible()
+
+    # Test Settings button from drawer
+    page.locator("#mobileSettingsBtn").click()
+    expect(page.locator("#settingsModal")).to_be_visible()
+    expect(page.locator("#leftSidebar")).not_to_have_class(re.compile(r"\bopen\b"))
+
+    # Close settings
+    page.locator("#cancelSettingsBtn").click()
+    expect(page.locator("#settingsModal")).to_be_hidden()
+
+    # Open drawer again to test Language change
+    page.locator("#mobileMenuBtn").click()
+    expect(page.locator("#leftSidebar")).to_have_class(re.compile(r"\bopen\b"))
+
+    page.locator("#mobileLangSelect").select_option("de")
+    expect(page.locator('.tab-btn[data-tab="media"] span')).to_have_text("Medien")
+

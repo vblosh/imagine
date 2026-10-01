@@ -851,6 +851,36 @@ export function setupEventListeners() {
     });
   }
 
+  // Mobile sidebar drawer utility actions
+  if (dom.mobileImportBtn) {
+    dom.mobileImportBtn.addEventListener('click', () => {
+      toggleMobileSidebar(false);
+      if (dom.importBtn) dom.importBtn.click();
+    });
+  }
+  if (dom.mobileSettingsBtn) {
+    dom.mobileSettingsBtn.addEventListener('click', () => {
+      toggleMobileSidebar(false);
+      if (dom.settingsBtn) dom.settingsBtn.click();
+    });
+  }
+  if (dom.mobileRefreshBtn) {
+    dom.mobileRefreshBtn.addEventListener('click', () => {
+      if (dom.refreshBtn) dom.refreshBtn.click();
+    });
+  }
+  if (dom.mobileLangSelect) {
+    if (dom.langSelect) {
+      dom.mobileLangSelect.value = dom.langSelect.value;
+    }
+    dom.mobileLangSelect.addEventListener('change', (e) => {
+      if (dom.langSelect) {
+        dom.langSelect.value = e.target.value;
+        dom.langSelect.dispatchEvent(new Event('change'));
+      }
+    });
+  }
+
   // iOS Install Modal listeners
   if (dom.closeIosInstallBtn) {
     dom.closeIosInstallBtn.addEventListener('click', closeIosInstallModal);
@@ -1622,6 +1652,9 @@ export async function init() {
   initialized = true;
   initI18n();
   onLanguageChange(() => {
+    if (dom.mobileLangSelect && dom.langSelect) {
+      dom.mobileLangSelect.value = dom.langSelect.value;
+    }
     updateFilterLabel();
     updateBatchBar();
     renderTimeline();
