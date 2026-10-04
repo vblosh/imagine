@@ -107,6 +107,12 @@ export const translations = {
 
     // Batch Actions
     n_selected: '{count} selected',
+    rate_or_flag: 'Rate / Flag...',
+    rate_flag_title: 'Rate, pick or reject selected photos',
+    flag_group: 'Flag',
+    rating_group: 'Rating',
+    unflag: 'Clear Flag',
+    clear_rating: 'Clear Rating (0★)',
     rate_label: 'Rate:',
     pick: 'Pick',
     pick_selected: 'Pick selected',
@@ -666,6 +672,12 @@ export const translations = {
 
     // Batch Actions
     n_selected: '{count} seleccionados',
+    rate_or_flag: 'Calificar / Marcar...',
+    rate_flag_title: 'Calificar, seleccionar o rechazar fotos seleccionadas',
+    flag_group: 'Marca',
+    rating_group: 'Calificación',
+    unflag: 'Quitar marca',
+    clear_rating: 'Borrar calificación (0★)',
     rate_label: 'Calificar:',
     pick: 'Seleccionar',
     pick_selected: 'Seleccionar elementos',
@@ -1225,6 +1237,12 @@ export const translations = {
 
     // Batch Actions
     n_selected: '{count} ausgewählt',
+    rate_or_flag: 'Bewerten / Markieren...',
+    rate_flag_title: 'Ausgewählte Fotos bewerten, auswählen oder ablehnen',
+    flag_group: 'Markierung',
+    rating_group: 'Bewertung',
+    unflag: 'Markierung entfernen',
+    clear_rating: 'Bewertung löschen (0★)',
     rate_label: 'Bewerten:',
     pick: 'Auswählen',
     pick_selected: 'Ausgewählte markieren',
@@ -1784,6 +1802,12 @@ export const translations = {
 
     // Batch Actions
     n_selected: 'Выбрано: {count}',
+    rate_or_flag: 'Оценка / Метка...',
+    rate_flag_title: 'Оценить, выбрать или отклонить выбранные фото',
+    flag_group: 'Метка',
+    rating_group: 'Оценка',
+    unflag: 'Снять метку',
+    clear_rating: 'Сбросить оценку (0★)',
     rate_label: 'Оценка:',
     pick: 'Выбрать',
     pick_selected: 'Пометить выбранные',
@@ -2343,6 +2367,12 @@ export const translations = {
 
     // Batch Actions
     n_selected: '已选择 {count} 项',
+    rate_or_flag: '评分 / 标记...',
+    rate_flag_title: '对所选照片进行评分、挑选或排除',
+    flag_group: '标记',
+    rating_group: '评分',
+    unflag: '清除标记',
+    clear_rating: '清除评分 (0★)',
     rate_label: '评级：',
     pick: '挑选',
     pick_selected: '标记精选',
@@ -2890,10 +2920,20 @@ export function applyTranslationsToDom() {
     }
   });
 
-  // 5. Update <html lang="...">
+  // 5. Optgroup labels
+  document.querySelectorAll('optgroup[data-i18n-label]').forEach(el => {
+    const key = el.getAttribute('data-i18n-label');
+    if (key) {
+      const translated = t(key);
+      el.label = translated;
+      el.setAttribute('label', translated);
+    }
+  });
+
+  // 6. Update <html lang="...">
   document.documentElement.lang = currentLanguage;
 
-  // 6. Update selector if present
+  // 7. Update selector if present
   const langSelect = document.getElementById('langSelect');
   if (langSelect && langSelect.value !== currentLanguage) {
     langSelect.value = currentLanguage;

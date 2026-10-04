@@ -818,6 +818,40 @@ body, html {
   font-size: 12px;
 }
 
+.batch-rate-flag-select {
+  background-color: #2a2a2a;
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  height: 24px;
+  line-height: 1.2;
+  transition: border-color 0.15s;
+}
+
+.batch-rate-flag-select:hover {
+  border-color: var(--text-muted);
+}
+
+.batch-rate-flag-select:focus {
+  border-color: var(--accent-color);
+}
+
+.batch-rate-flag-select optgroup {
+  background-color: #1f1f1f;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.batch-rate-flag-select option {
+  background-color: #2a2a2a;
+  color: var(--text-primary);
+}
+
 .batch-rating {
   display: flex;
   align-items: center;

@@ -201,11 +201,10 @@ Helper utilities for programmatically creating:
 * **Features Covered**:
   - Batch action bar `#batchActionBar` appears when `>= 1` cards selected.
   - Displays selected count (`#batchSelectedCount`).
-  - Batch Rate: sets rating for all selected items.
-  - Batch Pick (`#batchPickBtn`): sets pick flag on all selected items.
-  - Batch Reject (`#batchRejectBtn`): sets reject flag on all selected items.
+  - Batch Rate & Flag combobox (`#batchRateFlagSelect`): combines rating (0-5 stars) and flags (Pick, Reject, Clear Flag) in one space-saving control.
   - Batch Add Tag (`#batchAddTagBtn`): dialog handling to attach tag to multiple photos.
   - Batch Deselect (`#batchClearBtn`): deselects all and hides bar.
+  - Batch Delete (`#batchDeleteBtn`): located at the last position on the right of the batch action bar.
 
 #### [NEW] `tests/ui/test_loupe_modal.py`
 * **Features Covered**:

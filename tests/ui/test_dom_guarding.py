@@ -85,6 +85,7 @@ def test_setup_event_listeners_safe_with_missing_optional_elements(server, page:
             'addTagCategorySelect',
             'inspectorAddToAlbumBtn',
             'batchClearBtn',
+            'batchRateFlagSelect',
             'batchPickBtn',
             'batchRejectBtn',
             'batchDeleteBtn',

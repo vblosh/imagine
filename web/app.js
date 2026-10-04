@@ -996,6 +996,34 @@ export function setupEventListeners() {
     });
   }
 
+  if (dom.batchRateFlagSelect) {
+    dom.batchRateFlagSelect.addEventListener('change', async (e) => {
+      const val = e.target.value;
+      const ids = Array.from(state.selectedIds);
+      if (!val || ids.length === 0) return;
+      try {
+        if (val === 'pick') {
+          await batchUpdateFlags(ids, 1);
+        } else if (val === 'reject') {
+          await batchUpdateFlags(ids, -1);
+        } else if (val === 'unflag') {
+          await batchUpdateFlags(ids, 0);
+        } else if (val.startsWith('rate-')) {
+          const rating = parseInt(val.replace('rate-', ''), 10);
+          if (!isNaN(rating)) {
+            await batchUpdateRatings(ids, rating);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to apply batch rate/flag:', err);
+      } finally {
+        if (dom.batchRateFlagSelect) {
+          dom.batchRateFlagSelect.value = '';
+        }
+      }
+    });
+  }
+
   if (dom.batchPickBtn) {
     dom.batchPickBtn.addEventListener('click', async () => {
       await toggleFlagsForIds(Array.from(state.selectedIds), 1);

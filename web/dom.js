@@ -107,6 +107,7 @@ export const dom = {
   tagCategoryKeyword: document.getElementById('tagCategoryKeyword'),
   batchActionBar: document.getElementById('batchActionBar'),
   batchSelectedCount: document.getElementById('batchSelectedCount'),
+  batchRateFlagSelect: document.getElementById('batchRateFlagSelect'),
   batchRating: document.getElementById('batchRating'),
   batchPickBtn: document.getElementById('batchPickBtn'),
   batchRejectBtn: document.getElementById('batchRejectBtn'),

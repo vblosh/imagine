@@ -229,29 +229,33 @@ def test_i18n_batch_action_bar_translations(server, page: Page):
     # Switch to Spanish
     page.locator("#langSelect").select_option("es")
     expect(page.locator("#batchSelectedCount")).to_have_text("2 seleccionados")
-    expect(page.locator("#batchPickBtn span")).to_have_text("Seleccionar")
-    expect(page.locator("#batchRejectBtn span")).to_have_text("Rechazar")
+    expect(page.locator('#batchRateFlagSelect option[value=""]')).to_have_text("Calificar / Marcar...")
+    expect(page.locator('#batchRateFlagSelect option[value="pick"]')).to_have_text("Seleccionar")
+    expect(page.locator('#batchRateFlagSelect option[value="reject"]')).to_have_text("Rechazar")
     expect(page.locator("#batchDeleteBtn span")).to_have_text("Eliminar")
 
     # Switch to German
     page.locator("#langSelect").select_option("de")
     expect(page.locator("#batchSelectedCount")).to_have_text("2 ausgewählt")
-    expect(page.locator("#batchPickBtn span")).to_have_text("Auswählen")
-    expect(page.locator("#batchRejectBtn span")).to_have_text("Ablehnen")
+    expect(page.locator('#batchRateFlagSelect option[value=""]')).to_have_text("Bewerten / Markieren...")
+    expect(page.locator('#batchRateFlagSelect option[value="pick"]')).to_have_text("Auswählen")
+    expect(page.locator('#batchRateFlagSelect option[value="reject"]')).to_have_text("Ablehnen")
     expect(page.locator("#batchDeleteBtn span")).to_have_text("Löschen")
 
     # Switch to Russian
     page.locator("#langSelect").select_option("ru")
     expect(page.locator("#batchSelectedCount")).to_have_text("Выбрано: 2")
-    expect(page.locator("#batchPickBtn span")).to_have_text("Выбрать")
-    expect(page.locator("#batchRejectBtn span")).to_have_text("Отклонить")
+    expect(page.locator('#batchRateFlagSelect option[value=""]')).to_have_text("Оценка / Метка...")
+    expect(page.locator('#batchRateFlagSelect option[value="pick"]')).to_have_text("Выбрать")
+    expect(page.locator('#batchRateFlagSelect option[value="reject"]')).to_have_text("Отклонить")
     expect(page.locator("#batchDeleteBtn span")).to_have_text("Удалить")
 
     # Switch to Chinese
     page.locator("#langSelect").select_option("zh")
     expect(page.locator("#batchSelectedCount")).to_have_text("已选择 2 项")
-    expect(page.locator("#batchPickBtn span")).to_have_text("挑选")
-    expect(page.locator("#batchRejectBtn span")).to_have_text("排除")
+    expect(page.locator('#batchRateFlagSelect option[value=""]')).to_have_text("评分 / 标记...")
+    expect(page.locator('#batchRateFlagSelect option[value="pick"]')).to_have_text("挑选")
+    expect(page.locator('#batchRateFlagSelect option[value="reject"]')).to_have_text("排除")
     expect(page.locator("#batchDeleteBtn span")).to_have_text("删除")
 
 

@@ -335,25 +335,22 @@
           <!-- Batch Action Bar (shown when photos are selected) -->
           <div class="batch-action-bar" id="batchActionBar" style="display: none;">
             <span class="batch-count" id="batchSelectedCount">0 selected</span>
-            <div class="batch-rating">
-              <span data-i18n="rate_label">Rate:</span>
-              <div class="star-rating batch-stars" id="batchRating">
-                <span data-star="1">★</span>
-                <span data-star="2">★</span>
-                <span data-star="3">★</span>
-                <span data-star="4">★</span>
-                <span data-star="5">★</span>
-              </div>
-            </div>
-            <button class="btn btn-sm" id="batchPickBtn" title="Pick selected" data-i18n-title="pick_selected">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> <span data-i18n="pick">Pick</span>
-            </button>
-            <button class="btn btn-sm btn-danger" id="batchRejectBtn" title="Reject selected" data-i18n-title="reject_selected">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> <span data-i18n="reject">Reject</span>
-            </button>
-            <button class="btn btn-sm btn-danger" id="batchDeleteBtn" title="Delete selected photos from catalog" data-i18n-title="delete_selected">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> <span data-i18n="delete">Delete</span>
-            </button>
+            <select id="batchRateFlagSelect" class="batch-rate-flag-select" title="Rate, Pick or Reject selected photos" data-i18n-title="rate_flag_title" aria-label="Rate or Flag" data-i18n-aria-label="rate_or_flag">
+              <option value="" disabled selected data-i18n="rate_or_flag">Rate / Flag...</option>
+              <optgroup label="Flag" data-i18n-label="flag_group">
+                <option value="pick" data-i18n="pick">Pick</option>
+                <option value="reject" data-i18n="reject">Reject</option>
+                <option value="unflag" data-i18n="unflag">Clear Flag</option>
+              </optgroup>
+              <optgroup label="Rating" data-i18n-label="rating_group">
+                <option value="rate-5">★★★★★ (5)</option>
+                <option value="rate-4">★★★★☆ (4)</option>
+                <option value="rate-3">★★★☆☆ (3)</option>
+                <option value="rate-2">★★☆☆☆ (2)</option>
+                <option value="rate-1">★☆☆☆☆ (1)</option>
+                <option value="rate-0" data-i18n="clear_rating">Clear Rating (0★)</option>
+              </optgroup>
+            </select>
             <button class="btn btn-sm" id="batchAddTagBtn" data-i18n="add_tag">Add Tag</button>
             <button class="btn btn-sm btn-danger-outline" id="batchRemoveTagBtn" data-i18n="remove_tag">Remove Tag</button>
             <button class="btn btn-sm" id="batchAutoEventBtn" data-i18n-title="auto_event_title" title="Suggest events for selected photos">
@@ -366,6 +363,9 @@
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg> <span data-i18n="move">Move</span>
             </button>
             <button class="btn btn-sm btn-secondary" id="batchClearBtn" data-i18n="deselect">Deselect</button>
+            <button class="btn btn-sm btn-danger" id="batchDeleteBtn" title="Delete selected photos from catalog" data-i18n-title="delete_selected">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> <span data-i18n="delete">Delete</span>
+            </button>
           </div>
         </div>
 

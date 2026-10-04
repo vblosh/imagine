@@ -37,7 +37,7 @@ def test_batch_action_bar_visibility_and_selection_count(server, page: Page):
 
 
 def test_batch_pick_and_reject(server, page: Page):
-    """Batch Pick and Reject updates flag on all selected cards."""
+    """Batch Pick and Reject updates flag on all selected cards via combobox."""
     page.goto(server["url"])
 
     card1 = page.locator(".photo-card", has_text="sunset.bmp")
@@ -48,19 +48,19 @@ def test_batch_pick_and_reject(server, page: Page):
     card2.click(modifiers=["Control"])
     expect(page.locator("#batchActionBar")).to_be_visible()
 
-    # Click Batch Pick
-    page.locator("#batchPickBtn").click()
+    # Select Pick
+    page.locator("#batchRateFlagSelect").select_option("pick")
     expect(card1.locator(".flag-badge.pick")).to_be_visible()
     expect(card2.locator(".flag-badge.pick")).to_be_visible()
 
-    # Click Batch Reject
-    page.locator("#batchRejectBtn").click()
+    # Select Reject
+    page.locator("#batchRateFlagSelect").select_option("reject")
     expect(card1.locator(".flag-badge.reject")).to_be_visible()
     expect(card2.locator(".flag-badge.reject")).to_be_visible()
 
 
 def test_batch_rating(server, page: Page):
-    """Batch Rating sets the star rating for all selected cards."""
+    """Batch Rating sets the star rating for all selected cards via combobox."""
     page.goto(server["url"])
 
     card1 = page.locator(".photo-card", has_text="birthday.bmp")
@@ -71,8 +71,8 @@ def test_batch_rating(server, page: Page):
     card2.click(modifiers=["Control"])
     expect(page.locator("#batchActionBar")).to_be_visible()
 
-    # Click 4th star in batch rating widget
-    page.locator('#batchRating span[data-star="4"]').click()
+    # Select 4th star in batch rating widget
+    page.locator("#batchRateFlagSelect").select_option("rate-4")
     expect(card1.locator(".card-stars span.active")).to_have_count(4)
     expect(card2.locator(".card-stars span.active")).to_have_count(4)
 
@@ -161,7 +161,7 @@ def test_batch_operations_single_http_call(server, page: Page):
     # 1. Batch Flag
     api_calls.clear()
     with page.expect_response(lambda r: "/api/media/batch-flag" in r.url and r.ok) as response_info:
-        page.locator("#batchPickBtn").click()
+        page.locator("#batchRateFlagSelect").select_option("pick")
     response_info.value
     flag_calls = [url for url in api_calls if "flag" in url]
     assert len(flag_calls) == 1
@@ -170,7 +170,7 @@ def test_batch_operations_single_http_call(server, page: Page):
     # 2. Batch Rating
     api_calls.clear()
     with page.expect_response(lambda r: "/api/media/batch-rating" in r.url and r.ok) as response_info:
-        page.locator('#batchRating span[data-star="5"]').click()
+        page.locator("#batchRateFlagSelect").select_option("rate-5")
     response_info.value
     rating_calls = [url for url in api_calls if "rating" in url]
     assert len(rating_calls) == 1
@@ -298,6 +298,57 @@ def test_batch_move_outside_photos_dir_is_rejected(server, page: Page):
     expect(page.locator(".photo-card")).to_have_count(6)
     expect(card1).to_have_class(re.compile(r"\bselected\b"))
     expect(card2).to_have_class(re.compile(r"\bselected\b"))
+
+
+def test_batch_delete_button_last_position(server, page: Page):
+    """Batch delete button is located at the last position in the batch action bar."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=["Control"])
+    expect(page.locator("#batchActionBar")).to_be_visible()
+
+    # Verify that the last element child of #batchActionBar is #batchDeleteBtn
+    is_last = page.evaluate("""() => {
+        const bar = document.getElementById('batchActionBar');
+        const lastChild = bar.lastElementChild;
+        return lastChild && lastChild.id === 'batchDeleteBtn';
+    }""")
+    assert is_last is True
+
+
+def test_batch_combobox_unflag_and_clear_rating(server, page: Page):
+    """Batch combobox can clear flag and clear rating for selected cards."""
+    page.goto(server["url"])
+
+    card1 = page.locator(".photo-card", has_text="sunset.bmp")
+    card2 = page.locator(".photo-card", has_text="birthday.bmp")
+
+    card1.click()
+    card2.click(modifiers=["Control"])
+    expect(page.locator("#batchActionBar")).to_be_visible()
+
+    # Pick cards first
+    page.locator("#batchRateFlagSelect").select_option("pick")
+    expect(card1.locator(".flag-badge.pick")).to_be_visible()
+    expect(card2.locator(".flag-badge.pick")).to_be_visible()
+
+    # Unflag via combobox
+    page.locator("#batchRateFlagSelect").select_option("unflag")
+    expect(card1.locator(".flag-badge.pick")).to_be_hidden()
+    expect(card2.locator(".flag-badge.pick")).to_be_hidden()
+
+    # Rate 3 stars
+    page.locator("#batchRateFlagSelect").select_option("rate-3")
+    expect(card1.locator(".card-stars span.active")).to_have_count(3)
+    expect(card2.locator(".card-stars span.active")).to_have_count(3)
+
+    # Clear rating via combobox (0 stars)
+    page.locator("#batchRateFlagSelect").select_option("rate-0")
+    expect(card1.locator(".card-stars span.active")).to_have_count(0)
+    expect(card2.locator(".card-stars span.active")).to_have_count(0)
+
 
 
 

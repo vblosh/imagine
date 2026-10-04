@@ -940,6 +940,9 @@ export function updateBatchBar() {
     dom.batchAddAlbumBtn.textContent = t(labelKey);
     dom.batchAddAlbumBtn.title = t(labelKey);
   }
+  if (dom.batchRateFlagSelect) {
+    dom.batchRateFlagSelect.value = '';
+  }
   if (count > 1) {
     dom.batchActionBar.style.display = 'flex';
     if (dom.batchSelectedCount) dom.batchSelectedCount.textContent = t('n_selected', { count });
