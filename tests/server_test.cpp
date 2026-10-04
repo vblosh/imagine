@@ -2605,14 +2605,15 @@ TEST(FaceServiceTest, EmptyDetectionIsSuccessfulAndInferenceFailureIsDistinct) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     ASSERT_TRUE(changedSourceJob.isOk());
-    EXPECT_EQ(changedSourceJob.value()["failed"], 1);
-    EXPECT_EQ(changedSourceJob.value()["skipped"], 0);
-    EXPECT_EQ(call.load(), 2) << "A changed original must be checked before reusing stored analysis";
+    EXPECT_EQ(changedSourceJob.value()["failed"], 0);
+    EXPECT_EQ(changedSourceJob.value()["skipped"], 1);
+    EXPECT_EQ(call.load(), 2) << "Reusable analysis should not reread the source file";
     auto changedSource = service.getMedia(emptyId);
     ASSERT_TRUE(changedSource.isOk());
-    // The failed attempt is reported by the job; the committed empty result survives.
+    // Reusable results are trusted from catalog metadata; a physical file change
+    // must be reimported before it invalidates the stored analysis.
     EXPECT_EQ(changedSource.value()["state"], "complete");
-    EXPECT_NE(changedSourceJob.value()["error"], "");
+    EXPECT_EQ(changedSourceJob.value()["error"], "");
     std::error_code ec;
     std::filesystem::remove_all(root, ec);
 }
@@ -2907,8 +2908,10 @@ TEST(FaceServiceTest, FailedChangedFileAttemptPreservesSuccessWhenOriginalReturn
         changed << "temporary changed source";
         ASSERT_TRUE(changed.good());
     }
+    // Force is required to trigger physical file read/hash verification after the file changed on disk;
+    // non-forced scans trust reusable catalog metadata.
     int64_t failedJobId = 0;
-    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, failedJobId).isOk());
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, true, failedJobId).isOk());
     auto failedJob = waitForJob(failedJobId);
     ASSERT_TRUE(failedJob.isOk());
     EXPECT_EQ(failedJob.value()["state"], "completed");
@@ -3393,6 +3396,90 @@ TEST(FaceServiceTest, LogsErrorsOnUnableToOpenFile) {
 
     logger.setConsoleEnabled(true);
     logger.setLevel(origLevel);
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(FaceServiceTest, CatalogScopeQueuesOnlyEligiblePhotos) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_catalog_scope_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string path1 = (root / "p1.jpg").string();
+    const std::string path2 = (root / "p2.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, path1).isOk());
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, path2).isOk());
+
+    auto addPhoto = [&](const std::string& p) {
+        MediaItem item;
+        item.file_path = p; item.file_name = std::filesystem::path(p).filename().string();
+        item.content_hash = metadata::Hasher::computeFileSha256(p).value();
+        item.width = image.width; item.height = image.height; item.media_type = "photo";
+        return db.insertMedia(item).value();
+    };
+    MediaId id1 = addPhoto(path1);
+    MediaId id2 = addPhoto(path2);
+
+    std::atomic<int> analyzerCalls{0};
+    faces::Service service(db, (root / "cache").string(), [](const std::string& path) { return path; },
+        [&analyzerCalls](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            ++analyzerCalls;
+            return std::vector<faces::Detection>{};
+        });
+
+    auto waitForJob = [&](int64_t jobId) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        Result<nlohmann::json> job = service.getJob(jobId);
+        while (std::chrono::steady_clock::now() < deadline) {
+            job = service.getJob(jobId);
+            if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return job;
+    };
+
+    // Pre-analyze photo 1 so it is reusable.
+    int64_t preJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {id1}, false, preJobId).isOk());
+    auto preJob = waitForJob(preJobId);
+    ASSERT_TRUE(preJob.isOk());
+    EXPECT_EQ(preJob.value()["processed"], 1);
+    EXPECT_EQ(analyzerCalls.load(), 1);
+
+    // Non-forced catalog scan should only queue photo 2 (total == 1).
+    int64_t catJobId = 0;
+    ASSERT_TRUE(service.startJob("catalog", {}, false, catJobId).isOk());
+    auto catJob = waitForJob(catJobId);
+    ASSERT_TRUE(catJob.isOk());
+    EXPECT_EQ(catJob.value()["total"], 1);
+    EXPECT_EQ(catJob.value()["processed"], 1);
+    EXPECT_EQ(catJob.value()["skipped"], 0);
+    EXPECT_EQ(catJob.value()["failed"], 0);
+    EXPECT_EQ(analyzerCalls.load(), 2);
+
+    // Subsequent non-forced catalog scan has nothing to analyze (total == 0).
+    int64_t emptyCatJobId = 0;
+    ASSERT_TRUE(service.startJob("catalog", {}, false, emptyCatJobId).isOk());
+    auto emptyCatJob = waitForJob(emptyCatJobId);
+    ASSERT_TRUE(emptyCatJob.isOk());
+    EXPECT_EQ(emptyCatJob.value()["total"], 0);
+    EXPECT_EQ(emptyCatJob.value()["processed"], 0);
+    EXPECT_EQ(emptyCatJob.value()["skipped"], 0);
+    EXPECT_EQ(analyzerCalls.load(), 2);
+
+    // Forced catalog scan queues all photos (total == 2).
+    int64_t forcedCatJobId = 0;
+    ASSERT_TRUE(service.startJob("catalog", {}, true, forcedCatJobId).isOk());
+    auto forcedCatJob = waitForJob(forcedCatJobId);
+    ASSERT_TRUE(forcedCatJob.isOk());
+    EXPECT_EQ(forcedCatJob.value()["total"], 2);
+    EXPECT_EQ(forcedCatJob.value()["processed"], 2);
+    EXPECT_EQ(analyzerCalls.load(), 4);
+
     std::error_code ec;
     std::filesystem::remove_all(root, ec);
 }

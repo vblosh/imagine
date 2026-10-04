@@ -84,12 +84,13 @@ identity. A supplied name is trimmed and limited to 100 UTF-8 bytes. A write
 with an older face revision returns HTTP 409.
 
 Job states are `running`, `cancelling`, `cancelled`, `completed`, `interrupted`,
-and `failed`. Progress counts successful photos in `processed`, unchanged
-reusable results in `skipped`, errors in `failed`, and pending work in
-`remaining`. Each photo result commits atomically. If the process stops during a
-scan, startup marks the job `interrupted`; starting another catalog scan reuses
-completed results whose source hash, model checksums, pipeline version, and
-detector settings still match.
+and `failed`. Progress counts successful photos in `processed`, force-blocked
+results and explicitly selected reusable items in `skipped`, errors in `failed`,
+and pending work in `remaining`. A non-forced catalog scan queues only photos
+without a completed analysis matching the catalog hash, model checksums,
+pipeline version, and detector settings. Each photo result commits atomically.
+If the process stops during a scan, startup marks the job `interrupted`; a later
+catalog scan selects the remaining photos that still need analysis.
 
 `GET /status` reports only the latest job. A newer successful job supersedes
 older interruptions; the latest completed job remains available when it has
@@ -135,10 +136,11 @@ dismissing a face removes it from the example set, and deleting a person clears
 their face identities. Rejected face/person pairs are excluded from suggestions.
 Embeddings stay in the local catalog and are not included in browser responses.
 Changing the detector, pipeline, or detector settings leaves completed reviewed
-results in place and marks a non-forced scan item skipped with a force-required
-error; a forced replacement may reset those reviews. Stored results are only
-reused after the current original file hash has also been checked against the
-catalog hash. A failed refresh retains the last successful analysis metadata,
+results in place and marks non-forced items skipped with a force-required error;
+a forced replacement may reset those reviews. Reuse checks catalog metadata and does not read the original file. A physical file change
+must be reimported through the catalog to invalidate stored results. Photos that
+need inference are still checked against the catalog hash before and after
+inference. A failed refresh retains the last successful analysis metadata,
 embeddings, and review decisions until a replacement succeeds; the job records
 the refresh failure separately, so restoring a prior source or model can reuse
 the compatible committed results.

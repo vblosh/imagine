@@ -1746,9 +1746,30 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
         if (active.step() == StepResult::Row) return Status::alreadyExists("A face-analysis scan is already active");
 
         if (scope == "catalog") {
-            auto mediaRes = impl_->db.conn_.prepare("SELECT id FROM media_items WHERE media_type='photo' ORDER BY id;");
+            // Keep this eligibility predicate aligned with analysisReusable().
+            auto mediaRes = impl_->db.conn_.prepare(R"SQL(
+                SELECT m.id
+                FROM media_items m
+                WHERE m.media_type='photo'
+                  AND (?=1 OR NOT EXISTS (
+                    SELECT 1 FROM face_media_analysis a
+                    WHERE a.media_id=m.id AND a.state='complete'
+                      AND a.source_hash=m.content_hash
+                      AND a.detector_checksum=? AND a.recognizer_checksum=?
+                      AND a.pipeline_version=?
+                      AND ABS(a.confidence-?)<0.000001
+                      AND ABS(a.nms_threshold-?)<0.000001
+                  ))
+                ORDER BY m.id;
+            )SQL");
             if (!mediaRes.isOk()) return mediaRes.status();
             auto media = std::move(mediaRes.value());
+            media.bind(1, force ? 1 : 0);
+            media.bind(2, impl_->runtime.detectorChecksum);
+            media.bind(3, impl_->runtime.recognizerChecksum);
+            media.bind(4, impl_->runtime.pipelineVersion);
+            media.bind(5, impl_->config.confidence);
+            media.bind(6, impl_->config.nmsThreshold);
             while (media.step() == StepResult::Row) ids.push_back(media.getInt64(0));
         } else {
             ids = requestedIds;
@@ -2620,7 +2641,6 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             MediaItem media = mediaRes.value();
             if (media.media_type != "photo") { updateProgress("skipped"); continue; }
 
-            std::string photoPath = impl_->resolver ? impl_->resolver(media.file_path) : media.file_path;
             bool reusable = false;
             bool preserveIdentities = false;
             bool requiresForce = false;
@@ -2631,14 +2651,7 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
                 requiresForce = !force && detectorRefreshRequiresForce(impl_->db.conn_, media, runtime, impl_->config);
             }
             if (reusable || requiresForce) {
-                auto hashBefore = metadata::Hasher::computeFileSha256(photoPath);
-                if (!hashBefore.isOk() || hashBefore.value() != media.content_hash) {
-                    const std::string message = hashBefore.isOk()
-                        ? "Photo file changed since it was cataloged; reimport it before face analysis"
-                        : hashBefore.status().message();
-                    IMAGINE_LOG_ERROR("Face scan unable to verify/open photo file for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + message);
-                    recordFailure(mediaId, media, media, message);
-                } else if (reusable) {
+                if (reusable) {
                     updateProgress("skipped");
                 } else {
                     updateProgress("skipped", "Detector or analysis settings changed; use force to replace reviewed face results");
@@ -2647,6 +2660,7 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
                 continue;
             }
 
+            std::string photoPath = impl_->resolver ? impl_->resolver(media.file_path) : media.file_path;
             Result<EncodedSource> source = [&]() -> Result<EncodedSource> {
                 if (prefetchedSource && prefetchedIndex == index) {
                     auto ready = std::move(*prefetchedSource);
