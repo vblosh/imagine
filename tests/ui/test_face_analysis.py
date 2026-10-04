@@ -502,6 +502,7 @@ def test_group_acceptance_and_shared_selected_face_controls(server, page: Page):
     _assert_overlay_matches_image(page, "loupeImg", "loupeFaceOverlay")
     page.locator("#loupeCloseBtn").click()
     _open_existing_grid(page)
+    page.locator("#faceGridShowNamed").check()
     expect(page.locator("#faceGridList .face-grid-card")).to_have_count(2)
     expect(page.locator("#faceGridPagination")).to_be_visible()
     expect(page.locator("#faceGridRetryBtn")).to_be_hidden()
@@ -589,6 +590,7 @@ def test_accept_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
     suggestion = [dict(tag_id=alice["id"], name="Alice", score=.9)]
     api.faces = {81: _face(81, media_id, suggestion), 82: _face(82, media_id, suggestion)}
     _open_existing_grid(page)
+    page.locator("#faceGridShowNamed").check()
     group = page.locator(".face-grid-group").filter(has=page.locator('[data-face-id="81"]'))
     page.evaluate("window.__holdFaceMetadata = true")
     group.locator("[data-face-group-accept]").click()
@@ -704,8 +706,14 @@ def test_named_unnamed_filters_selection_pagination_and_dismissed(server, page: 
     api.faces[2].update(person_tag_id=99, person_name="Named person", dismissed=True)
     api.faces[3]["suggestions"] = [dict(tag_id=99, name="Named person", score=.9)]
     _open_existing_grid(page)
-    expect(page.locator("#faceGridShowNamed")).to_be_checked()
+    expect(page.locator("#faceGridShowNamed")).not_to_be_checked()
     expect(page.locator("#faceGridShowUnnamed")).to_be_checked()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_have_count(0)
+    expect(page.locator('.face-grid-card[data-face-id="3"]')).to_be_visible()
+    page.locator("#faceGridSelectAllBtn").click()
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("1")
+    page.locator("#faceGridShowNamed").check()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_be_visible()
     page.locator("#faceGridSelectAllBtn").click()
     expect(page.locator("#faceGridSelectedCount")).to_contain_text("2")
     page.locator("#faceGridShowNamed").uncheck()
@@ -742,6 +750,7 @@ def test_confirmed_people_filter_is_populated_on_open_and_matches_confirmed_iden
     }
     api.faces[1].update(person_tag_id=alice["id"], person_name="Alice")
     _open_existing_grid(page)
+    page.locator("#faceGridShowNamed").check()
 
     person_filter = page.locator("#faceGridConfirmedPersonFilter")
     expect(person_filter.locator(f'option[value="{alice["id"]}"]')).to_have_count(1)
@@ -792,6 +801,7 @@ def test_dismissed_group_restore_is_labeled_and_limited_to_visible_faces(server,
     api.faces[1].update(person_tag_id=98, person_name="Alice", dismissed=True)
     api.faces[2].update(dismissed=True)
     _open_existing_grid(page)
+    page.locator("#faceGridShowNamed").check()
     expect(page.locator("#faceGridEmpty")).to_be_visible()
 
     page.locator("#faceGridIncludeDismissed").check()
@@ -1050,6 +1060,7 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     assert any(query.get("limit") == ["1"] and query.get("offset") == ["0"] for query in refreshed_queries)
 
     media_queries.clear()
+    page.locator("#faceGridShowNamed").check()
     page.locator("#faceGridConfirmedPersonFilter").select_option(str(alice_id))
     face_card = page.locator(f'.face-grid-card[data-face-id="{face_id}"]')
     expect(face_card).to_be_visible()
@@ -1174,3 +1185,45 @@ def test_shift_select_range_after_scrolling_grid(server, page: Page):
     expect(card30).to_be_visible()
     card30.click(modifiers=["Shift"])
     expect(page.locator("#faceGridSelectedCount")).to_contain_text("30")
+
+
+def test_review_faces_dialog_starts_with_only_show_unnamed_selected(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {
+        1: _face(1, media_id),
+        2: _face(2, media_id),
+    }
+    api.faces[1].update(person_tag_id=99, person_name="Named person")
+
+    # Open from People tab 'Review faces' button
+    page.locator('.tab-btn[data-tab="people"]').click()
+    expect(page.locator("#facePeopleActions")).to_be_visible()
+    review_btn = page.locator("#faceReviewBtn")
+    expect(review_btn).to_be_visible()
+    review_btn.click()
+
+    # Dialog starts with only show unnamed selected
+    expect(page.locator("#faceGridModal")).to_be_visible()
+    expect(page.locator("#faceGridShowNamed")).not_to_be_checked()
+    expect(page.locator("#faceGridShowUnnamed")).to_be_checked()
+    expect(page.locator("#faceGridIncludeDismissed")).not_to_be_checked()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_have_count(0)
+    expect(page.locator('.face-grid-card[data-face-id="2"]')).to_be_visible()
+
+    # User toggles Show Named, then closes dialog
+    page.locator("#faceGridShowNamed").check()
+    expect(page.locator("#faceGridShowNamed")).to_be_checked()
+    page.locator("#faceGridCloseBtn").click()
+    expect(page.locator("#faceGridModal")).to_be_hidden()
+
+    # Reopening 'Review faces' dialog resets to only show unnamed selected
+    review_btn.click()
+    expect(page.locator("#faceGridModal")).to_be_visible()
+    expect(page.locator("#faceGridShowNamed")).not_to_be_checked()
+    expect(page.locator("#faceGridShowUnnamed")).to_be_checked()
+    expect(page.locator("#faceGridIncludeDismissed")).not_to_be_checked()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_have_count(0)
+    expect(page.locator('.face-grid-card[data-face-id="2"]')).to_be_visible()
+

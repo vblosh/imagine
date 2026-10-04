@@ -741,7 +741,7 @@ function updateFaceGridCard(card, face, groupKey, { stale = false, index = null 
 }
 
 function faceMatchesGridFilters(face) {
-  const showNamed = byId('faceGridShowNamed')?.checked ?? true;
+  const showNamed = byId('faceGridShowNamed')?.checked ?? false;
   const showUnnamed = byId('faceGridShowUnnamed')?.checked ?? true;
   const confirmedPersonId = byId('faceGridConfirmedPersonFilter')?.value || '';
   if (face.dismissed && !Boolean(byId('faceGridIncludeDismissed')?.checked)) return false;
@@ -1110,7 +1110,7 @@ function updateFaceGridLoading(loading) {
 
 function currentGridQuery(jobId = gridJobId) {
   const query = {
-    show_named: Boolean(byId('faceGridShowNamed')?.checked ?? true),
+    show_named: Boolean(byId('faceGridShowNamed')?.checked ?? false),
     show_unnamed: Boolean(byId('faceGridShowUnnamed')?.checked ?? true),
     include_dismissed: Boolean(byId('faceGridIncludeDismissed')?.checked ?? false)
   };
@@ -1350,7 +1350,7 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
   }
 }
 
-function openFaceGrid({ jobId = null, includeDismissed = false, title = null } = {}) {
+function openFaceGrid({ jobId = null, includeDismissed = false, showNamed = false, showUnnamed = true, title = null } = {}) {
   const modal = byId('faceGridModal');
   if (!modal) return;
   if (modal.style.display !== 'flex') gridModalReturnFocus = document.activeElement;
@@ -1370,6 +1370,10 @@ function openFaceGrid({ jobId = null, includeDismissed = false, title = null } =
   gridRetainedCardsById.clear();
   gridRetainedGroupKey = '';
   gridRetainedGroupFaceCount = 0;
+  const showNamedToggle = byId('faceGridShowNamed');
+  if (showNamedToggle) showNamedToggle.checked = showNamed;
+  const showUnnamedToggle = byId('faceGridShowUnnamed');
+  if (showUnnamedToggle) showUnnamedToggle.checked = showUnnamed;
   const includeDismissedToggle = byId('faceGridIncludeDismissed');
   if (includeDismissedToggle) includeDismissedToggle.checked = includeDismissed;
   const confirmedPersonFilter = byId('faceGridConfirmedPersonFilter');
