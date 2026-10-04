@@ -288,15 +288,20 @@ void ApiRouter::initFromEnvironment() {
 ApiRouter::ApiRouter(core::Catalog& catalog)
     : catalog_(&catalog) {
     initFromEnvironment();
+    faceService_ = std::make_unique<faces::Service>(this->db(), this->cache().cacheDir(),
+        [this](const std::string& path) { return resolvePhotoPath(path); });
 }
 
 ApiRouter::ApiRouter(db::CatalogDb& db, thumbnail::Cache& cache)
     : db_(&db), cache_(&cache) {
     initFromEnvironment();
+    faceService_ = std::make_unique<faces::Service>(this->db(), this->cache().cacheDir(),
+        [this](const std::string& path) { return resolvePhotoPath(path); });
 }
 
 ApiRouter::~ApiRouter() {
     stopImport();
+    faceService_.reset();
 }
 
 void ApiRouter::setApiToken(std::string token) {
@@ -379,6 +384,7 @@ void ApiRouter::registerRoutes(httplib::Server& server) {
     registerFolderRoutes(server);
     registerImportRoutes(server);
     registerGeocodeRoutes(server);
+    registerFaceRoutes(server);
 }
 
 void ApiRouter::registerCorsHandler(httplib::Server& server) {
@@ -2816,6 +2822,304 @@ void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
         } catch (const std::exception& ex) {
             sendError(res, std::string("Geocoding failed: ") + ex.what(), 502);
         }
+    });
+}
+
+void ApiRouter::registerFaceRoutes(httplib::Server& server) {
+    server.Get("/api/faces/status", [this](const httplib::Request&, httplib::Response& res) {
+        sendJson(res, faceService_->status());
+    });
+
+    server.Post("/api/faces/jobs", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            const auto body = nlohmann::json::parse(req.body);
+            if (!body.is_object() || !body.contains("scope") || !body["scope"].is_string()) {
+                sendError(res, "scope must be selected or catalog", 400);
+                return;
+            }
+            std::string scope = body["scope"].get<std::string>();
+            if (scope == "catalog" && body.contains("media_ids")) {
+                sendError(res, "media_ids may only be supplied with selected scope", 400);
+                return;
+            }
+            bool force = false;
+            if (body.contains("force")) {
+                if (!body["force"].is_boolean()) { sendError(res, "force must be a boolean", 400); return; }
+                force = body["force"].get<bool>();
+            }
+            std::vector<MediaId> ids;
+            if (body.contains("media_ids")) {
+                if (!body["media_ids"].is_array()) { sendError(res, "media_ids must be an array", 400); return; }
+                for (const auto& value : body["media_ids"]) {
+                    if (!value.is_number_integer()) { sendError(res, "media_ids must contain integer IDs", 400); return; }
+                    ids.push_back(value.get<MediaId>());
+                }
+            }
+            int64_t jobId = 0;
+            Status status = faceService_->startJob(scope, ids, force, jobId);
+            if (!status.isOk()) {
+                if (status.code() == StatusCode::IoError) sendError(res, status.message(), 503);
+                else sendStatusError(res, status);
+                return;
+            }
+            auto job = faceService_->getJob(jobId);
+            if (!job.isOk()) { sendStatusError(res, job.status()); return; }
+            sendJson(res, job.value(), 202);
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what(), 400);
+        }
+    });
+
+    server.Get(R"(/api/faces/jobs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto result = faceService_->getJob(std::stoll(req.matches[1]));
+            if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+            sendJson(res, result.value());
+        } catch (...) { sendError(res, "Invalid job ID", 400); }
+    });
+
+    server.Post(R"(/api/faces/jobs/(\d+)/cancel)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            Status status = faceService_->cancelJob(std::stoll(req.matches[1]));
+            if (!status.isOk()) { sendStatusError(res, status); return; }
+            auto job = faceService_->getJob(std::stoll(req.matches[1]));
+            if (!job.isOk()) { sendStatusError(res, job.status()); return; }
+            sendJson(res, job.value());
+        } catch (...) { sendError(res, "Invalid job ID", 400); }
+    });
+
+    server.Get(R"(/api/faces/media/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        try {
+            auto result = faceService_->getMedia(std::stoll(req.matches[1]));
+            if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+            sendJson(res, result.value());
+        } catch (...) { sendError(res, "Invalid media ID", 400); }
+    });
+
+    server.Get("/api/faces/review", [this](const httplib::Request& req, httplib::Response& res) {
+        auto parse = [&](const char* key, int fallback) -> std::optional<int> {
+            if (!req.has_param(key)) return fallback;
+            try {
+                std::string value = req.get_param_value(key);
+                size_t used = 0;
+                int parsed = std::stoi(value, &used);
+                if (used != value.size()) return std::nullopt;
+                return parsed;
+            } catch (...) { return std::nullopt; }
+        };
+        auto offset = parse("offset", 0);
+        auto limit = parse("limit", 50);
+        if (!offset || !limit) { sendError(res, "offset and limit must be integers", 400); return; }
+        auto result = faceService_->getReview(*offset, *limit);
+        if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+        sendJson(res, result.value());
+    });
+
+    server.Get("/api/faces/grid", [this](const httplib::Request& req, httplib::Response& res) {
+        auto parseInteger = [&](const char* key, int fallback) -> std::optional<int> {
+            if (!req.has_param(key)) return fallback;
+            try {
+                std::string value = req.get_param_value(key);
+                size_t used = 0;
+                int parsed = std::stoi(value, &used);
+                if (used != value.size()) return std::nullopt;
+                return parsed;
+            } catch (...) { return std::nullopt; }
+        };
+        auto offset = parseInteger("offset", 0);
+        auto limit = parseInteger("limit", 200);
+        if (!offset || !limit) { sendError(res, "offset and limit must be integers", 400); return; }
+
+        std::optional<int64_t> jobId;
+        if (req.has_param("job_id")) {
+            try {
+                std::string value = req.get_param_value("job_id");
+                size_t used = 0;
+                int64_t parsed = std::stoll(value, &used);
+                if (used != value.size() || parsed <= 0) { sendError(res, "job_id must be a positive integer", 400); return; }
+                jobId = parsed;
+            } catch (...) { sendError(res, "job_id must be a positive integer", 400); return; }
+        }
+
+        bool includeDismissed = false;
+        if (req.has_param("include_dismissed")) {
+            const std::string value = req.get_param_value("include_dismissed");
+            if (value == "true") includeDismissed = true;
+            else if (value != "false") { sendError(res, "include_dismissed must be true or false", 400); return; }
+        }
+        auto result = faceService_->getGrid(jobId, *offset, *limit, includeDismissed);
+        if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+        sendJson(res, result.value());
+    });
+
+    server.Post("/api/faces/batch", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            const auto body = nlohmann::json::parse(req.body);
+            if (!body.is_object() || !body.contains("action") || !body["action"].is_string() ||
+                !body.contains("faces") || !body["faces"].is_array()) {
+                sendError(res, "action and faces are required", 400); return;
+            }
+            const std::string action = body["action"].get<std::string>();
+            if (action != "identity" && action != "accept" && action != "dismiss") {
+                sendError(res, "action must be identity, accept, or dismiss", 400); return;
+            }
+            const auto& faces = body["faces"];
+            if (faces.empty() || faces.size() > 1000) {
+                sendError(res, "faces must contain between 1 and 1000 entries", 400); return;
+            }
+
+            struct FaceRevision { int64_t id; int64_t revision; };
+            std::vector<FaceRevision> edits;
+            edits.reserve(faces.size());
+            std::unordered_set<int64_t> uniqueIds;
+            for (const auto& face : faces) {
+                if (!face.is_object() || !face.contains("id") || !face["id"].is_number_integer() ||
+                    !face.contains("revision") || !face["revision"].is_number_integer()) {
+                    sendError(res, "each face must contain integer id and revision fields", 400); return;
+                }
+                const int64_t id = face["id"].get<int64_t>();
+                const int64_t revision = face["revision"].get<int64_t>();
+                if (id <= 0 || revision <= 0 || !uniqueIds.insert(id).second) {
+                    sendError(res, "face IDs and revisions must be positive and IDs unique", 400); return;
+                }
+                edits.push_back({id, revision});
+            }
+
+            std::optional<TagId> tagId;
+            std::optional<std::string> name;
+            bool dismissed = false;
+            if (action == "identity") {
+                const bool hasTag = body.contains("tag_id");
+                const bool hasName = body.contains("name");
+                if (hasTag == hasName) { sendError(res, "Provide exactly one of tag_id or name", 400); return; }
+                if (hasTag && !body["tag_id"].is_null()) {
+                    if (!body["tag_id"].is_number_integer() || body["tag_id"].get<int64_t>() <= 0) {
+                        sendError(res, "tag_id must be a positive integer or null", 400); return;
+                    }
+                    tagId = body["tag_id"].get<TagId>();
+                }
+                if (hasName) {
+                    if (!body["name"].is_string()) { sendError(res, "name must be a string", 400); return; }
+                    name = body["name"].get<std::string>();
+                }
+            } else if (action == "accept") {
+                if (!body.contains("tag_id") || !body["tag_id"].is_number_integer() ||
+                    body["tag_id"].get<int64_t>() <= 0) {
+                    sendError(res, "accept requires a positive tag_id", 400); return;
+                }
+                tagId = body["tag_id"].get<TagId>();
+            } else {
+                if (!body.contains("dismissed") || !body["dismissed"].is_boolean()) {
+                    sendError(res, "dismiss requires a boolean dismissed value", 400); return;
+                }
+                dismissed = body["dismissed"].get<bool>();
+            }
+
+            nlohmann::json updated = nlohmann::json::array();
+            nlohmann::json failed = nlohmann::json::array();
+            for (const auto& edit : edits) {
+                Result<nlohmann::json> result = action == "identity"
+                    ? faceService_->setIdentity(edit.id, edit.revision, tagId, name)
+                    : action == "accept"
+                        ? faceService_->acceptSuggestion(edit.id, edit.revision, *tagId)
+                        : faceService_->setDismissed(edit.id, edit.revision, dismissed);
+                if (result.isOk()) {
+                    updated.push_back(std::move(result.value()));
+                } else {
+                    const Status status = result.status();
+                    failed.push_back({{"id", edit.id}, {"status", statusToHttpCode(status)},
+                                      {"error", sanitizeUtf8(status.message())}});
+                }
+            }
+            sendJson(res, {{"updated", std::move(updated)}, {"failed", std::move(failed)}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid request: ") + ex.what(), 400);
+        }
+    });
+
+    server.Post(R"(/api/faces/(\d+)/identity)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.is_object() || !body.contains("revision") || !body["revision"].is_number_integer()) {
+                sendError(res, "revision must be a positive integer", 400); return;
+            }
+            const bool hasTag = body.contains("tag_id");
+            const bool hasName = body.contains("name");
+            if (hasTag == hasName) { sendError(res, "Provide exactly one of tag_id or name", 400); return; }
+            std::optional<TagId> tagId;
+            std::optional<std::string> name;
+            if (hasTag && !body["tag_id"].is_null()) {
+                if (!body["tag_id"].is_number_integer()) { sendError(res, "tag_id must be an integer or null", 400); return; }
+                tagId = body["tag_id"].get<TagId>();
+            }
+            if (hasName) {
+                if (!body["name"].is_string()) { sendError(res, "name must be a string", 400); return; }
+                name = body["name"].get<std::string>();
+            }
+            int64_t revision = body["revision"].get<int64_t>();
+            if (revision <= 0) { sendError(res, "revision must be positive", 400); return; }
+            auto result = faceService_->setIdentity(std::stoll(req.matches[1]), revision, tagId, name);
+            if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+            sendJson(res, result.value());
+        } catch (const std::exception& ex) { sendError(res, std::string("Invalid request: ") + ex.what(), 400); }
+    });
+
+    auto suggestionRoute = [this](const httplib::Request& req, httplib::Response& res, bool accept) {
+        if (!checkAuth(req, res)) return;
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.is_object() || !body.contains("revision") || !body["revision"].is_number_integer() ||
+                !body.contains("tag_id") || !body["tag_id"].is_number_integer()) {
+                sendError(res, "revision and tag_id must be integers", 400); return;
+            }
+            int64_t revision = body["revision"].get<int64_t>();
+            TagId tagId = body["tag_id"].get<TagId>();
+            if (revision <= 0 || tagId <= 0) { sendError(res, "revision and tag_id must be positive", 400); return; }
+            int64_t faceId = std::stoll(req.matches[1]);
+            auto result = accept ? faceService_->acceptSuggestion(faceId, revision, tagId)
+                                 : faceService_->rejectSuggestion(faceId, revision, tagId);
+            if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+            sendJson(res, result.value());
+        } catch (const std::exception& ex) { sendError(res, std::string("Invalid request: ") + ex.what(), 400); }
+    };
+    server.Post(R"(/api/faces/(\d+)/accept)", [suggestionRoute](const httplib::Request& req, httplib::Response& res) { suggestionRoute(req, res, true); });
+    server.Post(R"(/api/faces/(\d+)/reject)", [suggestionRoute](const httplib::Request& req, httplib::Response& res) { suggestionRoute(req, res, false); });
+
+    server.Post(R"(/api/faces/(\d+)/dismiss)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            if (!body.is_object() || !body.contains("revision") || !body["revision"].is_number_integer() ||
+                !body.contains("dismissed") || !body["dismissed"].is_boolean()) {
+                sendError(res, "revision and dismissed are required", 400); return;
+            }
+            int64_t revision = body["revision"].get<int64_t>();
+            if (revision <= 0) { sendError(res, "revision must be positive", 400); return; }
+            auto result = faceService_->setDismissed(std::stoll(req.matches[1]), revision, body["dismissed"].get<bool>());
+            if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+            sendJson(res, result.value());
+        } catch (const std::exception& ex) { sendError(res, std::string("Invalid request: ") + ex.what(), 400); }
+    });
+
+    server.Get(R"(/api/faces/(\d+)/crop)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!req.has_param("revision")) { sendError(res, "revision query parameter is required", 400); return; }
+        try {
+            size_t used = 0;
+            std::string value = req.get_param_value("revision");
+            int64_t revision = std::stoll(value, &used);
+            if (used != value.size() || revision <= 0) { sendError(res, "revision must be a positive integer", 400); return; }
+            auto path = faceService_->cropPath(std::stoll(req.matches[1]), revision);
+            if (!path.isOk()) { sendStatusError(res, path.status()); return; }
+            std::ifstream file(pathFromUtf8(path.value()), std::ios::binary);
+            if (!file) { sendError(res, "Face crop is unavailable", 404); return; }
+            std::string bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            res.set_content(bytes, "image/jpeg");
+            res.set_header("Cache-Control", "private, max-age=3600");
+        } catch (...) { sendError(res, "Invalid crop request", 400); }
     });
 }
 

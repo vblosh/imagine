@@ -10,6 +10,8 @@
 #include "imagine/common/types.hpp"
 #include "imagine/common/error.hpp"
 
+namespace imagine::faces { class Service; }
+
 namespace imagine::db {
 
 class CatalogDb {
@@ -86,6 +88,7 @@ public:
     Connection& connection() { return conn_; }
 
 private:
+    friend class ::imagine::faces::Service;
     MediaItem extractMediaItem(Statement& stmt);
 
     mutable std::recursive_mutex mutex_;

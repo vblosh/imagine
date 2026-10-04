@@ -209,11 +209,16 @@ export function renderInspectorContent(item) {
 
   // Mini-map
   updateInspectorMiniMap(item);
+
+  window.dispatchEvent(new CustomEvent('imagine:inspectorMediaChanged', {
+    detail: { mediaId: item.id, item }
+  }));
 }
 
 export async function updateInspector() {
   if (state.selectedIds.size === 0) {
     currentInspectorItem = null;
+    window.dispatchEvent(new CustomEvent('imagine:inspectorMediaChanged', { detail: { mediaId: null, item: null } }));
     updateInspectorAlbumActions(null);
     closeAllInlineEditors();
     if (inspectorAbortController) {

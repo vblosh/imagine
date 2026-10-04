@@ -34,7 +34,9 @@ def imagine_bin() -> str:
     """Locate and validate the compiled C++ imagine binary."""
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     bin_name = "imagine.exe" if sys.platform == "win32" else "imagine"
-    bin_path = os.path.join(repo_root, "build", bin_name)
+    bin_path = os.environ.get("IMAGINE_TEST_BIN", os.path.join(repo_root, "build", bin_name))
+    if os.environ.get("IMAGINE_TEST_BIN") and not os.path.isfile(bin_path):
+        pytest.fail(f"IMAGINE_TEST_BIN does not exist: {bin_path}")
     if not os.path.isfile(bin_path) or not os.access(bin_path, os.X_OK):
         # Trigger build if needed
         res = subprocess.run(["cmake", "--build", "build", "--target", "imagine", "-j"], cwd=repo_root)
@@ -66,6 +68,9 @@ def _clean_proc_env() -> Dict[str, str]:
     proc_env.pop("IMAGINE_PHOTOS_DIR", None)
     proc_env.pop("IMAGINE_THUMBS_DIR", None)
     proc_env.pop("IMAGINE_API_TOKEN", None)
+    proc_env.pop("IMAGINE_FACE_MODELS", None)
+    proc_env.pop("IMAGINE_FACE_DEVICE", None)
+    proc_env.pop("IMAGINE_FACE_MATCH_THRESHOLD", None)
     return proc_env
 
 

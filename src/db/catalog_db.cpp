@@ -7,6 +7,9 @@
 
 namespace imagine::db {
 
+static Status invalidateFaceAnalysis(Connection& conn, MediaId mediaId);
+static Result<bool> mediaFaceGeometryChanged(Connection& conn, const MediaItem& item);
+
 static int64_t currentUnixTime() {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()
@@ -258,6 +261,9 @@ Result<size_t> CatalogDb::insertMediaBatch(std::vector<MediaItem>& items) {
 
 Status CatalogDb::updateMedia(const MediaItem& item) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    auto geometryChangedRes = mediaFaceGeometryChanged(conn_, item);
+    if (!geometryChangedRes.isOk()) return geometryChangedRes.status();
+    Transaction tx(conn_);
     const char* sql = R"SQL(
         UPDATE media_items SET
             file_name = ?, file_size = ?, file_modified_time = ?, content_hash = ?,
@@ -317,7 +323,11 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to update media item: " + conn_.lastErrorMessage());
     }
-    return Status::ok();
+    if (geometryChangedRes.value()) {
+        Status invalidated = invalidateFaceAnalysis(conn_, item.id);
+        if (!invalidated.isOk()) return invalidated;
+    }
+    return tx.commit();
 }
 
 Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) {
@@ -349,6 +359,8 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
     size_t updatedCount = 0;
 
     for (const auto& item : items) {
+        auto geometryChangedRes = mediaFaceGeometryChanged(conn_, item);
+        if (!geometryChangedRes.isOk()) return geometryChangedRes.status();
         stmt.bind(1, item.file_name);
         stmt.bind(2, item.file_size);
         stmt.bind(3, item.file_modified_time);
@@ -392,6 +404,10 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
         }
         updatedCount++;
         stmt.reset();
+        if (geometryChangedRes.value()) {
+            Status invalidated = invalidateFaceAnalysis(conn_, item.id);
+            if (!invalidated.isOk()) return invalidated;
+        }
     }
 
     Status commitStatus = tx.commit();
@@ -742,6 +758,7 @@ Result<std::unordered_map<MediaId, std::vector<Tag>>> CatalogDb::getTagsForMedia
 
 Status CatalogDb::addTagToMedia(MediaId mediaId, TagId tagId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Transaction tx(conn_);
     auto stmtRes = conn_.prepare("INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?);");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -751,11 +768,39 @@ Status CatalogDb::addTagToMedia(MediaId mediaId, TagId tagId) {
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to add tag to media: " + conn_.lastErrorMessage());
     }
-    return Status::ok();
+    auto provenanceRes = conn_.prepare(
+        "INSERT INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,1) "
+        "ON CONFLICT(media_id,tag_id) DO UPDATE SET manual=1;");
+    if (!provenanceRes.isOk()) return provenanceRes.status();
+    auto provenance = std::move(provenanceRes.value());
+    provenance.bind(1, mediaId); provenance.bind(2, tagId);
+    if (provenance.step() != StepResult::Done) {
+        return Status::databaseError("Failed to record manual tag assignment: " + conn_.lastErrorMessage());
+    }
+    return tx.commit();
 }
 
 Status CatalogDb::removeTagFromMedia(MediaId mediaId, TagId tagId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Transaction tx(conn_);
+    auto categoryRes = conn_.prepare("SELECT category FROM tags WHERE id=?;");
+    if (!categoryRes.isOk()) return categoryRes.status();
+    auto categoryStmt = std::move(categoryRes.value()); categoryStmt.bind(1, tagId);
+    bool peopleTag = categoryStmt.step() == StepResult::Row && categoryStmt.getString(0) == "people";
+    if (peopleTag) {
+        auto rejectRes = conn_.prepare(R"SQL(
+            INSERT OR IGNORE INTO face_rejections(face_id,tag_id,rejected_at)
+            SELECT id,?,? FROM faces WHERE media_id=? AND person_tag_id=?;
+        )SQL");
+        if (!rejectRes.isOk()) return rejectRes.status();
+        auto reject = std::move(rejectRes.value()); reject.bind(1, tagId); reject.bind(2, currentUnixTime());
+        reject.bind(3, mediaId); reject.bind(4, tagId);
+        if (reject.step() != StepResult::Done) return Status::databaseError("Failed to record removed people identities: " + conn_.lastErrorMessage());
+        auto clearRes = conn_.prepare("UPDATE faces SET person_tag_id=NULL,revision=revision+1,updated_at=? WHERE media_id=? AND person_tag_id=?;");
+        if (!clearRes.isOk()) return clearRes.status();
+        auto clear = std::move(clearRes.value()); clear.bind(1, currentUnixTime()); clear.bind(2, mediaId); clear.bind(3, tagId);
+        if (clear.step() != StepResult::Done) return Status::databaseError("Failed to clear removed people identities: " + conn_.lastErrorMessage());
+    }
     auto stmtRes = conn_.prepare("DELETE FROM media_tags WHERE media_id = ? AND tag_id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -765,7 +810,52 @@ Status CatalogDb::removeTagFromMedia(MediaId mediaId, TagId tagId) {
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to remove tag from media: " + conn_.lastErrorMessage());
     }
+    auto provenanceRes = conn_.prepare("DELETE FROM media_tag_provenance WHERE media_id=? AND tag_id=?;");
+    if (!provenanceRes.isOk()) return provenanceRes.status();
+    auto provenance = std::move(provenanceRes.value()); provenance.bind(1, mediaId); provenance.bind(2, tagId);
+    if (provenance.step() != StepResult::Done) return Status::databaseError("Failed to clear tag provenance: " + conn_.lastErrorMessage());
+    return tx.commit();
+}
+
+static Status invalidateFaceAnalysis(Connection& conn, MediaId mediaId) {
+    auto tagsRes = conn.prepare("SELECT tag_id FROM media_tag_provenance WHERE media_id=? AND manual=0;");
+    if (!tagsRes.isOk()) return tagsRes.status();
+    auto tagsStmt = std::move(tagsRes.value());
+    tagsStmt.bind(1, mediaId);
+    std::vector<TagId> derivedTags;
+    while (tagsStmt.step() == StepResult::Row) derivedTags.push_back(tagsStmt.getInt64(0));
+
+    auto facesRes = conn.prepare("DELETE FROM faces WHERE media_id=?;");
+    if (!facesRes.isOk()) return facesRes.status();
+    auto faces = std::move(facesRes.value()); faces.bind(1, mediaId);
+    if (faces.step() != StepResult::Done) return Status::databaseError("Failed to invalidate faces: " + conn.lastErrorMessage());
+
+    auto analysisRes = conn.prepare("DELETE FROM face_media_analysis WHERE media_id=?;");
+    if (!analysisRes.isOk()) return analysisRes.status();
+    auto analysis = std::move(analysisRes.value()); analysis.bind(1, mediaId);
+    if (analysis.step() != StepResult::Done) return Status::databaseError("Failed to invalidate face analysis: " + conn.lastErrorMessage());
+
+    for (TagId tagId : derivedTags) {
+        auto linkRes = conn.prepare("DELETE FROM media_tags WHERE media_id=? AND tag_id=?;");
+        if (!linkRes.isOk()) return linkRes.status();
+        auto link = std::move(linkRes.value()); link.bind(1, mediaId); link.bind(2, tagId);
+        if (link.step() != StepResult::Done) return Status::databaseError("Failed to remove stale face people tag: " + conn.lastErrorMessage());
+        auto provenanceRes = conn.prepare("DELETE FROM media_tag_provenance WHERE media_id=? AND tag_id=? AND manual=0;");
+        if (!provenanceRes.isOk()) return provenanceRes.status();
+        auto provenance = std::move(provenanceRes.value()); provenance.bind(1, mediaId); provenance.bind(2, tagId);
+        if (provenance.step() != StepResult::Done) return Status::databaseError("Failed to remove stale face tag ownership: " + conn.lastErrorMessage());
+    }
     return Status::ok();
+}
+
+static Result<bool> mediaFaceGeometryChanged(Connection& conn, const MediaItem& item) {
+    auto previousRes = conn.prepare("SELECT content_hash,width,height,orientation,media_type FROM media_items WHERE id=?;");
+    if (!previousRes.isOk()) return previousRes.status();
+    auto previous = std::move(previousRes.value()); previous.bind(1, item.id);
+    if (previous.step() != StepResult::Row) return false;
+    return previous.getString(0) != item.content_hash || previous.getInt(1) != item.width ||
+           previous.getInt(2) != item.height || previous.getInt(3) != item.exif.orientation ||
+           previous.getString(4) != item.media_type;
 }
 
 Result<TagId> CatalogDb::replaceTagAssignments(
@@ -788,6 +878,11 @@ Result<TagId> CatalogDb::replaceTagAssignments(
         return Status::databaseError("Failed to clear tag assignments: " + conn_.lastErrorMessage());
     }
 
+    auto clearProvenanceRes = conn_.prepare("DELETE FROM media_tag_provenance WHERE tag_id=?;");
+    if (!clearProvenanceRes.isOk()) return clearProvenanceRes.status();
+    auto clearProvenance = std::move(clearProvenanceRes.value()); clearProvenance.bind(1, tagId);
+    if (clearProvenance.step() != StepResult::Done) return Status::databaseError("Failed to clear tag assignment provenance: " + conn_.lastErrorMessage());
+
     auto insertRes = conn_.prepare("INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?);");
     if (!insertRes.isOk()) return insertRes.status();
     auto insertStmt = std::move(insertRes.value());
@@ -798,6 +893,10 @@ Result<TagId> CatalogDb::replaceTagAssignments(
             return Status::databaseError("Failed to replace tag assignments: " + conn_.lastErrorMessage());
         }
         insertStmt.reset();
+        auto provenanceRes = conn_.prepare("INSERT INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,1);");
+        if (!provenanceRes.isOk()) return provenanceRes.status();
+        auto provenance = std::move(provenanceRes.value()); provenance.bind(1, mediaId); provenance.bind(2, tagId);
+        if (provenance.step() != StepResult::Done) return Status::databaseError("Failed to save tag assignment provenance: " + conn_.lastErrorMessage());
     }
 
     Status commitStatus = tx.commit();
@@ -807,12 +906,11 @@ Result<TagId> CatalogDb::replaceTagAssignments(
 
 Status CatalogDb::deleteTag(TagId tagId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    auto s1 = conn_.prepare("DELETE FROM media_tags WHERE tag_id = ?;");
-    if (s1.isOk()) {
-        auto stmt1 = std::move(s1.value());
-        stmt1.bind(1, tagId);
-        stmt1.step();
-    }
+    Transaction tx(conn_);
+    auto clearFacesRes = conn_.prepare("UPDATE faces SET person_tag_id=NULL,revision=revision+1,updated_at=? WHERE person_tag_id=?;");
+    if (!clearFacesRes.isOk()) return clearFacesRes.status();
+    auto clearFaces = std::move(clearFacesRes.value()); clearFaces.bind(1, currentUnixTime()); clearFaces.bind(2, tagId);
+    if (clearFaces.step() != StepResult::Done) return Status::databaseError("Failed to clear face identities for deleted tag: " + conn_.lastErrorMessage());
 
     auto stmtRes = conn_.prepare("DELETE FROM tags WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
@@ -825,7 +923,7 @@ Status CatalogDb::deleteTag(TagId tagId) {
     if (conn_.changes() == 0) {
         return Status::notFound("Tag not found: " + std::to_string(tagId));
     }
-    return Status::ok();
+    return tx.commit();
 }
 
 // --- Albums ---

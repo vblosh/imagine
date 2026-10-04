@@ -303,6 +303,9 @@
             </button>
             <span id="filterLabel" data-i18n="all_photos">All Photos</span>
             <button class="btn-link" id="clearFiltersBtn" style="display: none;" data-i18n="clear_filter">Clear Filter</button>
+            <div class="face-media-actions">
+              <button type="button" class="btn btn-secondary btn-sm" id="faceToolbarBtn" data-i18n="face_open_scan_dialog">Faces</button>
+            </div>
           </div>
 
           <!-- View Mode Switcher: Grid vs Map -->
@@ -373,6 +376,13 @@
             <span class="category-view-subtitle" id="categoryViewSubtitle">0 people</span>
           </div>
           <div class="category-view-actions">
+            <div class="face-people-actions" id="facePeopleActions" style="display: none;">
+              <button type="button" class="btn btn-secondary btn-sm" id="faceReviewBtn" aria-haspopup="dialog" aria-controls="faceGridModal">
+                <span data-i18n="face_review_button">Review faces</span>
+                <span class="face-review-count" id="faceReviewCount" aria-label="Unreviewed faces" data-i18n-aria-label="face_unreviewed_count">0</span>
+              </button>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" id="faceCategoryToolbarBtn" data-i18n="face_open_scan_dialog">Faces</button>
             <div class="category-sort-selector">
               <label for="categorySortSelect" data-i18n="sort_label">Sort:</label>
               <select id="categorySortSelect" aria-label="Sort categories" data-i18n-aria-label="sort_label">
@@ -507,6 +517,7 @@
             <!-- Selected photo preview -->
             <div class="inspector-preview" id="inspectorPreviewWrapper">
               <img id="inspectorImg" src="" alt="Photo preview">
+              <svg id="inspectorFaceOverlay" class="face-image-overlay" aria-hidden="true" hidden></svg>
               <div class="preview-overlay-btn" id="openLoupeFromInspector" title="Open Fullscreen Loupe" data-i18n-title="open_loupe">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
               </div>
@@ -726,6 +737,19 @@
                 <span data-i18n="delete_from_catalog">Delete from Catalog</span>
               </button>
             </div>
+
+            <!-- Face Detection & Recognition stays last so it does not displace photo details. -->
+            <section class="inspector-section face-inspector-section" id="inspectorFacesSection" aria-labelledby="inspectorFacesHeading">
+              <div class="inspector-section-heading-row">
+                <h4 class="section-heading" id="inspectorFacesHeading" data-i18n="face_inspector_heading">Faces</h4>
+                <label class="face-overlay-toggle" title="Show face boxes" data-i18n-title="face_overlay_toggle">
+                  <input type="checkbox" id="inspectorFaceOverlayToggle">
+                  <span data-i18n="face_overlay_toggle">Show boxes</span>
+                </label>
+              </div>
+              <div class="face-inspector-state" id="inspectorFaceState" role="status" aria-live="polite"></div>
+              <div class="face-card-list" id="inspectorFaceList"></div>
+            </section>
           </div>
         </div>
       </aside>
@@ -737,8 +761,9 @@
       <div class="loupe-content">
         <button class="loupe-btn loupe-prev" id="loupePrevBtn" title="Previous (Left Arrow)" data-i18n-title="prev_photo">&lsaquo;</button>
         <div class="loupe-image-container">
-          <div class="loupe-image-viewport" id="loupeImageViewport">
-            <img id="loupeImg" src="" alt="Fullscreen Loupe View" draggable="false">
+            <div class="loupe-image-viewport" id="loupeImageViewport">
+              <img id="loupeImg" src="" alt="Fullscreen Loupe View" draggable="false">
+              <svg id="loupeFaceOverlay" class="face-image-overlay face-loupe-overlay" aria-hidden="true" hidden></svg>
             <div class="quick-edit-container" id="quickEditContainer" style="display: none;">
               <canvas id="quickEditCanvas"></canvas>
               <div class="crop-overlay" id="cropOverlay" style="display: none;">
@@ -793,6 +818,10 @@
               <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)" data-i18n-title="pick_p">✔</button>
               <button class="flag-btn flag-reject" data-flag="-1" title="Reject (X)" data-i18n-title="reject_selected">✖</button>
             </div>
+            <label class="face-overlay-toggle face-loupe-overlay-toggle" title="Show face boxes" data-i18n-title="face_overlay_toggle">
+              <input type="checkbox" id="loupeFaceOverlayToggle">
+              <span data-i18n="face_overlay_toggle">Show boxes</span>
+            </label>
             <button class="btn btn-secondary loupe-quick-edit-btn" id="loupeQuickEditBtn" title="Quick Edit (E)" data-i18n-title="quick_edit_shortcut">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 20h9"/>
@@ -1531,9 +1560,122 @@
       </div>
     </div>
 
+    <div class="modal face-job-modal" id="faceJobModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="faceJobHeading">
+      <div class="modal-backdrop" id="faceJobBackdrop"></div>
+      <div class="modal-dialog face-job-dialog">
+        <div class="modal-header">
+          <h3 id="faceJobHeading" data-i18n="face_job_title">Face analysis</h3>
+          <button type="button" class="btn-icon-sm" id="faceJobCloseBtn" data-i18n-title="close_panel" aria-label="Close face analysis" data-i18n-aria-label="face_close_dialog">&times;</button>
+        </div>
+        <div class="modal-body face-job-body">
+          <div class="face-setup-notice" id="faceJobNotice" role="status" hidden></div>
+          <div class="face-job-state" id="faceJobState" role="status" aria-live="polite"></div>
+          <div class="face-scan-scope-wrap" id="faceScanScopeWrap">
+            <label for="faceScanScope" data-i18n="face_scan_scope_label">Analyze</label>
+            <select id="faceScanScope" aria-label="Photos to analyze" data-i18n-aria-label="face_scan_scope_label">
+              <option value="selected" id="faceSelectedScopeOption" data-i18n="face_scope_selected">Selected photos</option>
+              <option value="catalog" data-i18n="face_scope_catalog">Entire catalog</option>
+            </select>
+          </div>
+          <div class="face-job-progress-wrap" id="faceJobProgressWrap" hidden>
+            <progress id="faceJobProgress" max="100" value="0" aria-label="Face analysis progress" data-i18n-aria-label="face_progress_label"></progress>
+            <div class="face-job-counts" id="faceJobCounts"></div>
+          </div>
+          <label class="face-force-option" id="faceForceOption">
+            <input type="checkbox" id="faceForceReanalysis">
+            <span data-i18n="face_force_reanalysis">Reanalyze and reset face reviews</span>
+          </label>
+          <div class="face-job-error" id="faceJobError" role="alert" hidden></div>
+        </div>
+        <div class="modal-footer face-job-footer">
+          <button type="button" class="btn btn-secondary face-view-faces" id="faceViewFacesBtn" data-i18n="face_view_existing">View faces</button>
+          <button type="button" class="btn btn-secondary" id="faceJobCancelBtn" data-i18n="cancel">Cancel</button>
+          <button type="button" class="btn btn-danger-outline" id="faceJobStopBtn" data-i18n="face_cancel_scan" hidden>Cancel scan</button>
+          <button type="button" class="btn btn-secondary" id="faceJobRetryBtn" data-i18n="face_retry_scan" hidden>Retry remaining</button>
+          <button type="button" class="btn btn-primary" id="faceJobStartBtn" data-i18n="face_start_scan">Start scan</button>
+          <button type="button" class="btn btn-secondary" id="faceJobDoneBtn" data-i18n="close" hidden>Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal face-force-modal" id="faceForceWarningModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="faceForceWarningHeading">
+      <div class="modal-backdrop" id="faceForceWarningBackdrop"></div>
+      <div class="modal-dialog face-force-dialog">
+        <div class="modal-header"><h3 id="faceForceWarningHeading" data-i18n="face_force_title">Reset face reviews?</h3></div>
+        <div class="modal-body"><p class="face-force-warning" data-i18n="face_force_warning">Reanalysis clears face names and review decisions for the photos in this scan.</p></div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="faceForceCancelBtn" data-i18n="cancel">Cancel</button>
+          <button type="button" class="btn btn-danger" id="faceForceConfirmBtn" data-i18n="face_force_confirm">Reanalyze</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal face-grid-modal" id="faceGridModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="faceGridHeading">
+      <div class="modal-backdrop" id="faceGridBackdrop"></div>
+      <div class="modal-dialog face-grid-dialog">
+        <div class="modal-header">
+          <div><h3 id="faceGridHeading" data-i18n="face_grid_title">Review faces</h3><div class="face-grid-subtitle" id="faceGridSubtitle"></div></div>
+          <button type="button" class="btn-icon-sm" id="faceGridCloseBtn" data-i18n-title="close_panel" aria-label="Close face review" data-i18n-aria-label="face_close_dialog">&times;</button>
+        </div>
+        <div class="face-grid-toolbar">
+          <div class="face-grid-job-issue" id="faceGridJobIssue" role="status" aria-live="polite" hidden>
+            <span id="faceGridJobIssueText"></span>
+            <button type="button" class="btn btn-secondary btn-sm" id="faceGridJobRetryBtn" data-i18n="face_retry_scan">Retry scan</button>
+          </div>
+          <div class="face-grid-person-filter">
+            <label for="faceGridConfirmedPersonFilter" data-i18n="face_grid_person_filter">Confirmed person</label>
+            <select id="faceGridConfirmedPersonFilter">
+              <option value="" data-i18n="face_grid_all_confirmed_people">All confirmed people</option>
+            </select>
+          </div>
+          <span id="faceGridCount" class="face-grid-count" aria-live="polite"></span>
+          <button type="button" class="btn btn-secondary btn-sm" id="faceGridSelectAllBtn" data-i18n="face_grid_select_all">Select all loaded faces</button>
+          <div class="face-grid-filters" role="group" aria-labelledby="faceGridShowLabel">
+            <span id="faceGridShowLabel" data-i18n="face_grid_show_label">Show</span>
+            <label class="face-grid-dismiss-toggle"><input type="checkbox" id="faceGridShowNamed" checked><span data-i18n="face_grid_show_named">Named</span></label>
+            <label class="face-grid-dismiss-toggle"><input type="checkbox" id="faceGridShowUnnamed" checked><span data-i18n="face_grid_show_unnamed">Unnamed</span></label>
+            <label class="face-grid-dismiss-toggle"><input type="checkbox" id="faceGridIncludeDismissed"><span data-i18n="face_grid_show_dismissed">Dismissed</span></label>
+          </div>
+        </div>
+        <div class="modal-body face-grid-body">
+          <div class="face-grid-main">
+            <div class="face-setup-notice" id="faceGridNotice" role="status" hidden></div>
+            <div class="face-grid-state" id="faceGridState" role="status" aria-live="polite"></div>
+            <div class="face-grid-empty" id="faceGridEmpty" role="status" hidden></div>
+            <div class="face-grid-list" id="faceGridList"></div>
+            <div class="face-grid-pagination" id="faceGridPagination" hidden>
+              <button type="button" class="btn btn-secondary btn-sm" id="faceGridPrevBtn" data-i18n="face_review_previous">Previous</button>
+              <span id="faceGridPageStatus" aria-live="polite"></span>
+              <button type="button" class="btn btn-secondary btn-sm" id="faceGridNextBtn" data-i18n="face_review_next">Next</button>
+            </div>
+          </div>
+          <aside class="face-grid-sidepanel" id="faceGridSidePanel" aria-labelledby="faceGridActionsHeading">
+            <h4 id="faceGridActionsHeading" data-i18n="face_grid_actions">Selected faces</h4>
+            <div class="face-grid-selected-count" id="faceGridSelectedCount" aria-live="polite"></div>
+            <div class="face-grid-action-scope" id="faceGridActionScope"></div>
+            <label for="faceGridPersonSelect" data-i18n="face_choose_person">Choose a person</label>
+            <select id="faceGridPersonSelect"><option value="" data-i18n="face_choose_person">Choose a person</option></select>
+            <label for="faceGridNameInput" data-i18n="face_name_person">Name this face</label>
+            <input id="faceGridNameInput" type="text" maxlength="100" placeholder="Enter a person’s name" data-i18n-placeholder="face_name_placeholder">
+            <button type="button" class="btn btn-primary" id="faceGridApplyNameBtn" data-i18n="face_grid_save_identity">Save identity</button>
+            <button type="button" class="btn btn-secondary" id="faceGridAcceptBtn" data-i18n="face_grid_accept_selected" disabled>Accept suggestion</button>
+            <button type="button" class="btn btn-secondary" id="faceGridClearBtn" data-i18n="face_clear_identity" disabled>Clear identity</button>
+            <button type="button" class="btn btn-secondary" id="faceGridRejectBtn" data-i18n="face_reject" disabled>Reject suggestion</button>
+            <button type="button" class="btn btn-secondary" id="faceGridDismissBtn" data-i18n="face_grid_dismiss_selected" disabled>Dismiss selected</button>
+            <button type="button" class="btn btn-secondary" id="faceGridRestoreBtn" data-i18n="face_grid_restore_selected" disabled>Restore selected</button>
+          </aside>
+        </div>
+        <div class="modal-footer face-grid-footer">
+          <div class="face-grid-action-error" id="faceGridActionError" role="alert" hidden></div>
+          <button type="button" class="btn btn-secondary" id="faceGridRetryBtn" data-i18n="retry" hidden>Retry</button>
+          <button type="button" class="btn btn-secondary" id="faceGridDoneBtn" data-i18n="close">Close</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <script src="vendor/leaflet/leaflet.js"></script>
-  <script type="module" src="app.js?v=18"></script>
+  <script type="module" src="app.js?v=20"></script>
 </body>
 </html>

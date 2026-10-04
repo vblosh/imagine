@@ -6,6 +6,7 @@
 #include "imagine/common/error.hpp"
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/thumbnail/cache.hpp"
+#include "imagine/faces/service.hpp"
 
 #include <thread>
 #include <mutex>
@@ -56,6 +57,7 @@ private:
     void registerFolderRoutes(httplib::Server& server);
     void registerImportRoutes(httplib::Server& server);
     void registerGeocodeRoutes(httplib::Server& server);
+    void registerFaceRoutes(httplib::Server& server);
 
     bool checkAuth(const httplib::Request& req, httplib::Response& res) const;
     void initFromEnvironment();
@@ -64,6 +66,7 @@ private:
     core::Catalog* catalog_{nullptr};
     db::CatalogDb* db_{nullptr};
     thumbnail::Cache* cache_{nullptr};
+    std::unique_ptr<faces::Service> faceService_;
 
     std::jthread importThread_;
     mutable std::mutex importThreadMutex_;

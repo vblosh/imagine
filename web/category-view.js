@@ -298,6 +298,9 @@ export function renderCategoryView(category) {
   const config = getCategoryConfig(cat);
   const isAlbum = cat === 'albums';
 
+  const facePeopleActions = document.getElementById('facePeopleActions');
+  if (facePeopleActions) facePeopleActions.style.display = cat === 'people' ? 'flex' : 'none';
+
   // Switch display containers and toolbars
   dom.categoryViewContainer.style.display = 'flex';
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'none';

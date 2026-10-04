@@ -110,40 +110,37 @@ TEST_F(ThumbnailTest, ResizeAspectAndBoundaries) {
 }
 
 TEST_F(ThumbnailTest, RotateAllOrientations) {
-    auto loadRes = Generator::loadImage(testImgPath);
-    ASSERT_TRUE(loadRes.isOk());
-    const auto& img = loadRes.value();
+    ImageBuffer img;
+    img.width = 2;
+    img.height = 3;
+    img.channels = 1;
+    img.data = {1, 2, 3, 4, 5, 6};
 
-    // Orientation <= 1: unchanged
-    EXPECT_EQ(Generator::rotate(img, 1).width, 400);
-    EXPECT_EQ(Generator::rotate(img, 0).width, 400);
+    const std::vector<std::vector<uint8_t>> expected = {
+        {},
+        {1, 2, 3, 4, 5, 6}, // 1: identity
+        {2, 1, 4, 3, 6, 5}, // 2: mirror horizontal
+        {6, 5, 4, 3, 2, 1}, // 3: rotate 180
+        {5, 6, 3, 4, 1, 2}, // 4: mirror vertical
+        {1, 3, 5, 2, 4, 6}, // 5: transpose
+        {5, 3, 1, 6, 4, 2}, // 6: rotate 90 CW
+        {6, 4, 2, 5, 3, 1}, // 7: transverse
+        {2, 4, 6, 1, 3, 5}, // 8: rotate 270 CW
+    };
 
-    // Orientation > 8: unchanged
-    EXPECT_EQ(Generator::rotate(img, 9).width, 400);
+    for (int orientation = 1; orientation <= 8; ++orientation) {
+        const auto oriented = Generator::rotate(img, orientation);
+        const bool swapsDimensions = orientation >= 5;
+        EXPECT_EQ(oriented.width, swapsDimensions ? 3 : 2) << "orientation " << orientation;
+        EXPECT_EQ(oriented.height, swapsDimensions ? 2 : 3) << "orientation " << orientation;
+        EXPECT_EQ(oriented.data, expected[static_cast<size_t>(orientation)]) << "orientation " << orientation;
+    }
 
-    // Empty buffer: unchanged
+    EXPECT_EQ(Generator::rotate(img, 0).data, img.data);
+    EXPECT_EQ(Generator::rotate(img, 9).data, img.data);
+
     ImageBuffer emptyBuf;
     EXPECT_TRUE(Generator::rotate(emptyBuf, 6).data.empty());
-
-    // Orientation 3: 180 degrees CW -> dimensions unchanged (400x200)
-    auto rot3 = Generator::rotate(img, 3);
-    EXPECT_EQ(rot3.width, 400);
-    EXPECT_EQ(rot3.height, 200);
-
-    // Orientation 6: 90 degrees CW -> 400x200 becomes 200x400
-    auto rot6 = Generator::rotate(img, 6);
-    EXPECT_EQ(rot6.width, 200);
-    EXPECT_EQ(rot6.height, 400);
-
-    // Orientation 8: 270 degrees CW (90 CCW) -> 400x200 becomes 200x400
-    auto rot8 = Generator::rotate(img, 8);
-    EXPECT_EQ(rot8.width, 200);
-    EXPECT_EQ(rot8.height, 400);
-
-    // Other unhandled orientations (e.g. 2, 4, 5, 7): returns src
-    auto rot2 = Generator::rotate(img, 2);
-    EXPECT_EQ(rot2.width, 400);
-    EXPECT_EQ(rot2.height, 200);
 }
 
 TEST_F(ThumbnailTest, RotateAngle) {

@@ -5,10 +5,16 @@
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/thumbnail/cache.hpp"
 #include "imagine/thumbnail/generator.hpp"
+#include "imagine/faces/service.hpp"
+#include "imagine/metadata/hasher.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <future>
 
 using namespace imagine;
 using namespace imagine::core;
@@ -1398,6 +1404,1335 @@ TEST_F(ServerTest, ApiTokenAuthentication) {
 
     // Reset token for subsequent tests
     server_->setApiToken("");
+}
+
+TEST_F(ServerTest, FaceRoutesValidateRequestsAndProtectWrites) {
+    httplib::Client client("127.0.0.1", port_);
+    auto statusRes = client.Get("/api/faces/status");
+    ASSERT_TRUE(statusRes);
+    ASSERT_EQ(statusRes->status, 200);
+    const auto status = nlohmann::json::parse(statusRes->body);
+    EXPECT_TRUE(status.contains("built"));
+    EXPECT_TRUE(status.contains("ready"));
+    EXPECT_TRUE(status.contains("config"));
+    EXPECT_TRUE(status.contains("runtime"));
+    auto badReviewLimit = client.Get("/api/faces/review?limit=201");
+    ASSERT_TRUE(badReviewLimit);
+    EXPECT_EQ(badReviewLimit->status, 400);
+    auto zeroJob = client.Get("/api/faces/jobs/0");
+    ASSERT_TRUE(zeroJob);
+    EXPECT_EQ(zeroJob->status, 400);
+    auto zeroMedia = client.Get("/api/faces/media/0");
+    ASSERT_TRUE(zeroMedia);
+    EXPECT_EQ(zeroMedia->status, 400);
+    auto unknownJob = client.Get("/api/faces/jobs/999999");
+    ASSERT_TRUE(unknownJob);
+    EXPECT_EQ(unknownJob->status, 404);
+
+    MediaItem media;
+    media.file_path = (testDir_ / "missing-face-photo.jpg").string();
+    media.file_name = "missing-face-photo.jpg";
+    media.content_hash = "face-api-test-hash";
+    media.width = 32;
+    media.height = 24;
+    const MediaId mediaId = catalog_->db().insertMedia(media).value();
+
+    server_->setApiToken("face-token");
+    const auto body = nlohmann::json{{"scope", "selected"}, {"media_ids", {mediaId}}}.dump();
+    auto unauth = client.Post("/api/faces/jobs", body, "application/json");
+    ASSERT_TRUE(unauth);
+    EXPECT_EQ(unauth->status, 401);
+
+    httplib::Headers auth = {{"Authorization", "Bearer face-token"}};
+    auto zeroId = client.Post("/api/faces/jobs", auth,
+        nlohmann::json{{"scope", "selected"}, {"media_ids", {0}}}.dump(), "application/json");
+    ASSERT_TRUE(zeroId);
+    EXPECT_EQ(zeroId->status, 400);
+
+    auto duplicate = client.Post("/api/faces/jobs", auth,
+        nlohmann::json{{"scope", "selected"}, {"media_ids", {mediaId, mediaId}}}.dump(), "application/json");
+    ASSERT_TRUE(duplicate);
+    EXPECT_EQ(duplicate->status, 400);
+
+    std::vector<MediaId> tooMany(1001, mediaId);
+    auto oversized = client.Post("/api/faces/jobs", auth,
+        nlohmann::json{{"scope", "selected"}, {"media_ids", tooMany}}.dump(), "application/json");
+    ASSERT_TRUE(oversized);
+    EXPECT_EQ(oversized->status, 400);
+
+    auto catalogWithIds = client.Post("/api/faces/jobs", auth,
+        nlohmann::json{{"scope", "catalog"}, {"media_ids", nlohmann::json::array()}}.dump(), "application/json");
+    ASSERT_TRUE(catalogWithIds);
+    EXPECT_EQ(catalogWithIds->status, 400);
+
+    if (!status["ready"].get<bool>()) {
+        auto unavailable = client.Post("/api/faces/jobs", auth, body, "application/json");
+        ASSERT_TRUE(unavailable);
+        EXPECT_EQ(unavailable->status, 503);
+        auto job = catalog_->db().connection().prepare("SELECT COUNT(*) FROM face_analysis_jobs;");
+        ASSERT_TRUE(job.isOk());
+        auto stmt = std::move(job.value());
+        ASSERT_EQ(stmt.step(), StepResult::Row);
+        EXPECT_EQ(stmt.getInt64(0), 0);
+    }
+
+    auto malformedRevision = client.Post("/api/faces/1/dismiss", auth,
+        R"({"revision":"old","dismissed":true})", "application/json");
+    ASSERT_TRUE(malformedRevision);
+    EXPECT_EQ(malformedRevision->status, 400);
+    server_->setApiToken("");
+}
+
+TEST_F(ServerTest, FaceIdentityRevisionsAndTagProvenance) {
+    auto addPhoto = [&](const std::string& suffix) {
+        MediaItem media;
+        media.file_path = suffix + ".jpg";
+        media.file_name = suffix + ".jpg";
+        media.content_hash = "hash-" + suffix;
+        media.width = 100;
+        media.height = 80;
+        return catalog_->db().insertMedia(media).value();
+    };
+    auto addFaceResult = [&](MediaId mediaId) {
+        auto& connection = catalog_->db().connection();
+        std::vector<int64_t> ids;
+        auto analysisRes = connection.prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,recognizer_checksum,
+                pipeline_version,detector_provider,recognizer_provider,device,confidence,nms_threshold,analyzed_at)
+            VALUES(?,'complete','test-hash',100,80,'det','rec','pipeline','cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(analysisRes.isOk());
+        if (!analysisRes.isOk()) return ids;
+        auto analysis = std::move(analysisRes.value()); analysis.bind(1, mediaId);
+        EXPECT_EQ(analysis.step(), StepResult::Done);
+        for (int i = 0; i < 2; ++i) {
+            auto faceRes = connection.prepare(R"SQL(
+                INSERT INTO faces(media_id,x,y,width,height,score,landmarks,embedding,embedding_size,created_at,updated_at)
+                VALUES(?,?,?,?,?,0.9,'[{"x":1,"y":1}]',?,512,1,1);
+            )SQL");
+            EXPECT_TRUE(faceRes.isOk());
+            if (!faceRes.isOk()) return ids;
+            auto face = std::move(faceRes.value());
+            face.bind(1, mediaId); face.bind(2, 10.0 + i * 30); face.bind(3, 12.0);
+            face.bind(4, 20.0); face.bind(5, 20.0);
+            std::array<float, 512> embedding{};
+            embedding[0] = 1.0f;
+            EXPECT_EQ(sqlite3_bind_blob(face.raw(), 6, embedding.data(), sizeof(embedding), SQLITE_TRANSIENT), SQLITE_OK);
+            EXPECT_EQ(face.step(), StepResult::Done);
+            ids.push_back(connection.lastInsertRowId());
+        }
+        return ids;
+    };
+
+    const TagId personId = catalog_->db().createOrGetTag("Rhea", "people").value();
+    const MediaId manualMedia = addPhoto("manual-face");
+    ASSERT_TRUE(catalog_->db().addTagToMedia(manualMedia, personId).isOk());
+    auto manualFaces = addFaceResult(manualMedia);
+
+    const MediaId derivedMedia = addPhoto("derived-face");
+    auto derivedFaces = addFaceResult(derivedMedia);
+
+    server_->setApiToken("face-token");
+    httplib::Headers auth = {{"Authorization", "Bearer face-token"}};
+    httplib::Client client("127.0.0.1", port_);
+
+    auto badTag = client.Post("/api/faces/" + std::to_string(manualFaces[0]) + "/identity", auth,
+        nlohmann::json{{"revision", 1}, {"tag_id", 999999}}.dump(), "application/json");
+    ASSERT_TRUE(badTag);
+    EXPECT_EQ(badTag->status, 400);
+    auto unchanged = client.Get("/api/faces/media/" + std::to_string(manualMedia));
+    ASSERT_TRUE(unchanged);
+    ASSERT_EQ(unchanged->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(unchanged->body)["faces"][0]["revision"], 1);
+
+    auto stale = client.Post("/api/faces/" + std::to_string(manualFaces[0]) + "/identity", auth,
+        nlohmann::json{{"revision", 2}, {"tag_id", personId}}.dump(), "application/json");
+    ASSERT_TRUE(stale);
+    EXPECT_EQ(stale->status, 409);
+    auto staleName = client.Post("/api/faces/" + std::to_string(manualFaces[0]) + "/identity", auth,
+        nlohmann::json{{"revision", 2}, {"name", "Rollback Candidate"}}.dump(), "application/json");
+    ASSERT_TRUE(staleName);
+    EXPECT_EQ(staleName->status, 409);
+    auto rolledBackTag = catalog_->db().connection().prepare(
+        "SELECT COUNT(*) FROM tags WHERE name='Rollback Candidate' AND category='people';");
+    ASSERT_TRUE(rolledBackTag.isOk());
+    auto rolledBackTagStmt = std::move(rolledBackTag.value());
+    ASSERT_EQ(rolledBackTagStmt.step(), StepResult::Row);
+    EXPECT_EQ(rolledBackTagStmt.getInt64(0), 0);
+    auto initialFaces = client.Get("/api/faces/media/" + std::to_string(manualMedia));
+    ASSERT_TRUE(initialFaces);
+    std::string staleCropUrl = nlohmann::json::parse(initialFaces->body)["faces"][0]["crop_url"].get<std::string>();
+
+    auto assigned = client.Post("/api/faces/" + std::to_string(manualFaces[0]) + "/identity", auth,
+        nlohmann::json{{"revision", 1}, {"tag_id", personId}}.dump(), "application/json");
+    ASSERT_TRUE(assigned);
+    ASSERT_EQ(assigned->status, 200) << assigned->body;
+    auto staleCrop = client.Get(staleCropUrl);
+    ASSERT_TRUE(staleCrop);
+    EXPECT_EQ(staleCrop->status, 409);
+    auto suggestedMedia = client.Get("/api/faces/media/" + std::to_string(manualMedia));
+    ASSERT_TRUE(suggestedMedia);
+    const auto suggestions = nlohmann::json::parse(suggestedMedia->body)["faces"][1]["suggestions"];
+    ASSERT_EQ(suggestions.size(), 1u);
+    EXPECT_EQ(suggestions[0]["tag_id"], personId);
+    auto accepted = client.Post("/api/faces/" + std::to_string(manualFaces[1]) + "/accept", auth,
+        nlohmann::json{{"revision", 1}, {"tag_id", personId}}.dump(), "application/json");
+    ASSERT_TRUE(accepted);
+    ASSERT_EQ(accepted->status, 200) << accepted->body;
+    auto rejected = client.Post("/api/faces/" + std::to_string(derivedFaces[0]) + "/reject", auth,
+        nlohmann::json{{"revision", 1}, {"tag_id", personId}}.dump(), "application/json");
+    ASSERT_TRUE(rejected);
+    ASSERT_EQ(rejected->status, 200) << rejected->body;
+    EXPECT_TRUE(nlohmann::json::parse(rejected->body)["suggestions"].empty());
+    auto reassigned = client.Post("/api/faces/" + std::to_string(derivedFaces[0]) + "/identity", auth,
+        nlohmann::json{{"revision", 2}, {"tag_id", personId}}.dump(), "application/json");
+    ASSERT_TRUE(reassigned);
+    ASSERT_EQ(reassigned->status, 200) << reassigned->body;
+    auto secondAssigned = client.Post("/api/faces/" + std::to_string(derivedFaces[1]) + "/identity", auth,
+        nlohmann::json{{"revision", 1}, {"tag_id", personId}}.dump(), "application/json");
+    ASSERT_TRUE(secondAssigned);
+    ASSERT_EQ(secondAssigned->status, 200) << secondAssigned->body;
+    ASSERT_EQ(catalog_->db().getTagsForMedia(derivedMedia).value().size(), 1u);
+    auto removed = client.Delete("/api/media/batch-tags", auth,
+        nlohmann::json{{"ids", {derivedMedia}}, {"tag_id", personId}}.dump(), "application/json");
+    ASSERT_TRUE(removed);
+    ASSERT_EQ(removed->status, 200) << removed->body;
+    EXPECT_TRUE(catalog_->db().getTagsForMedia(derivedMedia).value().empty());
+    auto mediaFaces = client.Get("/api/faces/media/" + std::to_string(derivedMedia));
+    ASSERT_TRUE(mediaFaces);
+    ASSERT_EQ(mediaFaces->status, 200);
+    auto faceRows = nlohmann::json::parse(mediaFaces->body)["faces"];
+    ASSERT_EQ(faceRows.size(), 2u);
+    for (const auto& face : faceRows) EXPECT_TRUE(face["person_tag_id"].is_null());
+    auto rejectionCount = catalog_->db().connection().prepare(
+        "SELECT COUNT(*) FROM face_rejections WHERE tag_id=? AND face_id IN (?,?);");
+    ASSERT_TRUE(rejectionCount.isOk());
+    auto rejection = std::move(rejectionCount.value()); rejection.bind(1, personId);
+    rejection.bind(2, derivedFaces[0]); rejection.bind(3, derivedFaces[1]);
+    ASSERT_EQ(rejection.step(), StepResult::Row);
+    EXPECT_EQ(rejection.getInt64(0), 2);
+
+    auto clearFirst = client.Post("/api/faces/" + std::to_string(manualFaces[0]) + "/identity", auth,
+        nlohmann::json{{"revision", 2}, {"tag_id", nullptr}}.dump(), "application/json");
+    ASSERT_TRUE(clearFirst);
+    ASSERT_EQ(clearFirst->status, 200) << clearFirst->body;
+    EXPECT_EQ(catalog_->db().getTagsForMedia(manualMedia).value().size(), 1u);
+    auto clearSecond = client.Post("/api/faces/" + std::to_string(manualFaces[1]) + "/identity", auth,
+        nlohmann::json{{"revision", 2}, {"tag_id", nullptr}}.dump(), "application/json");
+    ASSERT_TRUE(clearSecond);
+    ASSERT_EQ(clearSecond->status, 200) << clearSecond->body;
+    EXPECT_EQ(catalog_->db().getTagsForMedia(manualMedia).value().size(), 1u);
+    server_->setApiToken("");
+}
+
+TEST_F(ServerTest, FaceGridScopesByJobAndSupportsDismissedPagination) {
+    auto addPhoto = [&](const std::string& suffix) {
+        MediaItem media;
+        media.file_path = suffix + ".jpg"; media.file_name = suffix + ".jpg";
+        media.content_hash = "grid-hash-" + suffix; media.width = 100; media.height = 80;
+        return catalog_->db().insertMedia(media).value();
+    };
+    auto addAnalysis = [&](MediaId mediaId) {
+        auto& conn = catalog_->db().connection();
+        auto stmtRes = conn.prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,
+                recognizer_checksum,pipeline_version,detector_provider,recognizer_provider,device,
+                confidence,nms_threshold,analyzed_at)
+            VALUES(?,'complete','grid-source',100,80,'det','rec','grid-v1','cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return;
+        auto stmt = std::move(stmtRes.value()); stmt.bind(1, mediaId);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+    };
+    auto addFace = [&](MediaId mediaId, bool dismissed) {
+        auto stmtRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,dismissed,created_at,updated_at)
+            VALUES(?,5,5,20,20,0.9,'[]',?,1,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return int64_t{0};
+        auto stmt = std::move(stmtRes.value()); stmt.bind(1, mediaId); stmt.bind(2, dismissed ? 1 : 0);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+        return catalog_->db().connection().lastInsertRowId();
+    };
+    auto addJob = [&](const std::string& state, int total) {
+        auto stmtRes = catalog_->db().connection().prepare(
+            "INSERT INTO face_analysis_jobs(state,scope,total,processed,remaining,created_at,updated_at) "
+            "VALUES(?,'selected',?,?,0,1,1);");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return int64_t{0};
+        auto stmt = std::move(stmtRes.value()); stmt.bind(1, state); stmt.bind(2, total); stmt.bind(3, total);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+        return catalog_->db().connection().lastInsertRowId();
+    };
+
+    const MediaId firstMedia = addPhoto("grid-first");
+    const MediaId secondMedia = addPhoto("grid-second");
+    const MediaId outsideMedia = addPhoto("grid-outside");
+    for (MediaId mediaId : {firstMedia, secondMedia, outsideMedia}) addAnalysis(mediaId);
+    const int64_t firstFace = addFace(firstMedia, false);
+    const int64_t secondFace = addFace(secondMedia, true);
+    addFace(outsideMedia, false);
+    const int64_t newJobId = addJob("completed", 2);
+    auto memberRes = catalog_->db().connection().prepare(
+        "INSERT INTO face_analysis_job_media(job_id,media_id) VALUES(?,?);");
+    ASSERT_TRUE(memberRes.isOk());
+    auto member = std::move(memberRes.value());
+    member.bind(1, newJobId); member.bind(2, firstMedia); ASSERT_EQ(member.step(), StepResult::Done);
+    member.reset(); member.bind(1, newJobId); member.bind(2, secondMedia); ASSERT_EQ(member.step(), StepResult::Done);
+    const int64_t historicalJobId = addJob("interrupted", 1); // Pre-v6 jobs have no membership rows.
+
+    httplib::Client client("127.0.0.1", port_);
+    auto scoped = client.Get("/api/faces/grid?job_id=" + std::to_string(newJobId));
+    ASSERT_TRUE(scoped);
+    ASSERT_EQ(scoped->status, 200) << scoped->body;
+    const auto scopedJson = nlohmann::json::parse(scoped->body);
+    EXPECT_EQ(scopedJson["total"], 1);
+    ASSERT_EQ(scopedJson["items"].size(), 1u);
+    EXPECT_EQ(scopedJson["items"][0]["id"], firstFace);
+
+    auto includeDismissed = client.Get("/api/faces/grid?job_id=" + std::to_string(newJobId) + "&include_dismissed=true");
+    ASSERT_TRUE(includeDismissed);
+    ASSERT_EQ(includeDismissed->status, 200);
+    const auto includedJson = nlohmann::json::parse(includeDismissed->body);
+    EXPECT_EQ(includedJson["total"], 2);
+    ASSERT_EQ(includedJson["items"].size(), 2u);
+    EXPECT_EQ(includedJson["items"][1]["id"], secondFace);
+
+    auto page = client.Get("/api/faces/grid?job_id=" + std::to_string(newJobId) + "&include_dismissed=true&offset=1&limit=1");
+    ASSERT_TRUE(page);
+    ASSERT_EQ(page->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(page->body)["items"][0]["id"], secondFace);
+
+    auto historical = client.Get("/api/faces/grid?job_id=" + std::to_string(historicalJobId) + "&include_dismissed=true");
+    ASSERT_TRUE(historical);
+    ASSERT_EQ(historical->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(historical->body)["total"], 0);
+
+    auto catalog = client.Get("/api/faces/grid");
+    ASSERT_TRUE(catalog);
+    ASSERT_EQ(catalog->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(catalog->body)["total"], 2);
+    EXPECT_EQ(client.Get("/api/faces/grid?limit=1001")->status, 400);
+    EXPECT_EQ(client.Get("/api/faces/grid?offset=-1")->status, 400);
+    EXPECT_EQ(client.Get("/api/faces/grid?job_id=999999")->status, 404);
+    EXPECT_EQ(client.Get("/api/faces/grid?job_id=0")->status, 400);
+    EXPECT_EQ(client.Get("/api/faces/grid?include_dismissed=yes")->status, 400);
+}
+
+TEST_F(ServerTest, FaceBatchReviewSupportsPartialIdentityAcceptAndDismiss) {
+    auto addPhoto = [&](const std::string& suffix) {
+        MediaItem media;
+        media.file_path = suffix + ".jpg"; media.file_name = suffix + ".jpg";
+        media.content_hash = "batch-face-hash-" + suffix; media.width = 100; media.height = 80;
+        return catalog_->db().insertMedia(media).value();
+    };
+    auto addAnalysis = [&](MediaId mediaId) {
+        auto stmtRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,
+                recognizer_checksum,pipeline_version,detector_provider,recognizer_provider,device,
+                confidence,nms_threshold,analyzed_at)
+            VALUES(?,'complete','batch-source',100,80,'det','rec','batch-v1','cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return;
+        auto stmt = std::move(stmtRes.value()); stmt.bind(1, mediaId);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+    };
+    auto addFace = [&](MediaId mediaId) {
+        auto stmtRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,embedding,embedding_size,created_at,updated_at)
+            VALUES(?,10,10,20,20,0.9,'[]',?,512,1,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return int64_t{0};
+        auto stmt = std::move(stmtRes.value()); stmt.bind(1, mediaId);
+        std::array<float, 512> vector{}; vector[0] = 1.0f;
+        EXPECT_EQ(sqlite3_bind_blob(stmt.raw(), 2, vector.data(), sizeof(vector), SQLITE_TRANSIENT), SQLITE_OK);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+        return catalog_->db().connection().lastInsertRowId();
+    };
+    const MediaId firstMedia = addPhoto("batch-first");
+    const MediaId secondMedia = addPhoto("batch-second");
+    addAnalysis(firstMedia); addAnalysis(secondMedia);
+    const int64_t firstFace = addFace(firstMedia);
+    const int64_t secondFace = addFace(secondMedia);
+
+    httplib::Client client("127.0.0.1", port_);
+    auto payload = nlohmann::json{{"action", "identity"},
+        {"faces", {{{"id", firstFace}, {"revision", 1}}, {{"id", secondFace}, {"revision", 2}}}},
+        {"name", "Batch Person"}}.dump();
+    server_->setApiToken("face-batch-token");
+    auto unauthenticated = client.Post("/api/faces/batch", payload, "application/json");
+    ASSERT_TRUE(unauthenticated);
+    EXPECT_EQ(unauthenticated->status, 401);
+    httplib::Headers auth = {{"Authorization", "Bearer face-batch-token"}};
+    auto duplicate = client.Post("/api/faces/batch", auth,
+        nlohmann::json{{"action", "dismiss"}, {"dismissed", true},
+            {"faces", {{{"id", firstFace}, {"revision", 1}}, {{"id", firstFace}, {"revision", 1}}}}}.dump(),
+        "application/json");
+    ASSERT_TRUE(duplicate);
+    EXPECT_EQ(duplicate->status, 400);
+
+    auto identity = client.Post("/api/faces/batch", auth, payload, "application/json");
+    ASSERT_TRUE(identity);
+    ASSERT_EQ(identity->status, 200) << identity->body;
+    const auto identityJson = nlohmann::json::parse(identity->body);
+    ASSERT_EQ(identityJson["updated"].size(), 1u);
+    ASSERT_EQ(identityJson["failed"].size(), 1u);
+    EXPECT_EQ(identityJson["updated"][0]["person_name"], "Batch Person");
+    EXPECT_EQ(identityJson["failed"][0]["id"], secondFace);
+    EXPECT_EQ(identityJson["failed"][0]["status"], 409);
+    const TagId personId = identityJson["updated"][0]["person_tag_id"].get<TagId>();
+
+    auto accept = client.Post("/api/faces/batch", auth,
+        nlohmann::json{{"action", "accept"}, {"tag_id", personId},
+            {"faces", {{{"id", secondFace}, {"revision", 1}}}}}.dump(), "application/json");
+    ASSERT_TRUE(accept);
+    ASSERT_EQ(accept->status, 200) << accept->body;
+    const auto acceptJson = nlohmann::json::parse(accept->body);
+    ASSERT_EQ(acceptJson["updated"].size(), 1u);
+    EXPECT_TRUE(acceptJson["failed"].empty());
+    EXPECT_EQ(acceptJson["updated"][0]["person_tag_id"], personId);
+
+    auto dismiss = client.Post("/api/faces/batch", auth,
+        nlohmann::json{{"action", "dismiss"}, {"dismissed", true},
+            {"faces", {{{"id", firstFace}, {"revision", 2}}, {{"id", secondFace}, {"revision", 2}}}}}.dump(),
+        "application/json");
+    ASSERT_TRUE(dismiss);
+    ASSERT_EQ(dismiss->status, 200) << dismiss->body;
+    const auto dismissJson = nlohmann::json::parse(dismiss->body);
+    ASSERT_EQ(dismissJson["updated"].size(), 2u);
+    EXPECT_TRUE(dismissJson["failed"].empty());
+    for (const auto& face : dismissJson["updated"]) EXPECT_TRUE(face["dismissed"].get<bool>());
+    server_->setApiToken("");
+}
+
+TEST_F(ServerTest, FaceSuggestionsRequireMatchingPipelineAndHealthyEmbeddings) {
+    auto addPhoto = [&](const std::string& suffix) {
+        MediaItem media;
+        media.file_path = suffix + ".jpg"; media.file_name = suffix + ".jpg";
+        media.content_hash = "pipeline-hash-" + suffix;
+        media.width = 100; media.height = 80;
+        return catalog_->db().insertMedia(media).value();
+    };
+    auto addAnalysis = [&](MediaId mediaId, const std::string& pipeline, const std::string& state) {
+        auto& connection = catalog_->db().connection();
+        auto stmtRes = connection.prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,
+                recognizer_checksum,pipeline_version,detector_provider,recognizer_provider,device,
+                confidence,nms_threshold,analyzed_at)
+            VALUES(?,?, 'pipeline-test',100,80,'det','rec',?,'cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return;
+        auto stmt = std::move(stmtRes.value());
+        stmt.bind(1, mediaId); stmt.bind(2, state); stmt.bind(3, pipeline);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+    };
+    auto addFace = [&](MediaId mediaId, std::optional<TagId> personId, const std::string& embeddingError,
+                       size_t activeEmbeddingIndex = 0) {
+        auto& connection = catalog_->db().connection();
+        auto stmtRes = connection.prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,person_tag_id,embedding,
+                embedding_size,embedding_error,created_at,updated_at)
+            VALUES(?,10,10,20,20,0.9,'[]',?,?,512,?,1,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return int64_t{0};
+        auto stmt = std::move(stmtRes.value());
+        stmt.bind(1, mediaId);
+        if (personId) stmt.bind(2, *personId); else stmt.bindNull(2);
+        std::array<float, 512> embedding{};
+        embedding[activeEmbeddingIndex] = 1.0f;
+        EXPECT_EQ(sqlite3_bind_blob(stmt.raw(), 3, embedding.data(), sizeof(embedding), SQLITE_TRANSIENT), SQLITE_OK);
+        stmt.bind(4, embeddingError);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+        return connection.lastInsertRowId();
+    };
+
+    const TagId incompatibleId = catalog_->db().createOrGetTag("Old Pipeline", "people").value();
+    const TagId compatibleId = catalog_->db().createOrGetTag("Current Pipeline", "people").value();
+    const TagId brokenEmbeddingId = catalog_->db().createOrGetTag("Broken Embedding", "people").value();
+    const TagId failedAnalysisId = catalog_->db().createOrGetTag("Failed Analysis", "people").value();
+    const TagId rejectedId = catalog_->db().createOrGetTag("Rejected Candidate", "people").value();
+    const TagId selfOnlyId = catalog_->db().createOrGetTag("Self Only", "people").value();
+
+    const MediaId candidateMedia = addPhoto("candidate");
+    addAnalysis(candidateMedia, "pipeline-current", "complete");
+    const int64_t candidateFace = addFace(candidateMedia, std::nullopt, "");
+    const MediaId incompatibleMedia = addPhoto("incompatible");
+    addAnalysis(incompatibleMedia, "pipeline-old", "complete");
+    addFace(incompatibleMedia, incompatibleId, "");
+    const MediaId compatibleMedia = addPhoto("compatible");
+    addAnalysis(compatibleMedia, "pipeline-current", "complete");
+    addFace(compatibleMedia, compatibleId, "");
+    const MediaId rejectedMedia = addPhoto("rejected");
+    addAnalysis(rejectedMedia, "pipeline-current", "complete");
+    addFace(rejectedMedia, rejectedId, "");
+    const MediaId selfOnlyMedia = addPhoto("self-only");
+    addAnalysis(selfOnlyMedia, "pipeline-current", "complete");
+    const int64_t selfOnlyFace = addFace(selfOnlyMedia, selfOnlyId, "", 1);
+    const MediaId brokenMedia = addPhoto("broken");
+    addAnalysis(brokenMedia, "pipeline-current", "complete");
+    addFace(brokenMedia, brokenEmbeddingId, "embedding refresh failed");
+    const MediaId failedMedia = addPhoto("failed");
+    addAnalysis(failedMedia, "pipeline-current", "failed");
+    addFace(failedMedia, failedAnalysisId, "");
+
+    auto rejectionRes = catalog_->db().connection().prepare(
+        "INSERT INTO face_rejections(face_id,tag_id,rejected_at) VALUES(?,?,1);");
+    ASSERT_TRUE(rejectionRes.isOk());
+    auto rejection = std::move(rejectionRes.value());
+    rejection.bind(1, candidateFace);
+    rejection.bind(2, rejectedId);
+    ASSERT_EQ(rejection.step(), StepResult::Done);
+
+    httplib::Client client("127.0.0.1", port_);
+    auto response = client.Get("/api/faces/media/" + std::to_string(candidateMedia));
+    ASSERT_TRUE(response);
+    ASSERT_EQ(response->status, 200) << response->body;
+    const auto suggestions = nlohmann::json::parse(response->body)["faces"][0]["suggestions"];
+    ASSERT_EQ(suggestions.size(), 1u);
+    EXPECT_EQ(suggestions[0]["tag_id"], compatibleId);
+
+    auto gridResponse = client.Get("/api/faces/grid?include_dismissed=true&limit=100");
+    ASSERT_TRUE(gridResponse);
+    ASSERT_EQ(gridResponse->status, 200) << gridResponse->body;
+    const auto grid = nlohmann::json::parse(gridResponse->body);
+    auto gridFace = [&](int64_t id) -> nlohmann::json {
+        for (const auto& face : grid["items"]) {
+            if (face["id"].get<int64_t>() == id) return face;
+        }
+        return nullptr;
+    };
+    const auto gridCandidate = gridFace(candidateFace);
+    ASSERT_FALSE(gridCandidate.is_null());
+    ASSERT_EQ(gridCandidate["suggestions"].size(), 1u);
+    EXPECT_EQ(gridCandidate["suggestions"][0]["tag_id"], compatibleId);
+    const auto gridSelfOnly = gridFace(selfOnlyFace);
+    ASSERT_FALSE(gridSelfOnly.is_null());
+    for (const auto& suggestion : gridSelfOnly["suggestions"]) {
+        EXPECT_NE(suggestion["tag_id"], selfOnlyId);
+    }
+
+    auto updateTargetError = catalog_->db().connection().prepare("UPDATE faces SET embedding_error='no embedding' WHERE id=?;");
+    ASSERT_TRUE(updateTargetError.isOk());
+    auto targetError = std::move(updateTargetError.value()); targetError.bind(1, candidateFace);
+    ASSERT_EQ(targetError.step(), StepResult::Done);
+    auto errorResponse = client.Get("/api/faces/media/" + std::to_string(candidateMedia));
+    ASSERT_TRUE(errorResponse);
+    ASSERT_EQ(errorResponse->status, 200);
+    EXPECT_TRUE(nlohmann::json::parse(errorResponse->body)["faces"][0]["suggestions"].empty());
+    auto restoreTarget = catalog_->db().connection().prepare("UPDATE faces SET embedding_error='' WHERE id=?;");
+    ASSERT_TRUE(restoreTarget.isOk());
+    auto restore = std::move(restoreTarget.value()); restore.bind(1, candidateFace);
+    ASSERT_EQ(restore.step(), StepResult::Done);
+    auto failAnalysis = catalog_->db().connection().prepare("UPDATE face_media_analysis SET state='failed' WHERE media_id=?;");
+    ASSERT_TRUE(failAnalysis.isOk());
+    auto fail = std::move(failAnalysis.value()); fail.bind(1, candidateMedia);
+    ASSERT_EQ(fail.step(), StepResult::Done);
+    auto failedTargetResponse = client.Get("/api/faces/media/" + std::to_string(candidateMedia));
+    ASSERT_TRUE(failedTargetResponse);
+    ASSERT_EQ(failedTargetResponse->status, 200);
+    EXPECT_TRUE(nlohmann::json::parse(failedTargetResponse->body)["faces"][0]["suggestions"].empty());
+}
+
+TEST(FaceServiceTest, EmptyDetectionIsSuccessfulAndInferenceFailureIsDistinct) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_service_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string firstPath = (root / "empty.jpg").string();
+    const std::string secondPath = (root / "failure.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, firstPath).isOk());
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, secondPath).isOk());
+    auto addMedia = [&](const std::string& path) {
+        MediaItem item;
+        item.file_path = path; item.file_name = std::filesystem::path(path).filename().string();
+        item.content_hash = metadata::Hasher::computeFileSha256(path).value();
+        item.width = image.width; item.height = image.height; item.media_type = "photo";
+        return db.insertMedia(item).value();
+    };
+    MediaId emptyId = addMedia(firstPath);
+    MediaId failedId = addMedia(secondPath);
+    std::atomic<int> call{0};
+    faces::Service service(db, (root / "cache").string(), [](const std::string& path) { return path; },
+        [&call](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            if (call.fetch_add(1) == 0) return std::vector<faces::Detection>{};
+            return Status::parseError("deliberate inference failure");
+        });
+    int64_t jobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {emptyId, failedId}, false, jobId).isOk());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    Result<nlohmann::json> job = service.getJob(jobId);
+    while (std::chrono::steady_clock::now() < deadline) {
+        job = service.getJob(jobId);
+        if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(job.isOk());
+    EXPECT_EQ(job.value()["state"], "completed");
+    EXPECT_EQ(job.value()["processed"], 1);
+    EXPECT_EQ(job.value()["failed"], 1);
+    EXPECT_EQ(job.value()["remaining"], 0);
+    auto membershipRes = db.connection().prepare(
+        "SELECT COUNT(*) FROM face_analysis_job_media WHERE job_id=?;");
+    ASSERT_TRUE(membershipRes.isOk());
+    auto membership = std::move(membershipRes.value()); membership.bind(1, jobId);
+    ASSERT_EQ(membership.step(), StepResult::Row);
+    EXPECT_EQ(membership.getInt64(0), 2);
+    auto empty = service.getMedia(emptyId);
+    ASSERT_TRUE(empty.isOk());
+    EXPECT_EQ(empty.value()["state"], "complete");
+    EXPECT_TRUE(empty.value()["faces"].empty());
+    auto persistedRuntimeRes = db.connection().prepare(
+        "SELECT runtime_version,fallback_reason FROM face_media_analysis WHERE media_id=?;");
+    ASSERT_TRUE(persistedRuntimeRes.isOk());
+    auto persistedRuntime = std::move(persistedRuntimeRes.value()); persistedRuntime.bind(1, emptyId);
+    ASSERT_EQ(persistedRuntime.step(), StepResult::Row);
+    EXPECT_EQ(persistedRuntime.getString(0), "test-runtime");
+    EXPECT_EQ(persistedRuntime.getString(1), "test-fallback");
+    auto failed = service.getMedia(failedId);
+    ASSERT_TRUE(failed.isOk());
+    EXPECT_EQ(failed.value()["state"], "failed");
+    EXPECT_NE(failed.value()["error"], "");
+    EXPECT_TRUE(failed.value()["faces"].empty());
+
+    thumbnail::ImageBuffer changedImage = image;
+    std::fill(changedImage.data.begin(), changedImage.data.end(), 0);
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(changedImage, firstPath).isOk());
+    int64_t changedSourceJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {emptyId}, false, changedSourceJobId).isOk());
+    const auto changedSourceDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    Result<nlohmann::json> changedSourceJob = service.getJob(changedSourceJobId);
+    while (std::chrono::steady_clock::now() < changedSourceDeadline) {
+        changedSourceJob = service.getJob(changedSourceJobId);
+        if (!changedSourceJob.isOk() || (changedSourceJob.value()["state"] != "running" && changedSourceJob.value()["state"] != "cancelling")) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(changedSourceJob.isOk());
+    EXPECT_EQ(changedSourceJob.value()["failed"], 1);
+    EXPECT_EQ(changedSourceJob.value()["skipped"], 0);
+    EXPECT_EQ(call.load(), 2) << "A changed original must be checked before reusing stored analysis";
+    auto changedSource = service.getMedia(emptyId);
+    ASSERT_TRUE(changedSource.isOk());
+    // The failed attempt is reported by the job; the committed empty result survives.
+    EXPECT_EQ(changedSource.value()["state"], "complete");
+    EXPECT_NE(changedSourceJob.value()["error"], "");
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(FaceServiceTest, CatalogGeometryChangeDuringInferenceDoesNotCommitStaleFaces) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_geometry_race_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string photoPath = (root / "photo.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, photoPath).isOk());
+    MediaItem media;
+    media.file_path = photoPath;
+    media.file_name = "photo.jpg";
+    media.content_hash = metadata::Hasher::computeFileSha256(photoPath).value();
+    media.width = image.width; media.height = image.height; media.media_type = "photo";
+    const MediaId mediaId = db.insertMedia(media).value();
+
+    faces::Service service(db, (root / "cache").string(), [](const std::string& path) { return path; },
+        [&db, mediaId](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            auto changed = db.getMediaById(mediaId);
+            if (!changed.isOk()) return changed.status();
+            changed.value().width += 1;
+            Status updated = db.updateMedia(changed.value());
+            if (!updated.isOk()) return updated;
+            faces::Detection detection;
+            detection.x = 1; detection.y = 2; detection.width = 3; detection.height = 4;
+            detection.score = 0.9f;
+            return std::vector<faces::Detection>{detection};
+        });
+    int64_t jobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, jobId).isOk());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    Result<nlohmann::json> job = service.getJob(jobId);
+    while (std::chrono::steady_clock::now() < deadline) {
+        job = service.getJob(jobId);
+        if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(job.isOk());
+    EXPECT_EQ(job.value()["state"], "completed");
+    EXPECT_EQ(job.value()["processed"], 0);
+    EXPECT_EQ(job.value()["skipped"], 1);
+    EXPECT_EQ(job.value()["remaining"], 0);
+    auto result = service.getMedia(mediaId);
+    ASSERT_TRUE(result.isOk());
+    EXPECT_EQ(result.value()["state"], "unscanned");
+    EXPECT_TRUE(result.value()["faces"].empty());
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(FaceServiceTest, CancellationStopsAtPhotoBoundary) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_cancel_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string firstPath = (root / "first.jpg").string();
+    const std::string secondPath = (root / "second.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, firstPath).isOk());
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, secondPath).isOk());
+    auto addMedia = [&](const std::string& path) {
+        MediaItem item;
+        item.file_path = path; item.file_name = std::filesystem::path(path).filename().string();
+        item.content_hash = metadata::Hasher::computeFileSha256(path).value();
+        item.width = image.width; item.height = image.height; item.media_type = "photo";
+        return db.insertMedia(item).value();
+    };
+    const MediaId firstId = addMedia(firstPath);
+    const MediaId secondId = addMedia(secondPath);
+
+    std::promise<void> analyzerEnteredPromise;
+    auto analyzerEntered = analyzerEnteredPromise.get_future();
+    std::promise<void> releaseAnalyzerPromise;
+    auto releaseAnalyzer = releaseAnalyzerPromise.get_future().share();
+    std::atomic<int> analyzerCalls{0};
+    faces::Service service(db, (root / "cache").string(), [](const std::string& path) { return path; },
+        [&analyzerEnteredPromise, releaseAnalyzer, &analyzerCalls](const thumbnail::ImageBuffer&)
+            -> Result<std::vector<faces::Detection>> {
+            if (analyzerCalls.fetch_add(1) == 0) {
+                analyzerEnteredPromise.set_value();
+                releaseAnalyzer.wait();
+            }
+            return std::vector<faces::Detection>{};
+        });
+    int64_t jobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {firstId, secondId}, false, jobId).isOk());
+    const bool entered = analyzerEntered.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+    if (!entered) {
+        releaseAnalyzerPromise.set_value();
+        FAIL() << "Fake inference did not reach its synchronization point";
+    }
+    Status cancellation = service.cancelJob(jobId);
+    releaseAnalyzerPromise.set_value();
+    ASSERT_TRUE(cancellation.isOk());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    Result<nlohmann::json> job = service.getJob(jobId);
+    while (std::chrono::steady_clock::now() < deadline) {
+        job = service.getJob(jobId);
+        if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(job.isOk());
+    EXPECT_EQ(job.value()["state"], "cancelled");
+    EXPECT_EQ(job.value()["processed"], 1);
+    EXPECT_EQ(job.value()["remaining"], 1);
+    EXPECT_EQ(analyzerCalls.load(), 1);
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(FaceServiceTest, StartupMarksPersistedActiveJobInterrupted) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_restart_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    auto insertRes = db.connection().prepare(
+        "INSERT INTO face_analysis_jobs(state,scope,total,remaining,created_at,updated_at) "
+        "VALUES('running','catalog',3,3,1,1);");
+    ASSERT_TRUE(insertRes.isOk());
+    auto insert = std::move(insertRes.value());
+    ASSERT_EQ(insert.step(), StepResult::Done);
+    const int64_t interruptedId = db.connection().lastInsertRowId();
+
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string path = (root / "photo.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, path).isOk());
+    MediaItem media;
+    media.file_path = path; media.file_name = "photo.jpg";
+    media.content_hash = metadata::Hasher::computeFileSha256(path).value();
+    media.width = image.width; media.height = image.height; media.media_type = "photo";
+    const MediaId mediaId = db.insertMedia(media).value();
+
+    faces::Service service(db, (root / "cache").string(), [](const std::string& value) { return value; },
+        [](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            return std::vector<faces::Detection>{};
+        });
+    auto interrupted = service.getJob(interruptedId);
+    ASSERT_TRUE(interrupted.isOk());
+    EXPECT_EQ(interrupted.value()["state"], "interrupted");
+    EXPECT_EQ(interrupted.value()["remaining"], 3);
+    EXPECT_NE(interrupted.value()["error"], "");
+
+    int64_t newJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, newJobId).isOk());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    Result<nlohmann::json> job = service.getJob(newJobId);
+    while (std::chrono::steady_clock::now() < deadline) {
+        job = service.getJob(newJobId);
+        if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(job.isOk());
+    EXPECT_EQ(job.value()["state"], "completed");
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(FaceServiceTest, LatestJobSupersedesOlderInterruptionButKeepsRetryableFailure) {
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    auto addJob = [&](const std::string& state, int failed) {
+        auto insertRes = db.connection().prepare(
+            "INSERT INTO face_analysis_jobs(state,scope,total,failed,remaining,created_at,updated_at) "
+            "VALUES(?,'catalog',1,?,0,1,1);");
+        EXPECT_TRUE(insertRes.isOk());
+        if (!insertRes.isOk()) return int64_t{0};
+        auto insert = std::move(insertRes.value());
+        insert.bind(1, state); insert.bind(2, failed);
+        EXPECT_EQ(insert.step(), StepResult::Done);
+        return db.connection().lastInsertRowId();
+    };
+    const int64_t interruptedId = addJob("running", 0);
+    faces::Service service(db, "", [](const std::string& value) { return value; },
+        [](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            return std::vector<faces::Detection>{};
+        });
+    auto interruptedStatus = service.status();
+    ASSERT_EQ(interruptedStatus["job"]["id"], interruptedId);
+    EXPECT_EQ(interruptedStatus["job"]["state"], "interrupted");
+
+    const int64_t newerSuccessId = addJob("completed", 0);
+    EXPECT_TRUE(service.status()["job"].is_null());
+
+    const int64_t newerFailureId = addJob("completed", 1);
+    const auto failedStatus = service.status();
+    ASSERT_EQ(failedStatus["job"]["id"], newerFailureId);
+    EXPECT_NE(failedStatus["job"]["id"], newerSuccessId);
+    EXPECT_EQ(failedStatus["job"]["failed"], 1);
+}
+
+TEST(FaceServiceTest, MatchThresholdAcceptsFiniteCosineRangeOnly) {
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    const char* priorEnv = std::getenv("IMAGINE_FACE_MATCH_THRESHOLD");
+    const bool hadPriorEnv = priorEnv != nullptr;
+    const std::string priorValue = priorEnv ? priorEnv : "";
+    auto setThreshold = [](const char* value) {
+#if defined(_WIN32)
+        _putenv_s("IMAGINE_FACE_MATCH_THRESHOLD", value ? value : "");
+#else
+        if (value) setenv("IMAGINE_FACE_MATCH_THRESHOLD", value, 1);
+        else unsetenv("IMAGINE_FACE_MATCH_THRESHOLD");
+#endif
+    };
+    auto validate = [&](const std::string& value, bool expectedReady) {
+        setThreshold(value.c_str());
+        faces::Service service(db, "", [](const std::string& path) { return path; },
+            [](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+                return std::vector<faces::Detection>{};
+            });
+        const auto status = service.status();
+        EXPECT_EQ(status["ready"].get<bool>(), expectedReady) << "threshold=" << value;
+        if (expectedReady) {
+            EXPECT_FLOAT_EQ(status["config"]["match_threshold"].get<float>(), std::stof(value));
+        } else {
+            EXPECT_NE(status["error"].get<std::string>().find("finite and between -1 and 1"), std::string::npos);
+        }
+    };
+
+    for (const std::string value : {"-1", "-0.1", "0", "1"}) validate(value, true);
+    for (const std::string value : {"-1.01", "1.01", "nan"}) validate(value, false);
+    setThreshold(hadPriorEnv ? priorValue.c_str() : nullptr);
+}
+
+TEST(FaceServiceTest, FailedChangedFileAttemptPreservesSuccessWhenOriginalReturns) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_restore_source_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string path = (root / "photo.jpg").string();
+    const std::string originalPath = (root / "photo.original.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, path).isOk());
+    std::filesystem::copy_file(path, originalPath);
+    MediaItem media;
+    media.file_path = path; media.file_name = "photo.jpg";
+    media.content_hash = metadata::Hasher::computeFileSha256(path).value();
+    media.width = image.width; media.height = image.height; media.media_type = "photo";
+    const MediaId mediaId = db.insertMedia(media).value();
+    std::atomic<int> analyzerCalls{0};
+    faces::Service service(db, (root / "cache").string(), [](const std::string& value) { return value; },
+        [&analyzerCalls](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            ++analyzerCalls;
+            faces::Detection detection;
+            detection.x = 1; detection.y = 2; detection.width = 6; detection.height = 7;
+            detection.score = 0.9f;
+            detection.embedding.assign(512, 0.0f);
+            detection.embedding[0] = 1.0f;
+            return std::vector<faces::Detection>{detection};
+        });
+    auto waitForJob = [&](int64_t jobId) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        Result<nlohmann::json> job = service.getJob(jobId);
+        while (std::chrono::steady_clock::now() < deadline) {
+            job = service.getJob(jobId);
+            if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return job;
+    };
+
+    int64_t initialJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, initialJobId).isOk());
+    auto initialJob = waitForJob(initialJobId);
+    ASSERT_TRUE(initialJob.isOk());
+    ASSERT_EQ(initialJob.value()["processed"], 1);
+    auto initialFaces = service.getMedia(mediaId);
+    ASSERT_TRUE(initialFaces.isOk());
+    ASSERT_EQ(initialFaces.value()["faces"].size(), 1u);
+    const int64_t faceId = initialFaces.value()["faces"][0]["id"].get<int64_t>();
+    const TagId personId = db.createOrGetTag("Restored Person", "people").value();
+    ASSERT_TRUE(service.setIdentity(faceId, 1, personId, std::nullopt).isOk());
+
+    {
+        std::ofstream changed(path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(changed.is_open());
+        changed << "temporary changed source";
+        ASSERT_TRUE(changed.good());
+    }
+    int64_t failedJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, failedJobId).isOk());
+    auto failedJob = waitForJob(failedJobId);
+    ASSERT_TRUE(failedJob.isOk());
+    EXPECT_EQ(failedJob.value()["state"], "completed");
+    EXPECT_EQ(failedJob.value()["failed"], 1);
+    ASSERT_EQ(service.status()["job"]["id"], failedJobId);
+
+    auto retainedAnalysisRes = db.connection().prepare(
+        "SELECT state,source_hash,recognizer_checksum FROM face_media_analysis WHERE media_id=?;");
+    ASSERT_TRUE(retainedAnalysisRes.isOk());
+    auto retainedAnalysis = std::move(retainedAnalysisRes.value()); retainedAnalysis.bind(1, mediaId);
+    ASSERT_EQ(retainedAnalysis.step(), StepResult::Row);
+    EXPECT_EQ(retainedAnalysis.getString(0), "complete");
+    EXPECT_EQ(retainedAnalysis.getString(1), media.content_hash);
+    EXPECT_EQ(retainedAnalysis.getString(2), "test-recognizer");
+
+    std::filesystem::copy_file(originalPath, path, std::filesystem::copy_options::overwrite_existing);
+    int64_t restoredJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, restoredJobId).isOk());
+    auto restoredJob = waitForJob(restoredJobId);
+    ASSERT_TRUE(restoredJob.isOk());
+    EXPECT_EQ(restoredJob.value()["state"], "completed");
+    EXPECT_EQ(restoredJob.value()["skipped"], 1);
+    EXPECT_EQ(restoredJob.value()["failed"], 0);
+    EXPECT_TRUE(service.status()["job"].is_null());
+    EXPECT_EQ(analyzerCalls.load(), 1);
+    auto restoredFaces = service.getMedia(mediaId);
+    ASSERT_TRUE(restoredFaces.isOk());
+    ASSERT_EQ(restoredFaces.value()["faces"].size(), 1u);
+    EXPECT_EQ(restoredFaces.value()["faces"][0]["id"], faceId);
+    EXPECT_EQ(restoredFaces.value()["faces"][0]["person_tag_id"], personId);
+    EXPECT_EQ(restoredFaces.value()["faces"][0]["revision"], 2);
+    auto retainedMediaTags = db.getTagsForMedia(mediaId);
+    ASSERT_TRUE(retainedMediaTags.isOk());
+    ASSERT_EQ(retainedMediaTags.value().size(), 1u);
+    EXPECT_EQ(retainedMediaTags.value()[0].id, personId);
+    auto provenanceRes = db.connection().prepare(
+        "SELECT manual FROM media_tag_provenance WHERE media_id=? AND tag_id=?;");
+    ASSERT_TRUE(provenanceRes.isOk());
+    auto provenance = std::move(provenanceRes.value());
+    provenance.bind(1, mediaId); provenance.bind(2, personId);
+    ASSERT_EQ(provenance.step(), StepResult::Row);
+    EXPECT_EQ(provenance.getInt(0), 0);
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(FaceServiceTest, FailedAttemptPreservesCompletedSnapshotEvenWhenStoredHashDiffers) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_keep_hash_mismatch_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string path = (root / "photo.jpg").string();
+    const std::string originalPath = (root / "photo.original.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, path).isOk());
+    std::filesystem::copy_file(path, originalPath);
+    MediaItem media;
+    media.file_path = path; media.file_name = "photo.jpg";
+    media.content_hash = metadata::Hasher::computeFileSha256(path).value();
+    media.width = image.width; media.height = image.height; media.media_type = "photo";
+    const MediaId mediaId = db.insertMedia(media).value();
+    faces::Service service(db, (root / "cache").string(), [](const std::string& value) { return value; },
+        [](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            faces::Detection detection;
+            detection.x = 1; detection.y = 2; detection.width = 6; detection.height = 7;
+            detection.score = 0.9f;
+            detection.embedding.assign(512, 0.0f);
+            detection.embedding[0] = 1.0f;
+            return std::vector<faces::Detection>{detection};
+        });
+    auto waitForJob = [&](int64_t jobId) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        Result<nlohmann::json> job = service.getJob(jobId);
+        while (std::chrono::steady_clock::now() < deadline) {
+            job = service.getJob(jobId);
+            if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return job;
+    };
+
+    int64_t initialJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, initialJobId).isOk());
+    auto initialJob = waitForJob(initialJobId);
+    ASSERT_TRUE(initialJob.isOk());
+    auto initialFaces = service.getMedia(mediaId);
+    ASSERT_TRUE(initialFaces.isOk());
+    ASSERT_EQ(initialFaces.value()["faces"].size(), 1u);
+    const int64_t faceId = initialFaces.value()["faces"][0]["id"].get<int64_t>();
+    const TagId personId = db.createOrGetTag("Hash Mismatch Person", "people").value();
+    ASSERT_TRUE(service.setIdentity(faceId, 1, personId, std::nullopt).isOk());
+
+    auto staleHashRes = db.connection().prepare(
+        "UPDATE face_media_analysis SET source_hash='previous-successful-source' WHERE media_id=?;");
+    ASSERT_TRUE(staleHashRes.isOk());
+    auto staleHash = std::move(staleHashRes.value()); staleHash.bind(1, mediaId);
+    ASSERT_EQ(staleHash.step(), StepResult::Done);
+    {
+        std::ofstream changed(path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(changed.is_open());
+        changed << "catalog hash mismatch while the prior snapshot is retained";
+        ASSERT_TRUE(changed.good());
+    }
+    int64_t failedJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, failedJobId).isOk());
+    auto failedJob = waitForJob(failedJobId);
+    ASSERT_TRUE(failedJob.isOk());
+    EXPECT_EQ(failedJob.value()["failed"], 1);
+    auto retained = service.getMedia(mediaId);
+    ASSERT_TRUE(retained.isOk());
+    ASSERT_EQ(retained.value()["faces"].size(), 1u);
+    EXPECT_EQ(retained.value()["faces"][0]["id"], faceId);
+    EXPECT_EQ(retained.value()["faces"][0]["revision"], 2);
+    EXPECT_EQ(retained.value()["faces"][0]["person_tag_id"], personId);
+    {
+        auto analysisRes = db.connection().prepare(
+            "SELECT state,source_hash FROM face_media_analysis WHERE media_id=?;");
+        ASSERT_TRUE(analysisRes.isOk());
+        auto analysis = std::move(analysisRes.value()); analysis.bind(1, mediaId);
+        ASSERT_EQ(analysis.step(), StepResult::Row);
+        EXPECT_EQ(analysis.getString(0), "complete");
+        EXPECT_EQ(analysis.getString(1), "previous-successful-source");
+    }
+
+    std::filesystem::copy_file(originalPath, path, std::filesystem::copy_options::overwrite_existing);
+    int64_t replaceJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, replaceJobId).isOk());
+    auto replaceJob = waitForJob(replaceJobId);
+    ASSERT_TRUE(replaceJob.isOk());
+    EXPECT_EQ(replaceJob.value()["processed"], 1);
+    auto replaced = service.getMedia(mediaId);
+    ASSERT_TRUE(replaced.isOk());
+    ASSERT_EQ(replaced.value()["faces"].size(), 1u);
+    EXPECT_NE(replaced.value()["faces"][0]["id"], faceId);
+    EXPECT_TRUE(replaced.value()["faces"][0]["person_tag_id"].is_null());
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(FaceServiceTest, DetectorChangesRequireForceBeforeReplacingReviewedIdentity) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_force_review_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string path = (root / "photo.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, path).isOk());
+    MediaItem media;
+    media.file_path = path; media.file_name = "photo.jpg";
+    media.content_hash = metadata::Hasher::computeFileSha256(path).value();
+    media.width = image.width; media.height = image.height; media.media_type = "photo";
+    const MediaId mediaId = db.insertMedia(media).value();
+    std::atomic<int> analyzerCalls{0};
+    faces::Service service(db, (root / "cache").string(), [](const std::string& value) { return value; },
+        [&analyzerCalls](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            ++analyzerCalls;
+            faces::Detection detection;
+            detection.x = 1; detection.y = 2; detection.width = 6; detection.height = 7;
+            detection.score = 0.9f;
+            return std::vector<faces::Detection>{detection};
+        });
+    auto waitForJob = [&](int64_t jobId) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        Result<nlohmann::json> job = service.getJob(jobId);
+        while (std::chrono::steady_clock::now() < deadline) {
+            job = service.getJob(jobId);
+            if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return job;
+    };
+    int64_t firstJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, firstJobId).isOk());
+    auto firstJob = waitForJob(firstJobId);
+    ASSERT_TRUE(firstJob.isOk());
+    ASSERT_EQ(firstJob.value()["processed"], 1);
+    auto faces = service.getMedia(mediaId);
+    ASSERT_TRUE(faces.isOk());
+    ASSERT_EQ(faces.value()["faces"].size(), 1u);
+    const int64_t faceId = faces.value()["faces"][0]["id"].get<int64_t>();
+    const TagId personId = db.createOrGetTag("Reviewed Person", "people").value();
+    ASSERT_TRUE(service.setIdentity(faceId, 1, personId, std::nullopt).isOk());
+    int64_t reusedJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, reusedJobId).isOk());
+    auto reusedJob = waitForJob(reusedJobId);
+    ASSERT_TRUE(reusedJob.isOk());
+    EXPECT_EQ(reusedJob.value()["skipped"], 1);
+    auto reusedGrid = service.getGrid(reusedJobId, 0, 1000, false);
+    ASSERT_TRUE(reusedGrid.isOk());
+    EXPECT_EQ(reusedGrid.value()["total"], 1);
+    EXPECT_EQ(reusedGrid.value()["items"][0]["person_tag_id"], personId);
+    auto unknownGridJob = service.getGrid(999999, 0, 1000, false);
+    ASSERT_FALSE(unknownGridJob.isOk());
+    EXPECT_EQ(unknownGridJob.status().code(), StatusCode::NotFound);
+    EXPECT_EQ(analyzerCalls.load(), 1);
+    auto changeDetector = db.connection().prepare("UPDATE face_media_analysis SET detector_checksum='previous-detector' WHERE media_id=?;");
+    ASSERT_TRUE(changeDetector.isOk());
+    auto change = std::move(changeDetector.value()); change.bind(1, mediaId);
+    ASSERT_EQ(change.step(), StepResult::Done);
+
+    int64_t blockedJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, blockedJobId).isOk());
+    auto blockedJob = waitForJob(blockedJobId);
+    ASSERT_TRUE(blockedJob.isOk());
+    EXPECT_EQ(blockedJob.value()["skipped"], 1);
+    EXPECT_NE(blockedJob.value()["error"].get<std::string>().find("use force"), std::string::npos);
+    EXPECT_EQ(analyzerCalls.load(), 1);
+    auto retained = service.getMedia(mediaId);
+    ASSERT_TRUE(retained.isOk());
+    ASSERT_EQ(retained.value()["faces"].size(), 1u);
+    EXPECT_EQ(retained.value()["faces"][0]["person_tag_id"], personId);
+
+    int64_t forcedJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, true, forcedJobId).isOk());
+    auto forcedJob = waitForJob(forcedJobId);
+    ASSERT_TRUE(forcedJob.isOk());
+    EXPECT_EQ(forcedJob.value()["processed"], 1);
+    EXPECT_EQ(analyzerCalls.load(), 2);
+    auto reset = service.getMedia(mediaId);
+    ASSERT_TRUE(reset.isOk());
+    ASSERT_EQ(reset.value()["faces"].size(), 1u);
+    EXPECT_TRUE(reset.value()["faces"][0]["person_tag_id"].is_null());
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(FaceServiceTest, RecognizerOnlyRefreshKeepsIdentityAndClearsUnrefreshedEmbeddings) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_recognizer_refresh_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string path = (root / "photo.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, path).isOk());
+    MediaItem media;
+    media.file_path = path; media.file_name = "photo.jpg";
+    media.content_hash = metadata::Hasher::computeFileSha256(path).value();
+    media.width = image.width; media.height = image.height; media.media_type = "photo";
+    const MediaId mediaId = db.insertMedia(media).value();
+    std::atomic<int> analyzerCalls{0};
+    faces::Service service(db, (root / "cache").string(), [](const std::string& value) { return value; },
+        [&analyzerCalls](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            if (analyzerCalls.fetch_add(1) != 0) return std::vector<faces::Detection>{};
+            faces::Detection detection;
+            detection.x = 1; detection.y = 2; detection.width = 6; detection.height = 7;
+            detection.score = 0.9f;
+            detection.embedding.assign(512, 0.0f);
+            detection.embedding[0] = 1.0f;
+            return std::vector<faces::Detection>{detection};
+        });
+    auto waitForJob = [&](int64_t jobId) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        Result<nlohmann::json> job = service.getJob(jobId);
+        while (std::chrono::steady_clock::now() < deadline) {
+            job = service.getJob(jobId);
+            if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return job;
+    };
+    int64_t firstJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, firstJobId).isOk());
+    auto firstJob = waitForJob(firstJobId);
+    ASSERT_TRUE(firstJob.isOk());
+    ASSERT_EQ(firstJob.value()["processed"], 1);
+    auto first = service.getMedia(mediaId);
+    ASSERT_TRUE(first.isOk());
+    ASSERT_EQ(first.value()["faces"].size(), 1u);
+    const int64_t faceId = first.value()["faces"][0]["id"].get<int64_t>();
+    const TagId personId = db.createOrGetTag("Recognized Person", "people").value();
+    ASSERT_TRUE(service.setIdentity(faceId, 1, personId, std::nullopt).isOk());
+    auto changeRecognizer = db.connection().prepare("UPDATE face_media_analysis SET recognizer_checksum='previous-recognizer' WHERE media_id=?;");
+    ASSERT_TRUE(changeRecognizer.isOk());
+    auto change = std::move(changeRecognizer.value()); change.bind(1, mediaId);
+    ASSERT_EQ(change.step(), StepResult::Done);
+
+    int64_t refreshJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, refreshJobId).isOk());
+    auto refreshJob = waitForJob(refreshJobId);
+    ASSERT_TRUE(refreshJob.isOk());
+    EXPECT_EQ(refreshJob.value()["processed"], 1);
+    auto refreshed = service.getMedia(mediaId);
+    ASSERT_TRUE(refreshed.isOk());
+    ASSERT_EQ(refreshed.value()["faces"].size(), 1u);
+    EXPECT_EQ(refreshed.value()["faces"][0]["id"], faceId);
+    EXPECT_EQ(refreshed.value()["faces"][0]["person_tag_id"], personId);
+    auto embeddingRes = db.connection().prepare("SELECT embedding,embedding_size,embedding_error FROM faces WHERE id=?;");
+    ASSERT_TRUE(embeddingRes.isOk());
+    auto embedding = std::move(embeddingRes.value()); embedding.bind(1, faceId);
+    ASSERT_EQ(embedding.step(), StepResult::Row);
+    EXPECT_TRUE(embedding.isNull(0));
+    EXPECT_EQ(embedding.getInt(1), 0);
+    EXPECT_EQ(embedding.getString(2), "No compatible refreshed embedding was produced");
+    auto checksumRes = db.connection().prepare("SELECT recognizer_checksum FROM face_media_analysis WHERE media_id=?;");
+    ASSERT_TRUE(checksumRes.isOk());
+    auto checksum = std::move(checksumRes.value()); checksum.bind(1, mediaId);
+    ASSERT_EQ(checksum.step(), StepResult::Row);
+    EXPECT_EQ(checksum.getString(0), "test-recognizer");
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
+TEST(FaceServiceTest, ForcedRecognizerRefreshResetsMatchedAndUnmatchedReviews) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_force_recognizer_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 16; image.height = 12; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string path = (root / "photo.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, path).isOk());
+    MediaItem media;
+    media.file_path = path; media.file_name = "photo.jpg";
+    media.content_hash = metadata::Hasher::computeFileSha256(path).value();
+    media.width = image.width; media.height = image.height; media.media_type = "photo";
+    const MediaId mediaId = db.insertMedia(media).value();
+    faces::Service service(db, (root / "cache").string(), [](const std::string& value) { return value; },
+        [](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            faces::Detection detection;
+            detection.x = 1; detection.y = 2; detection.width = 6; detection.height = 7;
+            detection.score = 0.9f;
+            detection.embedding.assign(512, 0.0f);
+            detection.embedding[0] = 1.0f;
+            return std::vector<faces::Detection>{detection};
+        });
+    auto waitForJob = [&](int64_t jobId) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        Result<nlohmann::json> job = service.getJob(jobId);
+        while (std::chrono::steady_clock::now() < deadline) {
+            job = service.getJob(jobId);
+            if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return job;
+    };
+
+    int64_t initialJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, false, initialJobId).isOk());
+    auto initialJob = waitForJob(initialJobId);
+    ASSERT_TRUE(initialJob.isOk());
+    ASSERT_EQ(initialJob.value()["processed"], 1);
+    auto initialMedia = service.getMedia(mediaId);
+    ASSERT_TRUE(initialMedia.isOk());
+    ASSERT_EQ(initialMedia.value()["faces"].size(), 1u);
+    const int64_t matchedFaceId = initialMedia.value()["faces"][0]["id"].get<int64_t>();
+    const TagId matchedPersonId = db.createOrGetTag("Matched Review", "people").value();
+    const TagId unmatchedPersonId = db.createOrGetTag("Unmatched Review", "people").value();
+    ASSERT_TRUE(service.setIdentity(matchedFaceId, 1, matchedPersonId, std::nullopt).isOk());
+
+    auto insertOldFaceRes = db.connection().prepare(R"SQL(
+        INSERT INTO faces(media_id,x,y,width,height,score,landmarks,created_at,updated_at)
+        VALUES(?,10,1,5,5,0.9,'[]',1,1);
+    )SQL");
+    ASSERT_TRUE(insertOldFaceRes.isOk());
+    auto insertOldFace = std::move(insertOldFaceRes.value()); insertOldFace.bind(1, mediaId);
+    ASSERT_EQ(insertOldFace.step(), StepResult::Done);
+    const int64_t unmatchedFaceId = db.connection().lastInsertRowId();
+    ASSERT_TRUE(service.setIdentity(unmatchedFaceId, 1, unmatchedPersonId, std::nullopt).isOk());
+    ASSERT_TRUE(service.setDismissed(unmatchedFaceId, 2, true).isOk());
+    auto insertRejectionRes = db.connection().prepare(
+        "INSERT INTO face_rejections(face_id,tag_id,rejected_at) VALUES(?,?,1);");
+    ASSERT_TRUE(insertRejectionRes.isOk());
+    auto insertRejection = std::move(insertRejectionRes.value());
+    insertRejection.bind(1, unmatchedFaceId); insertRejection.bind(2, matchedPersonId);
+    ASSERT_EQ(insertRejection.step(), StepResult::Done);
+    const TagId manualTagId = db.createOrGetTag("Manual Survivor", "events").value();
+    ASSERT_TRUE(db.addTagToMedia(mediaId, manualTagId).isOk());
+
+    auto changeRecognizer = db.connection().prepare(
+        "UPDATE face_media_analysis SET recognizer_checksum='previous-recognizer' WHERE media_id=?;");
+    ASSERT_TRUE(changeRecognizer.isOk());
+    auto change = std::move(changeRecognizer.value()); change.bind(1, mediaId);
+    ASSERT_EQ(change.step(), StepResult::Done);
+    int64_t forcedJobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, true, forcedJobId).isOk());
+    auto forcedJob = waitForJob(forcedJobId);
+    ASSERT_TRUE(forcedJob.isOk());
+    EXPECT_EQ(forcedJob.value()["processed"], 1);
+
+    auto after = service.getMedia(mediaId);
+    ASSERT_TRUE(after.isOk());
+    ASSERT_EQ(after.value()["faces"].size(), 1u);
+    const auto newFace = after.value()["faces"][0];
+    EXPECT_NE(newFace["id"], matchedFaceId);
+    EXPECT_NE(newFace["id"], unmatchedFaceId);
+    EXPECT_TRUE(newFace["person_tag_id"].is_null());
+    EXPECT_FALSE(newFace["dismissed"].get<bool>());
+    EXPECT_EQ(newFace["revision"], 1);
+
+    auto rejectionsRes = db.connection().prepare("SELECT COUNT(*) FROM face_rejections WHERE face_id IN (?,?);");
+    ASSERT_TRUE(rejectionsRes.isOk());
+    auto rejections = std::move(rejectionsRes.value());
+    rejections.bind(1, matchedFaceId); rejections.bind(2, unmatchedFaceId);
+    ASSERT_EQ(rejections.step(), StepResult::Row);
+    EXPECT_EQ(rejections.getInt64(0), 0);
+    auto mediaTags = db.getTagsForMedia(mediaId);
+    ASSERT_TRUE(mediaTags.isOk());
+    EXPECT_EQ(mediaTags.value().size(), 1u);
+    EXPECT_EQ(mediaTags.value()[0].id, manualTagId);
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
 }
 
 TEST_F(ServerTest, HttpStatusCodesNotFoundAndConflict) {

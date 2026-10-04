@@ -211,6 +211,109 @@ Status Schema::applyMigrationV4(Connection& conn) {
     return tx.commit();
 }
 
+Status Schema::applyMigrationV5(Connection& conn) {
+    const char* v5_sql = R"SQL(
+        CREATE TABLE IF NOT EXISTS face_analysis_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            state TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            total INTEGER NOT NULL DEFAULT 0,
+            processed INTEGER NOT NULL DEFAULT 0,
+            skipped INTEGER NOT NULL DEFAULT 0,
+            failed INTEGER NOT NULL DEFAULT 0,
+            remaining INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            force INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_face_one_active_job
+            ON face_analysis_jobs((1)) WHERE state IN ('running','cancelling');
+
+        CREATE TABLE IF NOT EXISTS face_media_analysis (
+            media_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+            state TEXT NOT NULL,
+            error TEXT NOT NULL DEFAULT '',
+            source_hash TEXT NOT NULL DEFAULT '',
+            width INTEGER NOT NULL DEFAULT 0,
+            height INTEGER NOT NULL DEFAULT 0,
+            detector_checksum TEXT NOT NULL DEFAULT '',
+            recognizer_checksum TEXT NOT NULL DEFAULT '',
+            pipeline_version TEXT NOT NULL DEFAULT '',
+            detector_provider TEXT NOT NULL DEFAULT '',
+            recognizer_provider TEXT NOT NULL DEFAULT '',
+            device TEXT NOT NULL DEFAULT '',
+            runtime_version TEXT NOT NULL DEFAULT '',
+            fallback_reason TEXT NOT NULL DEFAULT '',
+            confidence REAL NOT NULL DEFAULT 0.5,
+            nms_threshold REAL NOT NULL DEFAULT 0.4,
+            analyzed_at INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS faces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+            x REAL NOT NULL,
+            y REAL NOT NULL,
+            width REAL NOT NULL,
+            height REAL NOT NULL,
+            score REAL NOT NULL,
+            landmarks TEXT NOT NULL,
+            embedding BLOB,
+            embedding_size INTEGER NOT NULL DEFAULT 0,
+            embedding_error TEXT NOT NULL DEFAULT '',
+            person_tag_id INTEGER REFERENCES tags(id) ON DELETE SET NULL,
+            dismissed INTEGER NOT NULL DEFAULT 0,
+            revision INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_faces_media ON faces(media_id, id);
+        CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_tag_id, dismissed);
+
+        CREATE TABLE IF NOT EXISTS face_rejections (
+            face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+            tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            rejected_at INTEGER NOT NULL,
+            PRIMARY KEY(face_id, tag_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS media_tag_provenance (
+            media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+            tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            manual INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY(media_id, tag_id)
+        );
+        INSERT OR IGNORE INTO media_tag_provenance(media_id, tag_id, manual)
+            SELECT media_id, tag_id, 1 FROM media_tags;
+        CREATE INDEX IF NOT EXISTS idx_media_tag_provenance_tag ON media_tag_provenance(tag_id, manual);
+    )SQL";
+
+    Transaction tx(conn);
+    Status s = conn.execute(v5_sql);
+    if (!s.isOk()) return s;
+    s = conn.execute("INSERT INTO schema_version (version) VALUES (5);");
+    if (!s.isOk()) return s;
+    return tx.commit();
+}
+
+Status Schema::applyMigrationV6(Connection& conn) {
+    const char* v6_sql = R"SQL(
+        CREATE TABLE IF NOT EXISTS face_analysis_job_media (
+            job_id INTEGER NOT NULL REFERENCES face_analysis_jobs(id) ON DELETE CASCADE,
+            media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+            PRIMARY KEY(job_id, media_id)
+        );
+    )SQL";
+
+    Transaction tx(conn);
+    Status s = conn.execute(v6_sql);
+    if (!s.isOk()) return s;
+    s = conn.execute("INSERT INTO schema_version (version) VALUES (6);");
+    if (!s.isOk()) return s;
+    return tx.commit();
+}
+
 Status Schema::migrate(Connection& conn) {
     auto verResult = getCurrentVersion(conn);
     if (!verResult.isOk()) {
@@ -241,6 +344,18 @@ Status Schema::migrate(Connection& conn) {
         Status s = applyMigrationV4(conn);
         if (!s.isOk()) return s;
         current = 4;
+    }
+    if (current < 5) {
+        IMAGINE_LOG_INFO("Applying database migration v5...");
+        Status s = applyMigrationV5(conn);
+        if (!s.isOk()) return s;
+        current = 5;
+    }
+    if (current < 6) {
+        IMAGINE_LOG_INFO("Applying database migration v6...");
+        Status s = applyMigrationV6(conn);
+        if (!s.isOk()) return s;
+        current = 6;
     }
 
     IMAGINE_LOG_INFO("Database schema up to date at version " + std::to_string(current));

@@ -173,6 +173,7 @@ import {
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
 import { setupAutoEventListeners } from './auto-events.js';
 import { renderCategoryView, initCategoryView, navigateBackToCategory } from './category-view.js';
+import { initFaceAnalysis } from './face-analysis.js';
 
 async function removeSelectedFromActiveAlbum() {
   const albumId = state.activeAlbumId;
@@ -1676,6 +1677,7 @@ export async function init() {
   restoreLayoutPreferences();
   restoreNavigationPreferences();
   setupEventListeners();
+  initFaceAnalysis();
   updateFullscreenBtnState();
 
   const savedMode = getSavedViewMode();

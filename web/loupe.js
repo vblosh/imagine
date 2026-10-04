@@ -49,6 +49,7 @@ export function closeLoupe() {
     dom.loupeAudio.load();
   }
   if (dom.loupeModal) dom.loupeModal.style.display = 'none';
+  window.dispatchEvent(new CustomEvent('imagine:loupeChanged', { detail: { mediaId: null } }));
 }
 
 export function loadLoupeOriginal() {
@@ -177,6 +178,7 @@ export function updateLoupeView() {
 
   resetLoupeZoomToFit();
   updateLoupeControls();
+  window.dispatchEvent(new CustomEvent('imagine:loupeChanged', { detail: { mediaId: item.id } }));
 }
 
 export function toggleLoupePlayback() {

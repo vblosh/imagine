@@ -3,6 +3,7 @@
 #include "imagine/db/connection.hpp"
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 
 using namespace imagine;
@@ -86,6 +87,134 @@ TEST_F(CatalogDbTest, InsertAndRetrieveMedia) {
     EXPECT_EQ(db.getMediaById(99999).status().code(), StatusCode::NotFound);
     EXPECT_EQ(db.getMediaByPath("/no/such/path").status().code(), StatusCode::NotFound);
     EXPECT_EQ(db.getMediaByHash("non_existent_hash").status().code(), StatusCode::NotFound);
+}
+
+TEST(CatalogDbMigrationTest, PersistedV5CatalogUpgradesToV6JobMembership) {
+    const auto path = std::filesystem::temp_directory_path() /
+        ("imagine_catalog_v5_upgrade_" + std::to_string(
+            std::chrono::system_clock::now().time_since_epoch().count()) + ".db");
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    MediaId mediaId = 0;
+    int64_t jobId = 0;
+    {
+        CatalogDb initial;
+        ASSERT_TRUE(initial.open(path.string()).isOk());
+        MediaItem media;
+        media.file_path = "persisted/photo.jpg";
+        media.file_name = "photo.jpg";
+        media.content_hash = "persisted-v5-hash";
+        media.media_type = "photo";
+        mediaId = initial.insertMedia(media).value();
+        auto jobRes = initial.connection().prepare(
+            "INSERT INTO face_analysis_jobs(state,scope,total,remaining,created_at,updated_at) "
+            "VALUES('completed','selected',1,0,1,1);");
+        ASSERT_TRUE(jobRes.isOk());
+        auto job = std::move(jobRes.value());
+        ASSERT_EQ(job.step(), StepResult::Done);
+        jobId = initial.connection().lastInsertRowId();
+
+        // A v5 catalog predates the membership table. Recreate that persisted
+        // state while leaving all other schema and catalog data intact.
+        ASSERT_TRUE(initial.connection().execute("DROP TABLE face_analysis_job_media;").isOk());
+        ASSERT_TRUE(initial.connection().execute("DELETE FROM schema_version WHERE version=6;").isOk());
+        initial.close();
+    }
+
+    {
+        CatalogDb upgraded;
+        ASSERT_TRUE(upgraded.open(path.string()).isOk());
+        auto versionRes = upgraded.connection().prepare("SELECT MAX(version) FROM schema_version;");
+        ASSERT_TRUE(versionRes.isOk());
+        auto version = std::move(versionRes.value());
+        ASSERT_EQ(version.step(), StepResult::Row);
+        EXPECT_EQ(version.getInt(0), 6);
+        EXPECT_TRUE(upgraded.getMediaById(mediaId).isOk());
+        auto existingJobRes = upgraded.connection().prepare("SELECT state FROM face_analysis_jobs WHERE id=?;");
+        ASSERT_TRUE(existingJobRes.isOk());
+        auto existingJob = std::move(existingJobRes.value());
+        existingJob.bind(1, jobId);
+        ASSERT_EQ(existingJob.step(), StepResult::Row);
+        EXPECT_EQ(existingJob.getString(0), "completed");
+
+        auto membershipRes = upgraded.connection().prepare(
+            "INSERT INTO face_analysis_job_media(job_id,media_id) VALUES(?,?);");
+        ASSERT_TRUE(membershipRes.isOk());
+        auto membership = std::move(membershipRes.value());
+        membership.bind(1, jobId);
+        membership.bind(2, mediaId);
+        EXPECT_EQ(membership.step(), StepResult::Done);
+        upgraded.close();
+    }
+    std::filesystem::remove(path, ec);
+    std::filesystem::remove(path.string() + "-wal", ec);
+    std::filesystem::remove(path.string() + "-shm", ec);
+}
+
+TEST_F(CatalogDbTest, MediaChangesInvalidateFaceResultsAndKeepManualTags) {
+    auto makeMedia = [&](const std::string& path, const std::string& hash) {
+        MediaItem item;
+        item.file_path = path; item.file_name = path; item.content_hash = hash;
+        item.width = 100; item.height = 80; item.media_type = "photo";
+        return db.insertMedia(item).value();
+    };
+    auto seedFace = [&](MediaId mediaId, TagId tagId) {
+        auto& conn = db.connection();
+        auto analysisRes = conn.prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,recognizer_checksum,
+                pipeline_version,detector_provider,recognizer_provider,device,confidence,nms_threshold,analyzed_at)
+            VALUES(?,'complete','old-hash',100,80,'det','rec','pipeline','cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(analysisRes.isOk());
+        auto analysis = std::move(analysisRes.value()); analysis.bind(1, mediaId);
+        EXPECT_EQ(analysis.step(), StepResult::Done);
+        auto faceRes = conn.prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,person_tag_id,created_at,updated_at)
+            VALUES(?,1,2,20,20,0.9,'[]',?,1,1);
+        )SQL");
+        EXPECT_TRUE(faceRes.isOk());
+        auto face = std::move(faceRes.value()); face.bind(1, mediaId); face.bind(2, tagId);
+        EXPECT_EQ(face.step(), StepResult::Done);
+    };
+
+    const TagId person = db.createOrGetTag("Face invalidation", "people").value();
+    const MediaId manuallyOwned = makeMedia("manual.jpg", "manual-old");
+    ASSERT_TRUE(db.addTagToMedia(manuallyOwned, person).isOk());
+    seedFace(manuallyOwned, person);
+
+    const MediaId faceOwned = makeMedia("derived.jpg", "derived-old");
+    auto& conn = db.connection();
+    auto linkRes = conn.prepare("INSERT INTO media_tags(media_id,tag_id) VALUES(?,?);");
+    ASSERT_TRUE(linkRes.isOk());
+    auto link = std::move(linkRes.value()); link.bind(1, faceOwned); link.bind(2, person);
+    ASSERT_EQ(link.step(), StepResult::Done);
+    auto provenanceRes = conn.prepare("INSERT INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,0);");
+    ASSERT_TRUE(provenanceRes.isOk());
+    auto provenance = std::move(provenanceRes.value()); provenance.bind(1, faceOwned); provenance.bind(2, person);
+    ASSERT_EQ(provenance.step(), StepResult::Done);
+    seedFace(faceOwned, person);
+
+    auto changedManual = db.getMediaById(manuallyOwned).value();
+    changedManual.content_hash = "manual-new";
+    ASSERT_TRUE(db.updateMedia(changedManual).isOk());
+    auto changedDerived = db.getMediaById(faceOwned).value();
+    changedDerived.exif.orientation = 6;
+    std::vector<MediaItem> batch{changedDerived};
+    ASSERT_TRUE(db.updateMediaBatch(batch).isOk());
+
+    auto countFaces = conn.prepare("SELECT COUNT(*) FROM faces WHERE media_id IN (?,?);");
+    ASSERT_TRUE(countFaces.isOk());
+    auto count = std::move(countFaces.value()); count.bind(1, manuallyOwned); count.bind(2, faceOwned);
+    ASSERT_EQ(count.step(), StepResult::Row);
+    EXPECT_EQ(count.getInt64(0), 0);
+    auto countAnalysis = conn.prepare("SELECT COUNT(*) FROM face_media_analysis WHERE media_id IN (?,?);");
+    ASSERT_TRUE(countAnalysis.isOk());
+    auto analyses = std::move(countAnalysis.value()); analyses.bind(1, manuallyOwned); analyses.bind(2, faceOwned);
+    ASSERT_EQ(analyses.step(), StepResult::Row);
+    EXPECT_EQ(analyses.getInt64(0), 0);
+    EXPECT_EQ(db.getTagsForMedia(manuallyOwned).value().size(), 1u);
+    EXPECT_TRUE(db.getTagsForMedia(faceOwned).value().empty());
 }
 
 TEST_F(CatalogDbTest, InsertMediaBatch) {

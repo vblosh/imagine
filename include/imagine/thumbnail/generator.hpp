@@ -20,6 +20,7 @@ public:
     static Result<ImageBuffer> loadImageFromMemory(const uint8_t* data, size_t size);
 
     static Result<ImageBuffer> resize(const ImageBuffer& src, int maxDimension);
+    // Applies all EXIF orientations 1-8 (including mirrored orientations).
     static ImageBuffer rotate(const ImageBuffer& src, int orientation);
     static ImageBuffer rotateAngle(const ImageBuffer& src, int degrees);
     static Result<ImageBuffer> crop(const ImageBuffer& src, int x, int y, int width, int height);

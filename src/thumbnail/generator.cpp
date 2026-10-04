@@ -181,65 +181,46 @@ Result<ImageBuffer> Generator::loadImageFromMemoryTurboJpeg(
 }
 
 ImageBuffer Generator::rotate(const ImageBuffer& src, int orientation) {
-    if (orientation <= 1 || orientation > 8 || src.data.empty()) {
+    if (orientation < 1 || orientation > 8 || src.width <= 0 || src.height <= 0 ||
+        src.channels <= 0 || src.data.empty()) {
         return src;
     }
 
-    int inW = src.width;
-    int inH = src.height;
-    int c = src.channels;
+    const int inW = src.width;
+    const int inH = src.height;
+    const int c = src.channels;
+    const size_t expectedSize = static_cast<size_t>(inW) * static_cast<size_t>(inH) * static_cast<size_t>(c);
+    if (src.data.size() < expectedSize) return src;
+    if (orientation == 1) return src;
 
     ImageBuffer dst;
     dst.channels = c;
+    const bool swapsDimensions = orientation >= 5;
+    dst.width = swapsDimensions ? inH : inW;
+    dst.height = swapsDimensions ? inW : inH;
+    dst.data.resize(expectedSize);
 
-    if (orientation == 3) {
-        // 180 degrees
-        dst.width = inW;
-        dst.height = inH;
-        dst.data.resize(inW * inH * c);
-        for (int y = 0; y < inH; ++y) {
-            for (int x = 0; x < inW; ++x) {
-                int srcIdx = (y * inW + x) * c;
-                int dstIdx = ((inH - 1 - y) * inW + (inW - 1 - x)) * c;
-                for (int ch = 0; ch < c; ++ch) {
-                    dst.data[dstIdx + ch] = src.data[srcIdx + ch];
-                }
+    for (int y = 0; y < inH; ++y) {
+        for (int x = 0; x < inW; ++x) {
+            int dx = x;
+            int dy = y;
+            switch (orientation) {
+                case 2: dx = inW - 1 - x; break;                         // mirror horizontal
+                case 3: dx = inW - 1 - x; dy = inH - 1 - y; break;       // rotate 180
+                case 4: dy = inH - 1 - y; break;                         // mirror vertical
+                case 5: dx = y; dy = x; break;                           // transpose
+                case 6: dx = inH - 1 - y; dy = x; break;                 // rotate 90 CW
+                case 7: dx = inH - 1 - y; dy = inW - 1 - x; break;       // transverse
+                case 8: dx = y; dy = inW - 1 - x; break;                 // rotate 270 CW
+                default: break;
             }
+            const size_t source = (static_cast<size_t>(y) * inW + x) * c;
+            const size_t dest = (static_cast<size_t>(dy) * dst.width + dx) * c;
+            std::copy_n(src.data.begin() + static_cast<std::ptrdiff_t>(source), c,
+                        dst.data.begin() + static_cast<std::ptrdiff_t>(dest));
         }
-        return dst;
-    } else if (orientation == 6) {
-        // 90 degrees CW
-        dst.width = inH;
-        dst.height = inW;
-        dst.data.resize(inW * inH * c);
-        for (int y = 0; y < inH; ++y) {
-            for (int x = 0; x < inW; ++x) {
-                int srcIdx = (y * inW + x) * c;
-                int dstIdx = (x * inH + (inH - 1 - y)) * c;
-                for (int ch = 0; ch < c; ++ch) {
-                    dst.data[dstIdx + ch] = src.data[srcIdx + ch];
-                }
-            }
-        }
-        return dst;
-    } else if (orientation == 8) {
-        // 270 degrees CW (90 CCW)
-        dst.width = inH;
-        dst.height = inW;
-        dst.data.resize(inW * inH * c);
-        for (int y = 0; y < inH; ++y) {
-            for (int x = 0; x < inW; ++x) {
-                int srcIdx = (y * inW + x) * c;
-                int dstIdx = ((inW - 1 - x) * inH + y) * c;
-                for (int ch = 0; ch < c; ++ch) {
-                    dst.data[dstIdx + ch] = src.data[srcIdx + ch];
-                }
-            }
-        }
-        return dst;
     }
-
-    return src;
+    return dst;
 }
 
 ImageBuffer Generator::rotateAngle(const ImageBuffer& src, int degrees) {

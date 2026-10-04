@@ -19,6 +19,7 @@ Imagine combines a high-speed C++20 core engine with an interactive Command-Line
 10. [REST API Reference](#10-rest-api-reference)
 11. [Under the Hood: Database & Cache](#11-under-the-hood-database--cache)
 12. [Troubleshooting & FAQ](#12-troubleshooting--faq)
+13. [Face Detection & Recognition](#13-face-detection--recognition)
 
 ---
 
@@ -598,3 +599,23 @@ Then navigate to `http://<your-server-ip>:8080` from any computer or tablet on y
 
 ### Q: How do I back up my catalog?
 **A**: Simply back up your `catalog.db` file. Since thumbnails can always be re-generated from the original photos, `catalog.db` contains all your ratings, tags, album structures, and metadata history in a single portable file.
+
+---
+
+## 13. Face Detection & Recognition
+
+Face analysis is an optional local feature. Build with ONNX Runtime support and configure a local `buffalo_l` model folder containing `det_10g.onnx` and `w600k_r50.onnx` before starting the server. See [Face analysis setup](face-analysis-runtime.md) for installation, CPU/CUDA configuration, model-use restrictions, and reference validation.
+
+Click **Faces** on the toolbar to open the analysis dialog. Choose selected photos or the catalog, then start the scan. Scans run in the background; closing the progress dialog does not cancel them. Cancellation preserves photos already processed. Photos with no detected faces are reported separately from processing failures. The dialog also lets you view existing face results without scanning again.
+
+If some photos fail, the review grid shows a failure summary and a retry entry. **Faces** reopens that scan's error and **Retry remaining** controls, including after reloading the browser. A failed attempt preserves previously saved reviews; a successful forced reanalysis resets them. Naming or clearing faces refreshes the active photo filter and its counts.
+
+After a scan, the face grid opens with results from that scan's photos. Each person has one group containing their confirmed and suggested face crops, with the person's photos kept together on one grid page. Faces without an identity suggestion have a separate unnamed group. **Accept all** confirms only the suggested faces in a person's group. Review the group before accepting it; similarity scores are not probabilities.
+
+Under **Show**, use **Named**, **Unnamed**, and **Dismissed** to filter the grid. Named and Unnamed start checked. Suggested identities count as unnamed until confirmed. Select all and group actions apply to the filtered faces; hiding faces removes them from the active selection. The Accept button counts distinct photos across all grid pages; clicking it confirms every suggested face in that group. The group heading counts faces.
+
+Select face crops and use the grid's shared side panel to **Choose a person** or **Name this face**, then **Save name** for all selected faces. **Dismiss selection** removes unwanted detections from normal review. Face selection is independent of your photo selection. Confirmed identities add the corresponding people tag to each photo. A photo-level people tag alone does not teach the recognizer which face belongs to that person. The inspector's **Faces** panel is at the bottom and keeps face information and the **Show boxes** overlay. Each face has a small **×** button: it clears a confirmed identity or dismisses an unnamed detection. Dismissed detections can be restored from the review grid.
+
+You can change or clear a name, reject an identity suggestion, and dismiss or restore a false detection. SCRFD can detect faces on posters and mannequins; dismiss these when unwanted. Removing a face-derived identity preserves people tags added manually. Explicitly removing a people tag from a photo also clears matching face identities so the tag does not immediately reappear. Bulk review reports individual failures and keeps failed faces selected for retry.
+
+Analysis does not modify originals or upload photos. Editing the original invalidates the old face results. Forced reanalysis resets face review decisions for affected photos and requires confirmation. Back up the catalog to preserve face names and review decisions; cached face crops can be regenerated.
