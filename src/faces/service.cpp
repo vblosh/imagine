@@ -12,12 +12,17 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
+#include <condition_variable>
+#include <future>
 #include <limits>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -472,9 +477,113 @@ json pointsJson(const std::array<Point, 5>& points) {
     return result;
 }
 
-thumbnail::ImageBuffer orientRgb(const thumbnail::ImageBuffer& src, int orientation) {
-    return thumbnail::Generator::rotate(src, orientation);
+struct OrientedRgb {
+    const thumbnail::ImageBuffer* source{nullptr};
+    thumbnail::ImageBuffer rotated;
+
+    const thumbnail::ImageBuffer& image() const {
+        return source ? *source : rotated;
+    }
+};
+
+OrientedRgb orientRgb(const thumbnail::ImageBuffer& src, int orientation) {
+    if (orientation == 1) return {&src, {}};
+    return {nullptr, thumbnail::Generator::rotate(src, orientation)};
 }
+
+struct EncodedSource {
+    std::vector<uint8_t> bytes;
+    std::string hash;
+};
+
+Result<EncodedSource> readEncodedSource(const std::string& path) {
+    auto bytes = thumbnail::Generator::loadImageBytes(path);
+    if (!bytes.isOk()) return bytes.status();
+    auto hash = metadata::Hasher::computeBytesSha256(bytes.value().data(), bytes.value().size());
+    if (hash.empty()) return Status::internal("Failed to compute SHA-256 digest");
+    return EncodedSource{std::move(bytes.value()), std::move(hash)};
+}
+
+class SourcePrefetcher {
+public:
+    SourcePrefetcher() = default;
+    SourcePrefetcher(const SourcePrefetcher&) = delete;
+    SourcePrefetcher& operator=(const SourcePrefetcher&) = delete;
+
+    ~SourcePrefetcher() { stop(); }
+
+    std::optional<std::future<Result<EncodedSource>>> schedule(std::string path) {
+        std::promise<Result<EncodedSource>> promise;
+        auto future = promise.get_future();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (stopping_ || pending_ || busy_) return std::nullopt;
+            if (!worker_.joinable()) {
+                try {
+                    worker_ = std::thread([this] { run(); });
+                } catch (const std::system_error&) {
+                    return std::nullopt;
+                }
+            }
+            pending_.emplace(Task{std::move(path), std::move(promise)});
+        }
+        ready_.notify_one();
+        return std::optional<std::future<Result<EncodedSource>>>(std::move(future));
+    }
+
+private:
+    struct Task {
+        std::string path;
+        std::promise<Result<EncodedSource>> promise;
+    };
+
+    void run() {
+        for (;;) {
+            std::optional<Task> task;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                ready_.wait(lock, [&] { return stopping_ || pending_.has_value(); });
+                if (stopping_ && !pending_) return;
+                task.emplace(std::move(*pending_));
+                pending_.reset();
+                busy_ = true;
+            }
+
+            std::optional<Result<EncodedSource>> result;
+            std::exception_ptr failure;
+            try {
+                result.emplace(readEncodedSource(task->path));
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                busy_ = false;
+            }
+            try {
+                if (failure) task->promise.set_exception(failure);
+                else task->promise.set_value(std::move(*result));
+            } catch (...) {}
+        }
+    }
+
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+            pending_.reset();
+        }
+        ready_.notify_one();
+        if (worker_.joinable()) worker_.join();
+    }
+
+    std::mutex mutex_;
+    std::condition_variable ready_;
+    std::optional<Task> pending_;
+    bool busy_{false};
+    bool stopping_{false};
+    std::thread worker_;
+};
 
 std::vector<float> checkedEmbedding(const Detection& d, std::string& error) {
     if (!d.embeddingError.empty()) { error = d.embeddingError; return {}; }
@@ -2423,12 +2532,13 @@ Result<std::string> Service::cropPath(int64_t faceId, int64_t revision) {
         return loaded.status();
     }
     auto oriented = orientRgb(loaded.value(), orientation);
-    int left = std::clamp(static_cast<int>(std::floor(x)), 0, oriented.width);
-    int top = std::clamp(static_cast<int>(std::floor(y)), 0, oriented.height);
-    int right = std::clamp(static_cast<int>(std::ceil(x+w)), 0, oriented.width);
-    int bottom = std::clamp(static_cast<int>(std::ceil(y+h)), 0, oriented.height);
+    const auto& orientedImage = oriented.image();
+    int left = std::clamp(static_cast<int>(std::floor(x)), 0, orientedImage.width);
+    int top = std::clamp(static_cast<int>(std::floor(y)), 0, orientedImage.height);
+    int right = std::clamp(static_cast<int>(std::ceil(x+w)), 0, orientedImage.width);
+    int bottom = std::clamp(static_cast<int>(std::ceil(y+h)), 0, orientedImage.height);
     if (right <= left || bottom <= top) return Status::invalidArgument("Face rectangle is outside the source image");
-    auto cropped = thumbnail::Generator::crop(oriented, left, top, right-left, bottom-top);
+    auto cropped = thumbnail::Generator::crop(orientedImage, left, top, right-left, bottom-top);
     if (!cropped.isOk()) return cropped.status();
     std::string tempPath = pathToUtf8(cropFile) + ".tmp-" +
         std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id()));
@@ -2485,8 +2595,23 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
 
     try {
         const RuntimeInfo runtime = impl_->runtime;
-        for (MediaId mediaId : mediaIds) {
-            if (impl_->cancelRequested.load()) { finish("cancelled"); return; }
+        SourcePrefetcher sourcePrefetcher;
+        std::optional<std::future<Result<EncodedSource>>> prefetchedSource;
+        size_t prefetchedIndex = mediaIds.size();
+        auto discardPrefetch = [&]() {
+            if (!prefetchedSource) return;
+            try { (void)prefetchedSource->get(); } catch (...) {}
+            prefetchedSource.reset();
+            prefetchedIndex = mediaIds.size();
+        };
+
+        for (size_t index = 0; index < mediaIds.size(); ++index) {
+            if (impl_->cancelRequested.load()) {
+                discardPrefetch();
+                finish("cancelled");
+                return;
+            }
+            const MediaId mediaId = mediaIds[index];
             auto mediaRes = impl_->db.getMediaById(mediaId);
             if (!mediaRes.isOk()) {
                 IMAGINE_LOG_ERROR("Face scan unable to find media ID " + std::to_string(mediaId) + ": " + mediaRes.status().message());
@@ -2496,14 +2621,6 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             if (media.media_type != "photo") { updateProgress("skipped"); continue; }
 
             std::string photoPath = impl_->resolver ? impl_->resolver(media.file_path) : media.file_path;
-            auto hashBefore = metadata::Hasher::computeFileSha256(photoPath);
-            if (!hashBefore.isOk() || hashBefore.value() != media.content_hash) {
-                std::string message = hashBefore.isOk() ? "Photo file changed since it was cataloged; reimport it before face analysis" : hashBefore.status().message();
-                IMAGINE_LOG_ERROR("Face scan unable to verify/open photo file for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + message);
-                recordFailure(mediaId, media, media, message);
-                continue;
-            }
-
             bool reusable = false;
             bool preserveIdentities = false;
             bool requiresForce = false;
@@ -2513,28 +2630,88 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
                 preserveIdentities = !force && recognizerRefreshNeeded(impl_->db.conn_, media, runtime, impl_->config);
                 requiresForce = !force && detectorRefreshRequiresForce(impl_->db.conn_, media, runtime, impl_->config);
             }
-            if (reusable) { updateProgress("skipped"); continue; }
-            if (requiresForce) {
-                updateProgress("skipped", "Detector or analysis settings changed; use force to replace reviewed face results");
+            if (reusable || requiresForce) {
+                auto hashBefore = metadata::Hasher::computeFileSha256(photoPath);
+                if (!hashBefore.isOk() || hashBefore.value() != media.content_hash) {
+                    const std::string message = hashBefore.isOk()
+                        ? "Photo file changed since it was cataloged; reimport it before face analysis"
+                        : hashBefore.status().message();
+                    IMAGINE_LOG_ERROR("Face scan unable to verify/open photo file for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + message);
+                    recordFailure(mediaId, media, media, message);
+                } else if (reusable) {
+                    updateProgress("skipped");
+                } else {
+                    updateProgress("skipped", "Detector or analysis settings changed; use force to replace reviewed face results");
+                }
+                if (prefetchedSource && prefetchedIndex == index) discardPrefetch();
                 continue;
             }
-            auto loaded = thumbnail::Generator::loadImage(photoPath);
+
+            Result<EncodedSource> source = [&]() -> Result<EncodedSource> {
+                if (prefetchedSource && prefetchedIndex == index) {
+                    auto ready = std::move(*prefetchedSource);
+                    prefetchedSource.reset();
+                    prefetchedIndex = mediaIds.size();
+                    return ready.get();
+                }
+                return readEncodedSource(photoPath);
+            }();
+            if (!source.isOk() || source.value().hash != media.content_hash) {
+                std::string message = source.isOk() ? "Photo file changed since it was cataloged; reimport it before face analysis" : source.status().message();
+                IMAGINE_LOG_ERROR("Face scan unable to verify/open photo file for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + message);
+                recordFailure(mediaId, media, media, message);
+                continue;
+            }
+
+            auto loaded = [&]() {
+                auto encodedBytes = std::move(source.value().bytes);
+                return thumbnail::Generator::loadImageFromMemory(encodedBytes.data(), encodedBytes.size());
+            }();
             if (!loaded.isOk()) {
                 IMAGINE_LOG_ERROR("Face scan unable to open/load image file for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + loaded.status().message());
                 recordFailure(mediaId, media, media, loaded.status().message());
                 continue;
             }
             auto oriented = orientRgb(loaded.value(), media.exif.orientation);
+
+            if (!impl_->cancelRequested.load()) {
+                for (size_t nextIndex = index + 1; nextIndex < mediaIds.size(); ++nextIndex) {
+                    if (impl_->cancelRequested.load()) break;
+                    auto nextMedia = impl_->db.getMediaById(mediaIds[nextIndex]);
+                    if (!nextMedia.isOk() || nextMedia.value().media_type != "photo") continue;
+                    bool nextReusable = false;
+                    bool nextRequiresForce = false;
+                    {
+                        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+                        nextReusable = !force && analysisReusable(impl_->db.conn_, nextMedia.value(), runtime, impl_->config);
+                        nextRequiresForce = !force && detectorRefreshRequiresForce(impl_->db.conn_, nextMedia.value(), runtime, impl_->config);
+                    }
+                    if (nextReusable || nextRequiresForce) break;
+                    std::string nextPath = impl_->resolver ? impl_->resolver(nextMedia.value().file_path)
+                                                           : nextMedia.value().file_path;
+                    if (impl_->cancelRequested.load()) break;
+                    if (auto scheduled = sourcePrefetcher.schedule(std::move(nextPath))) {
+                        prefetchedSource.emplace(std::move(*scheduled));
+                        prefetchedIndex = nextIndex;
+                    } else {
+                        prefetchedSource.reset();
+                        prefetchedIndex = mediaIds.size();
+                    }
+                    break;
+                }
+            }
+
+            const auto& orientedImage = oriented.image();
             MediaItem analysisMedia = media;
-            analysisMedia.width = oriented.width;
-            analysisMedia.height = oriented.height;
-            auto detected = impl_->analyzer ? impl_->analyzer(oriented) : impl_->engine.analyze(oriented);
+            analysisMedia.width = orientedImage.width;
+            analysisMedia.height = orientedImage.height;
+            auto detected = impl_->analyzer ? impl_->analyzer(orientedImage) : impl_->engine.analyze(orientedImage);
             if (!detected.isOk()) {
                 IMAGINE_LOG_ERROR("Face scan inference failed for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + detected.status().message());
                 recordFailure(mediaId, analysisMedia, media, detected.status().message());
                 continue;
             }
-            Status geometryStatus = normalizeCandidateGeometry(detected.value(), oriented.width, oriented.height);
+            Status geometryStatus = normalizeCandidateGeometry(detected.value(), orientedImage.width, orientedImage.height);
             if (!geometryStatus.isOk()) {
                 IMAGINE_LOG_ERROR("Face scan candidate geometry invalid for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + geometryStatus.message());
                 recordFailure(mediaId, analysisMedia, media, geometryStatus.message());

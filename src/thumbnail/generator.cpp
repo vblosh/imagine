@@ -85,12 +85,19 @@ Result<std::pair<int, int>> Generator::getImageDimensionsFromMemory(const uint8_
 }
 
 Result<ImageBuffer> Generator::loadImage(const std::string& filePath) {
+    auto encoded = loadImageBytes(filePath);
+    if (!encoded.isOk()) return encoded.status();
+    return loadImageFromMemory(encoded.value().data(), encoded.value().size());
+}
+
+Result<std::vector<uint8_t>> Generator::loadImageBytes(const std::string& filePath) {
     std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file) {
         return Status::ioError("Failed to open image file: " + filePath);
     }
-    std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    return loadImageFromMemory(buffer.data(), buffer.size());
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (file.bad()) return Status::ioError("Failed to read image file: " + filePath);
+    return bytes;
 }
 
 Result<ImageBuffer> Generator::loadImageFromMemory(const uint8_t* data, size_t size) {

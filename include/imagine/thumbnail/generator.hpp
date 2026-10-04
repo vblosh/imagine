@@ -17,6 +17,7 @@ struct ImageBuffer {
 class Generator {
 public:
     static Result<ImageBuffer> loadImage(const std::string& filePath);
+    static Result<std::vector<uint8_t>> loadImageBytes(const std::string& filePath);
     static Result<ImageBuffer> loadImageFromMemory(const uint8_t* data, size_t size);
 
     static Result<ImageBuffer> resize(const ImageBuffer& src, int maxDimension);

@@ -16,16 +16,28 @@ static std::string hexEncode(const unsigned char* hash, unsigned int len) {
 }
 
 std::string Hasher::computeBytesSha256(const uint8_t* data, size_t size) {
+    if (!data && size != 0) {
+        return "";
+    }
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
     if (!ctx) return "";
 
     const EVP_MD* md = EVP_sha256();
-    EVP_DigestInit_ex(ctx, md, nullptr);
-    EVP_DigestUpdate(ctx, data, size);
+    if (EVP_DigestInit_ex(ctx, md, nullptr) != 1) {
+        EVP_MD_CTX_free(ctx);
+        return "";
+    }
+    if (size > 0 && EVP_DigestUpdate(ctx, data, size) != 1) {
+        EVP_MD_CTX_free(ctx);
+        return "";
+    }
 
     unsigned char hash[EVP_MAX_MD_SIZE];
     unsigned int hashLen = 0;
-    EVP_DigestFinal_ex(ctx, hash, &hashLen);
+    if (EVP_DigestFinal_ex(ctx, hash, &hashLen) != 1) {
+        EVP_MD_CTX_free(ctx);
+        return "";
+    }
     EVP_MD_CTX_free(ctx);
 
     return hexEncode(hash, hashLen);
