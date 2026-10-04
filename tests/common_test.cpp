@@ -227,6 +227,79 @@ TEST(LoggerTest, FileOutputJsonAndText) {
     logger.setLevel(origLevel);
 }
 
+TEST(LoggerTest, UnicodeLoggingAndFilePath) {
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
+
+    auto tempDir = std::filesystem::temp_directory_path() /
+        ("imagine_unicode_log_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(tempDir);
+
+    // Unicode folder and file path (Cyrillic and German characters)
+    auto unicodeSubdir = tempDir / pathFromUtf8("Логи_Папка");
+    auto logFilePath = unicodeSubdir / pathFromUtf8("журнал_Nürnberg.log");
+    std::string logFilePathUtf8 = pathToUtf8(logFilePath);
+
+    logger.setLevel(LogLevel::Debug);
+    logger.setConsoleEnabled(true);
+    logger.setFileFormat(LogFormat::Text);
+
+    // Verify setLogFile works with UTF-8 path and creates parent directory
+    EXPECT_TRUE(logger.setLogFile(logFilePathUtf8));
+
+    // Log messages containing Cyrillic, umlauts, CJK
+    const std::string cyrillicMsg = "Face scan error for media ID 10472 (Коломна/P1160040_filtered.tif): Failed to decode";
+    const std::string germanMsg = "Face scan unable to open image file for media ID 23850 (D:\\Foto\\Nürnberg/DSC_7926.NEF)";
+    const std::string cjkMsg = "Tokyo: 東京, Emoji: 🌟";
+
+    logger.log(LogLevel::Error, "service.cpp", 2604, cyrillicMsg);
+    logger.log(LogLevel::Error, "service.cpp", 2685, germanMsg);
+    logger.log(LogLevel::Info, "service.cpp", 2700, cjkMsg);
+
+    logger.closeLogFile();
+
+    // Verify file content has preserved the exact UTF-8 byte sequences
+    {
+        std::ifstream ifs(pathFromUtf8(logFilePathUtf8), std::ios::binary);
+        ASSERT_TRUE(ifs.is_open());
+        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        EXPECT_NE(content.find(cyrillicMsg), std::string::npos);
+        EXPECT_NE(content.find(germanMsg), std::string::npos);
+        EXPECT_NE(content.find(cjkMsg), std::string::npos);
+        EXPECT_NE(content.find("[service.cpp:2604]"), std::string::npos);
+    }
+
+    // Now test JSON format with Unicode log path
+    logger.setFileFormat(LogFormat::Json);
+    EXPECT_TRUE(logger.setLogFile(logFilePathUtf8));
+    logger.log(LogLevel::Error, "service.cpp", 2604, cyrillicMsg);
+    logger.log(LogLevel::Info, "service.cpp", 2700, cjkMsg);
+    logger.closeLogFile();
+
+    {
+        std::ifstream ifs(pathFromUtf8(logFilePathUtf8), std::ios::binary);
+        ASSERT_TRUE(ifs.is_open());
+        std::string line;
+        bool foundCyrillic = false;
+        bool foundCjk = false;
+        while (std::getline(ifs, line)) {
+            if (line.empty()) continue;
+            auto parsed = nlohmann::json::parse(line, nullptr, false);
+            if (parsed.is_object() && parsed.contains("msg")) {
+                if (parsed["msg"] == cyrillicMsg) foundCyrillic = true;
+                if (parsed["msg"] == cjkMsg) foundCjk = true;
+            }
+        }
+        EXPECT_TRUE(foundCyrillic);
+        EXPECT_TRUE(foundCjk);
+    }
+
+    // Cleanup and restore
+    std::error_code ec;
+    std::filesystem::remove_all(tempDir, ec);
+    logger.setLevel(origLevel);
+}
+
 TEST(TypesTest, ExifDataJsonSerialization) {
     ExifData original;
     original.camera_make = "Nikon";

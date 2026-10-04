@@ -44,7 +44,7 @@ public:
     static LogLevel parseLevel(std::string_view name);
 
 private:
-    Logger() = default;
+    Logger();
     ~Logger();
 
     std::string formatText(LogLevel level, std::string_view file, int line,

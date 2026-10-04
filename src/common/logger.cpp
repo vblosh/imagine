@@ -1,11 +1,76 @@
 #include "imagine/common/logger.hpp"
+#include "imagine/common/types.hpp"
 #include <chrono>
 #include <iomanip>
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace imagine {
+
+#if defined(_WIN32)
+static void writeConsoleUtf8(HANDLE hConsole, std::string_view text) {
+    if (text.empty()) return;
+    std::cout.flush();
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    std::string sanitized;
+    if (wlen <= 0) {
+        sanitized = sanitizeUtf8(text);
+        wlen = MultiByteToWideChar(CP_UTF8, 0, sanitized.data(), static_cast<int>(sanitized.size()), nullptr, 0);
+        text = sanitized;
+    }
+    if (wlen > 0) {
+        std::wstring wstr(wlen, L'\0');
+        if (MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), wstr.data(), wlen) > 0) {
+            const size_t chunkSize = 16384;
+            for (size_t offset = 0; offset < wstr.size(); offset += chunkSize) {
+                DWORD toWrite = static_cast<DWORD>(std::min(chunkSize, wstr.size() - offset));
+                DWORD written = 0;
+                if (!WriteConsoleW(hConsole, wstr.data() + offset, toWrite, &written, nullptr)) {
+                    std::cout.write(text.data(), text.size());
+                    std::cout.flush();
+                    return;
+                }
+            }
+            return;
+        }
+    }
+    std::cout.write(text.data(), text.size());
+    std::cout.flush();
+}
+#endif
+
+static std::string_view extractFilename(std::string_view file) {
+    auto pos = file.find_last_of("/\\");
+    return (pos == std::string_view::npos) ? file : file.substr(pos + 1);
+}
+
+Logger::Logger() {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (hOut != INVALID_HANDLE_VALUE) {
+        DWORD mode = 0;
+        if (GetConsoleMode(hOut, &mode)) {
+            if (!SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
+                consoleColors_ = false;
+            }
+        }
+    }
+#endif
+}
 
 Logger& Logger::instance() {
     static Logger logger;
@@ -34,7 +99,19 @@ bool Logger::setLogFile(const std::string& path) {
         logFile_.close();
     }
     logFile_.clear();
-    logFile_.open(path, std::ios::app);
+    if (path.empty()) {
+        return false;
+    }
+    auto fsPath = pathFromUtf8(path);
+    std::error_code ec;
+    if (std::filesystem::is_directory(fsPath, ec)) {
+        return false;
+    }
+    auto parent = fsPath.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, ec);
+    }
+    logFile_.open(fsPath, std::ios::app);
     return logFile_.is_open();
 }
 
@@ -141,9 +218,11 @@ std::string Logger::formatText(LogLevel level, std::string_view file, int line,
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
 
     std::tm tm_buf{};
-    if (const std::tm* tm_ptr = std::localtime(&time_t_now)) {
-        tm_buf = *tm_ptr;
-    }
+#if defined(_WIN32)
+    localtime_s(&tm_buf, &time_t_now);
+#else
+    localtime_r(&time_t_now, &tm_buf);
+#endif
 
     const char* color_code = "\033[0m";
     if (withColor) {
@@ -156,7 +235,7 @@ std::string Logger::formatText(LogLevel level, std::string_view file, int line,
         }
     }
 
-    std::string filename = std::filesystem::path(file).filename().string();
+    std::string_view filename = extractFilename(file);
 
     std::ostringstream oss;
     if (withColor) {
@@ -186,7 +265,7 @@ std::string Logger::formatJson(LogLevel level, std::string_view file, int line,
     gmtime_r(&time_t_now, &tm_buf);
 #endif
 
-    std::string filename = std::filesystem::path(file).filename().string();
+    std::string_view filename = extractFilename(file);
 
     // Trim trailing space from level string for JSON
     std::string lvl = levelStr(level);
@@ -211,7 +290,22 @@ void Logger::log(LogLevel level, std::string_view file, int line, std::string_vi
     }
 
     if (consoleEnabled_) {
-        std::cout << formatText(level, file, line, message, consoleColors_) << std::flush;
+#if defined(_WIN32)
+        HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode = 0;
+        bool isConsole = (hOut != INVALID_HANDLE_VALUE && GetConsoleMode(hOut, &mode));
+        std::string formatted = formatText(level, file, line, message, consoleColors_ && isConsole);
+        if (isConsole) {
+            writeConsoleUtf8(hOut, formatted);
+        } else {
+            std::cout.write(formatted.data(), formatted.size());
+            std::cout.flush();
+        }
+#else
+        std::string formatted = formatText(level, file, line, message, consoleColors_);
+        std::cout.write(formatted.data(), formatted.size());
+        std::cout.flush();
+#endif
     }
 
     if (logFile_.is_open()) {

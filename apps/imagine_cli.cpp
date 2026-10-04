@@ -14,6 +14,17 @@
 #include "imagine/server/web_server.hpp"
 #include "imagine/thumbnail/cache.hpp"
 #include "imagine/common/logger.hpp"
+#include "imagine/common/types.hpp"
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -302,7 +313,7 @@ int handleServe(int argc, char** argv) {
             // Append when replacing the extension could select the database itself.
             catPath += ".log";
         }
-        logFile = catPath.string();
+        logFile = imagine::pathToUtf8(catPath);
     }
     if (logFile == "none" || logFile == "off") {
         logFile.clear();
@@ -311,8 +322,8 @@ int handleServe(int argc, char** argv) {
     imagine::Logger::instance().setLevel(imagine::Logger::parseLevel(logLevel));
     if (!logFile.empty()) {
         try {
-            auto catalogPath = std::filesystem::weakly_canonical(catalogDb);
-            auto logPath = std::filesystem::weakly_canonical(logFile);
+            auto catalogPath = std::filesystem::weakly_canonical(imagine::pathFromUtf8(catalogDb));
+            auto logPath = std::filesystem::weakly_canonical(imagine::pathFromUtf8(logFile));
             auto catalogName = catalogPath.native();
             auto logName = logPath.native();
 #if defined(_WIN32)
@@ -846,6 +857,10 @@ int handleRelocate(int argc, char** argv) {
 } // anonymous namespace
 
 int main(int argc, char** argv) {
+#if defined(_WIN32)
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
     if (argc < 2) {
         const char* envCat = std::getenv("IMAGINE_CATALOG");
         if (!envCat || !*envCat) envCat = std::getenv("IMAGINE_CATALOG_DB");
