@@ -39,6 +39,7 @@ let gridLoadedFaces = new Map();
 let gridSelectedFaceById = new Map();
 let gridPageCache = new Map();
 let gridFaceIndexById = new Map();
+let gridFaceByIndex = new Map();
 let gridPageInflight = new Map();
 let gridFailedPageOffsets = new Set();
 let gridPendingFaceIds = new Set();
@@ -56,6 +57,7 @@ let gridIsLoading = false;
 let gridActionBusy = false;
 let gridSelection = new Set();
 let gridRangeAnchor = null;
+let gridRangeAnchorIndex = null;
 let gridLastClicked = null;
 let gridModalReturnFocus = null;
 let scanModalReturnFocus = null;
@@ -664,7 +666,7 @@ function distinctMediaCount(faces) {
   return new Set((faces || []).map(face => Number(face.media_id)).filter(id => id > 0)).size;
 }
 
-function faceGridCardMarkup(face, groupKey) {
+function faceGridCardMarkup(face, groupKey, index = null) {
   const id = Number(face.id);
   const suggestion = !face.dismissed && Array.isArray(face.suggestions) ? face.suggestions[0] : null;
   const title = face.person_name || (suggestion && suggestion.name) || t('face_name_person');
@@ -674,7 +676,8 @@ function faceGridCardMarkup(face, groupKey) {
         : t('face_unnamed');
   const selected = gridSelection.has(String(id));
   const alt = t('face_crop_alt', { name: title });
-  return `<label class="face-grid-card${selected ? ' selected' : ''}" data-face-id="${id}" data-group-key="${escapeHtml(groupKey)}">
+  const indexAttr = index !== null && index !== undefined ? ` data-face-index="${index}"` : '';
+  return `<label class="face-grid-card${selected ? ' selected' : ''}" data-face-id="${id}"${indexAttr} data-group-key="${escapeHtml(groupKey)}">
     <input class="face-grid-select" type="checkbox" value="${id}" aria-label="${escapeHtml(t('face_grid_select_face', { name: title }))}" ${selected ? 'checked' : ''}>
     <img class="face-grid-crop" src="${escapeHtml(safeCropUrl(face))}" alt="${escapeHtml(alt)}" loading="lazy">
     <span class="face-grid-name">${escapeHtml(title)}</span>
@@ -694,11 +697,14 @@ function faceGridCardText(face) {
   };
 }
 
-function updateFaceGridCard(card, face, groupKey, { stale = false } = {}) {
+function updateFaceGridCard(card, face, groupKey, { stale = false, index = null } = {}) {
   const id = Number(face.id);
   const { title, meta } = faceGridCardText(face);
   const selected = gridSelection.has(String(id));
   card.dataset.faceId = String(id);
+  if (index !== null && index !== undefined) {
+    card.dataset.faceIndex = String(index);
+  }
   card.dataset.groupKey = groupKey;
   card.classList.toggle('face-grid-card-stale', stale);
   card.classList.toggle('selected', selected);
@@ -753,6 +759,7 @@ function currentGridPageFaces() {
 }
 
 function gridPageFaceAt(index) {
+  if (gridFaceByIndex.has(index)) return gridFaceByIndex.get(index);
   const offset = Math.floor(index / GRID_GROUP_PAGE_SIZE) * GRID_GROUP_PAGE_SIZE;
   return gridPageCache.get(offset)?.[index - offset] || null;
 }
@@ -846,7 +853,7 @@ function renderFaceGrid(schedulePages = true) {
       windowRows.push({ index, face, fresh: Boolean(freshFace) });
       if (face) {
         if (freshFace) windowFaces.push(freshFace);
-        markup.push(faceGridCardMarkup(face, group.key));
+        markup.push(faceGridCardMarkup(face, group.key, index));
       } else {
         const placeholderHeight = Math.max(1, window.rowHeight - window.rowGap);
         markup.push(`<div class="face-grid-card face-grid-card-placeholder" style="height:${placeholderHeight}px" aria-hidden="true"></div>`);
@@ -866,7 +873,7 @@ function renderFaceGrid(schedulePages = true) {
       const face = row.face;
       const id = String(face.id);
       const card = existingCards.get(id) || gridRetainedCardsById.get(id) || freshCards.get(id) || templateNode;
-      updateFaceGridCard(card, face, group.key, { stale: !row.fresh });
+      updateFaceGridCard(card, face, group.key, { stale: !row.fresh, index: row.index });
       gridRetainedCardsById.delete(id);
       fragment.appendChild(card);
     }
@@ -878,7 +885,9 @@ function renderFaceGrid(schedulePages = true) {
     container.appendChild(bottomSpacer);
     list.scrollTop = requestedScrollTop;
     gridFaces = windowFaces;
-    gridLoadedFaces = new Map(windowFaces.map(face => [String(face.id), face]));
+    for (const face of windowFaces) {
+      gridLoadedFaces.set(String(face.id), face);
+    }
   }
   if (empty) {
     empty.textContent = gridGroups.length ? '' : t('face_grid_empty');
@@ -942,7 +951,10 @@ async function requestGridGroupPage(offset, group, snapshot, requestToken, viewT
     for (let i = 0; i < items.length; i++) {
       const face = items[i];
       const id = String(face.id);
-      gridFaceIndexById.set(id, offset + i);
+      const faceIndex = offset + i;
+      gridFaceIndexById.set(id, faceIndex);
+      gridFaceByIndex.set(faceIndex, face);
+      gridLoadedFaces.set(id, face);
       if (gridSelection.has(id)) gridSelectedFaceById.set(id, face);
     }
     trimGridPageCache(gridPageOffsetsForRange(gridGroupWindow.start, gridGroupWindow.end));
@@ -1114,12 +1126,15 @@ function clearGridGroupWindow() {
   gridPageInflight.clear();
   gridPageCache.clear();
   gridFaceIndexById.clear();
+  gridFaceByIndex.clear();
   gridFailedPageOffsets.clear();
   gridGroupLoadingMore = false;
   gridGroupTotal = 0;
   gridGroupWindow = { start: 0, end: 0, columns: 1, rowHeight: 240 };
   gridFaces = [];
   gridLoadedFaces.clear();
+  gridRangeAnchor = null;
+  gridRangeAnchorIndex = null;
 }
 
 function pruneGridSelectionToGroups(groups) {
@@ -1345,6 +1360,7 @@ function openFaceGrid({ jobId = null, includeDismissed = false, title = null } =
   gridSelectedFaceById.clear();
   gridPendingFaceIds.clear();
   gridRangeAnchor = null;
+  gridRangeAnchorIndex = null;
   gridGroupIndex = 0;
   gridGroups = [];
   gridSnapshot = '';
@@ -1460,24 +1476,59 @@ function handleGridSelectionClick(event) {
   if (gridIsLoading || gridActionBusy) return;
   const card = event.target.closest('.face-grid-card');
   if (!card) return;
-  gridLastClicked = { id: card.dataset.faceId, shiftKey: event.shiftKey };
+  const id = card.dataset.faceId;
+  const shiftKey = Boolean(event.shiftKey || (gridLastClicked?.id === id && gridLastClicked.shiftKey));
+  gridLastClicked = { id, shiftKey };
 }
 
-function handleGridSelectionChange(event) {
+async function handleGridSelectionChange(event) {
   if (gridIsLoading || gridActionBusy) return;
   const checkbox = event.target.closest('.face-grid-select');
   if (!checkbox) return;
+  const card = checkbox.closest('.face-grid-card');
   const id = String(checkbox.value);
-  const face = gridLoadedFaces.get(id);
-  const pageIds = currentGridPageFaces().map(face => String(face.id));
-  const targetIndex = pageIds.indexOf(id);
-  const anchorIndex = gridRangeAnchor === null ? -1 : pageIds.indexOf(String(gridRangeAnchor));
-  if (gridLastClicked?.id === id && gridLastClicked.shiftKey && anchorIndex >= 0 && targetIndex >= 0) {
+  const face = gridLoadedFaces.get(id) || (gridFaceIndexById.has(id) ? gridPageFaceAt(gridFaceIndexById.get(id)) : null);
+
+  const targetIndex = card?.dataset.faceIndex !== undefined && card.dataset.faceIndex !== ''
+    ? Number(card.dataset.faceIndex)
+    : (gridFaceIndexById.has(id) ? gridFaceIndexById.get(id) : -1);
+
+  const anchorIndex = gridRangeAnchorIndex !== null && gridRangeAnchorIndex !== undefined && gridRangeAnchorIndex >= 0
+    ? gridRangeAnchorIndex
+    : (gridRangeAnchor !== null && gridFaceIndexById.has(String(gridRangeAnchor)) ? gridFaceIndexById.get(String(gridRangeAnchor)) : -1);
+
+  const isShift = Boolean(gridLastClicked?.id === id && gridLastClicked.shiftKey);
+  const lastClickedWasShift = Boolean(gridLastClicked?.shiftKey);
+  gridLastClicked = null;
+
+  if (isShift && anchorIndex >= 0 && targetIndex >= 0) {
     const low = Math.min(anchorIndex, targetIndex);
     const high = Math.max(anchorIndex, targetIndex);
-    for (const rangeId of pageIds.slice(low, high + 1)) {
-      const rangeFace = gridLoadedFaces.get(rangeId);
-      if (checkbox.checked && rangeFace) {
+    const group = gridGroups[gridGroupIndex];
+    if (group && gridSnapshot) {
+      const requiredOffsets = gridPageOffsetsForRange(low, high + 1);
+      const missingOffsets = requiredOffsets.filter(offset => {
+        if (gridPageCache.has(offset)) return false;
+        const pageCount = Math.min(GRID_GROUP_PAGE_SIZE, (Number(group.faces_count) || 0) - offset);
+        for (let i = 0; i < pageCount; i++) {
+          if (!gridFaceByIndex.has(offset + i)) return true;
+        }
+        return false;
+      });
+      if (missingOffsets.length > 0) {
+        const viewToken = gridViewToken;
+        const requestToken = gridGroupRequestToken;
+        const snapshot = gridSnapshot;
+        await Promise.all(missingOffsets.map(offset => requestGridGroupPage(offset, group, snapshot, requestToken, viewToken)));
+        if (viewToken !== gridViewToken || requestToken !== gridGroupRequestToken || snapshot !== gridSnapshot
+            || byId('faceGridModal')?.style.display !== 'flex') return;
+      }
+    }
+    for (let index = low; index <= high; index++) {
+      const rangeFace = gridPageFaceAt(index);
+      if (!rangeFace || !faceMatchesGridFilters(rangeFace)) continue;
+      const rangeId = String(rangeFace.id);
+      if (checkbox.checked) {
         gridSelection.add(rangeId);
         gridSelectedFaceById.set(rangeId, rangeFace);
       } else {
@@ -1492,8 +1543,11 @@ function handleGridSelectionChange(event) {
     gridSelection.delete(id);
     gridSelectedFaceById.delete(id);
   }
-  if (!(gridLastClicked?.shiftKey)) gridRangeAnchor = id;
-  gridLastClicked = null;
+
+  if ((!lastClickedWasShift || gridRangeAnchor === null) && targetIndex >= 0) {
+    gridRangeAnchor = id;
+    gridRangeAnchorIndex = targetIndex;
+  }
   updateGridSelectionUi();
 }
 
@@ -1806,6 +1860,7 @@ async function updateGridPage(delta) {
   gridGroupIndex = nextIndex;
   clearGridGroupWindow();
   gridRangeAnchor = null;
+  gridRangeAnchorIndex = null;
   const list = byId('faceGridList');
   if (list) list.scrollTop = 0;
   const viewToken = gridViewToken;
@@ -1931,6 +1986,7 @@ function bindFaceActions() {
   byId('faceGridJobRetryBtn')?.addEventListener('click', openFailedJobFromGrid);
   const refreshGridFilters = () => {
     gridRangeAnchor = null;
+    gridRangeAnchorIndex = null;
     loadFaceGroups({ jobId: gridJobId, preserveSelection: true, preserveGroupKey: null, preserveGroupIndex: false });
   };
   byId('faceGridIncludeDismissed')?.addEventListener('change', refreshGridFilters);

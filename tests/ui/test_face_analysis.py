@@ -1128,4 +1128,49 @@ def test_dismiss_selection_updates_scroll_position_when_photos_disappear(server,
     # Verify the remaining items are rendered in view
     assert len(after["visibleIds"]) > 0
 
+def test_shift_select_range_after_scrolling_grid(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {i: _face(i, media_id) for i in range(1, 101)}
+    _open_existing_grid(page)
+    page.set_viewport_size(dict(width=1100, height=850))
 
+    # Click first card (face 1)
+    card1 = page.locator('.face-grid-card[data-face-id="1"]')
+    expect(card1).to_be_visible()
+    card1.click()
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("1")
+
+    # Scroll down so card 1 is no longer rendered
+    grid = page.locator("#faceGridList")
+    grid.evaluate("element => { element.scrollTop = 1500; element.dispatchEvent(new Event('scroll')); }")
+    page.wait_for_timeout(300)
+
+    # Verify card 1 is scrolled out of DOM
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_have_count(0)
+
+    # Find a visible card after scroll, e.g. face 25
+    card25 = page.locator('.face-grid-card[data-face-id="25"]')
+    expect(card25).to_be_visible()
+    card25.click(modifiers=["Shift"])
+
+    # Expect cards 1 through 25 to be selected (25 cards selected)
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("25")
+
+    # Scroll back up to the top
+    grid.evaluate("element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); }")
+    page.wait_for_timeout(300)
+
+    # Verify card 1 is visible and still marked selected and checked
+    expect(card1).to_be_visible()
+    assert card1.locator(".face-grid-select").is_checked()
+    assert "selected" in (card1.get_attribute("class") or "")
+
+    # Scroll back down and extend shift selection to card 30
+    grid.evaluate("element => { element.scrollTop = 1800; element.dispatchEvent(new Event('scroll')); }")
+    page.wait_for_timeout(300)
+    card30 = page.locator('.face-grid-card[data-face-id="30"]')
+    expect(card30).to_be_visible()
+    card30.click(modifiers=["Shift"])
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("30")
