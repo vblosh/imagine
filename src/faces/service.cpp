@@ -5,6 +5,7 @@
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/metadata/hasher.hpp"
 #include "imagine/common/types.hpp"
+#include "imagine/common/logger.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1682,6 +1683,9 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
         if (!committed.isOk()) return committed;
     }
 
+    IMAGINE_LOG_INFO("Created face-analysis job " + std::to_string(jobId) +
+                     " (scope: " + scope + ", items: " + std::to_string(ids.size()) +
+                     ", force: " + (force ? "true" : "false") + ")");
 
     impl_->cancelRequested.store(false);
     if (impl_->worker.joinable()) impl_->worker.join();
@@ -1715,6 +1719,7 @@ Status Service::cancelJob(int64_t jobId) {
     Status s = execDone(impl_->db.conn_, update, "Failed to cancel face-analysis job");
     if (!s.isOk()) return s;
     impl_->cancelRequested.store(true);
+    IMAGINE_LOG_INFO("Requested cancellation for face-analysis job " + std::to_string(jobId));
     return Status::ok();
 }
 
@@ -2413,7 +2418,10 @@ Result<std::string> Service::cropPath(int64_t faceId, int64_t revision) {
     std::error_code ec;
     if (std::filesystem::is_regular_file(cropFile, ec)) return pathToUtf8(cropFile);
     auto loaded = thumbnail::Generator::loadImage(photoPath);
-    if (!loaded.isOk()) return loaded.status();
+    if (!loaded.isOk()) {
+        IMAGINE_LOG_ERROR("Face crop unable to open/load image file: " + photoPath + " (" + loaded.status().message() + ")");
+        return loaded.status();
+    }
     auto oriented = orientRgb(loaded.value(), orientation);
     int left = std::clamp(static_cast<int>(std::floor(x)), 0, oriented.width);
     int top = std::clamp(static_cast<int>(std::floor(y)), 0, oriented.height);
@@ -2436,6 +2444,7 @@ Result<std::string> Service::cropPath(int64_t faceId, int64_t revision) {
 }
 
 void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
+    IMAGINE_LOG_INFO("Face-analysis job " + std::to_string(jobId) + " started processing " + std::to_string(mediaIds.size()) + " items");
     auto updateProgress = [&](const std::string& kind, const std::string& error = "") {
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
         std::string sql = "UPDATE face_analysis_jobs SET " + kind + "=" + kind + "+1,remaining=MAX(0,total-processed-skipped-failed-1),updated_at=?,error=CASE WHEN error='' AND ?<>'' THEN ? ELSE error END WHERE id=?;";
@@ -2450,9 +2459,18 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
         if (updateRes.isOk()) {
             auto update = std::move(updateRes.value()); update.bind(1,state); update.bind(2,error); update.bind(3,error); update.bind(4,nowSeconds()); update.bind(5,jobId); update.step();
         }
+        if (state == "failed") {
+            IMAGINE_LOG_ERROR("Face-analysis job " + std::to_string(jobId) + " failed: " + error);
+        } else if (state == "cancelled") {
+            IMAGINE_LOG_INFO("Face-analysis job " + std::to_string(jobId) + " was cancelled");
+        } else {
+            IMAGINE_LOG_INFO("Face-analysis job " + std::to_string(jobId) + " completed successfully");
+        }
     };
     auto recordFailure = [&](MediaId mediaId, const MediaItem& resultMedia,
                              const MediaItem& catalogSnapshot, const std::string& error) {
+        IMAGINE_LOG_ERROR("Face scan error for media ID " + std::to_string(mediaId) +
+                          " (" + resultMedia.file_path + "): " + error);
         Status saved;
         {
             std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
@@ -2471,6 +2489,7 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             if (impl_->cancelRequested.load()) { finish("cancelled"); return; }
             auto mediaRes = impl_->db.getMediaById(mediaId);
             if (!mediaRes.isOk()) {
+                IMAGINE_LOG_ERROR("Face scan unable to find media ID " + std::to_string(mediaId) + ": " + mediaRes.status().message());
                 updateProgress("failed", mediaRes.status().message()); continue;
             }
             MediaItem media = mediaRes.value();
@@ -2480,6 +2499,7 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             auto hashBefore = metadata::Hasher::computeFileSha256(photoPath);
             if (!hashBefore.isOk() || hashBefore.value() != media.content_hash) {
                 std::string message = hashBefore.isOk() ? "Photo file changed since it was cataloged; reimport it before face analysis" : hashBefore.status().message();
+                IMAGINE_LOG_ERROR("Face scan unable to verify/open photo file for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + message);
                 recordFailure(mediaId, media, media, message);
                 continue;
             }
@@ -2500,6 +2520,7 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             }
             auto loaded = thumbnail::Generator::loadImage(photoPath);
             if (!loaded.isOk()) {
+                IMAGINE_LOG_ERROR("Face scan unable to open/load image file for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + loaded.status().message());
                 recordFailure(mediaId, media, media, loaded.status().message());
                 continue;
             }
@@ -2509,17 +2530,20 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             analysisMedia.height = oriented.height;
             auto detected = impl_->analyzer ? impl_->analyzer(oriented) : impl_->engine.analyze(oriented);
             if (!detected.isOk()) {
+                IMAGINE_LOG_ERROR("Face scan inference failed for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + detected.status().message());
                 recordFailure(mediaId, analysisMedia, media, detected.status().message());
                 continue;
             }
             Status geometryStatus = normalizeCandidateGeometry(detected.value(), oriented.width, oriented.height);
             if (!geometryStatus.isOk()) {
+                IMAGINE_LOG_ERROR("Face scan candidate geometry invalid for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + geometryStatus.message());
                 recordFailure(mediaId, analysisMedia, media, geometryStatus.message());
                 continue;
             }
             auto hashAfter = metadata::Hasher::computeFileSha256(photoPath);
             if (!hashAfter.isOk() || hashAfter.value() != media.content_hash) {
                 const std::string message = "Photo file changed during face analysis; reimport it before face analysis";
+                IMAGINE_LOG_ERROR("Face scan file changed during analysis for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + message);
                 recordFailure(mediaId, analysisMedia, media, message);
                 continue;
             }
@@ -2532,15 +2556,20 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             }
             if (!persisted.isOk()) {
                 if (persisted.code() == StatusCode::AlreadyExists) { updateProgress("skipped", persisted.message()); }
-                else { updateProgress("failed", persisted.message()); }
+                else {
+                    IMAGINE_LOG_ERROR("Face scan failed to persist results for media ID " + std::to_string(mediaId) + ": " + persisted.message());
+                    updateProgress("failed", persisted.message());
+                }
                 continue;
             }
             updateProgress("processed");
         }
         finish(impl_->cancelRequested.load() ? "cancelled" : "completed");
     } catch (const std::exception& ex) {
+        IMAGINE_LOG_ERROR("Face-analysis job " + std::to_string(jobId) + " exception: " + std::string(ex.what()));
         finish("failed", ex.what());
     } catch (...) {
+        IMAGINE_LOG_ERROR("Face-analysis job " + std::to_string(jobId) + " unknown failure");
         finish("failed", "Unknown face-analysis failure");
     }
 }

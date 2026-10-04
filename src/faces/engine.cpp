@@ -1,6 +1,7 @@
 #include "imagine/faces/engine.hpp"
 
 #include "imagine/metadata/hasher.hpp"
+#include "imagine/common/logger.hpp"
 
 #include <algorithm>
 #include <array>
@@ -666,6 +667,7 @@ Status Engine::initialize() {
         impl_->initialized = false;
         impl_->detector.reset();
         impl_->recognizer.reset();
+        IMAGINE_LOG_ERROR("Face analysis engine initialization failed: " + impl_->info.error);
         return Status::internal(impl_->info.error);
     }
 #endif
@@ -817,11 +819,13 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
         timings.totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - totalStart).count();
         std::lock_guard lock(impl_->timingsMutex);
         impl_->timings = timings;
+        IMAGINE_LOG_ERROR("ONNX face inference failed: " + exceptionMessage(ex));
         return Status::internal("ONNX inference failed: " + exceptionMessage(ex));
     } catch (const std::exception& ex) {
         timings.totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - totalStart).count();
         std::lock_guard lock(impl_->timingsMutex);
         impl_->timings = timings;
+        IMAGINE_LOG_ERROR("Face analysis failed: " + exceptionMessage(ex));
         return Status::internal("Face analysis failed: " + exceptionMessage(ex));
     }
 #endif

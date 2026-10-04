@@ -3324,6 +3324,79 @@ TEST(FaceServiceTest, ForcedRecognizerRefreshResetsMatchedAndUnmatchedReviews) {
 }
 
 
+TEST(FaceServiceTest, LogsErrorsOnUnableToOpenFile) {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_log_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+
+    // Create a media item with a missing photo file
+    const std::string missingPath = (root / "nonexistent_photo.jpg").string();
+    MediaItem item;
+    item.file_path = missingPath;
+    item.file_name = "nonexistent_photo.jpg";
+    item.content_hash = "fake_content_hash_12345";
+    item.width = 100;
+    item.height = 100;
+    item.media_type = "photo";
+    MediaId missingMediaId = db.insertMedia(item).value();
+
+    // Configure logger to capture output to a file
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
+    auto logFilePath = root / "face_scan_error.log";
+    logger.setLevel(LogLevel::Debug);
+    logger.setConsoleEnabled(false);
+    logger.setFileFormat(LogFormat::Json);
+    logger.setLogFile(logFilePath.string());
+
+    faces::Service service(db, (root / "cache").string(), [](const std::string& path) { return path; },
+        [](const thumbnail::ImageBuffer&) -> Result<std::vector<faces::Detection>> {
+            return std::vector<faces::Detection>{};
+        });
+    int64_t jobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {missingMediaId}, false, jobId).isOk());
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    Result<nlohmann::json> job = service.getJob(jobId);
+    while (std::chrono::steady_clock::now() < deadline) {
+        job = service.getJob(jobId);
+        if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(job.isOk());
+    EXPECT_EQ(job.value()["state"], "completed");
+    EXPECT_EQ(job.value()["failed"], 1);
+
+    logger.closeLogFile();
+
+    // Verify error was logged in the log file
+    std::ifstream ifs(logFilePath);
+    ASSERT_TRUE(ifs.is_open());
+    std::string line;
+    bool foundErrorLog = false;
+    while (std::getline(ifs, line)) {
+        if (line.empty()) continue;
+        try {
+            auto j = nlohmann::json::parse(line);
+            std::string msg = j.value("msg", "");
+            std::string lvl = j.value("level", "");
+            if (lvl == "ERROR" && (msg.find("Face scan unable to verify/open") != std::string::npos ||
+                                   msg.find("Face scan error for media ID") != std::string::npos) &&
+                msg.find("nonexistent_photo.jpg") != std::string::npos) {
+                foundErrorLog = true;
+            }
+        } catch (...) {}
+    }
+    EXPECT_TRUE(foundErrorLog);
+
+    logger.setConsoleEnabled(true);
+    logger.setLevel(origLevel);
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
 TEST_F(ServerTest, HttpStatusCodesNotFoundAndConflict) {
     httplib::Client client("127.0.0.1", port_);
 
