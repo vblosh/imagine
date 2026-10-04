@@ -1063,3 +1063,69 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     cleared_queries = [query for query in media_queries if query.get("tag_id") == [str(alice_id)]]
     assert cleared_queries, media_queries
     assert any(query.get("limit") == ["1"] and query.get("offset") == ["0"] for query in cleared_queries)
+
+
+def test_dismiss_selection_updates_scroll_position_when_photos_disappear(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {i: _face(i, media_id) for i in range(1, 101)}
+    _open_existing_grid(page)
+    page.set_viewport_size(dict(width=1100, height=850))
+
+    grid = page.locator("#faceGridList")
+    page.wait_for_timeout(300)
+    # Scroll down into the group
+    grid.evaluate("element => { element.scrollTop = 1500; element.dispatchEvent(new Event('scroll')); }")
+    page.wait_for_timeout(500)
+
+    # Select 8 rendered cards around the scroll position
+    selected_ids = page.evaluate("""() => {
+        const cards = [...document.querySelectorAll('.face-grid-card[data-face-id]')].slice(0, 8);
+        for (const card of cards) {
+            const cb = card.querySelector('.face-grid-select');
+            if (cb) {
+                cb.checked = true;
+                cb.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+        return cards.map(c => c.dataset.faceId);
+    }""")
+    assert len(selected_ids) == 8
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("8")
+
+    before = page.evaluate("""() => {
+        const list = document.getElementById('faceGridList');
+        return {
+            scrollTop: list.scrollTop,
+            scrollHeight: list.scrollHeight,
+            clientHeight: list.clientHeight
+        };
+    }""")
+    assert before["scrollTop"] == 1500
+
+    page.locator("#faceGridDismissBtn").click()
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("0")
+    page.wait_for_timeout(300)
+
+    after = page.evaluate("""() => {
+        const list = document.getElementById('faceGridList');
+        return {
+            scrollTop: list.scrollTop,
+            scrollHeight: list.scrollHeight,
+            clientHeight: list.clientHeight,
+            visibleIds: [...list.querySelectorAll('.face-grid-card[data-face-id]')].map(c => c.dataset.faceId)
+        };
+    }""")
+
+    # Verify dismissed photos disappeared
+    for sid in selected_ids:
+        assert sid not in after["visibleIds"]
+
+    # Verify scroll height decreased and scroll position adjusted to reflect the removed photos
+    assert after["scrollHeight"] < before["scrollHeight"]
+    assert after["scrollTop"] < before["scrollTop"]
+    # Verify the remaining items are rendered in view
+    assert len(after["visibleIds"]) > 0
+
+

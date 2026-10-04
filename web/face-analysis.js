@@ -38,6 +38,7 @@ let gridGroupLoadingMore = false;
 let gridLoadedFaces = new Map();
 let gridSelectedFaceById = new Map();
 let gridPageCache = new Map();
+let gridFaceIndexById = new Map();
 let gridPageInflight = new Map();
 let gridFailedPageOffsets = new Set();
 let gridPendingFaceIds = new Set();
@@ -938,8 +939,10 @@ async function requestGridGroupPage(offset, group, snapshot, requestToken, viewT
     gridGroupTotal = total;
     gridFailedPageOffsets.delete(offset);
     gridPageCache.set(offset, items);
-    for (const face of items) {
+    for (let i = 0; i < items.length; i++) {
+      const face = items[i];
       const id = String(face.id);
+      gridFaceIndexById.set(id, offset + i);
       if (gridSelection.has(id)) gridSelectedFaceById.set(id, face);
     }
     trimGridPageCache(gridPageOffsetsForRange(gridGroupWindow.start, gridGroupWindow.end));
@@ -1110,6 +1113,7 @@ function clearGridGroupWindow() {
   for (const request of gridPageInflight.values()) request.controller.abort();
   gridPageInflight.clear();
   gridPageCache.clear();
+  gridFaceIndexById.clear();
   gridFailedPageOffsets.clear();
   gridGroupLoadingMore = false;
   gridGroupTotal = 0;
@@ -1128,7 +1132,7 @@ function pruneGridSelectionToGroups(groups) {
   }
 }
 
-async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, preserveGroupKey = null, preserveGroupIndex = false } = {}) {
+async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, preserveGroupKey = null, preserveGroupIndex = false, removedFaceIds = null } = {}) {
   const query = currentGridQuery(jobId);
   const querySignature = JSON.stringify(query);
   gridLoadController?.abort();
@@ -1139,6 +1143,56 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
   const previousGroupIndex = preserveGroupIndex ? gridGroupIndex : 0;
   const previousScrollTop = byId('faceGridList')?.scrollTop || 0;
   const previousGroup = gridGroups[gridGroupIndex] || null;
+
+  const list = byId('faceGridList');
+  let scrollAnchorState = null;
+  if (previousGroup && list) {
+    const existingCardsContainer = list.querySelector('.face-grid-group-cards');
+    if (existingCardsContainer) {
+      const listRect = list.getBoundingClientRect();
+      const cardsRect = existingCardsContainer.getBoundingClientRect();
+      const cardsTop = cardsRect.top - listRect.top + previousScrollTop;
+      const style = getComputedStyle(existingCardsContainer);
+      const tracks = style.gridTemplateColumns.split(/\s+/).filter(Boolean);
+      const columns = Math.max(1, tracks.length);
+      const firstTrackWidth = Number.parseFloat(tracks[0]) || Math.max(112, existingCardsContainer.clientWidth / columns);
+      const measuredCard = existingCardsContainer.querySelector('.face-grid-card:not(.face-grid-card-placeholder)');
+      const rowGap = Number.parseFloat(style.rowGap) || 0;
+      const layoutKey = `${columns}:${Math.round(firstTrackWidth)}`;
+      const measuredHeight = measuredCard?.getBoundingClientRect().height || 0;
+      if (measuredHeight > 0) gridCardHeightByLayout.set(layoutKey, measuredHeight);
+      const cardHeight = measuredHeight || gridCardHeightByLayout.get(layoutKey) || firstTrackWidth + 76;
+      const rowHeight = Math.max(1, cardHeight + rowGap);
+      const scrollInCards = Math.max(0, previousScrollTop - cardsTop);
+      const firstVisibleRow = Math.floor(scrollInCards / rowHeight);
+      const rowOffset = scrollInCards - firstVisibleRow * rowHeight;
+      const firstVisibleIndex = firstVisibleRow * columns;
+      const totalBefore = Number(previousGroup.faces_count) || 0;
+
+      const removedIndices = [];
+      if (removedFaceIds && removedFaceIds.size) {
+        for (const id of removedFaceIds) {
+          const idx = gridFaceIndexById.get(String(id));
+          if (idx !== undefined && idx >= 0) {
+            removedIndices.push(idx);
+          }
+        }
+        removedIndices.sort((a, b) => a - b);
+      }
+
+      scrollAnchorState = {
+        cardsTop,
+        columns,
+        rowHeight,
+        firstVisibleRow,
+        firstVisibleIndex,
+        rowOffset,
+        totalBefore,
+        removedIndices
+      };
+    }
+  }
+
   if (preserveSelection && previousGroup && gridLastQuerySignature === querySignature) {
     const retained = new Map();
     for (let index = gridGroupWindow.start; index < gridGroupWindow.end; index += 1) {
@@ -1215,8 +1269,36 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
       gridRetainedGroupKey = '';
       gridRetainedGroupFaceCount = 0;
     }
-    const list = byId('faceGridList');
-    if (list) list.scrollTop = preservedIndex >= 0 ? previousScrollTop : 0;
+    let targetScrollTop = preservedIndex >= 0 ? previousScrollTop : 0;
+    if (preservedIndex >= 0 && nextGroup && scrollAnchorState && list) {
+      const nextFacesCount = Number(nextGroup.faces_count) || 0;
+      const nextTotalRows = Math.ceil(nextFacesCount / scrollAnchorState.columns);
+      const maxScrollTop = Math.max(0, scrollAnchorState.cardsTop + nextTotalRows * scrollAnchorState.rowHeight - list.clientHeight);
+
+      if (nextFacesCount < scrollAnchorState.totalBefore) {
+        if (scrollAnchorState.removedIndices.length > 0) {
+          const removedSet = new Set(scrollAnchorState.removedIndices);
+          let anchorIndex = scrollAnchorState.firstVisibleIndex;
+          while (anchorIndex < scrollAnchorState.totalBefore && removedSet.has(anchorIndex)) {
+            anchorIndex++;
+          }
+          if (anchorIndex < scrollAnchorState.totalBefore) {
+            const removedBeforeAnchor = scrollAnchorState.removedIndices.filter(idx => idx < anchorIndex).length;
+            const newAnchorIndex = anchorIndex - removedBeforeAnchor;
+            const newAnchorRow = Math.floor(newAnchorIndex / scrollAnchorState.columns);
+            targetScrollTop = scrollAnchorState.cardsTop + newAnchorRow * scrollAnchorState.rowHeight + scrollAnchorState.rowOffset;
+          } else {
+            targetScrollTop = maxScrollTop;
+          }
+        } else {
+          targetScrollTop = Math.min(previousScrollTop, maxScrollTop);
+        }
+        targetScrollTop = Math.max(0, Math.min(targetScrollTop, maxScrollTop));
+      } else {
+        targetScrollTop = Math.min(previousScrollTop, maxScrollTop);
+      }
+    }
+    if (list) list.scrollTop = targetScrollTop;
     if (groups.length) {
       renderFaceGrid();
       const loaded = await loadGridVisiblePages();
@@ -1483,7 +1565,8 @@ async function applyFaceBatch(action, faces, fields = {}) {
         return face ? [String(item.id), face] : null;
       }).filter(Boolean));
       gridGroupIndex = actionGroupIndex;
-      gridRefreshPromise = loadFaceGroups({ jobId: actionJobId, preserveSelection: true, preserveGroupKey: actionGroupKey, preserveGroupIndex: true });
+      const removedFaceIds = new Set(successFaces.map(item => String(item.id)));
+      gridRefreshPromise = loadFaceGroups({ jobId: actionJobId, preserveSelection: true, preserveGroupKey: actionGroupKey, preserveGroupIndex: true, removedFaceIds });
     }
     const [, gridLoaded] = await Promise.all([refreshPromise, gridRefreshPromise]);
     populateFaceGridPeople();
@@ -1554,7 +1637,8 @@ async function rejectSelectedSuggestions(faces) {
         return face ? [String(item.id), face] : null;
       }).filter(Boolean));
       gridGroupIndex = actionGroupIndex;
-      gridRefreshPromise = loadFaceGroups({ jobId: actionJobId, preserveSelection: true, preserveGroupKey: actionGroupKey, preserveGroupIndex: true });
+      const removedFaceIds = new Set(updated.map(item => String(item.id)));
+      gridRefreshPromise = loadFaceGroups({ jobId: actionJobId, preserveSelection: true, preserveGroupKey: actionGroupKey, preserveGroupIndex: true, removedFaceIds });
     }
     const [, gridLoaded] = await Promise.all([refreshPromise, gridRefreshPromise]);
     populateFaceGridPeople();
