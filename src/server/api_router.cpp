@@ -3007,6 +3007,162 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
         sendJson(res, result.value());
     });
 
+    server.Get(R"(/api/faces/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        int64_t faceId = 0;
+        try {
+            const std::string value = req.matches[1];
+            size_t used = 0;
+            faceId = std::stoll(value, &used);
+            if (used != value.size() || faceId <= 0) {
+                sendError(res, "face ID must be a positive integer", 400); return;
+            }
+        } catch (...) {
+            sendError(res, "face ID must be a positive integer", 400); return;
+        }
+        auto result = faceService_->getFace(faceId);
+        if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+        sendJson(res, result.value());
+    });
+
+    server.Get("/api/faces/lookup", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!req.has_param("ids")) { sendError(res, "ids is required", 400); return; }
+        const std::string encodedIds = req.get_param_value("ids");
+        std::vector<int64_t> ids;
+        std::unordered_set<int64_t> uniqueIds;
+        size_t start = 0;
+        while (start <= encodedIds.size()) {
+            const size_t end = encodedIds.find(',', start);
+            const size_t length = (end == std::string::npos ? encodedIds.size() : end) - start;
+            const std::string token = encodedIds.substr(start, length);
+            if (token.empty() || !std::all_of(token.begin(), token.end(), [](unsigned char c) {
+                    return c >= '0' && c <= '9';
+                })) {
+                sendError(res, "ids must be a comma-separated list of unique positive integers", 400); return;
+            }
+            int64_t id = 0;
+            try {
+                size_t used = 0;
+                id = std::stoll(token, &used);
+                if (used != token.size() || id <= 0) {
+                    sendError(res, "ids must be a comma-separated list of unique positive integers", 400); return;
+                }
+            } catch (...) {
+                sendError(res, "ids must be a comma-separated list of unique positive integers", 400); return;
+            }
+            if (!uniqueIds.insert(id).second) {
+                sendError(res, "ids must not contain duplicates", 400); return;
+            }
+            ids.push_back(id);
+            if (ids.size() > 200) { sendError(res, "at most 200 face IDs are allowed", 400); return; }
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+
+        auto result = faceService_->lookupFaces(ids);
+        if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+        nlohmann::json items = nlohmann::json::array();
+        nlohmann::json failed = nlohmann::json::array();
+        for (const auto& outcome : result.value()) {
+            if (outcome.status.isOk()) items.push_back(outcome.face);
+            else failed.push_back({{"id", outcome.id}, {"status", statusToHttpCode(outcome.status)},
+                                   {"error", sanitizeUtf8(outcome.status.message())}});
+        }
+        sendJson(res, {{"items", std::move(items)}, {"failed", std::move(failed)}});
+    });
+
+    server.Get("/api/faces/groups", [this](const httplib::Request& req, httplib::Response& res) {
+        auto parseId = [&](const char* key) -> std::optional<int64_t> {
+            if (!req.has_param(key)) return std::nullopt;
+            try {
+                const std::string value = req.get_param_value(key);
+                size_t used = 0;
+                const int64_t parsed = std::stoll(value, &used);
+                if (used != value.size() || parsed <= 0) return std::nullopt;
+                return parsed;
+            } catch (...) { return std::nullopt; }
+        };
+        auto parseBoolean = [&](const char* key, bool fallback) -> std::optional<bool> {
+            if (!req.has_param(key)) return fallback;
+            const std::string value = req.get_param_value(key);
+            if (value == "true") return true;
+            if (value == "false") return false;
+            return std::nullopt;
+        };
+        std::optional<int64_t> jobId;
+        if (req.has_param("job_id")) {
+            jobId = parseId("job_id");
+            if (!jobId) { sendError(res, "job_id must be a positive integer", 400); return; }
+        }
+        std::optional<TagId> personTagId;
+        if (req.has_param("person_tag_id")) {
+            auto parsed = parseId("person_tag_id");
+            if (!parsed) { sendError(res, "person_tag_id must be a positive integer", 400); return; }
+            personTagId = *parsed;
+        }
+        auto showNamed = parseBoolean("show_named", true);
+        auto showUnnamed = parseBoolean("show_unnamed", true);
+        auto includeDismissed = parseBoolean("include_dismissed", false);
+        if (!showNamed || !showUnnamed || !includeDismissed) {
+            sendError(res, "show_named, show_unnamed, and include_dismissed must be true or false", 400);
+            return;
+        }
+        auto result = faceService_->getGroups(jobId, *showNamed, *showUnnamed,
+                                              *includeDismissed, personTagId);
+        if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+        sendJson(res, result.value());
+    });
+
+    server.Get("/api/faces/group", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!req.has_param("snapshot") || !req.has_param("key")) {
+            sendError(res, "snapshot and key are required", 400); return;
+        }
+        auto parseInteger = [&](const char* key, int fallback) -> std::optional<int> {
+            if (!req.has_param(key)) return fallback;
+            try {
+                const std::string value = req.get_param_value(key);
+                size_t used = 0;
+                const int parsed = std::stoi(value, &used);
+                if (used != value.size()) return std::nullopt;
+                return parsed;
+            } catch (...) { return std::nullopt; }
+        };
+        auto offset = parseInteger("offset", 0);
+        auto limit = parseInteger("limit", 100);
+        if (!offset || !limit) { sendError(res, "offset and limit must be integers", 400); return; }
+        auto result = faceService_->getGroupPage(req.get_param_value("snapshot"),
+            req.get_param_value("key"), *offset, *limit);
+        if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+        sendJson(res, result.value());
+    });
+
+    server.Post("/api/faces/groups/accept", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        try {
+            const auto body = nlohmann::json::parse(req.body);
+            if (!body.is_object() || !body.contains("snapshot") || !body["snapshot"].is_string() ||
+                !body.contains("key") || !body["key"].is_string()) {
+                sendError(res, "snapshot and key strings are required", 400); return;
+            }
+            auto accepted = faceService_->acceptGroup(body["snapshot"].get<std::string>(),
+                                                       body["key"].get<std::string>());
+            if (!accepted.isOk()) { sendStatusError(res, accepted.status()); return; }
+            nlohmann::json failed = nlohmann::json::array();
+            int64_t updatedCount = 0;
+            for (const auto& outcome : accepted.value()) {
+                if (outcome.status.isOk()) {
+                    ++updatedCount;
+                } else {
+                    failed.push_back({{"id", outcome.id}, {"status", statusToHttpCode(outcome.status)},
+                                      {"error", sanitizeUtf8(outcome.status.message())}});
+                }
+            }
+            sendJson(res, {{"updated_count", updatedCount}, {"failed_count", failed.size()},
+                           {"failed", std::move(failed)}});
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid request: ") + ex.what(), 400);
+        }
+    });
+
     server.Post("/api/faces/batch", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
         try {
@@ -3071,14 +3227,32 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
                 dismissed = body["dismissed"].get<bool>();
             }
 
+            if (action == "accept") {
+                std::vector<faces::SuggestionAcceptance> acceptances;
+                acceptances.reserve(edits.size());
+                for (const auto& edit : edits) acceptances.push_back({edit.id, edit.revision, *tagId});
+                auto outcomes = faceService_->acceptSuggestionsBatch(acceptances);
+                if (!outcomes.isOk()) { sendStatusError(res, outcomes.status()); return; }
+                nlohmann::json updated = nlohmann::json::array();
+                nlohmann::json failed = nlohmann::json::array();
+                for (auto& outcome : outcomes.value()) {
+                    if (outcome.status.isOk()) {
+                        updated.push_back(std::move(outcome.face));
+                    } else {
+                        failed.push_back({{"id", outcome.id}, {"status", statusToHttpCode(outcome.status)},
+                                          {"error", sanitizeUtf8(outcome.status.message())}});
+                    }
+                }
+                sendJson(res, {{"updated", std::move(updated)}, {"failed", std::move(failed)}});
+                return;
+            }
+
             nlohmann::json updated = nlohmann::json::array();
             nlohmann::json failed = nlohmann::json::array();
             for (const auto& edit : edits) {
                 Result<nlohmann::json> result = action == "identity"
                     ? faceService_->setIdentity(edit.id, edit.revision, tagId, name)
-                    : action == "accept"
-                        ? faceService_->acceptSuggestion(edit.id, edit.revision, *tagId)
-                        : faceService_->setDismissed(edit.id, edit.revision, dismissed);
+                    : faceService_->setDismissed(edit.id, edit.revision, dismissed);
                 if (result.isOk()) {
                     updated.push_back(std::move(result.value()));
                 } else {

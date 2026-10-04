@@ -7,6 +7,7 @@
 #include "imagine/common/types.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -14,6 +15,8 @@
 #include <limits>
 #include <mutex>
 #include <numeric>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -25,6 +28,7 @@ using nlohmann::json;
 using db::Connection;
 using db::Statement;
 using db::StepResult;
+constexpr size_t kEmbeddingDimensions = 512;
 
 int64_t nowSeconds() {
     return std::chrono::duration_cast<std::chrono::seconds>(
@@ -49,6 +53,37 @@ float envFloat(const char* key, float fallback) {
 
 Status dbError(Connection& conn, const std::string& context) {
     return Status::databaseError(context + ": " + conn.lastErrorMessage());
+}
+
+struct ReviewStamp {
+    int64_t totalChanges{0};
+    int64_t dataVersion{0};
+
+    bool operator==(const ReviewStamp& other) const noexcept {
+        return totalChanges == other.totalChanges && dataVersion == other.dataVersion;
+    }
+};
+
+Result<ReviewStamp> readReviewStamp(Connection& conn) {
+    if (!conn.raw()) return Status::databaseError("Catalog database is not open");
+    auto versionRes = conn.prepare("PRAGMA data_version;");
+    if (!versionRes.isOk()) return versionRes.status();
+    auto version = std::move(versionRes.value());
+    if (version.step() != StepResult::Row) return dbError(conn, "Failed to read catalog data version");
+    return ReviewStamp{sqlite3_total_changes64(conn.raw()), version.getInt64(0)};
+}
+
+std::string newReviewToken() {
+    unsigned char bytes[16];
+    if (RAND_bytes(bytes, static_cast<int>(sizeof(bytes))) != 1) return {};
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string token;
+    token.resize(sizeof(bytes) * 2);
+    for (size_t i = 0; i < sizeof(bytes); ++i) {
+        token[i * 2] = kHex[bytes[i] >> 4];
+        token[i * 2 + 1] = kHex[bytes[i] & 0x0f];
+    }
+    return token;
 }
 
 json jobJson(Connection& conn, int64_t id) {
@@ -88,6 +123,17 @@ struct Exemplar {
 };
 
 using ExemplarCache = std::unordered_map<std::string, std::vector<Exemplar>>;
+using RejectionCache = std::unordered_map<int64_t, std::unordered_set<TagId>>;
+
+struct FaceMatchInfo {
+    std::vector<float> embedding;
+    std::optional<TagId> personTagId;
+    std::string recognizerChecksum;
+    std::string pipelineVersion;
+    std::string embeddingError;
+    std::string analysisState;
+    bool dismissed{false};
+};
 
 std::vector<float> readVector(const Statement& stmt, int col, int expectedSize) {
     sqlite3_stmt* raw = stmt.raw();
@@ -127,13 +173,73 @@ std::vector<Exemplar> loadExemplars(Connection& conn, const std::string& recogni
     return exemplars;
 }
 
+std::vector<Suggestion> suggestionsFromExemplars(
+    int64_t faceId, const std::vector<float>& query,
+    const std::vector<Exemplar>& exemplars, float threshold,
+    const std::unordered_set<TagId>& excludedTagIds) {
+    std::vector<Suggestion> result;
+    if (query.size() != kEmbeddingDimensions) return result;
+
+    std::unordered_map<TagId, Suggestion> best;
+    for (const auto& exemplar : exemplars) {
+        if (exemplar.faceId == faceId || excludedTagIds.contains(exemplar.tagId)) continue;
+        double dot = 0;
+        for (size_t i = 0; i < kEmbeddingDimensions; ++i) {
+            dot += static_cast<double>(query[i]) * exemplar.embedding[i];
+        }
+        float score = static_cast<float>(dot);
+        if (!std::isfinite(score) || score < threshold) continue;
+        score = std::clamp(score, -1.0f, 1.0f);
+        auto it = best.find(exemplar.tagId);
+        if (it == best.end() || score > it->second.score) {
+            best[exemplar.tagId] = Suggestion{exemplar.tagId, exemplar.name, score};
+        }
+    }
+    for (auto& [id, suggestion] : best) result.push_back(std::move(suggestion));
+    std::sort(result.begin(), result.end(), [](const Suggestion& a, const Suggestion& b) {
+        if (a.score != b.score) return a.score > b.score;
+        return a.name < b.name;
+    });
+    if (result.size() > 3) result.resize(3);
+    return result;
+}
+
+Status loadRejections(Connection& conn, const std::vector<int64_t>& faceIds,
+                      RejectionCache& cache) {
+    if (faceIds.empty()) return Status::ok();
+    constexpr size_t kChunkSize = 900;
+    for (size_t start = 0; start < faceIds.size(); start += kChunkSize) {
+        const size_t count = std::min(kChunkSize, faceIds.size() - start);
+        std::string sql = "SELECT face_id,tag_id FROM face_rejections WHERE face_id IN (";
+        for (size_t i = 0; i < count; ++i) {
+            if (i) sql += ',';
+            sql += '?';
+        }
+        sql += ");";
+        auto stmtRes = conn.prepare(sql);
+        if (!stmtRes.isOk()) return stmtRes.status();
+        auto stmt = std::move(stmtRes.value());
+        for (size_t i = 0; i < count; ++i) {
+            Status bound = stmt.bind(static_cast<int>(i + 1), faceIds[start + i]);
+            if (!bound.isOk()) return bound;
+        }
+        StepResult step;
+        while ((step = stmt.step()) == StepResult::Row) {
+            cache[stmt.getInt64(0)].insert(stmt.getInt64(1));
+        }
+        if (step == StepResult::Error) return dbError(conn, "Failed to load face suggestion rejections");
+    }
+    return Status::ok();
+}
+
 std::vector<Suggestion> suggestionsFor(Connection& conn, int64_t faceId,
                                        const std::vector<float>& query,
                                        const std::string& recognizerChecksum,
                                        const std::string& pipelineVersion,
-                                       float threshold, ExemplarCache* cache = nullptr) {
+                                       float threshold, ExemplarCache* cache = nullptr,
+                                       const std::unordered_set<TagId>* rejectedTags = nullptr) {
     std::vector<Suggestion> result;
-    if (query.size() != 512 || recognizerChecksum.empty() || pipelineVersion.empty()) return result;
+    if (query.size() != kEmbeddingDimensions || recognizerChecksum.empty() || pipelineVersion.empty()) return result;
 
     std::vector<Exemplar> local;
     const std::vector<Exemplar>* exemplars = nullptr;
@@ -147,36 +253,24 @@ std::vector<Suggestion> suggestionsFor(Connection& conn, int64_t faceId,
         exemplars = &local;
     }
 
-    auto rejectedRes = conn.prepare("SELECT tag_id FROM face_rejections WHERE face_id=?;");
-    if (!rejectedRes.isOk()) return result;
-    auto rejectedStmt = std::move(rejectedRes.value()); rejectedStmt.bind(1, faceId);
-    std::unordered_set<TagId> rejected;
-    while (rejectedStmt.step() == StepResult::Row) rejected.insert(rejectedStmt.getInt64(0));
-
-    std::unordered_map<TagId, Suggestion> best;
-    for (const auto& exemplar : *exemplars) {
-        if (exemplar.faceId == faceId || rejected.contains(exemplar.tagId)) continue;
-        double dot = 0;
-        for (size_t i = 0; i < query.size(); ++i) dot += static_cast<double>(query[i]) * exemplar.embedding[i];
-        float score = static_cast<float>(dot);
-        if (!std::isfinite(score) || score < threshold) continue;
-        score = std::clamp(score, -1.0f, 1.0f);
-        auto it = best.find(exemplar.tagId);
-        if (it == best.end() || score > it->second.score) {
-            best[exemplar.tagId] = Suggestion{exemplar.tagId, exemplar.name, score};
-        }
+    std::unordered_set<TagId> loadedRejectedTags;
+    if (!rejectedTags) {
+        auto rejectedRes = conn.prepare("SELECT tag_id FROM face_rejections WHERE face_id=?;");
+        if (!rejectedRes.isOk()) return result;
+        auto rejectedStmt = std::move(rejectedRes.value()); rejectedStmt.bind(1, faceId);
+        while (rejectedStmt.step() == StepResult::Row) loadedRejectedTags.insert(rejectedStmt.getInt64(0));
     }
-    for (auto& [id, s] : best) result.push_back(std::move(s));
-    std::sort(result.begin(), result.end(), [](const Suggestion& a, const Suggestion& b) {
-        if (a.score != b.score) return a.score > b.score;
-        return a.name < b.name;
-    });
-    if (result.size() > 3) result.resize(3);
-    return result;
+    const auto& excludedTagIds = rejectedTags ? *rejectedTags : loadedRejectedTags;
+
+    return suggestionsFromExemplars(faceId, query, *exemplars, threshold, excludedTagIds);
 }
 
 Result<json> faceJson(Connection& conn, int64_t faceId, float matchThreshold,
-                      ExemplarCache* exemplarCache = nullptr) {
+                      ExemplarCache* exemplarCache = nullptr,
+                      const RejectionCache* rejectionCache = nullptr,
+                      bool suppressReviewedSuggestions = false,
+                      FaceMatchInfo* matchInfo = nullptr,
+                      bool includeSuggestions = true) {
     auto stmtRes = conn.prepare(R"SQL(
         SELECT f.id,f.media_id,f.revision,f.x,f.y,f.width,f.height,f.score,f.landmarks,
                f.person_tag_id,t.name,f.dismissed,f.embedding_error,f.embedding,f.embedding_size,
@@ -191,6 +285,15 @@ Result<json> faceJson(Connection& conn, int64_t faceId, float matchThreshold,
     stmt.bind(1, faceId);
     if (stmt.step() != StepResult::Row) return Status::notFound("Face not found");
 
+    FaceMatchInfo info;
+    if (!stmt.isNull(9)) info.personTagId = stmt.getInt64(9);
+    info.dismissed = stmt.getInt(11) != 0;
+    info.embeddingError = stmt.getString(12);
+    info.recognizerChecksum = stmt.getString(15);
+    info.pipelineVersion = stmt.getString(16);
+    info.analysisState = stmt.getString(17);
+    if (!stmt.isNull(13) && stmt.getInt(14) == 512) info.embedding = readVector(stmt, 13, 512);
+
     json landmarks = json::array();
     try { landmarks = json::parse(stmt.getString(8)); } catch (...) {}
     json out = {{"id", stmt.getInt64(0)}, {"media_id", stmt.getInt64(1)},
@@ -202,16 +305,39 @@ Result<json> faceJson(Connection& conn, int64_t faceId, float matchThreshold,
                 {"person_name", stmt.isNull(9) ? json(nullptr) : json(stmt.getString(10))},
                 {"dismissed", stmt.getInt(11) != 0}, {"embedding_error", stmt.getString(12)},
                 {"suggestions", json::array()}, {"crop_url", "/api/faces/" + std::to_string(faceId) + "/crop?revision=" + std::to_string(stmt.getInt64(2))}};
-    if (stmt.getString(17) == "complete" && stmt.getString(12).empty() &&
-        !stmt.isNull(13) && stmt.getInt(14) == 512) {
-        auto embedding = readVector(stmt, 13, 512);
-        auto suggestions = suggestionsFor(conn, faceId, embedding, stmt.getString(15),
-                                          stmt.getString(16), matchThreshold, exemplarCache);
+    const bool suggestionTarget = !suppressReviewedSuggestions ||
+        (!info.personTagId.has_value() && !info.dismissed);
+    if (includeSuggestions && suggestionTarget && info.analysisState == "complete" &&
+        info.embeddingError.empty() && info.embedding.size() == 512) {
+        const std::unordered_set<TagId>* rejected = nullptr;
+        if (rejectionCache) {
+            static const std::unordered_set<TagId> kNoRejections;
+            auto it = rejectionCache->find(faceId);
+            rejected = it == rejectionCache->end() ? &kNoRejections : &it->second;
+        }
+        auto suggestions = suggestionsFor(conn, faceId, info.embedding,
+                                          info.recognizerChecksum, info.pipelineVersion,
+                                          matchThreshold, exemplarCache, rejected);
         for (const auto& s : suggestions) {
             out["suggestions"].push_back({{"tag_id", s.tagId}, {"name", s.name}, {"score", s.score}});
         }
     }
+    if (matchInfo) *matchInfo = std::move(info);
     return out;
+}
+
+void updateExemplarCache(ExemplarCache& cache, const FaceMatchInfo& info,
+                         int64_t faceId, TagId tagId, const std::string& tagName) {
+    for (auto& [key, exemplars] : cache) {
+        exemplars.erase(std::remove_if(exemplars.begin(), exemplars.end(),
+            [faceId](const Exemplar& exemplar) { return exemplar.faceId == faceId; }), exemplars.end());
+    }
+    if (info.analysisState == "complete" && !info.dismissed && info.embeddingError.empty() &&
+        info.embedding.size() == 512 && !info.recognizerChecksum.empty() && !info.pipelineVersion.empty()) {
+        const std::string key = info.recognizerChecksum + "\x1f" + info.pipelineVersion;
+        auto it = cache.find(key);
+        if (it != cache.end()) it->second.push_back({faceId, tagId, tagName, info.embedding});
+    }
 }
 
 Status execDone(Connection& conn, Statement& stmt, const std::string& context) {
@@ -221,7 +347,8 @@ Status execDone(Connection& conn, Statement& stmt, const std::string& context) {
 
 Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
     auto countRes = conn.prepare(
-        "SELECT COUNT(*) FROM faces WHERE media_id=? AND person_tag_id=? AND dismissed=0;");
+        "SELECT COUNT(*) FROM faces INDEXED BY idx_faces_media "
+        "WHERE media_id=? AND person_tag_id=? AND dismissed=0;");
     if (!countRes.isOk()) return countRes.status();
     auto count = std::move(countRes.value());
     count.bind(1, mediaId);
@@ -268,6 +395,64 @@ Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
         return execDone(conn, deleteProv, "Failed to clear face tag ownership");
     }
     return Status::ok();
+}
+
+Status assignExistingPersonTag(Connection& conn, int64_t faceId, int64_t revision,
+                               TagId tagId, int64_t expectedDataVersion) {
+    if (faceId <= 0 || revision <= 0 || tagId <= 0) {
+        return Status::invalidArgument("face ID, revision, and tag_id must be positive");
+    }
+    if (!isPeopleTag(conn, tagId)) return Status::invalidArgument("tag_id must identify a people tag");
+
+    db::Transaction tx(conn);
+    auto getRes = conn.prepare("SELECT media_id,person_tag_id,revision,dismissed FROM faces WHERE id=?;");
+    if (!getRes.isOk()) return getRes.status();
+    auto get = std::move(getRes.value());
+    get.bind(1, faceId);
+    if (get.step() != StepResult::Row) return Status::notFound("Face not found");
+    const MediaId mediaId = get.getInt64(0);
+    const bool alreadyAssigned = !get.isNull(1);
+    if (get.getInt64(2) != revision) {
+        return Status::alreadyExists("Face review is stale; reload before changing its identity");
+    }
+    if (alreadyAssigned || get.getInt(3) != 0) {
+        return Status::alreadyExists("Face is no longer an active unnamed suggestion");
+    }
+
+    auto stamp = readReviewStamp(conn);
+    if (!stamp.isOk()) return stamp.status();
+    if (stamp.value().dataVersion != expectedDataVersion) {
+        return Status::alreadyExists("Face group snapshot is stale; reload the groups");
+    }
+
+    auto updateRes = conn.prepare(
+        "UPDATE faces SET person_tag_id=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND person_tag_id IS NULL AND dismissed=0;");
+    if (!updateRes.isOk()) return updateRes.status();
+    auto update = std::move(updateRes.value());
+    update.bind(1, tagId);
+    update.bind(2, nowSeconds());
+    update.bind(3, faceId);
+    update.bind(4, revision);
+    if (update.step() != StepResult::Done) {
+        const int code = conn.lastErrorCode() & 0xff;
+        if (code == SQLITE_BUSY || code == SQLITE_LOCKED) {
+            return Status::alreadyExists("Face group snapshot is stale; reload the groups");
+        }
+        return dbError(conn, "Failed to assign face identity");
+    }
+    if (conn.changes() != 1) {
+        return Status::alreadyExists("Face review is stale; reload before changing its identity");
+    }
+    auto rejectRes = conn.prepare("DELETE FROM face_rejections WHERE face_id=? AND tag_id=?;");
+    if (!rejectRes.isOk()) return rejectRes.status();
+    auto reject = std::move(rejectRes.value());
+    reject.bind(1, faceId);
+    reject.bind(2, tagId);
+    Status status = execDone(conn, reject, "Failed to clear identity rejection");
+    if (!status.isOk()) return status;
+    status = syncFaceTagOwnership(conn, mediaId, tagId);
+    if (!status.isOk()) return status;
+    return tx.commit();
 }
 
 void bindEmbedding(Statement& stmt, int index, const std::vector<float>& embedding) {
@@ -603,6 +788,733 @@ Status persistAnalysis(Connection& conn, MediaId mediaId, const MediaItem& media
     return tx.commit();
 }
 
+struct GroupReviewFace {
+    int64_t id{0};
+    MediaId mediaId{0};
+    int64_t revision{0};
+    std::optional<TagId> personTagId;
+    std::string personName;
+    bool dismissed{false};
+    bool queryEligible{false};
+    std::vector<float> embedding;
+    std::string recognizerChecksum;
+    std::string pipelineVersion;
+    std::unordered_set<TagId> rejectedTags;
+    struct RankedPerson {
+        Suggestion suggestion;
+        int64_t bestExemplarId{0};
+        int64_t secondExemplarId{0};
+        float secondScore{0};
+        bool hasSecond{false};
+        bool secondExact{true};
+    };
+    std::vector<RankedPerson> ranked;
+    std::optional<RankedPerson> omittedUpperBound;
+    bool rankingComplete{true};
+    bool frontierExact{true};
+    bool omittedBoundaryTie{false};
+    std::vector<Suggestion> suggestions;
+};
+
+struct ExemplarDescriptor {
+    TagId tagId{0};
+    std::string name;
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> embeddingHash{};
+};
+
+struct GroupReviewIndex {
+    std::optional<int64_t> jobId;
+    ReviewStamp stamp;
+    std::vector<GroupReviewFace> faces;
+    std::unordered_map<int64_t, size_t> facePositions;
+    std::unordered_map<std::string, std::unordered_map<int64_t, ExemplarDescriptor>> exemplarDescriptors;
+};
+
+struct PendingGroupQuery {
+    size_t faceIndex{0};
+    std::vector<float> embedding;
+    std::string recognizerChecksum;
+    std::string pipelineVersion;
+};
+
+struct GroupReviewBuild {
+    std::shared_ptr<GroupReviewIndex> index;
+    ExemplarCache exemplars;
+    RejectionCache rejections;
+    std::vector<PendingGroupQuery> queries;
+};
+
+using RankedPerson = GroupReviewFace::RankedPerson;
+
+std::array<unsigned char, SHA256_DIGEST_LENGTH> embeddingDigest(const std::vector<float>& embedding) {
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    const auto* bytes = reinterpret_cast<const unsigned char*>(embedding.data());
+    SHA256(bytes, embedding.size() * sizeof(float), digest.data());
+    return digest;
+}
+
+bool rankedBefore(const RankedPerson& left, const RankedPerson& right) {
+    if (left.suggestion.score != right.suggestion.score) {
+        return left.suggestion.score > right.suggestion.score;
+    }
+    return left.suggestion.name < right.suggestion.name;
+}
+
+bool ranksBeforeBoundary(const RankedPerson& candidate, const RankedPerson& boundary) {
+    if (candidate.suggestion.score != boundary.suggestion.score) {
+        return candidate.suggestion.score > boundary.suggestion.score;
+    }
+    return candidate.suggestion.name <= boundary.suggestion.name;
+}
+
+void applyRankedSuggestions(GroupReviewFace& face) {
+    face.suggestions.clear();
+    const size_t count = std::min<size_t>(3, face.ranked.size());
+    face.suggestions.reserve(count);
+    for (size_t i = 0; i < count; ++i) face.suggestions.push_back(face.ranked[i].suggestion);
+}
+
+std::vector<RankedPerson> rankExemplars(
+    int64_t faceId, const std::vector<float>& query,
+    const std::vector<Exemplar>& exemplars, float threshold,
+    const std::unordered_set<TagId>& excludedTagIds,
+    bool& rankingComplete, bool& omittedBoundaryTie,
+    std::optional<RankedPerson>& omittedUpperBound) {
+    std::unordered_map<TagId, RankedPerson> best;
+    if (query.size() != kEmbeddingDimensions) {
+        rankingComplete = true;
+        omittedBoundaryTie = false;
+        omittedUpperBound.reset();
+        return {};
+    }
+    for (const auto& exemplar : exemplars) {
+        if (exemplar.faceId == faceId || excludedTagIds.contains(exemplar.tagId) ||
+            exemplar.embedding.size() != kEmbeddingDimensions) continue;
+        double dot = 0;
+        for (size_t i = 0; i < kEmbeddingDimensions; ++i) {
+            dot += static_cast<double>(query[i]) * exemplar.embedding[i];
+        }
+        float score = static_cast<float>(dot);
+        if (!std::isfinite(score) || score < threshold) continue;
+        score = std::clamp(score, -1.0f, 1.0f);
+        auto found = best.find(exemplar.tagId);
+        RankedPerson candidate;
+        candidate.suggestion = Suggestion{exemplar.tagId, exemplar.name, score};
+        candidate.bestExemplarId = exemplar.faceId;
+        if (found == best.end()) {
+            best.emplace(exemplar.tagId, std::move(candidate));
+            continue;
+        }
+        auto& current = found->second;
+        const bool better = score > current.suggestion.score ||
+            (score == current.suggestion.score && exemplar.faceId < current.bestExemplarId);
+        if (better) {
+            candidate.secondExemplarId = current.bestExemplarId;
+            candidate.secondScore = current.suggestion.score;
+            candidate.hasSecond = true;
+            if (current.hasSecond && (current.secondScore > candidate.secondScore ||
+                (current.secondScore == candidate.secondScore && current.secondExemplarId < candidate.secondExemplarId))) {
+                candidate.secondExemplarId = current.secondExemplarId;
+                candidate.secondScore = current.secondScore;
+            }
+            current = std::move(candidate);
+        } else {
+            const bool betterSecond = !current.hasSecond || score > current.secondScore ||
+                (score == current.secondScore && exemplar.faceId < current.secondExemplarId);
+            if (betterSecond) {
+                current.secondExemplarId = exemplar.faceId;
+                current.secondScore = score;
+                current.hasSecond = true;
+            }
+        }
+    }
+
+    std::vector<RankedPerson> all;
+    all.reserve(best.size());
+    for (auto& [tagId, person] : best) all.push_back(std::move(person));
+    std::sort(all.begin(), all.end(), rankedBefore);
+    rankingComplete = all.size() <= 4;
+    omittedBoundaryTie = all.size() > 4 &&
+        all[4].suggestion.score == all[3].suggestion.score;
+    omittedUpperBound = all.size() > 4 ? std::optional<RankedPerson>(all[3]) : std::nullopt;
+    if (all.size() > 4) all.resize(4);
+    return all;
+}
+
+void exactRankFace(GroupReviewFace& face, const std::vector<Exemplar>& exemplars,
+                   float threshold) {
+    face.ranked = rankExemplars(face.id, face.embedding, exemplars, threshold,
+                                face.rejectedTags, face.rankingComplete,
+                                face.omittedBoundaryTie, face.omittedUpperBound);
+    applyRankedSuggestions(face);
+}
+
+struct GroupReviewGroup {
+    std::string key;
+    std::string type;
+    std::optional<TagId> tagId;
+    std::string name;
+    int64_t facesCount{0};
+    int64_t photosCount{0};
+    int64_t suggestionFacesCount{0};
+    int64_t suggestionPhotosCount{0};
+    std::vector<size_t> members;
+    std::vector<size_t> suggestionMembers;
+};
+
+struct GroupReviewSnapshot {
+    std::string token;
+    std::shared_ptr<GroupReviewIndex> index;
+    std::optional<int64_t> jobId;
+    bool showNamed{true};
+    bool showUnnamed{true};
+    bool includeDismissed{false};
+    std::optional<TagId> personTagId;
+    std::vector<GroupReviewGroup> groups;
+    std::chrono::steady_clock::time_point createdAt;
+};
+
+std::string exemplarKey(const std::string& checksum, const std::string& pipeline) {
+    return checksum + "\x1f" + pipeline;
+}
+
+Result<GroupReviewBuild> buildGroupReviewIndex(
+    Connection& conn, std::optional<int64_t> jobId, const ReviewStamp& stamp) {
+    GroupReviewBuild built;
+    built.index = std::make_shared<GroupReviewIndex>();
+    auto& index = built.index;
+    index->jobId = jobId;
+    index->stamp = stamp;
+
+    const std::string jobJoin = jobId
+        ? " JOIN face_analysis_job_media jm ON jm.media_id=f.media_id AND jm.job_id=? "
+        : " ";
+    const std::string analysisJoin = " FROM faces f JOIN face_media_analysis a ON a.media_id=f.media_id "
+        "LEFT JOIN tags t ON t.id=f.person_tag_id " + jobJoin;
+    const std::string completeScope = " WHERE a.state='complete' ";
+
+    std::unordered_set<std::string> exemplarKeys;
+    auto keyRes = conn.prepare(
+        "SELECT DISTINCT a.recognizer_checksum,a.pipeline_version" + analysisJoin +
+        completeScope + " AND f.person_tag_id IS NULL AND f.dismissed=0 AND f.embedding_error='' "
+        "AND f.embedding IS NOT NULL AND f.embedding_size=512 AND a.recognizer_checksum<>'' AND a.pipeline_version<>'';");
+    if (!keyRes.isOk()) return keyRes.status();
+    auto keys = std::move(keyRes.value());
+    if (jobId) keys.bind(1, *jobId);
+    StepResult keyStep;
+    while ((keyStep = keys.step()) == StepResult::Row) {
+        const std::string checksum = keys.getString(0);
+        const std::string pipeline = keys.getString(1);
+        exemplarKeys.insert(exemplarKey(checksum, pipeline));
+    }
+    if (keyStep == StepResult::Error) return dbError(conn, "Failed to enumerate face-recognition pipelines");
+
+    for (const auto& key : exemplarKeys) {
+        const size_t separator = key.find('\x1f');
+        if (separator == std::string::npos) continue;
+        const std::string checksum = key.substr(0, separator);
+        const std::string pipeline = key.substr(separator + 1);
+        built.exemplars.emplace(key, loadExemplars(conn, checksum, pipeline));
+    }
+
+    auto rejectionRes = conn.prepare(
+        "SELECT r.face_id,r.tag_id FROM face_rejections r JOIN faces f ON f.id=r.face_id "
+        "JOIN face_media_analysis a ON a.media_id=f.media_id " + jobJoin +
+        "WHERE a.state='complete' AND f.person_tag_id IS NULL AND f.dismissed=0;");
+    if (!rejectionRes.isOk()) return rejectionRes.status();
+    auto rejectionStmt = std::move(rejectionRes.value());
+    if (jobId) rejectionStmt.bind(1, *jobId);
+    StepResult rejectionStep;
+    while ((rejectionStep = rejectionStmt.step()) == StepResult::Row) {
+        built.rejections[rejectionStmt.getInt64(0)].insert(rejectionStmt.getInt64(1));
+    }
+    if (rejectionStep == StepResult::Error) return dbError(conn, "Failed to load face suggestion rejections");
+
+    auto facesRes = conn.prepare(
+        "SELECT f.id,f.media_id,f.revision,f.person_tag_id,t.name,f.dismissed,f.embedding_error,"
+        "CASE WHEN f.person_tag_id IS NULL AND f.dismissed=0 AND f.embedding_error='' AND f.embedding_size=512 "
+        "THEN f.embedding ELSE NULL END,f.embedding_size,a.recognizer_checksum,a.pipeline_version " +
+        analysisJoin + completeScope + " ORDER BY f.media_id,f.id;");
+    if (!facesRes.isOk()) return facesRes.status();
+    auto faces = std::move(facesRes.value());
+    if (jobId) faces.bind(1, *jobId);
+    StepResult faceStep;
+    while ((faceStep = faces.step()) == StepResult::Row) {
+        GroupReviewFace indexed;
+        indexed.id = faces.getInt64(0);
+        indexed.mediaId = faces.getInt64(1);
+        indexed.revision = faces.getInt64(2);
+        if (!faces.isNull(3)) indexed.personTagId = faces.getInt64(3);
+        if (!faces.isNull(4)) indexed.personName = faces.getString(4);
+        indexed.dismissed = faces.getInt(5) != 0;
+        const size_t faceIndex = index->faces.size();
+        const bool queryEligible = !indexed.personTagId && !indexed.dismissed && faces.getString(6).empty() &&
+            !faces.isNull(7) && faces.getInt(8) == 512;
+        if (queryEligible) {
+            auto embedding = readVector(faces, 7, 512);
+            if (embedding.size() == 512) {
+                indexed.queryEligible = true;
+                indexed.embedding = std::move(embedding);
+                indexed.recognizerChecksum = faces.getString(9);
+                indexed.pipelineVersion = faces.getString(10);
+            }
+        }
+        index->facePositions.emplace(indexed.id, faceIndex);
+        index->faces.push_back(std::move(indexed));
+    }
+    if (faceStep == StepResult::Error) return dbError(conn, "Failed to build face review index");
+    return built;
+}
+
+std::unordered_map<std::string, std::unordered_map<int64_t, ExemplarDescriptor>>
+describeExemplars(const ExemplarCache& exemplars) {
+    std::unordered_map<std::string, std::unordered_map<int64_t, ExemplarDescriptor>> described;
+    for (const auto& [key, rows] : exemplars) {
+        auto& output = described[key];
+        output.reserve(rows.size());
+        for (const auto& exemplar : rows) {
+            output.emplace(exemplar.faceId, ExemplarDescriptor{
+                exemplar.tagId, exemplar.name, embeddingDigest(exemplar.embedding)});
+        }
+    }
+    return described;
+}
+
+struct ExemplarChanges {
+    std::vector<std::pair<int64_t, TagId>> removed;
+    std::unordered_map<TagId, std::vector<const Exemplar*>> addedByTag;
+    std::unordered_map<TagId, std::string> currentNames;
+    std::unordered_set<TagId> renamedTags;
+    std::unordered_set<TagId> newlyIntroducedTags;
+    bool anyNameChanged{false};
+};
+
+ExemplarChanges diffExemplars(
+    const GroupReviewIndex* previous, const GroupReviewIndex& current,
+    const ExemplarCache& exemplars, const std::string& key) {
+    ExemplarChanges changes;
+    auto vectors = exemplars.find(key);
+    auto descriptors = current.exemplarDescriptors.find(key);
+    if (descriptors != current.exemplarDescriptors.end()) {
+        for (const auto& [id, descriptor] : descriptors->second) {
+            changes.currentNames[descriptor.tagId] = descriptor.name;
+        }
+    }
+    const std::unordered_map<int64_t, ExemplarDescriptor>* old = nullptr;
+    if (previous) {
+        auto found = previous->exemplarDescriptors.find(key);
+        if (found != previous->exemplarDescriptors.end()) old = &found->second;
+    }
+    auto currentDescriptors = descriptors == current.exemplarDescriptors.end()
+        ? nullptr : &descriptors->second;
+    std::unordered_map<int64_t, const Exemplar*> currentVectors;
+    if (vectors != exemplars.end()) {
+        currentVectors.reserve(vectors->second.size());
+        for (const auto& exemplar : vectors->second) currentVectors.emplace(exemplar.faceId, &exemplar);
+    }
+
+    if (old) {
+        for (const auto& [id, prior] : *old) {
+            auto now = currentDescriptors ? currentDescriptors->find(id) :
+                std::unordered_map<int64_t, ExemplarDescriptor>::const_iterator{};
+            const bool exists = currentDescriptors && now != currentDescriptors->end();
+            if (!exists || now->second.tagId != prior.tagId ||
+                now->second.embeddingHash != prior.embeddingHash) {
+                changes.removed.emplace_back(id, prior.tagId);
+            }
+            if (exists && now->second.name != prior.name) {
+                changes.anyNameChanged = true;
+                changes.renamedTags.insert(prior.tagId);
+                changes.renamedTags.insert(now->second.tagId);
+            }
+        }
+    }
+    if (currentDescriptors) {
+        std::unordered_set<TagId> oldTags;
+        if (old) {
+            oldTags.reserve(old->size());
+            for (const auto& [id, descriptor] : *old) oldTags.insert(descriptor.tagId);
+        }
+        for (const auto& [id, descriptor] : *currentDescriptors) {
+            if (!oldTags.contains(descriptor.tagId)) changes.newlyIntroducedTags.insert(descriptor.tagId);
+        }
+        for (const auto& [id, descriptor] : *currentDescriptors) {
+            auto prior = old ? old->find(id) :
+                std::unordered_map<int64_t, ExemplarDescriptor>::const_iterator{};
+            const bool existed = old && prior != old->end();
+            if (!existed || prior->second.tagId != descriptor.tagId ||
+                prior->second.embeddingHash != descriptor.embeddingHash) {
+                auto vector = currentVectors.find(id);
+                if (vector != currentVectors.end()) changes.addedByTag[descriptor.tagId].push_back(vector->second);
+            }
+        }
+    }
+    return changes;
+}
+
+float exemplarScore(const std::vector<float>& query, const Exemplar& exemplar) {
+    double dot = 0;
+    for (size_t i = 0; i < kEmbeddingDimensions; ++i) {
+        dot += static_cast<double>(query[i]) * exemplar.embedding[i];
+    }
+    float score = static_cast<float>(dot);
+    return std::isfinite(score) ? score : -std::numeric_limits<float>::infinity();
+}
+
+bool incrementallyUpdateFace(GroupReviewFace& face, const ExemplarChanges& changes,
+                             const std::vector<Exemplar>& exemplars, float threshold) {
+    const std::vector<RankedPerson> oldRanked = face.ranked;
+    const bool oldComplete = face.rankingComplete;
+    const bool oldBoundaryTie = face.omittedBoundaryTie;
+    if (!oldComplete && changes.anyNameChanged) return false;
+    std::optional<RankedPerson> oldBoundary;
+    if (!oldComplete) oldBoundary = face.omittedUpperBound;
+
+    std::unordered_map<TagId, RankedPerson> current;
+    for (const auto& person : oldRanked) current.emplace(person.suggestion.tagId, person);
+    std::unordered_map<TagId, std::unordered_set<int64_t>> removedByTag;
+    for (const auto& [faceId, tagId] : changes.removed) removedByTag[tagId].insert(faceId);
+
+    for (const auto& [tagId, removedIds] : removedByTag) {
+        auto found = current.find(tagId);
+        if (found == current.end() || face.rejectedTags.contains(tagId)) continue;
+        auto& person = found->second;
+        const bool removeBest = removedIds.contains(person.bestExemplarId);
+        const bool removeSecond = person.hasSecond && removedIds.contains(person.secondExemplarId);
+        if (removeBest) {
+            if (person.hasSecond && !removeSecond && person.secondExact) {
+                person.bestExemplarId = person.secondExemplarId;
+                person.suggestion.score = person.secondScore;
+                person.hasSecond = false;
+                person.secondExact = false;
+            } else if (!person.hasSecond && person.secondExact) {
+                current.erase(found);
+                continue;
+            } else {
+                const bool tagStillExists = std::any_of(exemplars.begin(), exemplars.end(),
+                    [&](const Exemplar& item) { return item.tagId == tagId; });
+                if (tagStillExists) return false;
+                current.erase(found);
+                continue;
+            }
+        } else if (removeSecond) {
+            person.hasSecond = false;
+            person.secondExact = false;
+        }
+    }
+
+    for (const auto& [tagId, additions] : changes.addedByTag) {
+        if (face.rejectedTags.contains(tagId)) continue;
+        auto found = current.find(tagId);
+        if (found == current.end()) {
+            RankedPerson added;
+            added.suggestion.tagId = tagId;
+            auto name = changes.currentNames.find(tagId);
+            if (name != changes.currentNames.end()) added.suggestion.name = name->second;
+            std::vector<std::pair<int64_t, float>> scored;
+            for (const auto* exemplar : additions) {
+                if (exemplar->faceId == face.id) continue;
+                const float rawScore = exemplarScore(face.embedding, *exemplar);
+                if (rawScore >= threshold) scored.emplace_back(exemplar->faceId, std::clamp(rawScore, -1.0f, 1.0f));
+            }
+            std::sort(scored.begin(), scored.end(), [](const auto& left, const auto& right) {
+                return left.second != right.second ? left.second > right.second : left.first < right.first;
+            });
+            if (scored.empty()) continue;
+            added.suggestion.score = scored[0].second;
+            added.bestExemplarId = scored[0].first;
+            if (scored.size() > 1) {
+                added.hasSecond = true;
+                added.secondExemplarId = scored[1].first;
+                added.secondScore = scored[1].second;
+            }
+            if (!oldComplete && !changes.newlyIntroducedTags.contains(tagId)) {
+                if (!oldBoundary) return false;
+                // Earlier examples for an omitted person are below the old
+                // frontier. If this new score stays below it, the person stays
+                // omitted as well. Otherwise compute an exact face ranking.
+                if (ranksBeforeBoundary(added, *oldBoundary)) return false;
+                continue;
+            }
+            if (!oldComplete && oldBoundary && !ranksBeforeBoundary(added, *oldBoundary)) continue;
+            current.emplace(tagId, std::move(added));
+            continue;
+        }
+
+        auto& person = found->second;
+        if (!person.secondExact) {
+            std::vector<std::pair<int64_t, float>> addedScores;
+            for (const auto* exemplar : additions) {
+                if (exemplar->faceId == face.id) continue;
+                const float rawScore = exemplarScore(face.embedding, *exemplar);
+                if (rawScore >= threshold) {
+                    addedScores.emplace_back(exemplar->faceId, std::clamp(rawScore, -1.0f, 1.0f));
+                }
+            }
+            std::sort(addedScores.begin(), addedScores.end(), [](const auto& left, const auto& right) {
+                return left.second != right.second ? left.second > right.second : left.first < right.first;
+            });
+            if (!addedScores.empty()) {
+                const auto oldBest = std::make_pair(person.bestExemplarId, person.suggestion.score);
+                const auto addedIsBetter = [&](const auto& candidate, const auto& other) {
+                    return candidate.second > other.second ||
+                        (candidate.second == other.second && candidate.first < other.first);
+                };
+                if (addedIsBetter(addedScores.front(), oldBest)) {
+                    person.bestExemplarId = addedScores.front().first;
+                    person.suggestion.score = addedScores.front().second;
+                    if (addedScores.size() > 1 && addedIsBetter(addedScores[1], oldBest)) {
+                        person.hasSecond = true;
+                        person.secondExemplarId = addedScores[1].first;
+                        person.secondScore = addedScores[1].second;
+                    } else {
+                        person.hasSecond = true;
+                        person.secondExemplarId = oldBest.first;
+                        person.secondScore = oldBest.second;
+                    }
+                    person.secondExact = true;
+                }
+            }
+            continue;
+        }
+        std::vector<std::pair<int64_t, float>> scored;
+        scored.emplace_back(person.bestExemplarId, person.suggestion.score);
+        if (person.hasSecond) scored.emplace_back(person.secondExemplarId, person.secondScore);
+        for (const auto* exemplar : additions) {
+            if (exemplar->faceId == face.id) continue;
+            const float rawScore = exemplarScore(face.embedding, *exemplar);
+            if (rawScore >= threshold) scored.emplace_back(exemplar->faceId, std::clamp(rawScore, -1.0f, 1.0f));
+        }
+        std::sort(scored.begin(), scored.end(), [](const auto& left, const auto& right) {
+            return left.second != right.second ? left.second > right.second : left.first < right.first;
+        });
+        scored.erase(std::unique(scored.begin(), scored.end(), [](const auto& a, const auto& b) {
+            return a.first == b.first;
+        }), scored.end());
+        if (scored.empty()) return false;
+        person.bestExemplarId = scored[0].first;
+        person.suggestion.score = scored[0].second;
+        person.hasSecond = scored.size() > 1;
+        person.secondExact = true;
+        if (person.hasSecond) {
+            person.secondExemplarId = scored[1].first;
+            person.secondScore = scored[1].second;
+        }
+        auto name = changes.currentNames.find(tagId);
+        if (name != changes.currentNames.end()) person.suggestion.name = name->second;
+    }
+
+    for (const auto& [tagId, name] : changes.currentNames) {
+        auto found = current.find(tagId);
+        if (found != current.end()) found->second.suggestion.name = name;
+    }
+    if (changes.anyNameChanged && oldBoundaryTie) return false;
+
+    std::vector<RankedPerson> ranked;
+    ranked.reserve(current.size());
+    for (auto& [tagId, person] : current) ranked.push_back(std::move(person));
+    std::sort(ranked.begin(), ranked.end(), rankedBefore);
+    if (oldComplete) {
+        face.rankingComplete = ranked.size() <= 4;
+        face.frontierExact = true;
+        face.omittedBoundaryTie = ranked.size() > 4 && ranked[4].suggestion.score == ranked[3].suggestion.score;
+        face.omittedUpperBound = ranked.size() > 4 ? std::optional<RankedPerson>(ranked[3]) : std::nullopt;
+        if (ranked.size() > 4) ranked.resize(4);
+    } else {
+        face.rankingComplete = false;
+        if (!oldBoundary) return false;
+        const size_t ahead = static_cast<size_t>(std::count_if(ranked.begin(), ranked.end(),
+            [&](const RankedPerson& candidate) { return ranksBeforeBoundary(candidate, *oldBoundary); }));
+        if (ahead < 3) return false;
+        face.frontierExact = ahead >= 4;
+        face.omittedBoundaryTie = oldBoundaryTie && !changes.anyNameChanged;
+        if (face.frontierExact) {
+            face.omittedUpperBound = ranked.size() > 4 ? std::optional<RankedPerson>(ranked[3]) : oldBoundary;
+            if (ranked.size() > 4) ranked.resize(4);
+        } else {
+            face.omittedUpperBound = oldBoundary;
+            if (ranked.size() > 3) ranked.resize(3);
+        }
+    }
+
+    // The unknown previous fifth-place person can only stay below the old
+    // boundary. An uncached added person at or above that boundary takes the
+    // exact path above; otherwise the old top-four prefix remains sufficient.
+    face.ranked = std::move(ranked);
+    applyRankedSuggestions(face);
+    return true;
+}
+
+void finishGroupReviewBuild(GroupReviewBuild& built, float matchThreshold,
+                            const GroupReviewIndex* previous = nullptr) {
+    auto& index = *built.index;
+    index.exemplarDescriptors = describeExemplars(built.exemplars);
+
+    std::unordered_map<std::string, ExemplarChanges> changesByKey;
+    if (previous) {
+        for (const auto& face : index.faces) {
+            if (face.queryEligible) {
+                const std::string key = exemplarKey(face.recognizerChecksum, face.pipelineVersion);
+                if (!changesByKey.contains(key)) {
+                    changesByKey.emplace(key, diffExemplars(previous, index, built.exemplars, key));
+                }
+            }
+        }
+    }
+
+    for (const auto& [faceId, rejected] : built.rejections) {
+        auto position = index.facePositions.find(faceId);
+        if (position != index.facePositions.end()) index.faces[position->second].rejectedTags = rejected;
+    }
+
+    for (auto& face : index.faces) {
+        if (!face.queryEligible) continue;
+        bool reused = false;
+        if (previous) {
+            auto oldPosition = previous->facePositions.find(face.id);
+            if (oldPosition != previous->facePositions.end()) {
+                const auto& old = previous->faces[oldPosition->second];
+                if (old.queryEligible && old.embedding == face.embedding &&
+                    old.recognizerChecksum == face.recognizerChecksum &&
+                    old.pipelineVersion == face.pipelineVersion && old.rejectedTags == face.rejectedTags) {
+                    face.ranked = old.ranked;
+                    face.omittedUpperBound = old.omittedUpperBound;
+                    face.rankingComplete = old.rankingComplete;
+                    face.frontierExact = old.frontierExact;
+                    face.omittedBoundaryTie = old.omittedBoundaryTie;
+                    face.suggestions = old.suggestions;
+                    reused = true;
+                }
+            }
+        }
+        if (!reused) {
+            auto exemplars = built.exemplars.find(exemplarKey(face.recognizerChecksum, face.pipelineVersion));
+            if (exemplars != built.exemplars.end()) exactRankFace(face, exemplars->second, matchThreshold);
+            else exactRankFace(face, {}, matchThreshold);
+            continue;
+        }
+
+        const std::string key = exemplarKey(face.recognizerChecksum, face.pipelineVersion);
+        const auto changes = changesByKey.find(key);
+        static const std::vector<Exemplar> kNoExemplars;
+        static const ExemplarChanges kNoChanges;
+        const auto exemplars = built.exemplars.find(key);
+        const std::vector<Exemplar>& currentExemplars = exemplars == built.exemplars.end()
+            ? kNoExemplars : exemplars->second;
+        const ExemplarChanges& currentChanges = changes == changesByKey.end() ? kNoChanges : changes->second;
+        const bool updated = incrementallyUpdateFace(face, currentChanges, currentExemplars, matchThreshold);
+        if (!updated) {
+            auto exemplars = built.exemplars.find(key);
+            if (exemplars != built.exemplars.end()) exactRankFace(face, exemplars->second, matchThreshold);
+            else exactRankFace(face, {}, matchThreshold);
+        }
+    }
+
+    // Exemplar vectors and temporary query/rejection maps are large. Keep only
+    // compact per-exemplar digests and the active unmatched query vectors.
+    built.queries.clear();
+    built.queries.shrink_to_fit();
+    built.exemplars.clear();
+    built.rejections.clear();
+}
+
+struct GroupAccumulator {
+    GroupReviewGroup group;
+    std::unordered_set<MediaId> photos;
+    std::unordered_set<MediaId> suggestionPhotos;
+};
+
+std::shared_ptr<GroupReviewSnapshot> makeGroupReviewSnapshot(
+    std::shared_ptr<GroupReviewIndex> index, std::string token,
+    bool showNamed, bool showUnnamed, bool includeDismissed,
+    std::optional<TagId> personTagId) {
+    auto snapshot = std::make_shared<GroupReviewSnapshot>();
+    snapshot->token = std::move(token);
+    snapshot->index = std::move(index);
+    snapshot->jobId = snapshot->index->jobId;
+    snapshot->showNamed = showNamed;
+    snapshot->showUnnamed = showUnnamed;
+    snapshot->includeDismissed = includeDismissed;
+    snapshot->personTagId = personTagId;
+    snapshot->createdAt = std::chrono::steady_clock::now();
+
+    std::unordered_map<std::string, GroupAccumulator> accumulators;
+    auto addFace = [&](std::string key, std::string type, std::optional<TagId> tagId,
+                       const std::string& name, size_t faceIndex, bool suggested) {
+        auto& accumulator = accumulators[key];
+        if (accumulator.group.key.empty()) {
+            accumulator.group.key = key;
+            accumulator.group.type = std::move(type);
+            accumulator.group.tagId = tagId;
+            accumulator.group.name = name;
+        }
+        const auto& face = snapshot->index->faces[faceIndex];
+        accumulator.group.members.push_back(faceIndex);
+        accumulator.photos.insert(face.mediaId);
+        if (suggested) {
+            accumulator.group.suggestionMembers.push_back(faceIndex);
+            accumulator.suggestionPhotos.insert(face.mediaId);
+        }
+    };
+
+    for (size_t i = 0; i < snapshot->index->faces.size(); ++i) {
+        const auto& face = snapshot->index->faces[i];
+        if (face.dismissed) {
+            const bool visibleByIdentity = face.personTagId ? showNamed : showUnnamed;
+            if (includeDismissed && visibleByIdentity &&
+                (!personTagId || (face.personTagId && *face.personTagId == *personTagId))) {
+                addFace("dismissed", "dismissed", std::nullopt, "", i, false);
+            }
+            continue;
+        }
+        if (face.personTagId) {
+            if (showNamed && (!personTagId || *face.personTagId == *personTagId)) {
+                addFace("person:" + std::to_string(*face.personTagId), "person",
+                        face.personTagId, face.personName, i, false);
+            }
+            continue;
+        }
+        if (!showUnnamed || personTagId) continue;
+        if (!face.suggestions.empty()) {
+            const auto& suggestion = face.suggestions.front();
+            addFace("person:" + std::to_string(suggestion.tagId), "person",
+                    suggestion.tagId, suggestion.name, i, true);
+        } else {
+            addFace("unnamed", "unnamed", std::nullopt, "", i, false);
+        }
+    }
+
+    for (auto& [key, accumulator] : accumulators) {
+        accumulator.group.facesCount = static_cast<int64_t>(accumulator.group.members.size());
+        accumulator.group.photosCount = static_cast<int64_t>(accumulator.photos.size());
+        accumulator.group.suggestionFacesCount = static_cast<int64_t>(accumulator.group.suggestionMembers.size());
+        accumulator.group.suggestionPhotosCount = static_cast<int64_t>(accumulator.suggestionPhotos.size());
+        snapshot->groups.push_back(std::move(accumulator.group));
+    }
+    std::sort(snapshot->groups.begin(), snapshot->groups.end(), [](const auto& a, const auto& b) {
+        if (a.type != b.type) {
+            auto order = [](const std::string& type) {
+                if (type == "person") return 0;
+                if (type == "unnamed") return 1;
+                return 2;
+            };
+            return order(a.type) < order(b.type);
+        }
+        if (a.name != b.name) return a.name < b.name;
+        return a.tagId.value_or(0) < b.tagId.value_or(0);
+    });
+    return snapshot;
+}
+
+nlohmann::json groupSummaryJson(const GroupReviewGroup& group) {
+    return {{"key", group.key}, {"type", group.type},
+            {"tag_id", group.tagId ? nlohmann::json(*group.tagId) : nlohmann::json(nullptr)},
+            {"name", group.type == "person" ? nlohmann::json(group.name) : nlohmann::json(nullptr)},
+            {"faces_count", group.facesCount}, {"photos_count", group.photosCount},
+            {"suggestion_faces_count", group.suggestionFacesCount},
+            {"suggestion_photos_count", group.suggestionPhotosCount}};
+}
+
 } // namespace
 
 struct Service::Impl {
@@ -617,6 +1529,12 @@ struct Service::Impl {
     std::jthread worker;
     std::atomic<bool> cancelRequested{false};
     Status engineStatus;
+    mutable std::mutex reviewMutex;
+    mutable std::shared_ptr<GroupReviewIndex> reviewIndex;
+    // Kept independently from short-lived review snapshots so a stale page or
+    // mutation token cannot discard the exact-match baseline used for deltas.
+    mutable std::shared_ptr<GroupReviewIndex> matcherIndex;
+    mutable std::vector<std::shared_ptr<GroupReviewSnapshot>> reviewSnapshots;
 
     Impl(db::CatalogDb& dbRef, std::string cacheDir, PathResolver resolve, Analyzer analyze)
         : db(dbRef), cacheDirectory(std::move(cacheDir)), resolver(std::move(resolve)), analyzer(std::move(analyze)),
@@ -764,6 +1682,7 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
         if (!committed.isOk()) return committed;
     }
 
+
     impl_->cancelRequested.store(false);
     if (impl_->worker.joinable()) impl_->worker.join();
     impl_->worker = std::jthread([this, jobId, ids = std::move(ids), force](std::stop_token) mutable {
@@ -818,8 +1737,15 @@ Result<json> Service::getMedia(MediaId mediaId) const {
     auto facesRes = impl_->db.conn_.prepare("SELECT id FROM faces WHERE media_id=? ORDER BY id;");
     if (!facesRes.isOk()) return facesRes.status();
     auto faces = std::move(facesRes.value()); faces.bind(1, mediaId);
-    while (faces.step() == StepResult::Row) {
-        auto face = faceJson(impl_->db.conn_, faces.getInt64(0), impl_->config.matchThreshold);
+    std::vector<int64_t> faceIds;
+    while (faces.step() == StepResult::Row) faceIds.push_back(faces.getInt64(0));
+    RejectionCache rejectionCache;
+    Status rejectionStatus = loadRejections(impl_->db.conn_, faceIds, rejectionCache);
+    if (!rejectionStatus.isOk()) return rejectionStatus;
+    ExemplarCache exemplarCache;
+    for (int64_t faceId : faceIds) {
+        auto face = faceJson(impl_->db.conn_, faceId, impl_->config.matchThreshold,
+                             &exemplarCache, &rejectionCache);
         if (face.isOk()) out["faces"].push_back(std::move(face.value()));
     }
     return out;
@@ -839,9 +1765,16 @@ Result<json> Service::getReview(int offset, int limit) const {
         "WHERE f.person_tag_id IS NULL AND f.dismissed=0 AND a.state='complete' ORDER BY f.id LIMIT ? OFFSET ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value()); stmt.bind(1, limit); stmt.bind(2, offset);
+    std::vector<int64_t> faceIds;
+    while (stmt.step() == StepResult::Row) faceIds.push_back(stmt.getInt64(0));
+    RejectionCache rejectionCache;
+    Status rejectionStatus = loadRejections(impl_->db.conn_, faceIds, rejectionCache);
+    if (!rejectionStatus.isOk()) return rejectionStatus;
+    ExemplarCache exemplarCache;
     json items = json::array();
-    while (stmt.step() == StepResult::Row) {
-        auto face = faceJson(impl_->db.conn_, stmt.getInt64(0), impl_->config.matchThreshold);
+    for (int64_t faceId : faceIds) {
+        auto face = faceJson(impl_->db.conn_, faceId, impl_->config.matchThreshold,
+                             &exemplarCache, &rejectionCache);
         if (face.isOk()) items.push_back(std::move(face.value()));
     }
     return json{{"items", std::move(items)}, {"total", total}};
@@ -878,17 +1811,393 @@ Result<json> Service::getGrid(std::optional<int64_t> jobId, int offset, int limi
     int param = 1;
     if (jobId) itemStmt.bind(param++, *jobId);
     itemStmt.bind(param++, limit); itemStmt.bind(param, offset);
+    std::vector<int64_t> faceIds;
+    while (itemStmt.step() == StepResult::Row) faceIds.push_back(itemStmt.getInt64(0));
+    RejectionCache rejectionCache;
+    Status rejectionStatus = loadRejections(conn, faceIds, rejectionCache);
+    if (!rejectionStatus.isOk()) return rejectionStatus;
     json items = json::array();
     ExemplarCache exemplarCache;
-    while (itemStmt.step() == StepResult::Row) {
-        auto face = faceJson(conn, itemStmt.getInt64(0), impl_->config.matchThreshold, &exemplarCache);
+    for (int64_t faceId : faceIds) {
+        auto face = faceJson(conn, faceId, impl_->config.matchThreshold,
+                             &exemplarCache, &rejectionCache, true);
         if (face.isOk()) items.push_back(std::move(face.value()));
     }
     return json{{"items", std::move(items)}, {"total", total}};
 }
 
+Result<json> Service::getFace(int64_t faceId) const {
+    if (faceId <= 0) return Status::invalidArgument("face ID must be positive");
+    std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+    return faceJson(impl_->db.conn_, faceId, impl_->config.matchThreshold);
+}
+
+Result<std::vector<FaceLookupOutcome>> Service::lookupFaces(
+    const std::vector<int64_t>& faceIds) const {
+    if (faceIds.empty() || faceIds.size() > 200) {
+        return Status::invalidArgument("Face lookup requires between 1 and 200 IDs");
+    }
+    std::unordered_set<int64_t> uniqueIds;
+    uniqueIds.reserve(faceIds.size());
+    for (int64_t faceId : faceIds) {
+        if (faceId <= 0 || !uniqueIds.insert(faceId).second) {
+            return Status::invalidArgument("Face lookup IDs must be unique positive integers");
+        }
+    }
+
+    std::lock_guard<std::mutex> reviewLock(impl_->reviewMutex);
+    std::lock_guard<std::recursive_mutex> dbLock(impl_->db.mutex_);
+    Connection& conn = impl_->db.conn_;
+    auto stampRes = readReviewStamp(conn);
+    if (!stampRes.isOk()) return stampRes.status();
+    const ReviewStamp stamp = stampRes.value();
+
+    std::shared_ptr<GroupReviewIndex> currentIndex = impl_->reviewIndex;
+    if (currentIndex && !(currentIndex->stamp == stamp)) {
+        impl_->reviewIndex.reset();
+        impl_->reviewSnapshots.clear();
+        currentIndex.reset();
+    }
+
+    std::vector<int64_t> uncachedIds;
+    uncachedIds.reserve(faceIds.size());
+    for (int64_t faceId : faceIds) {
+        if (!currentIndex || !currentIndex->facePositions.contains(faceId)) uncachedIds.push_back(faceId);
+    }
+    RejectionCache rejectionCache;
+    Status rejectionStatus = loadRejections(conn, uncachedIds, rejectionCache);
+    if (!rejectionStatus.isOk()) return rejectionStatus;
+
+    ExemplarCache exemplarCache;
+    std::vector<FaceLookupOutcome> outcomes;
+    outcomes.reserve(faceIds.size());
+    for (int64_t faceId : faceIds) {
+        FaceLookupOutcome outcome;
+        outcome.id = faceId;
+        if (currentIndex) {
+            auto position = currentIndex->facePositions.find(faceId);
+            if (position != currentIndex->facePositions.end()) {
+                const auto& indexed = currentIndex->faces[position->second];
+                auto face = faceJson(conn, faceId, impl_->config.matchThreshold,
+                                     nullptr, nullptr, true, nullptr, false);
+                if (!face.isOk()) {
+                    outcome.status = face.status();
+                } else if (face.value()["revision"].get<int64_t>() != indexed.revision) {
+                    impl_->reviewIndex.reset();
+                    impl_->reviewSnapshots.clear();
+                    return Status::alreadyExists("Face group snapshot is stale; retry the face lookup");
+                } else {
+                    if (!indexed.dismissed && !indexed.personTagId) {
+                        for (const auto& suggestion : indexed.suggestions) {
+                            face.value()["suggestions"].push_back({{"tag_id", suggestion.tagId},
+                                {"name", suggestion.name}, {"score", suggestion.score}});
+                        }
+                    }
+                    outcome.face = std::move(face.value());
+                }
+                outcomes.push_back(std::move(outcome));
+                continue;
+            }
+        }
+
+        auto face = faceJson(conn, faceId, impl_->config.matchThreshold,
+                             &exemplarCache, &rejectionCache, true);
+        if (!face.isOk()) outcome.status = face.status();
+        else outcome.face = std::move(face.value());
+        outcomes.push_back(std::move(outcome));
+    }
+
+    auto finalStamp = readReviewStamp(conn);
+    if (!finalStamp.isOk()) return finalStamp.status();
+    if (!(finalStamp.value() == stamp)) {
+        impl_->reviewIndex.reset();
+        impl_->reviewSnapshots.clear();
+        return Status::alreadyExists("Catalog changed during face lookup; retry the request");
+    }
+    return outcomes;
+}
+
+Result<json> Service::getGroups(std::optional<int64_t> jobId, bool showNamed,
+                                bool showUnnamed, bool includeDismissed,
+                                std::optional<TagId> personTagId) const {
+    if ((jobId && *jobId <= 0) || (personTagId && *personTagId <= 0)) {
+        return Status::invalidArgument("job_id and person_tag_id must be positive");
+    }
+    std::unique_lock<std::mutex> reviewLock(impl_->reviewMutex);
+    ReviewStamp currentStamp;
+    {
+        std::lock_guard<std::recursive_mutex> dbLock(impl_->db.mutex_);
+        auto stamp = readReviewStamp(impl_->db.conn_);
+        if (!stamp.isOk()) return stamp.status();
+        currentStamp = stamp.value();
+        if (personTagId && !isPeopleTag(impl_->db.conn_, *personTagId)) {
+            return Status::invalidArgument("person_tag_id must identify a people tag");
+        }
+        if (jobId) {
+            auto jobRes = impl_->db.conn_.prepare("SELECT 1 FROM face_analysis_jobs WHERE id=?;");
+            if (!jobRes.isOk()) return jobRes.status();
+            auto job = std::move(jobRes.value());
+            job.bind(1, *jobId);
+            if (job.step() != StepResult::Row) return Status::notFound("Face-analysis job not found");
+        }
+    }
+
+    const auto sameScope = [&](const std::shared_ptr<GroupReviewIndex>& index) {
+        return index && index->jobId == jobId;
+    };
+    if (!sameScope(impl_->reviewIndex) || !(impl_->reviewIndex->stamp == currentStamp)) {
+        GroupReviewBuild pendingBuild;
+        ReviewStamp buildStamp;
+        const GroupReviewIndex* previousIndex = impl_->matcherIndex &&
+            impl_->matcherIndex->jobId == jobId ? impl_->matcherIndex.get() : nullptr;
+        {
+            std::lock_guard<std::recursive_mutex> dbLock(impl_->db.mutex_);
+            db::Transaction readTransaction(impl_->db.conn_);
+            auto startStamp = readReviewStamp(impl_->db.conn_);
+            if (!startStamp.isOk()) return startStamp.status();
+            if (!(startStamp.value() == currentStamp)) {
+                return Status::alreadyExists("Catalog changed before face groups could be built; reload the groups");
+            }
+            if (jobId) {
+                auto jobRes = impl_->db.conn_.prepare("SELECT 1 FROM face_analysis_jobs WHERE id=?;");
+                if (!jobRes.isOk()) return jobRes.status();
+                auto job = std::move(jobRes.value());
+                job.bind(1, *jobId);
+                if (job.step() != StepResult::Row) return Status::notFound("Face-analysis job not found");
+            }
+            auto build = buildGroupReviewIndex(impl_->db.conn_, jobId, startStamp.value());
+            if (!build.isOk()) return build.status();
+            pendingBuild = std::move(build.value());
+            Status committed = readTransaction.commit();
+            if (!committed.isOk()) return committed;
+            auto endStamp = readReviewStamp(impl_->db.conn_);
+            if (!endStamp.isOk()) return endStamp.status();
+            if (!(endStamp.value() == startStamp.value())) {
+                return Status::alreadyExists("Catalog changed while building face groups; reload the groups");
+            }
+            buildStamp = endStamp.value();
+        }
+
+        // Exact cosine ranking is CPU-bound, so run it after releasing the
+        // catalog mutex and read transaction. Only the final publication check
+        // reacquires the DB lock.
+        finishGroupReviewBuild(pendingBuild, impl_->config.matchThreshold, previousIndex);
+        pendingBuild.index->stamp = buildStamp;
+        {
+            std::lock_guard<std::recursive_mutex> dbLock(impl_->db.mutex_);
+            auto afterMatching = readReviewStamp(impl_->db.conn_);
+            if (!afterMatching.isOk()) return afterMatching.status();
+            if (!(afterMatching.value() == buildStamp)) {
+                return Status::alreadyExists("Catalog changed while matching face groups; reload the groups");
+            }
+        }
+        impl_->matcherIndex = pendingBuild.index;
+        impl_->reviewIndex = std::move(pendingBuild.index);
+        impl_->reviewSnapshots.clear();
+    }
+
+    constexpr auto kSnapshotTtl = std::chrono::minutes(10);
+    auto now = std::chrono::steady_clock::now();
+    for (auto it = impl_->reviewSnapshots.begin(); it != impl_->reviewSnapshots.end();) {
+        auto& snapshot = *it;
+        if (now - snapshot->createdAt >= kSnapshotTtl || snapshot->index != impl_->reviewIndex) {
+            it = impl_->reviewSnapshots.erase(it);
+            continue;
+        }
+        if (snapshot->jobId == jobId && snapshot->showNamed == showNamed &&
+            snapshot->showUnnamed == showUnnamed && snapshot->includeDismissed == includeDismissed &&
+            snapshot->personTagId == personTagId) {
+            auto stable = snapshot;
+            impl_->reviewSnapshots.erase(it);
+            impl_->reviewSnapshots.push_back(stable);
+            nlohmann::json groups = nlohmann::json::array();
+            int64_t totalFaces = 0;
+            for (const auto& group : stable->groups) {
+                groups.push_back(groupSummaryJson(group));
+                totalFaces += group.facesCount;
+            }
+            {
+                std::lock_guard<std::recursive_mutex> dbLock(impl_->db.mutex_);
+                auto after = readReviewStamp(impl_->db.conn_);
+                if (!after.isOk()) return after.status();
+                if (!(after.value() == stable->index->stamp)) {
+                    impl_->reviewIndex.reset();
+                    impl_->reviewSnapshots.clear();
+                    return Status::alreadyExists("Face group snapshot is stale; reload the groups");
+                }
+            }
+            return nlohmann::json{{"snapshot", stable->token}, {"total", totalFaces},
+                                  {"group_count", stable->groups.size()}, {"groups", std::move(groups)}};
+        }
+        ++it;
+    }
+
+    std::string token = newReviewToken();
+    if (token.empty()) return Status::internal("Failed to create face-group snapshot token");
+    auto snapshot = makeGroupReviewSnapshot(impl_->reviewIndex, std::move(token),
+        showNamed, showUnnamed, includeDismissed, personTagId);
+    impl_->reviewSnapshots.push_back(snapshot);
+    constexpr size_t kMaxCachedSnapshots = 4;
+    if (impl_->reviewSnapshots.size() > kMaxCachedSnapshots) {
+        impl_->reviewSnapshots.erase(impl_->reviewSnapshots.begin());
+    }
+
+    nlohmann::json groups = nlohmann::json::array();
+    int64_t totalFaces = 0;
+    for (const auto& group : snapshot->groups) {
+        groups.push_back(groupSummaryJson(group));
+        totalFaces += group.facesCount;
+    }
+    {
+        std::lock_guard<std::recursive_mutex> dbLock(impl_->db.mutex_);
+        auto after = readReviewStamp(impl_->db.conn_);
+        if (!after.isOk()) return after.status();
+        if (!(after.value() == snapshot->index->stamp)) {
+            impl_->reviewIndex.reset();
+            impl_->reviewSnapshots.clear();
+            return Status::alreadyExists("Face group snapshot is stale; reload the groups");
+        }
+    }
+    return nlohmann::json{{"snapshot", snapshot->token}, {"total", totalFaces},
+                          {"group_count", snapshot->groups.size()}, {"groups", std::move(groups)}};
+}
+
+Result<json> Service::getGroupPage(const std::string& snapshotToken, const std::string& key,
+                                   int offset, int limit) const {
+    if (snapshotToken.empty() || key.empty() || offset < 0 || limit < 1 || limit > 200) {
+        return Status::invalidArgument("snapshot and key are required; offset must be nonnegative and limit between 1 and 200");
+    }
+    std::lock_guard<std::mutex> reviewLock(impl_->reviewMutex);
+    const auto now = std::chrono::steady_clock::now();
+    auto snapshotIt = std::find_if(impl_->reviewSnapshots.begin(), impl_->reviewSnapshots.end(),
+        [&](const auto& candidate) { return candidate->token == snapshotToken; });
+    if (snapshotIt == impl_->reviewSnapshots.end() || now - (*snapshotIt)->createdAt >= std::chrono::minutes(10)) {
+        return Status::alreadyExists("Face group snapshot expired or was evicted; reload the groups");
+    }
+    auto snapshot = *snapshotIt;
+    auto groupIt = std::find_if(snapshot->groups.begin(), snapshot->groups.end(),
+        [&](const auto& group) { return group.key == key; });
+    if (groupIt == snapshot->groups.end()) return Status::notFound("Face group not found");
+
+    std::lock_guard<std::recursive_mutex> dbLock(impl_->db.mutex_);
+    auto before = readReviewStamp(impl_->db.conn_);
+    if (!before.isOk()) return before.status();
+    if (!(before.value() == snapshot->index->stamp)) {
+        impl_->reviewIndex.reset();
+        impl_->reviewSnapshots.clear();
+        return Status::alreadyExists("Face group snapshot is stale; reload the groups");
+    }
+
+    json items = json::array();
+    const size_t start = std::min(static_cast<size_t>(offset), groupIt->members.size());
+    const size_t end = std::min(groupIt->members.size(), start + static_cast<size_t>(limit));
+    for (size_t i = start; i < end; ++i) {
+        const auto& indexed = snapshot->index->faces[groupIt->members[i]];
+        auto face = faceJson(impl_->db.conn_, indexed.id, impl_->config.matchThreshold,
+                             nullptr, nullptr, true, nullptr, false);
+        if (!face.isOk()) return face.status();
+        if (face.value()["revision"].get<int64_t>() != indexed.revision) {
+            impl_->reviewIndex.reset();
+            impl_->reviewSnapshots.clear();
+            return Status::alreadyExists("Face group snapshot is stale; reload the groups");
+        }
+        if (!indexed.dismissed && !indexed.personTagId) {
+            for (const auto& suggestion : indexed.suggestions) {
+                face.value()["suggestions"].push_back({{"tag_id", suggestion.tagId},
+                    {"name", suggestion.name}, {"score", suggestion.score}});
+            }
+        }
+        items.push_back(std::move(face.value()));
+    }
+    auto after = readReviewStamp(impl_->db.conn_);
+    if (!after.isOk()) return after.status();
+    if (!(after.value() == snapshot->index->stamp)) {
+        impl_->reviewIndex.reset();
+        impl_->reviewSnapshots.clear();
+        return Status::alreadyExists("Face group snapshot is stale; reload the groups");
+    }
+    return json{{"snapshot", snapshot->token}, {"key", key}, {"items", std::move(items)},
+                {"total", groupIt->facesCount}, {"offset", offset}, {"limit", limit}};
+}
+
+Result<std::vector<SuggestionAcceptanceOutcome>> Service::acceptGroup(
+    const std::string& snapshotToken, const std::string& key) {
+    if (snapshotToken.empty() || key.empty()) {
+        return Status::invalidArgument("snapshot and key are required");
+    }
+    std::lock_guard<std::mutex> reviewLock(impl_->reviewMutex);
+    auto snapshotIt = std::find_if(impl_->reviewSnapshots.begin(), impl_->reviewSnapshots.end(),
+        [&](const auto& candidate) { return candidate->token == snapshotToken; });
+    if (snapshotIt == impl_->reviewSnapshots.end() ||
+        std::chrono::steady_clock::now() - (*snapshotIt)->createdAt >= std::chrono::minutes(10)) {
+        return Status::alreadyExists("Face group snapshot expired or was evicted; reload the groups");
+    }
+    auto snapshot = *snapshotIt;
+    auto groupIt = std::find_if(snapshot->groups.begin(), snapshot->groups.end(),
+        [&](const auto& group) { return group.key == key; });
+    if (groupIt == snapshot->groups.end()) return Status::notFound("Face group not found");
+    if (groupIt->type != "person" || !groupIt->tagId) {
+        return Status::invalidArgument("Only person groups can be accepted");
+    }
+
+    std::lock_guard<std::recursive_mutex> dbLock(impl_->db.mutex_);
+    auto initialStamp = readReviewStamp(impl_->db.conn_);
+    if (!initialStamp.isOk()) return initialStamp.status();
+    if (!(initialStamp.value() == snapshot->index->stamp)) {
+        impl_->reviewIndex.reset();
+        impl_->reviewSnapshots.clear();
+        return Status::alreadyExists("Face group snapshot is stale; reload the groups");
+    }
+
+    std::vector<SuggestionAcceptanceOutcome> outcomes;
+    outcomes.reserve(groupIt->suggestionMembers.size());
+    bool wrote = false;
+    for (size_t position = 0; position < groupIt->suggestionMembers.size(); ++position) {
+        const auto& face = snapshot->index->faces[groupIt->suggestionMembers[position]];
+        SuggestionAcceptanceOutcome outcome;
+        outcome.id = face.id;
+        auto currentVersion = readReviewStamp(impl_->db.conn_);
+        if (!currentVersion.isOk()) {
+            outcome.status = currentVersion.status();
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+        if (currentVersion.value().dataVersion != snapshot->index->stamp.dataVersion) {
+            outcome.status = Status::alreadyExists("Face group snapshot is stale; reload the groups");
+            outcomes.push_back(std::move(outcome));
+            for (++position; position < groupIt->suggestionMembers.size(); ++position) {
+                SuggestionAcceptanceOutcome remaining;
+                remaining.id = snapshot->index->faces[groupIt->suggestionMembers[position]].id;
+                remaining.status = Status::alreadyExists("Face group snapshot is stale; reload the groups");
+                outcomes.push_back(std::move(remaining));
+            }
+            break;
+        }
+        outcome.status = assignExistingPersonTag(impl_->db.conn_, face.id, face.revision,
+                                                  *groupIt->tagId, snapshot->index->stamp.dataVersion);
+        wrote = wrote || outcome.status.isOk();
+        if (!outcome.status.isOk() && outcome.status.message().find("snapshot is stale") != std::string::npos) {
+            outcomes.push_back(std::move(outcome));
+            for (++position; position < groupIt->suggestionMembers.size(); ++position) {
+                SuggestionAcceptanceOutcome remaining;
+                remaining.id = snapshot->index->faces[groupIt->suggestionMembers[position]].id;
+                remaining.status = Status::alreadyExists("Face group snapshot is stale; reload the groups");
+                outcomes.push_back(std::move(remaining));
+            }
+            break;
+        }
+        outcomes.push_back(std::move(outcome));
+    }
+    if (wrote) {
+        impl_->reviewIndex.reset();
+        impl_->reviewSnapshots.clear();
+    }
+    return outcomes;
+}
+
 Result<json> Service::setIdentity(int64_t faceId, int64_t revision, std::optional<TagId> tagId,
-                                  const std::optional<std::string>& name) {
+                                  const std::optional<std::string>& name,
+                                  bool includeSuggestions) {
     if (faceId <= 0 || revision <= 0 || (tagId.has_value() && name.has_value())) {
         return Status::invalidArgument("Provide a face ID and revision, with at most one of tag_id or name");
     }
@@ -939,19 +2248,92 @@ Result<json> Service::setIdentity(int64_t faceId, int64_t revision, std::optiona
     if (oldTag && *oldTag != newTag) { s = syncFaceTagOwnership(conn, mediaId, *oldTag); if (!s.isOk()) return s; }
     if (newTag > 0) { s = syncFaceTagOwnership(conn, mediaId, newTag); if (!s.isOk()) return s; }
     s = tx.commit(); if (!s.isOk()) return s;
-    return faceJson(conn, faceId, impl_->config.matchThreshold);
+    return faceJson(conn, faceId, impl_->config.matchThreshold, nullptr, nullptr,
+                    false, nullptr, includeSuggestions);
 }
 
 Result<json> Service::acceptSuggestion(int64_t faceId, int64_t revision, TagId tagId) {
     if (faceId <= 0 || revision <= 0 || tagId <= 0) return Status::invalidArgument("face ID, revision, and tag_id must be positive");
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
-    auto faceRes = faceJson(impl_->db.conn_, faceId, impl_->config.matchThreshold);
+    ExemplarCache exemplarCache;
+    RejectionCache rejectionCache;
+    auto rejectionStatus = loadRejections(impl_->db.conn_, {faceId}, rejectionCache);
+    if (!rejectionStatus.isOk()) return rejectionStatus;
+    auto faceRes = faceJson(impl_->db.conn_, faceId, impl_->config.matchThreshold,
+                            &exemplarCache, &rejectionCache);
     if (!faceRes.isOk()) return faceRes.status();
     if (faceRes.value()["revision"].get<int64_t>() != revision) return Status::alreadyExists("Face review is stale; reload before accepting a suggestion");
-    bool found = false;
-    for (const auto& suggestion : faceRes.value()["suggestions"]) if (suggestion["tag_id"].get<int64_t>() == tagId) found = true;
-    if (!found) return Status::alreadyExists("That identity is no longer an eligible suggestion");
-    return setIdentity(faceId, revision, tagId, std::nullopt);
+    std::optional<std::string> acceptedName;
+    for (const auto& suggestion : faceRes.value()["suggestions"]) {
+        if (suggestion["tag_id"].get<int64_t>() == tagId) acceptedName = suggestion["name"].get<std::string>();
+    }
+    if (!acceptedName) return Status::alreadyExists("That identity is no longer an eligible suggestion");
+    auto updated = setIdentity(faceId, revision, tagId, std::nullopt, false);
+    return updated;
+}
+
+Result<std::vector<SuggestionAcceptanceOutcome>> Service::acceptSuggestionsBatch(
+    const std::vector<SuggestionAcceptance>& acceptances) {
+    std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+    std::vector<int64_t> faceIds;
+    faceIds.reserve(acceptances.size());
+    for (const auto& acceptance : acceptances) faceIds.push_back(acceptance.id);
+    RejectionCache rejectionCache;
+    Status rejectionStatus = loadRejections(impl_->db.conn_, faceIds, rejectionCache);
+    if (!rejectionStatus.isOk()) return rejectionStatus;
+
+    ExemplarCache exemplarCache;
+    std::vector<SuggestionAcceptanceOutcome> outcomes;
+    outcomes.reserve(acceptances.size());
+    for (const auto& acceptance : acceptances) {
+        SuggestionAcceptanceOutcome outcome;
+        outcome.id = acceptance.id;
+        if (acceptance.id <= 0 || acceptance.revision <= 0 || acceptance.tagId <= 0) {
+            outcome.status = Status::invalidArgument("face ID, revision, and tag_id must be positive");
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+        FaceMatchInfo matchInfo;
+        auto face = faceJson(impl_->db.conn_, acceptance.id, impl_->config.matchThreshold,
+                             &exemplarCache, &rejectionCache, false, &matchInfo);
+        if (!face.isOk()) {
+            outcome.status = face.status();
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+        if (face.value()["revision"].get<int64_t>() != acceptance.revision) {
+            outcome.status = Status::alreadyExists("Face review is stale; reload before accepting a suggestion");
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+        std::optional<std::string> acceptedName;
+        for (const auto& suggestion : face.value()["suggestions"]) {
+            if (suggestion["tag_id"].get<int64_t>() == acceptance.tagId) {
+                acceptedName = suggestion["name"].get<std::string>();
+                break;
+            }
+        }
+        if (!acceptedName) {
+            outcome.status = Status::alreadyExists("That identity is no longer an eligible suggestion");
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        auto updated = setIdentity(acceptance.id, acceptance.revision, acceptance.tagId,
+                                   std::nullopt, false);
+        if (!updated.isOk()) {
+            outcome.status = updated.status();
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+        outcome.face = std::move(updated.value());
+        updateExemplarCache(exemplarCache, matchInfo, acceptance.id,
+                            acceptance.tagId, *acceptedName);
+        auto rejected = rejectionCache.find(acceptance.id);
+        if (rejected != rejectionCache.end()) rejected->second.erase(acceptance.tagId);
+        outcomes.push_back(std::move(outcome));
+    }
+    return outcomes;
 }
 
 Result<json> Service::rejectSuggestion(int64_t faceId, int64_t revision, TagId tagId) {

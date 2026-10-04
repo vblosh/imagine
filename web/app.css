@@ -1027,11 +1027,15 @@ body, html {
 .face-grid-group { margin-bottom: 18px; }
 
 .face-grid-group-header {
+  position: sticky;
+  top: -4px;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 10px;
   margin: 4px 0 8px;
-  padding-bottom: 6px;
+  padding: 4px 2px 6px;
+  background: var(--bg-card);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -1043,6 +1047,13 @@ body, html {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 10px;
+}
+
+.face-grid-virtual-spacer {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 0;
+  pointer-events: none;
 }
 
 .face-grid-card {
@@ -1064,6 +1075,12 @@ body, html {
 }
 
 .face-grid-card:focus-within { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+
+.face-grid-card-placeholder {
+  box-sizing: border-box;
+  visibility: hidden;
+  cursor: default;
+}
 
 .face-grid-select {
   position: absolute;
@@ -1087,10 +1104,31 @@ body, html {
   margin-top: 7px;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.25;
+  height: 2.5em;
+  min-height: 2.5em;
+  max-height: 2.5em;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   overflow-wrap: anywhere;
+  flex: 0 0 auto;
 }
 
-.face-grid-meta { margin-top: 3px; color: var(--text-secondary); font-size: 10px; line-height: 1.4; }
+.face-grid-meta {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+  height: 1.4em;
+  min-height: 1.4em;
+  max-height: 1.4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
 
 .face-grid-sidepanel {
   display: flex;

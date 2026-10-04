@@ -27,8 +27,13 @@ responses.
 | `GET /jobs/:id` | Reads persisted progress and state. |
 | `POST /jobs/:id/cancel` | Requests cancellation between photos. |
 | `GET /media/:id` | Reads analysis state, oriented dimensions, errors, and detections for a photo. |
+| `GET /:id` | Reads one current face, including its revision and suggestions, for correction of an unloaded failed review. |
+| `GET /lookup?ids=12,13` | Reads up to 200 unique positive face IDs, returning `{items,failed}` with individual missing-ID errors. Used to resolve unloaded review failures in bounded batches. |
 | `GET /review?offset=0&limit=50` | Lists unnamed, nondismissed faces from completed analyses. The limit is 1–200. |
 | `GET /grid?job_id=123&offset=0&limit=200&include_dismissed=false` | Lists completed faces for a scan job, or all completed faces when `job_id` is omitted. The limit is 1–1,000. |
+| `GET /groups` | Compact, filtered person/unnamed/dismissed group summaries and a review snapshot; no face cards or embeddings. |
+| `GET /group?key=person%3A42&snapshot=...&offset=0&limit=100` | A bounded page of face cards from one snapshot group. |
+| `POST /groups/accept` | Accepts every eligible suggestion in the snapshot group, including unloaded cards. Body: `{"snapshot":"...","key":"person:42"}`. |
 | `POST /:id/identity` | Assigns or clears a person: `{"revision":1,"tag_id":42}`, `{"revision":1,"name":"Ari"}`, or `{"revision":1,"tag_id":null}`. |
 | `POST /:id/accept` | Accepts an eligible suggestion: `{"revision":1,"tag_id":42}`. |
 | `POST /:id/reject` | Rejects an eligible suggestion with the same payload. |
@@ -37,6 +42,36 @@ responses.
 | `GET /:id/crop?revision=1` | Serves a JPEG crop if the face revision and source image are still current. |
 
 `GET /grid` accepts `include_dismissed=true` to include dismissed faces. A job-scoped grid contains only photos recorded for that job that currently have complete analysis. Historical jobs created before job-to-photo membership was recorded produce an empty scoped grid. With no `job_id`, the grid includes every photo with a complete analysis. Results are ordered by face ID.
+
+For a lighter review-grid response, suggestions are omitted (returned as an empty array) for already assigned or dismissed faces. Suggestion-acceptance mutation responses also return an empty suggestions array after the update; refresh the media or review endpoint to retrieve suggestions for an unnamed, active face.
+
+The review browser uses `/groups` and `/group` instead of downloading the entire
+legacy `/grid`. Group queries accept optional `job_id`, `show_named` and
+`show_unnamed` (both default true), `include_dismissed` (default false), and an
+optional `person_tag_id` filter. The response is
+`{snapshot,total,groups:[{key,type,tag_id,name,faces_count,photos_count,suggestion_faces_count,suggestion_photos_count}]}`.
+`total` counts faces across the filtered groups. A person group combines
+confirmed faces with unnamed faces whose strongest eligible suggestion is that
+person. Each face belongs to one group. Other keys are `unnamed` and `dismissed`.
+The suggestion button counts distinct photos, even when a photo has multiple
+face detections.
+
+The snapshot fixes group membership, scope, filters and captured review
+revisions. `/group` returns `{snapshot,items,total,offset,limit}` for its bounded
+card page; the limit is 1–200 and defaults to 100. Up to four filtered snapshots
+are retained for the current indexed scope, each for ten minutes. Group acceptance requires mutation authentication and returns
+`{updated_count,failed_count,failed:[{id,status,error}]}` without returning every
+updated card. It preserves individual commit and partial-failure semantics.
+Expired or invalidated snapshots return HTTP 409; obtain fresh summaries before
+retrying. The bounded in-memory index is invalidated by local catalog writes
+and committed changes made through another database connection. A separate
+matching baseline survives snapshot invalidation. Rebuilding compares current
+query vectors, pipelines, rejections and exemplar fingerprints, reuses unchanged
+scores and updates affected comparisons. Uncertain rankings use exact fallback.
+Active unnamed query vectors and a bounded number of best-person/example scores
+remain in server memory; confirmed-example vectors are temporary build inputs.
+The cache is not persisted or sent to the browser, and does not change the exact
+matching algorithm.
 
 `POST /batch` requires API-token authentication. Its body uses `action:"identity"`, `action:"accept"`, or `action:"dismiss"` and a `faces` array of `{id,revision}` objects. Identity takes one of `tag_id` (including `null` to clear) or `name`; accept takes `tag_id`; dismiss takes a boolean `dismissed`. Face IDs must be unique and positive. Structural validation errors return HTTP 400 for the request; per-face conflicts and validation failures appear in `failed` as `{id,status,error}` while successful faces appear in `updated`. The response is HTTP 200 even when some or all faces fail.
 

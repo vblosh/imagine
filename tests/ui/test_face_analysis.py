@@ -95,6 +95,11 @@ class FaceApi:
     def __init__(self, page):
         self.faces, self.names, self.jobs = {}, {}, {}
         self.posts, self.batches, self.grid_reads = [], [], []
+        self.group_queries, self.group_reads, self.group_accepts, self.group_accept_headers = [], [], [], []
+        self.face_get_reads, self.face_lookup_reads = [], []
+        self.group_page_failures, self.short_group_pages = {}, set()
+        self.group_snapshot_number, self.group_snapshot, self.group_members = 0, "", {}
+        self.group_snapshots = {}
         self.face_actions = []
         self.fail_ids = set()
         self.start_failures, self.job_overrides = [], []
@@ -133,6 +138,118 @@ class FaceApi:
             route.fulfill(json=job)
         elif re.fullmatch(r"/api/faces/jobs/\d+", path):
             route.fulfill(json=self.jobs[int(path.rsplit("/", 1)[1])])
+        elif path == "/api/faces/groups" and method == "GET":
+            query = parse_qs(parsed.query)
+            self.group_queries.append(query)
+            include_dismissed = query.get("include_dismissed") == ["true"]
+            show_named = query.get("show_named", ["true"])[0] == "true"
+            show_unnamed = query.get("show_unnamed", ["true"])[0] == "true"
+            confirmed_person_id = query.get("person_tag_id", [""])[0]
+            filtered = []
+            for face in self.faces.values():
+                if face["dismissed"] and not include_dismissed:
+                    continue
+                confirmed = face["person_tag_id"] is not None
+                if confirmed and not show_named or not confirmed and not show_unnamed:
+                    continue
+                if confirmed_person_id and str(face["person_tag_id"] or "") != confirmed_person_id:
+                    continue
+                filtered.append(face)
+            members = {}
+            for face in filtered:
+                if face["dismissed"]:
+                    key, group_type = "dismissed", "dismissed"
+                elif face["person_tag_id"] is not None:
+                    key, group_type = f"person:{face['person_tag_id']}", "person"
+                elif face["suggestions"] and int(face["suggestions"][0]["tag_id"]) > 0:
+                    key, group_type = f"person:{face['suggestions'][0]['tag_id']}", "person"
+                else:
+                    key, group_type = "unnamed", "unnamed"
+                members.setdefault(key, []).append(face)
+            groups = []
+            for key, faces in members.items():
+                faces.sort(key=lambda face: (face["media_id"], face["id"]))
+                if key.startswith("person:"):
+                    group_type = "person"
+                    tag_id = int(key.split(":", 1)[1])
+                    name = self.names.get(tag_id) or next((face["person_name"] for face in faces if face["person_name"]), None)
+                    if not name:
+                        name = next((face["suggestions"][0]["name"] for face in faces if face["suggestions"]), f"Person {tag_id}")
+                else:
+                    tag_id = None
+                    group_type = "dismissed" if key == "dismissed" else "unnamed"
+                    name = "Dismissed" if group_type == "dismissed" else "Unnamed"
+                eligible = [face for face in faces if not face["dismissed"] and face["person_tag_id"] is None
+                            and face["suggestions"] and key == f"person:{face['suggestions'][0]['tag_id']}"]
+                groups.append(dict(key=key, type=group_type, tag_id=tag_id, name=name,
+                                   faces_count=len(faces), photos_count=len({face["media_id"] for face in faces}),
+                                   suggestion_faces_count=len(eligible),
+                                   suggestion_photos_count=len({face["media_id"] for face in eligible})))
+            groups.sort(key=lambda group: (0 if group["type"] == "person" else 1 if group["type"] == "unnamed" else 2,
+                                           group["name"].casefold(), group["key"]))
+            self.group_snapshot_number += 1
+            self.group_snapshot = f"face-snapshot-{self.group_snapshot_number}"
+            self.group_members = {group["key"]: members[group["key"]] for group in groups}
+            self.group_snapshots[self.group_snapshot] = self.group_members
+            while len(self.group_snapshots) > 4:
+                del self.group_snapshots[next(iter(self.group_snapshots))]
+            route.fulfill(json=dict(snapshot=self.group_snapshot, total=len(filtered), groups=groups))
+        elif path == "/api/faces/group" and method == "GET":
+            query = parse_qs(parsed.query)
+            key = query.get("key", [""])[0]
+            snapshot = query.get("snapshot", [""])[0]
+            offset, limit = int(query.get("offset", [0])[0]), int(query.get("limit", [48])[0])
+            self.group_reads.append(dict(key=key, snapshot=snapshot, offset=offset, limit=limit))
+            snapshot_members = self.group_snapshots.get(snapshot)
+            if snapshot_members is None or key not in snapshot_members:
+                route.fulfill(status=409, json={"error": "Face review snapshot is stale"})
+                return
+            if self.group_page_failures.get(offset, 0):
+                self.group_page_failures[offset] -= 1
+                route.fulfill(status=503, json={"error": "Temporary crop page failure"})
+                return
+            members = snapshot_members[key]
+            items = members[offset:offset + limit]
+            if offset in self.short_group_pages and items:
+                items = items[:-1]
+            route.fulfill(json=dict(snapshot=snapshot, items=items, total=len(members), offset=offset, limit=limit))
+        elif path == "/api/faces/groups/accept" and method == "POST":
+            self.group_accepts.append(body)
+            self.group_accept_headers.append(route.request.headers.get("authorization"))
+            snapshot_members = self.group_snapshots.get(body.get("snapshot"))
+            if snapshot_members is None or body.get("key") not in snapshot_members:
+                route.fulfill(status=409, json={"error": "Face review snapshot is stale"})
+                return
+            updated, failed = 0, []
+            for face in snapshot_members[body["key"]]:
+                if face["dismissed"] or face["person_tag_id"] is not None or not face["suggestions"]:
+                    continue
+                suggestion = face["suggestions"][0]
+                if face["id"] in self.fail_ids:
+                    failed.append(dict(id=face["id"], status=409, error="Face review is stale"))
+                    continue
+                face["person_tag_id"] = suggestion["tag_id"]
+                face["person_name"] = suggestion["name"]
+                face["suggestions"] = []
+                face["revision"] += 1
+                face["crop_url"] = f"/api/faces/{face['id']}/crop?revision={face['revision']}"
+                updated += 1
+            if updated:
+                self.group_snapshots.clear()
+                self.group_snapshot = ""
+                self.group_members = {}
+            route.fulfill(json=dict(updated_count=updated, failed_count=len(failed), failed=failed))
+        elif path == "/api/faces/lookup" and method == "GET":
+            ids = [int(value) for value in parse_qs(parsed.query).get("ids", [""])[0].split(",") if value]
+            self.face_lookup_reads.append(ids)
+            route.fulfill(json=dict(items=[self.faces[face_id] for face_id in ids if face_id in self.faces], failed=[]))
+        elif re.fullmatch(r"/api/faces/\d+", path) and method == "GET":
+            face_id = int(path.rsplit("/", 1)[1])
+            self.face_get_reads.append(face_id)
+            if face_id not in self.faces:
+                route.fulfill(status=404, json={"error": "Face not found"})
+            else:
+                route.fulfill(json=self.faces[face_id])
         elif path in ("/api/faces/grid", "/api/faces/review"):
             query = parse_qs(parsed.query)
             self.grid_reads.append(query)
@@ -347,7 +464,7 @@ def test_toolbar_scan_warning_cancel_retry_and_automatic_grid(server, page: Page
     assert [body for body, _ in api.posts] == [dict(scope="selected", media_ids=[media_id], force=True),
                                             dict(scope="selected", media_ids=[media_id], force=False)]
     assert all(header == "Bearer face-ui-test-token" for _, header in api.posts)
-    assert any(query.get("job_id") == ["2"] for query in api.grid_reads)
+    assert any(query.get("job_id") == ["2"] for query in api.group_queries)
     assert native_dialogs == []
     expect(photo).to_have_class(re.compile(r"\bselected\b"))
 
@@ -385,8 +502,8 @@ def test_group_acceptance_and_shared_selected_face_controls(server, page: Page):
     _assert_overlay_matches_image(page, "loupeImg", "loupeFaceOverlay")
     page.locator("#loupeCloseBtn").click()
     _open_existing_grid(page)
-    expect(page.locator("#faceGridList .face-grid-card")).to_have_count(4)
-    expect(page.locator("#faceGridPagination")).to_be_hidden()
+    expect(page.locator("#faceGridList .face-grid-card")).to_have_count(2)
+    expect(page.locator("#faceGridPagination")).to_be_visible()
     expect(page.locator("#faceGridRetryBtn")).to_be_hidden()
     page.set_viewport_size(dict(width=1600, height=1100))
     bounds = page.locator("#faceGridModal .modal-dialog").bounding_box()
@@ -404,11 +521,24 @@ def test_group_acceptance_and_shared_selected_face_controls(server, page: Page):
     group = page.locator(".face-grid-group").filter(has=page.locator('[data-face-id="81"]'))
     expect(group.locator(".face-grid-card")).to_have_count(2)
     expect(group.locator("[data-face-group-accept]")).to_have_text("Accept 1 suggestions")
+    page.wait_for_function("""() => {
+      const image = document.querySelector('.face-grid-card[data-face-id="82"] .face-grid-crop');
+      return image && image.complete && image.naturalWidth > 0;
+    }""")
+    page.evaluate("""() => {
+      window.__retainedFaceCrop = document.querySelector('.face-grid-card[data-face-id="82"] .face-grid-crop');
+      window.__retainedFaceCropSrc = window.__retainedFaceCrop.getAttribute('src');
+    }""")
     group.locator("[data-face-group-accept]").click()
     page.wait_for_function("() => [...document.querySelectorAll('.face-grid-group')].some(g => g.textContent.includes('Alice') && !g.querySelector('[data-face-group-accept]') && g.querySelectorAll('.face-grid-card').length === 2)")
-    assert api.batches[0][0]["action"] == "accept"
+    assert page.evaluate("window.__retainedFaceCrop === document.querySelector('.face-grid-card[data-face-id=\"82\"] .face-grid-crop')")
+    assert page.evaluate("window.__retainedFaceCropSrc === document.querySelector('.face-grid-card[data-face-id=\"82\"] .face-grid-crop').getAttribute('src')")
+    assert api.group_accepts[0]["key"] == f"person:{alice['id']}"
+    assert api.group_accept_headers == ["Bearer face-ui-test-token"]
     expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
-    assert {item["id"] for item in api.batches[0][0]["faces"]} == {81, 82}
+    assert {api.faces[face_id]["person_tag_id"] for face_id in (81, 82)} == {alice["id"]}
+    page.locator("#faceGridNextBtn").click()
+    expect(page.locator('.face-grid-group[data-group-key="unnamed"]')).to_be_visible()
     page.locator('.face-grid-card[data-face-id="83"] .face-grid-select').check()
     page.locator('.face-grid-card[data-face-id="84"] .face-grid-select').check()
     expect(page.locator("#faceGridSelectedCount")).to_contain_text("2")
@@ -419,7 +549,8 @@ def test_group_acceptance_and_shared_selected_face_controls(server, page: Page):
     name.fill("é" * 51)
     page.locator("#faceGridApplyNameBtn").click()
     expect(page.locator(".toast-error, #faceGridActionError").filter(has_text="100 UTF-8 bytes").first).to_be_visible()
-    assert len(api.batches) == 1
+    assert len(api.group_accepts) == 1
+    assert len(api.batches) == 0
     name.fill("Charlie")
     page.locator("#faceGridApplyNameBtn").click()
     page.wait_for_function("() => [...document.querySelectorAll('.face-grid-group')].some(g => g.textContent.includes('Charlie') && g.querySelectorAll('.face-grid-card').length === 2)")
@@ -435,13 +566,93 @@ def test_group_acceptance_and_shared_selected_face_controls(server, page: Page):
     expect(photo).to_have_class(re.compile(r"\bselected\b"))
 
 
-def test_group_accept_all_spans_pages_and_keeps_failed_faces_selected(server, page: Page):
+def test_accept_refreshes_review_grid_while_metadata_is_pending(server, page: Page):
+    api = FaceApi(page)
+    page.add_init_script("""(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__holdFaceMetadata = false;
+      window.__faceMetadataWaiting = false;
+      window.__releaseFaceMetadata = null;
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (window.__holdFaceMetadata && new URL(url, location.href).pathname === '/api/tags') {
+          window.__faceMetadataWaiting = true;
+          await new Promise(resolve => { window.__releaseFaceMetadata = resolve; });
+        }
+        return originalFetch(input, init);
+      };
+    })();""")
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    api.names[alice["id"]] = "Alice"
+    suggestion = [dict(tag_id=alice["id"], name="Alice", score=.9)]
+    api.faces = {81: _face(81, media_id, suggestion), 82: _face(82, media_id, suggestion)}
+    _open_existing_grid(page)
+    group = page.locator(".face-grid-group").filter(has=page.locator('[data-face-id="81"]'))
+    page.evaluate("window.__holdFaceMetadata = true")
+    group.locator("[data-face-group-accept]").click()
+    page.wait_for_function("""() => {
+      const group = [...document.querySelectorAll('.face-grid-group')]
+        .find(node => node.querySelector('[data-face-id="81"]'));
+      return window.__faceMetadataWaiting && group && !group.querySelector('[data-face-group-accept]')
+        && group.querySelectorAll('.face-grid-card').length === 2;
+    }""", timeout=5000)
+    page.evaluate("window.__releaseFaceMetadata?.()")
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
+    assert len(api.group_accepts) == 1
+    assert len(api.batches) == 0
+
+
+def test_reject_refreshes_review_grid_while_metadata_is_pending(server, page: Page):
+    api = FaceApi(page)
+    page.add_init_script("""(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__holdFaceMetadata = false;
+      window.__faceMetadataWaiting = false;
+      window.__releaseFaceMetadata = null;
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (window.__holdFaceMetadata && new URL(url, location.href).pathname === '/api/tags') {
+          window.__faceMetadataWaiting = true;
+          await new Promise(resolve => { window.__releaseFaceMetadata = resolve; });
+        }
+        return originalFetch(input, init);
+      };
+    })();""")
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    suggestion = [dict(tag_id=alice["id"], name="Alice", score=.9)]
+    api.faces = {81: _face(81, media_id, suggestion)}
+    _open_existing_grid(page)
+    page.locator('.face-grid-card[data-face-id="81"] .face-grid-select').check()
+    page.evaluate("window.__holdFaceMetadata = true")
+    page.locator("#faceGridRejectBtn").click()
+    page.wait_for_function("""() => {
+      const group = document.querySelector('.face-grid-group[data-group-key="unnamed"]');
+      return window.__faceMetadataWaiting && group && group.querySelector('[data-face-id="81"]');
+    }""", timeout=5000)
+    # One summary refresh replaces the old suggestion group while catalog metadata
+    # remains pending; the grid must not wait for that unrelated refresh to begin.
+    assert len(api.group_queries) == 2
+    assert api.face_actions[0][1] == "reject"
+    assert api.group_accepts == []
+    page.evaluate("window.__releaseFaceMetadata?.()")
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
+
+
+@pytest.mark.parametrize("face_count", [1002, 2002])
+def test_group_accept_all_spans_pages_and_keeps_failed_faces_selected(server, page: Page, face_count: int):
     api = FaceApi(page)
     page.goto(server["url"])
     media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
     alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
     api.names[alice["id"]] = "Alice"
-    api.faces = {i: _face(i, media_id, [dict(tag_id=alice["id"], name="Alice", score=.85)]) for i in range(100, 1102)}
+    api.faces = {
+        i: _face(i, media_id, [dict(tag_id=alice["id"], name="Alice", score=.85)])
+        for i in range(100, 100 + face_count)
+    }
     api.fail_ids = {100}
     _open_existing_grid(page)
     accept = page.locator("[data-face-group-accept]").first
@@ -450,10 +661,27 @@ def test_group_accept_all_spans_pages_and_keeps_failed_faces_selected(server, pa
     accept.click()
     expect(page.locator("#faceGridActionError")).to_be_visible()
     expect(page.locator("#faceGridSelectedCount")).to_contain_text("1")
-    assert len(api.batches) == 2
-    assert all(len(body["faces"]) <= 1000 for body, _ in api.batches)
-    assert {item["id"] for body, _ in api.batches for item in body["faces"]} == set(range(100, 1102))
-    assert sum(1 for face in api.faces.values() if face["person_name"] == "Alice") == 1001
+    assert len(api.group_accepts) == 1
+    assert api.group_accepts[0]["key"] == f"person:{alice['id']}"
+    assert len(api.batches) == 0
+    assert sum(1 for face in api.faces.values() if face["person_name"] == "Alice") == face_count - 1
+    expect(page.locator('.face-grid-card[data-face-id="100"] .face-grid-select')).to_be_checked()
+
+    api.faces[100].update(x=29, revision=2, crop_url="/api/faces/100/crop?revision=2")
+    page.evaluate("""() => {
+      window.__failedFaceCrop = document.querySelector('.face-grid-card[data-face-id="100"] .face-grid-crop');
+      window.__failedFaceCropSrc = window.__failedFaceCrop.getAttribute('src');
+    }""")
+    page.locator("#faceGridIncludeDismissed").check()
+    page.wait_for_function("""() => {
+      const image = document.querySelector('.face-grid-card[data-face-id="100"] .face-grid-crop');
+      return image && image.getAttribute('src').includes('revision=2');
+    }""")
+    assert page.evaluate("window.__failedFaceCropSrc !== document.querySelector('.face-grid-card[data-face-id=\"100\"] .face-grid-crop').getAttribute('src')")
+    page.wait_for_function("""() => {
+      const image = document.querySelector('.face-grid-card[data-face-id="100"] .face-grid-crop');
+      return image && image.complete && image.naturalWidth > 0;
+    }""")
     expect(page.locator('.face-grid-card[data-face-id="100"] .face-grid-select')).to_be_checked()
 
 
@@ -479,13 +707,13 @@ def test_named_unnamed_filters_selection_pagination_and_dismissed(server, page: 
     expect(page.locator("#faceGridShowNamed")).to_be_checked()
     expect(page.locator("#faceGridShowUnnamed")).to_be_checked()
     page.locator("#faceGridSelectAllBtn").click()
-    expect(page.locator("#faceGridSelectedCount")).to_contain_text("202")
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("2")
     page.locator("#faceGridShowNamed").uncheck()
-    expect(page.locator("#faceGridSelectedCount")).to_contain_text("201")
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("1")
     expect(page.locator('.face-grid-card[data-face-id="1"]')).to_have_count(0)
     expect(page.locator('.face-grid-card[data-face-id="3"]')).to_be_visible()
     page.locator("#faceGridNextBtn").click()
-    expect(page.locator("#faceGridList .face-grid-card")).to_have_count(1)
+    assert page.locator("#faceGridList .face-grid-card").count() <= 96
     page.locator("#faceGridShowUnnamed").uncheck()
     expect(page.locator("#faceGridEmpty")).to_be_visible()
     expect(page.locator("#faceGridSelectedCount")).to_contain_text("0")
@@ -493,12 +721,36 @@ def test_named_unnamed_filters_selection_pagination_and_dismissed(server, page: 
     page.locator("#faceGridShowNamed").check()
     expect(page.locator("#faceGridList .face-grid-card")).to_have_count(1)
     page.locator("#faceGridIncludeDismissed").check()
-    expect(page.locator("#faceGridList .face-grid-card")).to_have_count(2)
+    expect(page.locator("#faceGridList .face-grid-card")).to_have_count(1)
     page.locator("#faceGridSelectAllBtn").click()
-    expect(page.locator("#faceGridSelectedCount")).to_contain_text("2")
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("1")
     page.locator("#faceGridDismissBtn").click()
     expect(page.locator("#faceGridSelectedCount")).to_contain_text("0")
     assert [f["id"] for f in api.batches[0][0]["faces"]] == [1]
+
+
+def test_confirmed_people_filter_is_populated_on_open_and_matches_confirmed_identity_only(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    api.names[alice["id"]] = "Alice"
+    api.faces = {
+        1: _face(1, media_id),
+        2: _face(2, media_id, [dict(tag_id=alice["id"], name="Alice", score=.9)]),
+        3: _face(3, media_id),
+    }
+    api.faces[1].update(person_tag_id=alice["id"], person_name="Alice")
+    _open_existing_grid(page)
+
+    person_filter = page.locator("#faceGridConfirmedPersonFilter")
+    expect(person_filter.locator(f'option[value="{alice["id"]}"]')).to_have_count(1)
+    expect(person_filter).to_be_enabled()
+    person_filter.select_option(str(alice["id"]))
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="2"]')).to_have_count(0)
+    expect(page.locator('.face-grid-card[data-face-id="3"]')).to_have_count(0)
+    assert api.group_queries[-1].get("person_tag_id") == [str(alice["id"])]
 
 
 def test_person_group_merges_confirmed_and_suggested_faces_without_page_split(server, page: Page):
@@ -518,7 +770,7 @@ def test_person_group_merges_confirmed_and_suggested_faces_without_page_split(se
     _open_existing_grid(page)
     group = page.locator('.face-grid-group[data-group-key="person:98"]')
     expect(group).to_have_count(1)
-    expect(group.locator(".face-grid-card")).to_have_count(203)
+    assert group.locator(".face-grid-card").count() <= 96
     expect(group.locator("[data-face-group-accept]")).to_have_text("Accept 2 suggestions")
     expect(page.locator('.face-grid-card[data-face-id="204"]')).to_have_count(0)
     page.locator("#faceGridNextBtn").click()
@@ -526,9 +778,211 @@ def test_person_group_merges_confirmed_and_suggested_faces_without_page_split(se
     page.locator("#faceGridPrevBtn").click()
     group.locator("[data-face-group-accept]").click()
     expect(group.locator("[data-face-group-accept]")).to_have_count(0)
-    expect(group.locator(".face-grid-card")).to_have_count(203)
-    assert {f["id"] for f in api.batches[0][0]["faces"]} == set(range(2, 204))
+    assert group.locator(".face-grid-card").count() <= 96
+    assert api.group_accepts[0]["key"] == "person:98"
+    assert sum(face["person_tag_id"] == 98 for face in api.faces.values()) == 203
     assert api.faces[1]["revision"] == 1
+
+
+def test_dismissed_group_restore_is_labeled_and_limited_to_visible_faces(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {1: _face(1, media_id), 2: _face(2, media_id)}
+    api.faces[1].update(person_tag_id=98, person_name="Alice", dismissed=True)
+    api.faces[2].update(dismissed=True)
+    _open_existing_grid(page)
+    expect(page.locator("#faceGridEmpty")).to_be_visible()
+
+    page.locator("#faceGridIncludeDismissed").check()
+    group = page.locator('.face-grid-group[data-group-key="dismissed"]')
+    restore = group.locator("[data-face-group-restore]")
+    expect(restore).to_have_text("Restore 2 visible faces")
+    restore.click()
+    expect(page.locator('.face-grid-group[data-group-key="dismissed"]')).to_have_count(0)
+    assert api.batches[-1][0]["action"] == "dismiss"
+    assert api.batches[-1][0]["dismissed"] is False
+    assert {face["id"] for face in api.batches[-1][0]["faces"]} == {1, 2}
+
+
+def test_lazy_face_grid_virtualizes_random_access_scroll_and_whole_group_accept(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    api.names[alice["id"]] = "Alice"
+    api.faces = {
+        i: _face(i, media_id, [dict(tag_id=alice["id"], name="Alice", score=.85)])
+        for i in range(100, 25_100)
+    }
+    failed_id = 25_099
+    api.fail_ids = {failed_id}
+
+    _open_existing_grid(page)
+    first = page.locator('.face-grid-card[data-face-id="100"]')
+    expect(first).to_be_visible()
+    assert page.locator(".face-grid-card").count() <= 96
+    assert len(api.group_reads) <= 4
+    assert {read["offset"] for read in api.group_reads} <= {0, 48, 96, 144}
+
+    page.set_viewport_size(dict(width=1100, height=850))
+    expect(first).to_be_visible()
+    assert page.locator(".face-grid-card").count() <= 96
+    page.evaluate("""() => new Promise(resolve => {
+      const list = document.getElementById('faceGridList');
+      let previous = '';
+      let stableFrames = 0;
+      const sample = () => {
+        const cards = list.querySelector('.face-grid-group-cards');
+        const card = list.querySelector('.face-grid-card:not(.face-grid-card-placeholder)');
+        const rect = card?.getBoundingClientRect();
+        const signature = [list.clientWidth, list.clientHeight,
+          getComputedStyle(cards).gridTemplateColumns,
+          rect ? `${rect.width}:${rect.height}` : 'no-card'].join('|');
+        if (signature === previous) stableFrames += 1;
+        else { previous = signature; stableFrames = 0; }
+        if (stableFrames >= 2) resolve();
+        else requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    })""")
+
+    grid = page.locator("#faceGridList")
+    grid.evaluate("element => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); }")
+    last_id = 25_099
+    last_card = page.locator(f'.face-grid-card[data-face-id="{last_id}"]')
+    expect(last_card).to_be_visible(timeout=10000)
+    expect(page.locator(".face-grid-group-header [data-face-group-accept]")).to_be_visible()
+    assert last_card.evaluate("""card => {
+      const viewport = document.getElementById('faceGridList').getBoundingClientRect();
+      const rect = card.getBoundingClientRect();
+      return rect.bottom > viewport.top && rect.top < viewport.bottom
+        && rect.right > viewport.left && rect.left < viewport.right;
+    }""")
+    assert page.locator(".face-grid-group-header [data-face-group-accept]").evaluate("""button => {
+      const viewport = document.getElementById('faceGridList').getBoundingClientRect();
+      const rect = button.getBoundingClientRect();
+      return rect.bottom > viewport.top && rect.top < viewport.bottom;
+    }""")
+    assert page.locator(".face-grid-card").count() <= 96
+    high_offsets = [read["offset"] for read in api.group_reads if read["offset"] >= 24_000]
+    assert high_offsets and min(high_offsets) >= 24_000
+    assert len(api.group_reads) <= 10
+
+    grid.evaluate("element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); }")
+    expect(page.locator('.face-grid-card[data-face-id="100"]')).to_be_visible(timeout=10000)
+    assert page.locator('.face-grid-card[data-face-id="100"]').evaluate("""card => {
+      const viewport = document.getElementById('faceGridList').getBoundingClientRect();
+      const rect = card.getBoundingClientRect();
+      return rect.bottom > viewport.top && rect.top < viewport.bottom
+        && rect.right > viewport.left && rect.left < viewport.right;
+    }""")
+    assert len(api.group_reads) <= 12
+    accept = page.locator("[data-face-group-accept]")
+    accept.click()
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("1", timeout=10000)
+    expect(page.locator("[data-face-group-accept]")).to_be_visible()
+    assert len(api.group_accepts) == 1
+    assert api.group_accepts[0]["key"] == f"person:{alice['id']}"
+    assert api.group_accepts[0]["snapshot"]
+    assert api.face_lookup_reads == [[failed_id]]
+    assert sum(face["person_tag_id"] == alice["id"] for face in api.faces.values()) == 24_999
+
+
+def test_virtual_face_grid_keeps_bottom_position_while_far_page_is_pending(server, page: Page):
+    api = FaceApi(page)
+    page.add_init_script("""(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__holdFarFacePages = false;
+      window.__farFacePageOffsets = [];
+      window.__farFacePageReleases = [];
+      window.__releaseFarFacePages = () => {
+        window.__holdFarFacePages = false;
+        for (const release of window.__farFacePageReleases.splice(0)) release();
+      };
+      window.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        const parsed = new URL(url, location.href);
+        const offset = Number(parsed.searchParams.get('offset') || 0);
+        if (window.__holdFarFacePages && parsed.pathname === '/api/faces/group' && offset >= 4800) {
+          window.__farFacePageOffsets.push(offset);
+          await new Promise(resolve => window.__farFacePageReleases.push(resolve));
+        }
+        return originalFetch(input, init);
+      };
+    })();""")
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    api.names[alice["id"]] = "Alice"
+    api.faces = {
+        face_id: _face(face_id, media_id, [dict(tag_id=alice["id"], name="Alice", score=.85)])
+        for face_id in range(100, 5100)
+    }
+    _open_existing_grid(page)
+    expect(page.locator('.face-grid-card[data-face-id="100"]')).to_be_visible()
+    page.evaluate("window.__holdFarFacePages = true")
+    grid = page.locator("#faceGridList")
+    grid.evaluate("element => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); }")
+    page.wait_for_function("window.__farFacePageOffsets.length > 0", timeout=5000)
+    pending = page.evaluate("""() => {
+      const list = document.getElementById('faceGridList');
+      return {
+        scrollTop: list.scrollTop,
+        maxScrollTop: list.scrollHeight - list.clientHeight,
+        placeholderHeights: [...list.querySelectorAll('.face-grid-card-placeholder')]
+          .map(card => card.getBoundingClientRect().height)
+      };
+    }""")
+    assert pending["maxScrollTop"] > 100_000
+    assert pending["scrollTop"] >= pending["maxScrollTop"] - 300
+    assert pending["placeholderHeights"] and min(pending["placeholderHeights"]) >= 100
+
+    page.evaluate("window.__releaseFarFacePages()")
+    last_card = page.locator('.face-grid-card[data-face-id="5099"]')
+    expect(last_card).to_be_visible(timeout=10000)
+    assert last_card.evaluate("""card => {
+      const viewport = document.getElementById('faceGridList').getBoundingClientRect();
+      const rect = card.getBoundingClientRect();
+      return rect.bottom > viewport.top && rect.top < viewport.bottom;
+    }""")
+    assert any(read["offset"] >= 4800 for read in api.group_reads)
+
+
+def test_lazy_face_grid_initial_page_failure_stays_visible_until_explicit_retry(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {1: _face(1, media_id), 2: _face(2, media_id)}
+    api.group_page_failures[0] = 1
+
+    _open_existing_grid(page)
+    expect(page.locator("#faceGridRetryBtn")).to_be_visible()
+    expect(page.locator("#faceGridState")).to_contain_text("Could not load")
+    assert [read["offset"] for read in api.group_reads] == [0]
+
+    page.locator("#faceGridRetryBtn").click()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_be_visible()
+    assert [read["offset"] for read in api.group_reads] == [0, 0]
+
+
+def test_lazy_face_grid_rejects_short_nonempty_page_and_retries(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {1: _face(1, media_id), 2: _face(2, media_id)}
+    api.short_group_pages.add(0)
+
+    _open_existing_grid(page)
+    expect(page.locator("#faceGridRetryBtn")).to_be_visible()
+    expect(page.locator("#faceGridState")).to_contain_text("Could not load")
+    assert [read["offset"] for read in api.group_reads] == [0]
+
+    api.short_group_pages.clear()
+    page.locator("#faceGridRetryBtn").click()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="2"]')).to_be_visible()
+    assert [read["offset"] for read in api.group_reads] == [0, 0]
 
 
 def test_faces_toolbar_can_review_without_models_and_localizes_grid(server, page: Page):
@@ -596,7 +1050,10 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     assert any(query.get("limit") == ["1"] and query.get("offset") == ["0"] for query in refreshed_queries)
 
     media_queries.clear()
-    page.locator(f'.face-grid-card[data-face-id="{face_id}"] .face-grid-select').check()
+    page.locator("#faceGridConfirmedPersonFilter").select_option(str(alice_id))
+    face_card = page.locator(f'.face-grid-card[data-face-id="{face_id}"]')
+    expect(face_card).to_be_visible()
+    face_card.locator(".face-grid-select").check()
     page.locator("#faceGridClearBtn").click()
     birthday = page.locator(".photo-card", has_text="birthday.bmp")
     expect(birthday).to_be_visible()

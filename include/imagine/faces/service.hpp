@@ -16,6 +16,24 @@ namespace imagine::db { class CatalogDb; }
 
 namespace imagine::faces {
 
+struct SuggestionAcceptance {
+    int64_t id{0};
+    int64_t revision{0};
+    TagId tagId{0};
+};
+
+struct SuggestionAcceptanceOutcome {
+    int64_t id{0};
+    Status status;
+    nlohmann::json face;
+};
+
+struct FaceLookupOutcome {
+    int64_t id{0};
+    Status status;
+    nlohmann::json face;
+};
+
 class Service {
 public:
     using PathResolver = std::function<std::string(const std::string&)>;
@@ -36,10 +54,22 @@ public:
     Result<nlohmann::json> getReview(int offset, int limit) const;
     Result<nlohmann::json> getGrid(std::optional<int64_t> jobId, int offset, int limit,
                                    bool includeDismissed) const;
+    Result<nlohmann::json> getFace(int64_t faceId) const;
+    Result<std::vector<FaceLookupOutcome>> lookupFaces(const std::vector<int64_t>& faceIds) const;
+    Result<nlohmann::json> getGroups(std::optional<int64_t> jobId, bool showNamed,
+                                     bool showUnnamed, bool includeDismissed,
+                                     std::optional<TagId> personTagId) const;
+    Result<nlohmann::json> getGroupPage(const std::string& snapshot, const std::string& key,
+                                        int offset, int limit) const;
+    Result<std::vector<SuggestionAcceptanceOutcome>> acceptGroup(
+        const std::string& snapshot, const std::string& key);
     Result<nlohmann::json> setIdentity(int64_t faceId, int64_t revision,
                                        std::optional<TagId> tagId,
-                                       const std::optional<std::string>& name);
+                                       const std::optional<std::string>& name,
+                                       bool includeSuggestions = true);
     Result<nlohmann::json> acceptSuggestion(int64_t faceId, int64_t revision, TagId tagId);
+    Result<std::vector<SuggestionAcceptanceOutcome>> acceptSuggestionsBatch(
+        const std::vector<SuggestionAcceptance>& acceptances);
     Result<nlohmann::json> rejectSuggestion(int64_t faceId, int64_t revision, TagId tagId);
     Result<nlohmann::json> setDismissed(int64_t faceId, int64_t revision, bool dismissed);
     Result<std::string> cropPath(int64_t faceId, int64_t revision);

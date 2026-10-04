@@ -24,7 +24,7 @@ from fixtures import init_schema, seed_default_catalog, create_import_photos, se
 # 1x1 transparent PNG bytes for mocking external map tile responses
 TRANSPARENT_1X1_PNG = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-    b"\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4"
     b"\x00\x00\x00\x00IEND\xaeB`\x82"
 )
 
@@ -348,28 +348,51 @@ def start_backend(imagine_bin: str, web_dir: str, env: Dict[str, Any]) -> Genera
         "--web-dir", web_dir
     ]
     proc_env = _clean_proc_env()
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=proc_env)
-    url = f"http://127.0.0.1:{env['port']}"
-
-    ready = wait_for_server(url, port=env["port"], timeout_sec=6.0)
-    if not ready:
-        proc.terminate()
-        out, err = proc.communicate(timeout=2)
-        pytest.fail(f"Backend failed to start on {url}.\nStdout: {out.decode()}\nStderr: {err.decode()}")
-
-    server_info = {
-        "url": url,
-        "proc": proc,
-        "env": env
-    }
-
-    yield server_info
-
+    stdout_log = tempfile.TemporaryFile(mode="w+b")
+    stderr_log = tempfile.TemporaryFile(mode="w+b")
     try:
-        proc.terminate()
-        proc.wait(timeout=3)
-    except Exception:
-        proc.kill()
+        proc = subprocess.Popen(cmd, stdout=stdout_log, stderr=stderr_log, env=proc_env)
+    except BaseException:
+        stdout_log.close()
+        stderr_log.close()
+        raise
+    url = f"http://127.0.0.1:{env['port']}"
+    try:
+        ready = wait_for_server(url, port=env["port"], timeout_sec=6.0)
+        if not ready:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)
+            stdout_log.seek(0)
+            stderr_log.seek(0)
+            out, err = stdout_log.read(), stderr_log.read()
+            pytest.fail(
+                f"Backend failed to start on {url}.\n"
+                f"Stdout: {out.decode(errors='replace')}\n"
+                f"Stderr: {err.decode(errors='replace')}"
+            )
+
+        server_info = {
+            "url": url,
+            "proc": proc,
+            "env": env
+        }
+
+        yield server_info
+    finally:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                proc.kill()
+                proc.wait(timeout=2)
+        stdout_log.close()
+        stderr_log.close()
 
 
 @pytest.fixture

@@ -14,6 +14,7 @@
 #include <fstream>
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <future>
 
@@ -1728,6 +1729,457 @@ TEST_F(ServerTest, FaceGridScopesByJobAndSupportsDismissedPagination) {
     EXPECT_EQ(client.Get("/api/faces/grid?include_dismissed=yes")->status, 400);
 }
 
+TEST_F(ServerTest, FaceGroupsPageLazilyAndAcceptWholeTopSuggestionGroup) {
+    auto addPhoto = [&](const std::string& suffix) {
+        MediaItem media;
+        media.file_path = suffix + ".jpg"; media.file_name = suffix + ".jpg";
+        media.content_hash = "group-face-hash-" + suffix;
+        media.media_type = "photo"; media.width = 100; media.height = 80;
+        return catalog_->db().insertMedia(media).value();
+    };
+    auto addAnalysis = [&](MediaId mediaId) {
+        auto statementRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,
+                recognizer_checksum,pipeline_version,detector_provider,recognizer_provider,device,
+                confidence,nms_threshold,analyzed_at)
+            VALUES(?,'complete','group-source',100,80,'det','rec','lazy-group-v1','cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(statementRes.isOk());
+        if (!statementRes.isOk()) return;
+        auto statement = std::move(statementRes.value()); statement.bind(1, mediaId);
+        EXPECT_EQ(statement.step(), StepResult::Done);
+    };
+    auto addFace = [&](MediaId mediaId, std::optional<TagId> personId,
+                       const std::optional<std::array<float, 512>>& embedding, bool dismissed = false) {
+        auto statementRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,person_tag_id,dismissed,
+                embedding,embedding_size,created_at,updated_at)
+            VALUES(?,10,10,20,20,0.9,'[]',?,?,?, ?,1,1);
+        )SQL");
+        EXPECT_TRUE(statementRes.isOk());
+        if (!statementRes.isOk()) return int64_t{0};
+        auto statement = std::move(statementRes.value());
+        statement.bind(1, mediaId);
+        if (personId) statement.bind(2, *personId); else statement.bindNull(2);
+        statement.bind(3, dismissed ? 1 : 0);
+        if (embedding) {
+            EXPECT_EQ(sqlite3_bind_blob(statement.raw(), 4, embedding->data(), sizeof(*embedding), SQLITE_TRANSIENT), SQLITE_OK);
+            statement.bind(5, 512);
+        } else {
+            statement.bindNull(4); statement.bind(5, 0);
+        }
+        EXPECT_EQ(statement.step(), StepResult::Done);
+        return catalog_->db().connection().lastInsertRowId();
+    };
+
+    const TagId alphaId = catalog_->db().createOrGetTag("Alpha Group", "people").value();
+    const TagId betaId = catalog_->db().createOrGetTag("Beta Group", "people").value();
+    std::array<float, 512> alphaEmbedding{}; alphaEmbedding[0] = 1.0f;
+    std::array<float, 512> betaEmbedding{}; betaEmbedding[0] = 1.0f;
+    std::array<float, 512> unmatchedEmbedding{}; unmatchedEmbedding[1] = 1.0f;
+
+    const MediaId alphaPhoto = addPhoto("alpha-exemplar"); addAnalysis(alphaPhoto);
+    const int64_t alphaFace = addFace(alphaPhoto, alphaId, alphaEmbedding);
+    const MediaId betaPhoto = addPhoto("beta-exemplar"); addAnalysis(betaPhoto);
+    addFace(betaPhoto, betaId, betaEmbedding);
+    std::vector<MediaId> suggestionMedia;
+    std::vector<int64_t> suggestionFaces;
+    for (int i = 0; i < 3; ++i) {
+        // Two detections share a photo: the group accepts both faces but its
+        // button must count that photo only once.
+        const MediaId mediaId = i == 2 ? suggestionMedia[1] : addPhoto("candidate-" + std::to_string(i));
+        if (i != 2) addAnalysis(mediaId);
+        suggestionMedia.push_back(mediaId);
+        suggestionFaces.push_back(addFace(mediaId, std::nullopt, alphaEmbedding));
+    }
+    const MediaId unmatchedPhoto = addPhoto("unmatched"); addAnalysis(unmatchedPhoto);
+    const int64_t unmatchedFace = addFace(unmatchedPhoto, std::nullopt, unmatchedEmbedding);
+    const MediaId dismissedPhoto = addPhoto("dismissed"); addAnalysis(dismissedPhoto);
+    addFace(dismissedPhoto, std::nullopt, std::nullopt, true);
+
+    auto jobInsertRes = catalog_->db().connection().prepare(
+        "INSERT INTO face_analysis_jobs(state,scope,total,remaining,created_at,updated_at) "
+        "VALUES('completed','selected',2,0,1,1);");
+    ASSERT_TRUE(jobInsertRes.isOk());
+    auto jobInsert = std::move(jobInsertRes.value()); ASSERT_EQ(jobInsert.step(), StepResult::Done);
+    const int64_t jobId = catalog_->db().connection().lastInsertRowId();
+    auto jobMemberRes = catalog_->db().connection().prepare(
+        "INSERT INTO face_analysis_job_media(job_id,media_id) VALUES(?,?);");
+    ASSERT_TRUE(jobMemberRes.isOk());
+    auto jobMember = std::move(jobMemberRes.value());
+    jobMember.bind(1, jobId); jobMember.bind(2, suggestionMedia[0]); ASSERT_EQ(jobMember.step(), StepResult::Done);
+    jobMember.reset(); jobMember.bind(1, jobId); jobMember.bind(2, unmatchedPhoto); ASSERT_EQ(jobMember.step(), StepResult::Done);
+
+    // Create a deterministic per-face stale result during whole-group acceptance.
+    // Same-connection writes preserve the snapshot's data_version, so the later
+    // face fails by revision while earlier faces remain accepted.
+    auto triggerRes = catalog_->db().connection().prepare(
+        "CREATE TRIGGER bump_later_candidate AFTER UPDATE OF person_tag_id ON faces "
+        "WHEN OLD.id=" + std::to_string(suggestionFaces[0]) + " BEGIN UPDATE faces SET revision=revision+1 WHERE id=" +
+        std::to_string(suggestionFaces[2]) + "; END;");
+    ASSERT_TRUE(triggerRes.isOk());
+    auto trigger = std::move(triggerRes.value());
+    ASSERT_EQ(trigger.step(), StepResult::Done);
+
+    httplib::Client client("127.0.0.1", port_);
+    EXPECT_EQ(client.Get("/api/faces/0")->status, 400);
+    EXPECT_EQ(client.Get("/api/faces/999999")->status, 404);
+    auto directFace = client.Get("/api/faces/" + std::to_string(alphaFace));
+    ASSERT_TRUE(directFace);
+    ASSERT_EQ(directFace->status, 200) << directFace->body;
+    EXPECT_EQ(nlohmann::json::parse(directFace->body)["id"], alphaFace);
+    auto groupsResponse = client.Get("/api/faces/groups");
+    ASSERT_TRUE(groupsResponse);
+    ASSERT_EQ(groupsResponse->status, 200) << groupsResponse->body;
+    const auto groupsJson = nlohmann::json::parse(groupsResponse->body);
+    EXPECT_EQ(groupsJson["total"], 6);
+    std::string snapshot = groupsJson["snapshot"].get<std::string>();
+    auto repeated = client.Get("/api/faces/groups");
+    ASSERT_TRUE(repeated);
+    ASSERT_EQ(repeated->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(repeated->body)["snapshot"], snapshot);
+    auto cachedLookup = client.Get("/api/faces/lookup?ids=" + std::to_string(alphaFace) + "," +
+        std::to_string(suggestionFaces[0]) + "," + std::to_string(suggestionFaces[1]) + ",999999");
+    ASSERT_TRUE(cachedLookup);
+    ASSERT_EQ(cachedLookup->status, 200) << cachedLookup->body;
+    const auto cachedLookupJson = nlohmann::json::parse(cachedLookup->body);
+    ASSERT_EQ(cachedLookupJson["items"].size(), 3u);
+    ASSERT_EQ(cachedLookupJson["failed"].size(), 1u);
+    EXPECT_EQ(cachedLookupJson["failed"][0]["id"], 999999);
+    EXPECT_EQ(cachedLookupJson["failed"][0]["status"], 404);
+    EXPECT_EQ(cachedLookupJson["items"][1]["suggestions"][0]["tag_id"], alphaId);
+    auto findGroup = [&](const nlohmann::json& groups, const std::string& key) {
+        for (const auto& group : groups["groups"]) if (group["key"] == key) return group;
+        return nlohmann::json();
+    };
+    const auto alphaGroup = findGroup(groupsJson, "person:" + std::to_string(alphaId));
+    ASSERT_FALSE(alphaGroup.is_null());
+    EXPECT_EQ(alphaGroup["faces_count"], 4);
+    EXPECT_EQ(alphaGroup["photos_count"], 3);
+    EXPECT_EQ(alphaGroup["suggestion_faces_count"], 3);
+    EXPECT_EQ(alphaGroup["suggestion_photos_count"], 2);
+    const auto betaGroup = findGroup(groupsJson, "person:" + std::to_string(betaId));
+    ASSERT_FALSE(betaGroup.is_null());
+    EXPECT_EQ(betaGroup["faces_count"], 1);
+    EXPECT_EQ(betaGroup["suggestion_faces_count"], 0);
+    EXPECT_EQ(client.Get("/api/faces/groups?show_named=false&show_unnamed=false")->status, 200);
+    EXPECT_EQ(client.Get("/api/faces/groups?show_named=maybe")->status, 400);
+    EXPECT_EQ(client.Get("/api/faces/groups?person_tag_id=999999")->status, 400);
+    EXPECT_EQ(client.Get("/api/faces/lookup")->status, 400);
+    EXPECT_EQ(client.Get("/api/faces/lookup?ids=")->status, 400);
+    EXPECT_EQ(client.Get("/api/faces/lookup?ids=1,1")->status, 400);
+    EXPECT_EQ(client.Get("/api/faces/lookup?ids=0")->status, 400);
+    std::string oversizedLookup = "/api/faces/lookup?ids=";
+    for (int i = 1; i <= 201; ++i) {
+        if (i > 1) oversizedLookup += ',';
+        oversizedLookup += std::to_string(i);
+    }
+    EXPECT_EQ(client.Get(oversizedLookup)->status, 400);
+
+    const std::string alphaKey = "person:" + std::to_string(alphaId);
+    auto firstPage = client.Get("/api/faces/group?snapshot=" + snapshot + "&key=" + alphaKey + "&offset=0&limit=2");
+    ASSERT_TRUE(firstPage);
+    ASSERT_EQ(firstPage->status, 200) << firstPage->body;
+    const auto firstPageJson = nlohmann::json::parse(firstPage->body);
+    ASSERT_EQ(firstPageJson["items"].size(), 2u);
+    EXPECT_EQ(firstPageJson["items"][0]["id"], alphaFace);
+    EXPECT_EQ(firstPageJson["items"][1]["suggestions"][0]["tag_id"], alphaId);
+    auto secondPage = client.Get("/api/faces/group?snapshot=" + snapshot + "&key=" + alphaKey + "&offset=2&limit=2");
+    ASSERT_TRUE(secondPage);
+    ASSERT_EQ(secondPage->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(secondPage->body)["items"].size(), 2u);
+    EXPECT_EQ(client.Get("/api/faces/group?snapshot=" + snapshot + "&key=" + alphaKey + "&limit=201")->status, 400);
+
+    auto scoped = client.Get("/api/faces/groups?job_id=" + std::to_string(jobId));
+    ASSERT_TRUE(scoped);
+    ASSERT_EQ(scoped->status, 200) << scoped->body;
+    const auto scopedJson = nlohmann::json::parse(scoped->body);
+    EXPECT_EQ(scopedJson["total"], 2);
+    EXPECT_EQ(findGroup(scopedJson, alphaKey)["suggestion_faces_count"], 1);
+    EXPECT_EQ(client.Get("/api/faces/groups?job_id=999999")->status, 404);
+
+    auto namedOnly = client.Get("/api/faces/groups?person_tag_id=" + std::to_string(alphaId));
+    ASSERT_TRUE(namedOnly);
+    ASSERT_EQ(namedOnly->status, 200);
+    const auto namedJson = nlohmann::json::parse(namedOnly->body);
+    EXPECT_EQ(namedJson["total"], 1);
+    EXPECT_EQ(findGroup(namedJson, alphaKey)["suggestion_faces_count"], 0);
+    auto dismissedIncluded = client.Get("/api/faces/groups?include_dismissed=true");
+    ASSERT_TRUE(dismissedIncluded);
+    ASSERT_EQ(dismissedIncluded->status, 200);
+    const auto dismissedJson = nlohmann::json::parse(dismissedIncluded->body);
+    EXPECT_EQ(dismissedJson["total"], 7);
+    EXPECT_EQ(findGroup(dismissedJson, "dismissed")["faces_count"], 1);
+
+    auto currentGroups = client.Get("/api/faces/groups");
+    ASSERT_TRUE(currentGroups);
+    ASSERT_EQ(currentGroups->status, 200);
+    snapshot = nlohmann::json::parse(currentGroups->body)["snapshot"].get<std::string>();
+    server_->setApiToken("face-group-token");
+    httplib::Headers auth = {{"Authorization", "Bearer face-group-token"}};
+    const auto acceptBody = nlohmann::json{{"snapshot", snapshot}, {"key", alphaKey}}.dump();
+    auto unauthorized = client.Post("/api/faces/groups/accept", acceptBody, "application/json");
+    ASSERT_TRUE(unauthorized);
+    EXPECT_EQ(unauthorized->status, 401);
+    auto accepted = client.Post("/api/faces/groups/accept", auth, acceptBody, "application/json");
+    ASSERT_TRUE(accepted);
+    ASSERT_EQ(accepted->status, 200) << accepted->body;
+    const auto acceptedJson = nlohmann::json::parse(accepted->body);
+    EXPECT_EQ(acceptedJson["updated_count"], 2);
+    ASSERT_EQ(acceptedJson["failed_count"], 1);
+    EXPECT_EQ(acceptedJson["failed"][0]["id"], suggestionFaces[2]);
+    EXPECT_EQ(acceptedJson["failed"][0]["status"], 409);
+    auto assigned = catalog_->db().connection().prepare(
+        "SELECT person_tag_id,revision FROM faces WHERE id=?;");
+    ASSERT_TRUE(assigned.isOk());
+    auto assignment = std::move(assigned.value());
+    for (int i : {0, 1}) {
+        assignment.bind(1, suggestionFaces[i]);
+        ASSERT_EQ(assignment.step(), StepResult::Row);
+        EXPECT_EQ(assignment.getInt64(0), alphaId);
+        ASSERT_TRUE(assignment.reset().isOk());
+    }
+    assignment.bind(1, suggestionFaces[2]);
+    ASSERT_EQ(assignment.step(), StepResult::Row);
+    EXPECT_TRUE(assignment.isNull(0));
+    EXPECT_EQ(assignment.getInt64(1), 2);
+    ASSERT_TRUE(assignment.reset().isOk());
+    auto failedFace = client.Get("/api/faces/" + std::to_string(suggestionFaces[2]));
+    ASSERT_TRUE(failedFace);
+    ASSERT_EQ(failedFace->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(failedFace->body)["revision"], 2);
+    auto stalePage = client.Get("/api/faces/group?snapshot=" + snapshot + "&key=" + alphaKey);
+    ASSERT_TRUE(stalePage);
+    EXPECT_EQ(stalePage->status, 409);
+
+    auto refreshed = client.Get("/api/faces/groups");
+    ASSERT_TRUE(refreshed);
+    ASSERT_EQ(refreshed->status, 200);
+    const std::string refreshedSnapshot = nlohmann::json::parse(refreshed->body)["snapshot"].get<std::string>();
+    Connection external;
+    ASSERT_TRUE(external.open(dbPath_).isOk());
+    auto externalUpdateRes = external.prepare("UPDATE faces SET revision=revision+1 WHERE id=?;");
+    ASSERT_TRUE(externalUpdateRes.isOk());
+    auto externalUpdate = std::move(externalUpdateRes.value());
+    externalUpdate.bind(1, suggestionFaces[2]);
+    ASSERT_EQ(externalUpdate.step(), StepResult::Done);
+    auto externalStalePage = client.Get("/api/faces/group?snapshot=" + refreshedSnapshot + "&key=" + alphaKey);
+    ASSERT_TRUE(externalStalePage);
+    EXPECT_EQ(externalStalePage->status, 409);
+    auto fallbackLookup = client.Get("/api/faces/lookup?ids=" + std::to_string(suggestionFaces[2]) + "," +
+        std::to_string(unmatchedFace));
+    ASSERT_TRUE(fallbackLookup);
+    ASSERT_EQ(fallbackLookup->status, 200) << fallbackLookup->body;
+    const auto fallbackLookupJson = nlohmann::json::parse(fallbackLookup->body);
+    ASSERT_EQ(fallbackLookupJson["items"].size(), 2u);
+    EXPECT_EQ(fallbackLookupJson["items"][0]["suggestions"][0]["tag_id"], alphaId);
+    EXPECT_TRUE(fallbackLookupJson["items"][1]["suggestions"].empty());
+    server_->setApiToken("");
+}
+
+TEST_F(ServerTest, IncrementalReviewIndexMatchesExactSuggestionsAfterMutations) {
+    auto addPhoto = [&](const std::string& suffix) {
+        MediaItem media;
+        media.file_path = suffix + ".jpg"; media.file_name = suffix + ".jpg";
+        media.content_hash = "incremental-face-hash-" + suffix;
+        media.media_type = "photo"; media.width = 100; media.height = 80;
+        return catalog_->db().insertMedia(media).value();
+    };
+    auto addAnalysis = [&](MediaId mediaId) {
+        auto statementRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,
+                recognizer_checksum,pipeline_version,detector_provider,recognizer_provider,device,
+                confidence,nms_threshold,analyzed_at)
+            VALUES(?,'complete','incremental-source',100,80,'det','rec','incremental-v1','cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(statementRes.isOk());
+        if (!statementRes.isOk()) return;
+        auto statement = std::move(statementRes.value()); statement.bind(1, mediaId);
+        EXPECT_EQ(statement.step(), StepResult::Done);
+    };
+    auto addFace = [&](MediaId mediaId, std::optional<TagId> personId,
+                       const std::array<float, 512>& embedding) {
+        auto statementRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,person_tag_id,embedding,
+                embedding_size,created_at,updated_at)
+            VALUES(?,10,10,20,20,0.9,'[]',?,?,512,1,1);
+        )SQL");
+        EXPECT_TRUE(statementRes.isOk());
+        if (!statementRes.isOk()) return int64_t{0};
+        auto statement = std::move(statementRes.value());
+        statement.bind(1, mediaId);
+        if (personId) statement.bind(2, *personId); else statement.bindNull(2);
+        EXPECT_EQ(sqlite3_bind_blob(statement.raw(), 3, embedding.data(), sizeof(embedding), SQLITE_TRANSIENT), SQLITE_OK);
+        EXPECT_EQ(statement.step(), StepResult::Done);
+        return catalog_->db().connection().lastInsertRowId();
+    };
+    auto makeVector = [](float first) {
+        std::array<float, 512> vector{};
+        vector[0] = first;
+        vector[1] = std::sqrt(std::max(0.0f, 1.0f - first * first));
+        return vector;
+    };
+
+    const std::vector<std::string> names = {
+        "Person A", "Person B", "Person C", "Person D", "Person E", "Person F"};
+    const std::vector<float> similarities = {0.99f, 0.97f, 0.95f, 0.93f, 0.93f, 0.89f};
+    std::vector<TagId> people;
+    std::vector<int64_t> exemplarsA;
+    for (size_t i = 0; i < names.size(); ++i) {
+        const TagId personId = catalog_->db().createOrGetTag(names[i], "people").value();
+        people.push_back(personId);
+        const int copies = i == 0 ? 2 : 1;
+        for (int copy = 0; copy < copies; ++copy) {
+            const float score = i == 0 && copy == 1 ? 0.985f : similarities[i];
+            const MediaId mediaId = addPhoto("exemplar-" + std::to_string(i) + "-" + std::to_string(copy));
+            addAnalysis(mediaId);
+            const int64_t faceId = addFace(mediaId, personId, makeVector(score));
+            if (i == 0) exemplarsA.push_back(faceId);
+        }
+    }
+    std::array<float, 512> queryEmbedding{}; queryEmbedding[0] = 1.0f;
+    std::vector<int64_t> queryFaces;
+    for (int i = 0; i < 3; ++i) {
+        const MediaId mediaId = addPhoto("query-" + std::to_string(i));
+        addAnalysis(mediaId);
+        queryFaces.push_back(addFace(mediaId, std::nullopt, queryEmbedding));
+    }
+
+    server_->setApiToken("incremental-review-token");
+    httplib::Headers auth = {{"Authorization", "Bearer incremental-review-token"}};
+    httplib::Client client("127.0.0.1", port_);
+    auto refreshAndCompare = [&]() {
+        auto groups = client.Get("/api/faces/groups?show_named=false");
+        ASSERT_TRUE(groups);
+        ASSERT_EQ(groups->status, 200) << groups->body;
+        const auto groupsJson = nlohmann::json::parse(groups->body);
+        const std::string snapshot = groupsJson["snapshot"].get<std::string>();
+        size_t compared = 0;
+        for (const auto& group : groupsJson["groups"]) {
+            auto page = client.Get("/api/faces/group?snapshot=" + snapshot + "&key=" +
+                group.at("key").get<std::string>() + "&offset=0&limit=200");
+            ASSERT_TRUE(page);
+            ASSERT_EQ(page->status, 200) << page->body;
+            const auto pageJson = nlohmann::json::parse(page->body);
+            for (const auto& indexed : pageJson["items"]) {
+                ASSERT_TRUE(indexed["person_tag_id"].is_null());
+                ASSERT_FALSE(indexed.value("dismissed", false));
+                const int64_t faceId = indexed["id"].get<int64_t>();
+                auto exact = client.Get("/api/faces/" + std::to_string(faceId));
+                ASSERT_TRUE(exact);
+                ASSERT_EQ(exact->status, 200) << exact->body;
+                const auto exactJson = nlohmann::json::parse(exact->body);
+                EXPECT_EQ(indexed["suggestions"], exactJson["suggestions"]) << "face id " << faceId;
+                const std::string expectedKey = exactJson["suggestions"].empty() ? "unnamed"
+                    : "person:" + std::to_string(exactJson["suggestions"][0]["tag_id"].get<TagId>());
+                EXPECT_EQ(group["key"], expectedKey) << "face id " << faceId;
+                ++compared;
+            }
+        }
+        EXPECT_GT(compared, 0u) << "mutation parity check must exercise eligible unnamed faces";
+        EXPECT_EQ(compared, groupsJson["total"].get<size_t>());
+    };
+
+    refreshAndCompare();
+
+    // Removing ranks three and four together must expose the old fifth person,
+    // even though that person was outside the retained matching prefix.
+    auto setBoundaryDismissed = [&](bool dismissed) {
+        auto statementRes = catalog_->db().connection().prepare(
+            "UPDATE faces SET dismissed=? WHERE person_tag_id IN (?,?);");
+        ASSERT_TRUE(statementRes.isOk());
+        auto statement = std::move(statementRes.value());
+        statement.bind(1, dismissed ? 1 : 0);
+        statement.bind(2, people[2]);
+        statement.bind(3, people[3]);
+        ASSERT_EQ(statement.step(), StepResult::Done);
+    };
+    setBoundaryDismissed(true);
+    refreshAndCompare();
+    auto exposed = client.Get("/api/faces/" + std::to_string(queryFaces[1]));
+    ASSERT_TRUE(exposed);
+    ASSERT_EQ(exposed->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(exposed->body)["suggestions"][2]["tag_id"], people[4]);
+    setBoundaryDismissed(false);
+    refreshAndCompare();
+
+    // Rejections remove each of the original top three in turn. Every cached
+    // page is checked against the uncached, full matcher response.
+    for (int i = 0; i < 3; ++i) {
+        auto exact = client.Get("/api/faces/" + std::to_string(queryFaces[0]));
+        ASSERT_TRUE(exact);
+        ASSERT_EQ(exact->status, 200);
+        const auto current = nlohmann::json::parse(exact->body);
+        ASSERT_FALSE(current["suggestions"].empty());
+        const TagId rejected = current["suggestions"][0]["tag_id"].get<TagId>();
+        auto response = client.Post("/api/faces/" + std::to_string(queryFaces[0]) + "/reject", auth,
+            nlohmann::json{{"revision", current["revision"]}, {"tag_id", rejected}}.dump(), "application/json");
+        ASSERT_TRUE(response);
+        ASSERT_EQ(response->status, 200) << response->body;
+        refreshAndCompare();
+    }
+
+    // Removing and restoring the best exemplar exercises alternate promotion
+    // without losing the exact next-example state, then removing the second
+    // exemplar tests the guarded exact fallback.
+    auto clearIdentity = [&](int64_t faceId, int64_t revision) {
+        auto response = client.Post("/api/faces/" + std::to_string(faceId) + "/identity", auth,
+            nlohmann::json{{"revision", revision}, {"tag_id", nullptr}}.dump(), "application/json");
+        ASSERT_TRUE(response);
+        ASSERT_EQ(response->status, 200) << response->body;
+    };
+    clearIdentity(exemplarsA[0], 1);
+    refreshAndCompare();
+    auto restoreBest = client.Post("/api/faces/" + std::to_string(exemplarsA[0]) + "/identity", auth,
+        nlohmann::json{{"revision", 2}, {"tag_id", people[0]}}.dump(), "application/json");
+    ASSERT_TRUE(restoreBest);
+    ASSERT_EQ(restoreBest->status, 200) << restoreBest->body;
+    refreshAndCompare();
+    clearIdentity(exemplarsA[0], 3);
+    refreshAndCompare();
+    clearIdentity(exemplarsA[1], 1);
+    refreshAndCompare();
+
+    // Adding a high-scoring exemplar and moving it to another person must keep
+    // all unaffected query results exact as ranks change.
+    auto assign = [&](int64_t faceId, TagId tagId, int64_t revision) {
+        auto response = client.Post("/api/faces/" + std::to_string(faceId) + "/identity", auth,
+            nlohmann::json{{"revision", revision}, {"tag_id", tagId}}.dump(), "application/json");
+        ASSERT_TRUE(response);
+        ASSERT_EQ(response->status, 200) << response->body;
+    };
+    assign(queryFaces[2], people[0], 1);
+    refreshAndCompare();
+    assign(queryFaces[2], people[1], 2);
+    refreshAndCompare();
+
+    // A lexical rename at a tied rank-four/five boundary uses exact fallback.
+    auto renameRes = catalog_->db().connection().prepare("UPDATE tags SET name='Person 0' WHERE id=?;");
+    ASSERT_TRUE(renameRes.isOk());
+    auto rename = std::move(renameRes.value()); rename.bind(1, people[4]);
+    ASSERT_EQ(rename.step(), StepResult::Done);
+    refreshAndCompare();
+
+    // External embedding edits can bypass revision increments. The semantic
+    // fingerprint must still recompute that query before serving the new page.
+    std::array<float, 512> externallyChanged{};
+    externallyChanged[0] = 0.8f; externallyChanged[2] = 0.6f;
+    auto editRes = catalog_->db().connection().prepare("UPDATE faces SET embedding=? WHERE id=?;");
+    ASSERT_TRUE(editRes.isOk());
+    auto edit = std::move(editRes.value());
+    ASSERT_EQ(sqlite3_bind_blob(edit.raw(), 1, externallyChanged.data(), sizeof(externallyChanged), SQLITE_TRANSIENT), SQLITE_OK);
+    edit.bind(2, queryFaces[1]);
+    ASSERT_EQ(edit.step(), StepResult::Done);
+    refreshAndCompare();
+
+    auto filtered = client.Get("/api/faces/groups?show_named=true&show_unnamed=false&person_tag_id=" +
+        std::to_string(people[1]));
+    ASSERT_TRUE(filtered);
+    ASSERT_EQ(filtered->status, 200) << filtered->body;
+    refreshAndCompare();
+    server_->setApiToken("");
+}
+
 TEST_F(ServerTest, FaceBatchReviewSupportsPartialIdentityAcceptAndDismiss) {
     auto addPhoto = [&](const std::string& suffix) {
         MediaItem media;
@@ -1813,6 +2265,128 @@ TEST_F(ServerTest, FaceBatchReviewSupportsPartialIdentityAcceptAndDismiss) {
     ASSERT_EQ(dismissJson["updated"].size(), 2u);
     EXPECT_TRUE(dismissJson["failed"].empty());
     for (const auto& face : dismissJson["updated"]) EXPECT_TRUE(face["dismissed"].get<bool>());
+    server_->setApiToken("");
+}
+
+TEST_F(ServerTest, BatchAcceptPreservesSequentialNewExemplarEligibility) {
+    auto addPhoto = [&](const std::string& suffix) {
+        MediaItem media;
+        media.file_path = suffix + ".jpg"; media.file_name = suffix + ".jpg";
+        media.content_hash = "sequential-face-hash-" + suffix; media.width = 100; media.height = 80;
+        return catalog_->db().insertMedia(media).value();
+    };
+    auto addAnalysis = [&](MediaId mediaId) {
+        auto statementRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,
+                recognizer_checksum,pipeline_version,detector_provider,recognizer_provider,device,
+                confidence,nms_threshold,analyzed_at)
+            VALUES(?,'complete','sequential-source',100,80,'det','rec','sequential-v1','cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(statementRes.isOk());
+        if (!statementRes.isOk()) return;
+        auto statement = std::move(statementRes.value()); statement.bind(1, mediaId);
+        EXPECT_EQ(statement.step(), StepResult::Done);
+    };
+    auto addFace = [&](MediaId mediaId, TagId personId, const std::array<float, 512>& embedding) {
+        auto statementRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,person_tag_id,embedding,
+                embedding_size,created_at,updated_at)
+            VALUES(?,10,10,20,20,0.9,'[]',?,?,512,1,1);
+        )SQL");
+        EXPECT_TRUE(statementRes.isOk());
+        if (!statementRes.isOk()) return int64_t{0};
+        auto statement = std::move(statementRes.value());
+        statement.bind(1, mediaId);
+        if (personId > 0) statement.bind(2, personId); else statement.bindNull(2);
+        EXPECT_EQ(sqlite3_bind_blob(statement.raw(), 3, embedding.data(), sizeof(embedding), SQLITE_TRANSIENT), SQLITE_OK);
+        EXPECT_EQ(statement.step(), StepResult::Done);
+        return catalog_->db().connection().lastInsertRowId();
+    };
+
+    const TagId personId = catalog_->db().createOrGetTag("Sequential Person", "people").value();
+    std::array<float, 512> exemplar{};
+    exemplar[0] = 1.0f;
+    const MediaId exemplarMedia = addPhoto("exemplar");
+    addAnalysis(exemplarMedia);
+    addFace(exemplarMedia, personId, exemplar);
+
+    std::array<float, 512> firstEmbedding{};
+    firstEmbedding[0] = static_cast<float>(std::cos(50.0 * 3.14159265358979323846 / 180.0));
+    firstEmbedding[1] = static_cast<float>(std::sin(50.0 * 3.14159265358979323846 / 180.0));
+    const MediaId firstMedia = addPhoto("first");
+    addAnalysis(firstMedia);
+    const int64_t firstFace = addFace(firstMedia, 0, firstEmbedding);
+
+    std::array<float, 512> staleEmbedding{};
+    staleEmbedding[0] = static_cast<float>(std::cos(60.0 * 3.14159265358979323846 / 180.0));
+    staleEmbedding[1] = static_cast<float>(std::sin(60.0 * 3.14159265358979323846 / 180.0));
+    const MediaId staleMedia = addPhoto("stale");
+    addAnalysis(staleMedia);
+    const int64_t staleFace = addFace(staleMedia, 0, staleEmbedding);
+
+    std::array<float, 512> rejectedEmbedding{};
+    rejectedEmbedding[0] = static_cast<float>(std::cos(70.0 * 3.14159265358979323846 / 180.0));
+    rejectedEmbedding[1] = static_cast<float>(std::sin(70.0 * 3.14159265358979323846 / 180.0));
+    const MediaId rejectedMedia = addPhoto("rejected");
+    addAnalysis(rejectedMedia);
+    const int64_t rejectedFace = addFace(rejectedMedia, 0, rejectedEmbedding);
+    {
+        auto rejectionRes = catalog_->db().connection().prepare(
+            "INSERT INTO face_rejections(face_id,tag_id,rejected_at) VALUES(?,?,1);");
+        ASSERT_TRUE(rejectionRes.isOk());
+        auto rejection = std::move(rejectionRes.value());
+        rejection.bind(1, rejectedFace);
+        rejection.bind(2, personId);
+        ASSERT_EQ(rejection.step(), StepResult::Done);
+    }
+
+    std::array<float, 512> secondEmbedding{};
+    secondEmbedding[0] = static_cast<float>(std::cos(80.0 * 3.14159265358979323846 / 180.0));
+    secondEmbedding[1] = static_cast<float>(std::sin(80.0 * 3.14159265358979323846 / 180.0));
+    const MediaId secondMedia = addPhoto("second");
+    addAnalysis(secondMedia);
+    const int64_t secondFace = addFace(secondMedia, 0, secondEmbedding);
+
+    httplib::Client client("127.0.0.1", port_);
+    auto beforeSecond = client.Get("/api/faces/media/" + std::to_string(secondMedia));
+    ASSERT_TRUE(beforeSecond);
+    ASSERT_EQ(beforeSecond->status, 200);
+    EXPECT_TRUE(nlohmann::json::parse(beforeSecond->body)["faces"][0]["suggestions"].empty());
+
+    server_->setApiToken("face-sequential-token");
+    httplib::Headers auth = {{"Authorization", "Bearer face-sequential-token"}};
+    auto accepted = client.Post("/api/faces/batch", auth,
+        nlohmann::json{{"action", "accept"}, {"tag_id", personId},
+            {"faces", {{{"id", firstFace}, {"revision", 1}},
+                       {{"id", staleFace}, {"revision", 2}},
+                       {{"id", rejectedFace}, {"revision", 1}},
+                       {{"id", secondFace}, {"revision", 1}}}}}.dump(),
+        "application/json");
+    ASSERT_TRUE(accepted);
+    ASSERT_EQ(accepted->status, 200) << accepted->body;
+    const auto result = nlohmann::json::parse(accepted->body);
+    ASSERT_EQ(result["updated"].size(), 2u);
+    ASSERT_EQ(result["failed"].size(), 2u);
+    EXPECT_EQ(result["failed"][0]["id"], staleFace);
+    EXPECT_EQ(result["failed"][0]["status"], 409);
+    EXPECT_EQ(result["failed"][1]["id"], rejectedFace);
+    EXPECT_EQ(result["failed"][1]["status"], 409);
+    EXPECT_EQ(result["updated"][0]["person_tag_id"], personId);
+    EXPECT_EQ(result["updated"][1]["person_tag_id"], personId);
+    EXPECT_TRUE(result["updated"][0]["suggestions"].empty());
+    EXPECT_TRUE(result["updated"][1]["suggestions"].empty());
+    auto verifyUnchanged = [&](int64_t faceId, int64_t expectedRevision) {
+        auto verifyRes = catalog_->db().connection().prepare(
+            "SELECT person_tag_id,revision FROM faces WHERE id=?;");
+        ASSERT_TRUE(verifyRes.isOk());
+        auto verify = std::move(verifyRes.value());
+        verify.bind(1, faceId);
+        ASSERT_EQ(verify.step(), StepResult::Row);
+        EXPECT_TRUE(verify.isNull(0));
+        EXPECT_EQ(verify.getInt64(1), expectedRevision);
+    };
+    verifyUnchanged(staleFace, 1);
+    verifyUnchanged(rejectedFace, 1);
     server_->setApiToken("");
 }
 
@@ -1903,6 +2477,7 @@ TEST_F(ServerTest, FaceSuggestionsRequireMatchingPipelineAndHealthyEmbeddings) {
     const auto suggestions = nlohmann::json::parse(response->body)["faces"][0]["suggestions"];
     ASSERT_EQ(suggestions.size(), 1u);
     EXPECT_EQ(suggestions[0]["tag_id"], compatibleId);
+    EXPECT_DOUBLE_EQ(suggestions[0]["score"].get<double>(), 1.0);
 
     auto gridResponse = client.Get("/api/faces/grid?include_dismissed=true&limit=100");
     ASSERT_TRUE(gridResponse);
@@ -1918,11 +2493,17 @@ TEST_F(ServerTest, FaceSuggestionsRequireMatchingPipelineAndHealthyEmbeddings) {
     ASSERT_FALSE(gridCandidate.is_null());
     ASSERT_EQ(gridCandidate["suggestions"].size(), 1u);
     EXPECT_EQ(gridCandidate["suggestions"][0]["tag_id"], compatibleId);
+    EXPECT_DOUBLE_EQ(gridCandidate["suggestions"][0]["score"].get<double>(), 1.0);
     const auto gridSelfOnly = gridFace(selfOnlyFace);
     ASSERT_FALSE(gridSelfOnly.is_null());
     for (const auto& suggestion : gridSelfOnly["suggestions"]) {
         EXPECT_NE(suggestion["tag_id"], selfOnlyId);
     }
+    auto selfOnlyMediaResponse = client.Get("/api/faces/media/" + std::to_string(selfOnlyMedia));
+    ASSERT_TRUE(selfOnlyMediaResponse);
+    ASSERT_EQ(selfOnlyMediaResponse->status, 200);
+    const auto selfOnlySuggestions = nlohmann::json::parse(selfOnlyMediaResponse->body)["faces"][0]["suggestions"];
+    EXPECT_TRUE(selfOnlySuggestions.empty());
 
     auto updateTargetError = catalog_->db().connection().prepare("UPDATE faces SET embedding_error='no embedding' WHERE id=?;");
     ASSERT_TRUE(updateTargetError.isOk());
@@ -2741,6 +3322,7 @@ TEST(FaceServiceTest, ForcedRecognizerRefreshResetsMatchedAndUnmatchedReviews) {
     std::error_code ec;
     std::filesystem::remove_all(root, ec);
 }
+
 
 TEST_F(ServerTest, HttpStatusCodesNotFoundAndConflict) {
     httplib::Client client("127.0.0.1", port_);
