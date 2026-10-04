@@ -2,6 +2,9 @@
 #include "imagine/common/error.hpp"
 #include "imagine/common/logger.hpp"
 #include "imagine/common/types.hpp"
+#include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
 
 using namespace imagine;
 
@@ -114,6 +117,114 @@ TEST(LoggerTest, LevelsAndLogging) {
     // Restore
     logger.setLevel(origLevel);
     EXPECT_EQ(logger.level(), origLevel);
+}
+
+TEST(LoggerTest, ParseLevel) {
+    EXPECT_EQ(Logger::parseLevel("debug"), LogLevel::Debug);
+    EXPECT_EQ(Logger::parseLevel("DEBUG"), LogLevel::Debug);
+    EXPECT_EQ(Logger::parseLevel("info"), LogLevel::Info);
+    EXPECT_EQ(Logger::parseLevel("INFO"), LogLevel::Info);
+    EXPECT_EQ(Logger::parseLevel("warn"), LogLevel::Warn);
+    EXPECT_EQ(Logger::parseLevel("warning"), LogLevel::Warn);
+    EXPECT_EQ(Logger::parseLevel("error"), LogLevel::Error);
+    EXPECT_EQ(Logger::parseLevel("none"), LogLevel::None);
+    EXPECT_EQ(Logger::parseLevel("off"), LogLevel::None);
+    EXPECT_EQ(Logger::parseLevel("invalid_fallback"), LogLevel::Info);
+}
+
+TEST(LoggerTest, FileOutputJsonAndText) {
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
+
+    auto tempDir = std::filesystem::temp_directory_path() / ("imagine_logger_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(tempDir);
+    auto logFilePath = tempDir / "test.log";
+
+    // Clean up any existing file
+    std::error_code ec;
+    std::filesystem::remove(logFilePath, ec);
+
+    // Test JSON logging
+    logger.setLevel(LogLevel::Debug);
+    logger.setConsoleEnabled(false);
+    logger.setFileFormat(LogFormat::Json);
+    logger.setLogFile(logFilePath.string());
+
+    IMAGINE_LOG_INFO("Hello \"JSON\" world\nline2");
+    IMAGINE_LOG_WARN("Warning test");
+    IMAGINE_LOG_ERROR("Error test");
+
+    const std::vector<std::string> malformed = {
+        std::string("bad\xff", 4), std::string("\xc0\xaf", 2),
+        std::string("\xed\xa0\x80", 3), std::string("\xf4\x90\x80\x80", 4),
+        std::string("\xe2\x82", 2), std::string("\xe2(\xa1", 3)
+    };
+    const std::string replacement = "\xef\xbf\xbd";
+    const std::vector<std::string> sanitized = {
+        "bad" + replacement, replacement + replacement,
+        replacement + replacement + replacement,
+        replacement + replacement + replacement + replacement,
+        replacement + replacement, replacement + "(" + replacement
+    };
+    for (const auto& message : malformed) {
+        logger.log(LogLevel::Info, "test.cpp", 1, message);
+    }
+    const std::string validUtf8 = "\xc3\xa9\xe4\xb8\xad\xf0\x9f\x98\x80";
+    logger.log(LogLevel::Info, "test.cpp", 1, validUtf8);
+
+    logger.closeLogFile();
+
+    // Verify file content
+    {
+        std::ifstream ifs(logFilePath);
+        ASSERT_TRUE(ifs.is_open());
+        std::string line;
+        int count = 0;
+        while (std::getline(ifs, line)) {
+            if (line.empty()) continue;
+            count++;
+            auto j = nlohmann::json::parse(line);
+            EXPECT_TRUE(j.contains("ts"));
+            EXPECT_TRUE(j.contains("level"));
+            EXPECT_TRUE(j.contains("file"));
+            EXPECT_TRUE(j.contains("line"));
+            EXPECT_TRUE(j.contains("msg"));
+            if (count == 1) {
+                EXPECT_EQ(j["level"], "INFO");
+                EXPECT_EQ(j["msg"], "Hello \"JSON\" world\nline2");
+            } else if (count == 2) {
+                EXPECT_EQ(j["level"], "WARN");
+                EXPECT_EQ(j["msg"], "Warning test");
+            } else if (count == 3) {
+                EXPECT_EQ(j["level"], "ERROR");
+                EXPECT_EQ(j["msg"], "Error test");
+            } else if (count <= 3 + static_cast<int>(sanitized.size())) {
+                EXPECT_EQ(j["msg"], sanitized[count - 4]);
+            } else {
+                EXPECT_EQ(j["msg"], validUtf8);
+            }
+        }
+        EXPECT_EQ(count, 4 + sanitized.size());
+    }
+
+    // Test Text logging appending to file
+    logger.setFileFormat(LogFormat::Text);
+    EXPECT_FALSE(logger.setLogFile(tempDir.string()));
+    EXPECT_TRUE(logger.setLogFile(logFilePath.string()));
+    IMAGINE_LOG_INFO("Text format test message");
+    logger.closeLogFile();
+
+    {
+        std::ifstream ifs(logFilePath);
+        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        EXPECT_NE(content.find("Text format test message"), std::string::npos);
+        EXPECT_NE(content.find("[INFO ]"), std::string::npos);
+    }
+
+    // Cleanup and restore
+    std::filesystem::remove_all(tempDir, ec);
+    logger.setConsoleEnabled(true);
+    logger.setLevel(origLevel);
 }
 
 TEST(TypesTest, ExifDataJsonSerialization) {

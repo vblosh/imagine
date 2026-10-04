@@ -121,6 +121,11 @@ void sendJson(httplib::Response& res, const nlohmann::json& j, int status = 200)
 }
 
 void sendError(httplib::Response& res, const std::string& message, int status = 400) {
+    if (status >= 500) {
+        IMAGINE_LOG_ERROR("HTTP " + std::to_string(status) + ": " + message);
+    } else if (status >= 400) {
+        IMAGINE_LOG_WARN("HTTP " + std::to_string(status) + ": " + message);
+    }
     nlohmann::json err = {{"error", sanitizeUtf8(message)}};
     res.status = status;
     try {
@@ -343,6 +348,8 @@ bool ApiRouter::checkAuth(const httplib::Request& req, httplib::Response& res) c
         auto key = req.get_header_value("X-API-Key");
         if (key == apiToken_) return true;
     }
+    IMAGINE_LOG_WARN("Authentication failed for " + req.method + " " + req.path +
+                     " from " + req.remote_addr);
     sendError(res, "Unauthorized: valid API token required", 401);
     return false;
 }
@@ -375,6 +382,7 @@ Status ApiRouter::moveMedia(MediaId id, const std::string& destinationPath, std:
 
 void ApiRouter::registerRoutes(httplib::Server& server) {
     registerCorsHandler(server);
+    registerAccessLog(server);
     registerMediaRoutes(server);
     registerTagRoutes(server);
     registerAlbumRoutes(server);
@@ -389,6 +397,12 @@ void ApiRouter::registerRoutes(httplib::Server& server) {
 
 void ApiRouter::registerCorsHandler(httplib::Server& server) {
     server.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+        // Record request start time for access log duration measurement
+        thread_local std::chrono::steady_clock::time_point t_requestStart;
+        t_requestStart = std::chrono::steady_clock::now();
+        res.set_header("X-Internal-Start-Ns",
+            std::to_string(t_requestStart.time_since_epoch().count()));
+
         std::string requestId;
         if (req.has_header("X-Request-ID")) {
             requestId = req.get_header_value("X-Request-ID");
@@ -416,6 +430,45 @@ void ApiRouter::registerCorsHandler(httplib::Server& server) {
             return httplib::Server::HandlerResponse::Handled;
         }
         return httplib::Server::HandlerResponse::Unhandled;
+    });
+}
+
+void ApiRouter::registerAccessLog(httplib::Server& server) {
+    server.set_post_routing_handler([](const httplib::Request& req, httplib::Response& res) {
+        // Compute request duration
+        std::string durationStr = "-";
+        if (res.has_header("X-Internal-Start-Ns")) {
+            try {
+                auto startNs = std::stoull(res.get_header_value("X-Internal-Start-Ns"));
+                auto endNs = std::chrono::steady_clock::now().time_since_epoch().count();
+                auto elapsedMs = (static_cast<unsigned long long>(endNs) - startNs) / 1000000ULL;
+                durationStr = std::to_string(elapsedMs);
+            } catch (...) {}
+            // Remove internal header so it's not sent to the client
+            res.headers.erase("X-Internal-Start-Ns");
+        }
+
+        // Skip OPTIONS only after removing the internal timing header.
+        if (req.method == "OPTIONS") return;
+
+        // Log static file requests at Debug level to reduce noise
+        auto level = LogLevel::Info;
+        if (req.path.rfind("/api/", 0) != 0) {
+            level = LogLevel::Debug;
+        }
+
+        // Override level for errors
+        if (res.status >= 500) {
+            level = LogLevel::Error;
+        } else if (res.status >= 400) {
+            level = LogLevel::Warn;
+        }
+
+        std::string logMsg = req.method + " " + req.path
+            + " " + std::to_string(res.status)
+            + " " + durationStr + "ms";
+
+        Logger::instance().log(level, "access", 0, logMsg);
     });
 }
 

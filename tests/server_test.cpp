@@ -7,6 +7,7 @@
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/faces/service.hpp"
 #include "imagine/metadata/hasher.hpp"
+#include "imagine/common/logger.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -27,6 +28,12 @@ protected:
     void SetUp() override {
         testDir_ = std::filesystem::temp_directory_path() / ("imagine_server_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
         std::filesystem::create_directories(testDir_);
+
+#if defined(_WIN32)
+        _putenv_s("IMAGINE_API_TOKEN", "");
+#else
+        unsetenv("IMAGINE_API_TOKEN");
+#endif
 
         dbPath_ = (testDir_ / "test_catalog.db").string();
         cacheDir_ = (testDir_ / "cache").string();
@@ -3292,7 +3299,9 @@ TEST_F(ServerTest, WebServerConcurrentStopAndWait) {
         runFinished = true;
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    for (int i = 0; i < 200 && !ws.isRunning(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     EXPECT_TRUE(ws.isRunning());
     ws.stop();
     runThread.join();
@@ -3451,5 +3460,84 @@ TEST_F(ServerTest, EditedPortraitThumbnailNormalizesOrientation) {
     EXPECT_LT(thumb.data[thumbRightIdx + 2], 100);
 }
 
+TEST_F(ServerTest, AccessLogOutput) {
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
 
+    auto logPath = testDir_ / "access_test.log";
+    logger.setLevel(LogLevel::Debug);
+    logger.setConsoleEnabled(false);
+    logger.setFileFormat(LogFormat::Json);
+    logger.setLogFile(logPath.string());
+
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Successful API call
+    auto res1 = client.Get("/api/stats");
+    ASSERT_TRUE(res1);
+    EXPECT_EQ(res1->status, 200);
+
+    // 2. 404 API call
+    auto res2 = client.Get("/api/nonexistent_endpoint");
+    ASSERT_TRUE(res2);
+    EXPECT_EQ(res2->status, 404);
+
+    // 3. Static asset call
+    auto res3 = client.Get("/index.html");
+    ASSERT_TRUE(res3);
+    EXPECT_EQ(res3->status, 200);
+
+    auto preflight = client.Options("/api/stats");
+    ASSERT_TRUE(preflight);
+    EXPECT_EQ(preflight->status, 204);
+    EXPECT_FALSE(preflight->has_header("X-Internal-Start-Ns"));
+    EXPECT_FALSE(res1->has_header("X-Internal-Start-Ns"));
+
+    auto malformed = client.Get("/api/%FF");
+    ASSERT_TRUE(malformed);
+    EXPECT_EQ(malformed->status, 404);
+
+    logger.closeLogFile();
+
+    // Verify access logs in file
+    std::ifstream ifs(logPath);
+    ASSERT_TRUE(ifs.is_open());
+    std::string line;
+    bool foundStats = false;
+    bool found404 = false;
+    bool foundStatic = false;
+    bool foundMalformed = false;
+
+    while (std::getline(ifs, line)) {
+        if (line.empty()) continue;
+        try {
+            auto j = nlohmann::json::parse(line);
+            std::string msg = j.value("msg", "");
+            std::string lvl = j.value("level", "");
+            EXPECT_EQ(msg.find("OPTIONS "), std::string::npos);
+            if (msg.find("GET /api/\xef\xbf\xbd 404") != std::string::npos && lvl == "WARN") {
+                foundMalformed = true;
+            }
+            if (msg.find("GET /api/stats 200") != std::string::npos && lvl == "INFO") {
+                foundStats = true;
+            }
+            if (msg.find("GET /api/nonexistent_endpoint 404") != std::string::npos && lvl == "WARN") {
+                found404 = true;
+            }
+            if (msg.find("GET /index.html 200") != std::string::npos && lvl == "DEBUG") {
+                foundStatic = true;
+            }
+        } catch (const std::exception& e) {
+            ADD_FAILURE() << "Invalid JSON access log: " << e.what();
+        }
+    }
+
+    EXPECT_TRUE(foundStats);
+    EXPECT_TRUE(found404);
+    EXPECT_TRUE(foundStatic);
+    EXPECT_TRUE(foundMalformed);
+
+    logger.setConsoleEnabled(true);
+    logger.setLevel(origLevel);
+}
 

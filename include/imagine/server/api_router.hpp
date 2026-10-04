@@ -58,6 +58,7 @@ private:
     void registerImportRoutes(httplib::Server& server);
     void registerGeocodeRoutes(httplib::Server& server);
     void registerFaceRoutes(httplib::Server& server);
+    void registerAccessLog(httplib::Server& server);
 
     bool checkAuth(const httplib::Request& req, httplib::Response& res) const;
     void initFromEnvironment();

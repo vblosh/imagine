@@ -182,6 +182,7 @@ Status WebServer::start(const std::string& host, int port, const std::string& we
     setupStaticFileServing();
 
     if (!server_->bind_to_port(host_.c_str(), port_)) {
+        IMAGINE_LOG_ERROR("Failed to bind to " + host_ + ":" + std::to_string(port_));
         server_.reset();
         router_.reset();
         return Status::ioError("Failed to bind web server to " + host_ + ":" + std::to_string(port_));
@@ -203,6 +204,7 @@ Status WebServer::start(const std::string& host, int port, const std::string& we
 }
 
 void WebServer::stop() {
+    IMAGINE_LOG_INFO("Web server shutting down...");
     std::unique_ptr<std::thread> t;
     std::unique_ptr<httplib::Server> s;
     std::unique_ptr<ApiRouter> r;

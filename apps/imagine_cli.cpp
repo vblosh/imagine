@@ -6,6 +6,9 @@
 #include <chrono>
 #include <thread>
 #include <filesystem>
+#include <algorithm>
+#include <cwctype>
+#include <cctype>
 #include "imagine/core/catalog.hpp"
 #include "imagine/core/query.hpp"
 #include "imagine/server/web_server.hpp"
@@ -90,6 +93,9 @@ Options for 'serve':
   --host <ip>         Host address to bind to (default: 0.0.0.0)
   --port <port>       Port number to listen on (default: 8080)
   --web-dir <dir>     Path to directory containing web UI assets (default: web)
+  --log-file <path>   Path to log file (default: alongside catalog DB, or 'none')
+  --log-level <level> Log level: debug, info, warn, error, none (default: info)
+  --no-log-file       Disable writing log to file
 
 Options for 'relocate':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
@@ -226,6 +232,9 @@ int handleServe(int argc, char** argv) {
     std::string host = "0.0.0.0";
     int port = 8080;
     std::string webDir = "web";
+    std::string logFile = "";
+    std::string logLevel = "info";
+    bool logFileExplicitlySet = false;
 
     const char* envPhotos = std::getenv("IMAGINE_PHOTOS_DIR");
     if (envPhotos && *envPhotos) {
@@ -247,6 +256,15 @@ int handleServe(int argc, char** argv) {
     if (envWeb && *envWeb) {
         webDir = envWeb;
     }
+    const char* envLogFile = std::getenv("IMAGINE_LOG_FILE");
+    if (envLogFile && *envLogFile) {
+        logFile = envLogFile;
+        logFileExplicitlySet = true;
+    }
+    const char* envLogLevel = std::getenv("IMAGINE_LOG_LEVEL");
+    if (envLogLevel && *envLogLevel) {
+        logLevel = envLogLevel;
+    }
 
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
@@ -262,7 +280,64 @@ int handleServe(int argc, char** argv) {
             port = std::stoi(argv[++i]);
         } else if (arg == "--web-dir" && i + 1 < argc) {
             webDir = argv[++i];
+        } else if (arg == "--log-file" && i + 1 < argc) {
+            logFile = argv[++i];
+            logFileExplicitlySet = true;
+        } else if (arg == "--log-level" && i + 1 < argc) {
+            logLevel = argv[++i];
+        } else if (arg == "--no-log-file") {
+            logFile = "";
+            logFileExplicitlySet = true;
         }
+    }
+
+    if (!logFileExplicitlySet && logFile.empty()) {
+        std::filesystem::path catPath(catalogDb);
+        std::string extension = catPath.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (catPath.has_extension() && extension != ".log") {
+            catPath.replace_extension(".log");
+        } else {
+            // Append when replacing the extension could select the database itself.
+            catPath += ".log";
+        }
+        logFile = catPath.string();
+    }
+    if (logFile == "none" || logFile == "off") {
+        logFile.clear();
+    }
+
+    imagine::Logger::instance().setLevel(imagine::Logger::parseLevel(logLevel));
+    if (!logFile.empty()) {
+        try {
+            auto catalogPath = std::filesystem::weakly_canonical(catalogDb);
+            auto logPath = std::filesystem::weakly_canonical(logFile);
+            auto catalogName = catalogPath.native();
+            auto logName = logPath.native();
+#if defined(_WIN32)
+            std::transform(catalogName.begin(), catalogName.end(), catalogName.begin(),
+                           [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+            std::transform(logName.begin(), logName.end(), logName.begin(),
+                           [](wchar_t c) { return static_cast<wchar_t>(std::towlower(c)); });
+#endif
+            std::error_code ec;
+            if (catalogName == logName || std::filesystem::equivalent(catalogPath, logPath, ec)) {
+                std::cerr << "Error: log file must be distinct from the catalog database: " << logFile << "\n";
+                return 1;
+            }
+            if (!logPath.parent_path().empty()) {
+                std::filesystem::create_directories(logPath.parent_path());
+            }
+        } catch (const std::filesystem::filesystem_error& e) {
+            std::cerr << "Error preparing log file '" << logFile << "': " << e.what() << "\n";
+            return 1;
+        }
+        if (!imagine::Logger::instance().setLogFile(logFile)) {
+            std::cerr << "Error opening log file: " << logFile << "\n";
+            return 1;
+        }
+        imagine::Logger::instance().setFileFormat(imagine::LogFormat::Json);
     }
 
     if (!std::filesystem::exists(webDir) && argc > 0 && argv[0]) {
@@ -291,6 +366,13 @@ int handleServe(int argc, char** argv) {
     std::string effectiveCacheDir = thumbsDir.empty() ? imagine::thumbnail::Cache::defaultCacheDir() : thumbsDir;
     std::string effectivePhotosDir = photosDir.empty() ? "(none / relative to catalog)" : photosDir;
 
+    auto envVal = [](const char* name, bool mask = false) -> std::string {
+        const char* val = std::getenv(name);
+        if (!val || !*val) return "(not set)";
+        if (mask) return "(configured, " + std::to_string(std::string_view(val).size()) + " chars)";
+        return std::string("\"") + val + "\"";
+    };
+
     std::cout << R"(
 ======================================================
   IMAGINE Photo Organizer Web Server
@@ -300,6 +382,8 @@ int handleServe(int argc, char** argv) {
   Catalog DB: )" << catalogDb << R"(
   Photos Dir: )" << effectivePhotosDir << R"(
   Cache Dir:  )" << effectiveCacheDir << R"(
+  Log File:   )" << (logFile.empty() ? "(none)" : logFile) << R"(
+  Log Level:  )" << logLevel << R"(
 ------------------------------------------------------
   Available Options for 'serve':
     --catalog <db>      Path to SQLite catalog database [current: )" << catalogDb << R"(]
@@ -309,9 +393,21 @@ int handleServe(int argc, char** argv) {
     --host <ip>         Host address to bind to [current: )" << host << R"(]
     --port <port>       Port number to listen on [current: )" << port << R"(]
     --web-dir <dir>     Path to directory containing web UI assets [current: )" << webDir << R"(]
+    --log-file <path>   Path to log file [current: )" << (logFile.empty() ? "(none)" : logFile) << R"(]
+    --log-level <level> Log level: debug, info, warn, error, none [current: )" << logLevel << R"(]
+    --no-log-file       Disable writing log to file
   Environment Variables:
-    IMAGINE_PHOTOS_DIR  Default path to photos directory
-    IMAGINE_THUMBS_DIR  Default path to thumbnail cache directory
+    IMAGINE_CATALOG:        )" << envVal("IMAGINE_CATALOG") << R"(
+    IMAGINE_PHOTOS_DIR:     )" << envVal("IMAGINE_PHOTOS_DIR") << R"(
+    IMAGINE_THUMBS_DIR:     )" << envVal("IMAGINE_THUMBS_DIR") << R"(
+    IMAGINE_HOST:           )" << envVal("IMAGINE_HOST") << R"(
+    IMAGINE_PORT:           )" << envVal("IMAGINE_PORT") << R"(
+    IMAGINE_WEB_DIR:        )" << envVal("IMAGINE_WEB_DIR") << R"(
+    IMAGINE_LOG_FILE:       )" << envVal("IMAGINE_LOG_FILE") << R"(
+    IMAGINE_LOG_LEVEL:      )" << envVal("IMAGINE_LOG_LEVEL") << R"(
+    IMAGINE_API_TOKEN:      )" << envVal("IMAGINE_API_TOKEN", true) << R"(
+    IMAGINE_ALLOWED_ORIGIN: )" << envVal("IMAGINE_ALLOWED_ORIGIN") << R"(
+    IMAGINE_MAX_PAYLOAD_MB: )" << envVal("IMAGINE_MAX_PAYLOAD_MB") << R"(
 ======================================================
   Press Ctrl+C to stop the server.
 )" << std::endl;
@@ -321,7 +417,9 @@ int handleServe(int argc, char** argv) {
                      ", thumbs-dir=" + effectiveCacheDir +
                      ", host=" + host +
                      ", port=" + std::to_string(port) +
-                     ", web-dir=" + webDir);
+                     ", web-dir=" + webDir +
+                     ", log-file=" + (logFile.empty() ? "(none)" : logFile) +
+                     ", log-level=" + logLevel);
 
     auto startStatus = webServer.run(host, port, webDir);
     if (!startStatus.isOk()) {
