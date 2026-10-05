@@ -33,13 +33,17 @@ public:
     static constexpr size_t kDefaultMaxLogFiles = 3;                  // 3 rotated files
 
     // File output with rotation. Returns false if the file could not be opened.
+    // maxFiles controls how many backup files to keep (<path>.1 ... <path>.<maxFiles>).
+    // Older backups are deleted. If maxFiles == 0, no backup files are kept and the
+    // active log file is truncated/cleared whenever maxFileSize is reached.
     bool setLogFile(const std::string& path,
                     size_t maxFileSize = kDefaultMaxLogFileSize,
                     size_t maxFiles = kDefaultMaxLogFiles);
     void setFileFormat(LogFormat fmt);
+    LogFormat fileFormat() const;
     void closeLogFile();
 
-    // Rotation control
+    // Rotation control (maxFiles == 0 retains 0 backups and truncates active file on rotation)
     void setRotation(size_t maxFileSize, size_t maxFiles);
     size_t maxFileSize() const;
     size_t maxFiles() const;
@@ -48,7 +52,9 @@ public:
 
     // Console control
     void setConsoleEnabled(bool enabled);
+    bool isConsoleEnabled() const;
     void setConsoleColors(bool enabled);
+    bool consoleColors() const;
 
     void log(LogLevel level, std::string_view file, int line, std::string_view message);
 

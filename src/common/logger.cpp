@@ -81,7 +81,36 @@ static std::filesystem::path rotatedPath(const std::string& basePath, size_t ind
     return pathFromUtf8(basePath + "." + std::to_string(index));
 }
 
+// Enumerate and delete all rotated backups whose index exceeds keepCount.
+// The active log file (basePath itself) is never touched here.
+// Must be called with mutex_ held.
+static void pruneStaleBackups(const std::string& basePath, size_t keepCount) {
+    std::error_code ec;
+    auto fsBase = pathFromUtf8(basePath);
+    auto parent = fsBase.parent_path();
+    auto stem = fsBase.filename();
+    if (parent.empty()) { parent = std::filesystem::current_path(ec); }
+    for (auto& entry : std::filesystem::directory_iterator(parent, ec)) {
+        auto name = entry.path().filename();
+        // Match: <stem>.<N> where N > keepCount
+        auto nameStr = name.string();
+        auto stemStr = stem.string();
+        if (nameStr.size() <= stemStr.size() + 1) continue;
+        if (nameStr.substr(0, stemStr.size() + 1) != stemStr + ".") continue;
+        auto suffix = nameStr.substr(stemStr.size() + 1);
+        bool allDigits = !suffix.empty() &&
+            std::all_of(suffix.begin(), suffix.end(), [](unsigned char c){ return std::isdigit(c); });
+        if (!allDigits) continue;
+        size_t idx = 0;
+        try { idx = std::stoul(suffix); } catch (...) { continue; }
+        if (idx > keepCount) {
+            std::filesystem::remove(entry.path(), ec);
+        }
+    }
+}
+
 void Logger::rotateLogFiles() {
+    // NOTE: must be called with mutex_ held; does not acquire it.
     if (logFilePath_.empty()) {
         return;
     }
@@ -96,13 +125,8 @@ void Logger::rotateLogFiles() {
     auto fsPath = pathFromUtf8(logFilePath_);
 
     if (maxFiles_ > 0) {
-        // Delete any existing rotated files beyond maxFiles_
-        for (size_t i = maxFiles_ + 1; i <= maxFiles_ + 10; ++i) {
-            auto p = rotatedPath(logFilePath_, i);
-            if (std::filesystem::exists(p, ec)) {
-                std::filesystem::remove(p, ec);
-            }
-        }
+        // Delete any stale rotated files whose index exceeds maxFiles_
+        pruneStaleBackups(logFilePath_, maxFiles_);
 
         // Delete the oldest backup (e.g. .3) if it exists
         auto oldest = rotatedPath(logFilePath_, maxFiles_);
@@ -141,6 +165,9 @@ void Logger::rotateLogFiles() {
             }
         }
     } else {
+        // maxFiles_ == 0: unlimited backups (no shift, no delete) — just truncate active file.
+        // Keeping the active file is intentional: callers who want "delete on rotate"
+        // should set maxFiles_ == 1 and let the oldest-backup removal handle it.
         std::filesystem::remove(fsPath, ec);
     }
 
@@ -150,6 +177,14 @@ void Logger::rotateLogFiles() {
     }
     logFile_.open(fsPath, std::ios::out | std::ios::trunc);
     currentFileSize_ = 0;
+
+    if (!logFile_.is_open()) {
+        // Rotation succeeded but reopen failed (permissions, disk full, …).
+        // Emit a one-time diagnostic to stderr so the problem is not invisible.
+        std::cerr << "[imagine logger] WARNING: failed to reopen log file after rotation: "
+                  << logFilePath_ << "\n";
+        // logFilePath_ is preserved so the next log() call can attempt reopening.
+    }
 }
 
 Logger::~Logger() {
@@ -198,12 +233,7 @@ bool Logger::setLogFile(const std::string& path, size_t maxFileSize, size_t maxF
 
     // Delete any stale old files beyond maxFiles_
     if (maxFiles_ > 0) {
-        for (size_t i = maxFiles_ + 1; i <= maxFiles_ + 10; ++i) {
-            auto p = rotatedPath(logFilePath_, i);
-            if (std::filesystem::exists(p, ec)) {
-                std::filesystem::remove(p, ec);
-            }
-        }
+        pruneStaleBackups(logFilePath_, maxFiles_);
     }
 
     // Check existing file size
@@ -224,6 +254,11 @@ bool Logger::setLogFile(const std::string& path, size_t maxFileSize, size_t maxF
 void Logger::setFileFormat(LogFormat fmt) {
     std::lock_guard<std::mutex> lock(mutex_);
     fileFormat_ = fmt;
+}
+
+LogFormat Logger::fileFormat() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return fileFormat_;
 }
 
 void Logger::closeLogFile() {
@@ -271,6 +306,16 @@ void Logger::setConsoleEnabled(bool enabled) {
 void Logger::setConsoleColors(bool enabled) {
     std::lock_guard<std::mutex> lock(mutex_);
     consoleColors_ = enabled;
+}
+
+bool Logger::isConsoleEnabled() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return consoleEnabled_;
+}
+
+bool Logger::consoleColors() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return consoleColors_;
 }
 
 const char* Logger::levelStr(LogLevel level) {
@@ -444,25 +489,37 @@ void Logger::log(LogLevel level, std::string_view file, int line, std::string_vi
 #endif
     }
 
-    if (logFile_.is_open()) {
-        std::string formatted;
-        if (fileFormat_ == LogFormat::Json) {
-            formatted = formatJson(level, file, line, message);
-            formatted += '\n';
-        } else {
-            formatted = formatText(level, file, line, message, false);
-        }
-
-        if (maxFileSize_ > 0 && (currentFileSize_ + formatted.size() > maxFileSize_)) {
-            if (currentFileSize_ > 0) {
-                rotateLogFiles();
+    if (!logFilePath_.empty()) {
+        if (!logFile_.is_open()) {
+            auto fsPath = pathFromUtf8(logFilePath_);
+            logFile_.open(fsPath, std::ios::app);
+            if (logFile_.is_open()) {
+                std::error_code ec;
+                auto sz = std::filesystem::file_size(fsPath, ec);
+                currentFileSize_ = ec ? 0 : static_cast<size_t>(sz);
             }
         }
 
         if (logFile_.is_open()) {
-            logFile_.write(formatted.data(), formatted.size());
-            logFile_.flush();
-            currentFileSize_ += formatted.size();
+            std::string formatted;
+            if (fileFormat_ == LogFormat::Json) {
+                formatted = formatJson(level, file, line, message);
+                formatted += '\n';
+            } else {
+                formatted = formatText(level, file, line, message, false);
+            }
+
+            if (maxFileSize_ > 0 && (currentFileSize_ + formatted.size() > maxFileSize_)) {
+                if (currentFileSize_ > 0) {
+                    rotateLogFiles();
+                }
+            }
+
+            if (logFile_.is_open()) {
+                logFile_.write(formatted.data(), formatted.size());
+                logFile_.flush();
+                currentFileSize_ += formatted.size();
+            }
         }
     }
 }

@@ -4,6 +4,7 @@
 #include "imagine/common/types.hpp"
 #include <filesystem>
 #include <fstream>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 using namespace imagine;
@@ -135,6 +136,8 @@ TEST(LoggerTest, ParseLevel) {
 TEST(LoggerTest, FileOutputJsonAndText) {
     auto& logger = Logger::instance();
     auto origLevel = logger.level();
+    auto origFormat = logger.fileFormat();
+    auto origConsole = logger.isConsoleEnabled();
 
     auto tempDir = std::filesystem::temp_directory_path() / ("imagine_logger_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(tempDir);
@@ -223,13 +226,16 @@ TEST(LoggerTest, FileOutputJsonAndText) {
 
     // Cleanup and restore
     std::filesystem::remove_all(tempDir, ec);
-    logger.setConsoleEnabled(true);
+    logger.setConsoleEnabled(origConsole);
+    logger.setFileFormat(origFormat);
     logger.setLevel(origLevel);
 }
 
 TEST(LoggerTest, UnicodeLoggingAndFilePath) {
     auto& logger = Logger::instance();
     auto origLevel = logger.level();
+    auto origFormat = logger.fileFormat();
+    auto origConsole = logger.isConsoleEnabled();
 
     auto tempDir = std::filesystem::temp_directory_path() /
         ("imagine_unicode_log_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
@@ -297,12 +303,19 @@ TEST(LoggerTest, UnicodeLoggingAndFilePath) {
     // Cleanup and restore
     std::error_code ec;
     std::filesystem::remove_all(tempDir, ec);
+    logger.setConsoleEnabled(origConsole);
+    logger.setFileFormat(origFormat);
     logger.setLevel(origLevel);
 }
 
 TEST(LoggerTest, RotationStrategyThreeFilesDeleteOld) {
     auto& logger = Logger::instance();
     auto origLevel = logger.level();
+    auto origFormat = logger.fileFormat();
+    auto origConsole = logger.isConsoleEnabled();
+    auto origMaxFileSize = logger.maxFileSize();
+    auto origMaxFiles = logger.maxFiles();
+
     logger.setLevel(LogLevel::Info);
     logger.setConsoleEnabled(false);
     logger.setFileFormat(LogFormat::Text);
@@ -311,7 +324,7 @@ TEST(LoggerTest, RotationStrategyThreeFilesDeleteOld) {
         ("imagine_rotation_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(tempDir);
     auto logPath = tempDir / "rotate.log";
-    std::string logPathStr = logPath.string();
+    std::string logPathStr = pathToUtf8(logPath);
 
     // Default configuration should be 10MB and 3 files
     EXPECT_EQ(Logger::kDefaultMaxLogFileSize, 10 * 1024 * 1024);
@@ -340,31 +353,34 @@ TEST(LoggerTest, RotationStrategyThreeFilesDeleteOld) {
     EXPECT_TRUE(std::filesystem::exists(logPath, ec));
     EXPECT_FALSE(std::filesystem::exists(backup1, ec));
 
-    // Write enough logs to trigger rotation 1 -> backup1 created
-    while (!std::filesystem::exists(backup1, ec)) {
+    // Write enough logs to trigger rotation 1 -> backup1 created (bounded loop)
+    int iters = 0;
+    while (!std::filesystem::exists(backup1, ec) && ++iters < 200) {
         IMAGINE_LOG_INFO("Trigger rotation 1 filling up file with some text");
     }
+    ASSERT_TRUE(std::filesystem::exists(backup1, ec)) << "Timeout waiting for backup1";
     EXPECT_TRUE(std::filesystem::exists(logPath, ec));
-    EXPECT_TRUE(std::filesystem::exists(backup1, ec));
     EXPECT_FALSE(std::filesystem::exists(backup2, ec));
 
-    // Write enough logs to trigger rotation 2 -> backup2 created
-    while (!std::filesystem::exists(backup2, ec)) {
+    // Write enough logs to trigger rotation 2 -> backup2 created (bounded loop)
+    iters = 0;
+    while (!std::filesystem::exists(backup2, ec) && ++iters < 200) {
         IMAGINE_LOG_INFO("Trigger rotation 2 filling up file with more text");
     }
+    ASSERT_TRUE(std::filesystem::exists(backup2, ec)) << "Timeout waiting for backup2";
     EXPECT_TRUE(std::filesystem::exists(logPath, ec));
     EXPECT_TRUE(std::filesystem::exists(backup1, ec));
-    EXPECT_TRUE(std::filesystem::exists(backup2, ec));
     EXPECT_FALSE(std::filesystem::exists(backup3, ec));
 
-    // Write enough logs to trigger rotation 3 -> backup3 created
-    while (!std::filesystem::exists(backup3, ec)) {
+    // Write enough logs to trigger rotation 3 -> backup3 created (bounded loop)
+    iters = 0;
+    while (!std::filesystem::exists(backup3, ec) && ++iters < 200) {
         IMAGINE_LOG_INFO("Trigger rotation 3 filling up file with even more text");
     }
+    ASSERT_TRUE(std::filesystem::exists(backup3, ec)) << "Timeout waiting for backup3";
     EXPECT_TRUE(std::filesystem::exists(logPath, ec));
     EXPECT_TRUE(std::filesystem::exists(backup1, ec));
     EXPECT_TRUE(std::filesystem::exists(backup2, ec));
-    EXPECT_TRUE(std::filesystem::exists(backup3, ec));
     EXPECT_FALSE(std::filesystem::exists(backup4, ec));
 
     // Capture contents of backup3 and backup2 before 4th rotation
@@ -379,9 +395,9 @@ TEST(LoggerTest, RotationStrategyThreeFilesDeleteOld) {
         b2ContentBefore = std::string((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
     }
 
-    // Now write messages until rotation 4 occurs (backup3 changes)
-    int counter = 0;
-    while (true) {
+    // Now write messages until rotation 4 occurs (backup3 changes) (bounded loop)
+    bool rotated4 = false;
+    for (int counter = 0; counter < 200; ++counter) {
         std::string currentB3;
         {
             std::ifstream ifs(backup3);
@@ -390,10 +406,12 @@ TEST(LoggerTest, RotationStrategyThreeFilesDeleteOld) {
         if (currentB3 != b3ContentBefore) {
             // Exactly one rotation happened: backup2 was shifted to backup3 and old backup3 was deleted
             EXPECT_EQ(currentB3, b2ContentBefore);
+            rotated4 = true;
             break;
         }
-        IMAGINE_LOG_INFO("Single step to trigger rotation 4: " + std::to_string(counter++));
+        IMAGINE_LOG_INFO("Single step to trigger rotation 4: " + std::to_string(counter));
     }
+    ASSERT_TRUE(rotated4) << "Timeout waiting for rotation 4";
 
     // Now write many more messages to trigger numerous additional rotations
     for (int i = 0; i < 100; ++i) {
@@ -413,13 +431,20 @@ TEST(LoggerTest, RotationStrategyThreeFilesDeleteOld) {
 
     // Clean up
     std::filesystem::remove_all(tempDir, ec);
-    logger.setConsoleEnabled(true);
+    logger.setConsoleEnabled(origConsole);
+    logger.setFileFormat(origFormat);
+    logger.setRotation(origMaxFileSize, origMaxFiles);
     logger.setLevel(origLevel);
 }
 
 TEST(LoggerTest, RotateOnOpenWhenOverLimit) {
     auto& logger = Logger::instance();
     auto origLevel = logger.level();
+    auto origFormat = logger.fileFormat();
+    auto origConsole = logger.isConsoleEnabled();
+    auto origMaxFileSize = logger.maxFileSize();
+    auto origMaxFiles = logger.maxFiles();
+
     logger.setLevel(LogLevel::Info);
     logger.setConsoleEnabled(false);
 
@@ -440,14 +465,16 @@ TEST(LoggerTest, RotateOnOpenWhenOverLimit) {
     EXPECT_TRUE(std::filesystem::exists(logPath, ec));
     EXPECT_FALSE(std::filesystem::exists(backup1, ec));
 
-    ASSERT_TRUE(logger.setLogFile(logPath.string(), 300, 3));
+    ASSERT_TRUE(logger.setLogFile(pathToUtf8(logPath), 300, 3));
     // It should have rotated immediately on open because existing file > 300 bytes
     EXPECT_TRUE(std::filesystem::exists(backup1, ec));
     EXPECT_EQ(std::filesystem::file_size(backup1, ec), 500);
 
     logger.closeLogFile();
     std::filesystem::remove_all(tempDir, ec);
-    logger.setConsoleEnabled(true);
+    logger.setConsoleEnabled(origConsole);
+    logger.setFileFormat(origFormat);
+    logger.setRotation(origMaxFileSize, origMaxFiles);
     logger.setLevel(origLevel);
 }
 
@@ -468,6 +495,54 @@ TEST(LoggerTest, LogFileNotCreatedWhenClosed) {
     logger.closeLogFile();
     EXPECT_FALSE(logger.isLogFileOpen());
     EXPECT_TRUE(logger.logFilePath().empty());
+}
+
+TEST(LoggerTest, PruneStaleBackupsWhenMaxFilesReduced) {
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
+    auto origFormat = logger.fileFormat();
+    auto origConsole = logger.isConsoleEnabled();
+    auto origMaxFileSize = logger.maxFileSize();
+    auto origMaxFiles = logger.maxFiles();
+
+    auto tempDir = std::filesystem::temp_directory_path() /
+        ("imagine_prune_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(tempDir);
+    auto logPath = tempDir / "prune.log";
+
+    // Create stale rotated files up to .15
+    for (int i = 1; i <= 15; ++i) {
+        std::ofstream ofs(tempDir / ("prune.log." + std::to_string(i)));
+        ofs << "dummy backup " << i;
+    }
+    // Also create unrelated files to ensure they are not pruned
+    {
+        std::ofstream ofs(tempDir / "other.log.10");
+        ofs << "unrelated";
+    }
+
+    // Call setLogFile with maxFiles = 3
+    ASSERT_TRUE(logger.setLogFile(pathToUtf8(logPath), 10 * 1024 * 1024, 3));
+
+    std::error_code ec;
+    // .1, .2, .3 should still exist
+    EXPECT_TRUE(std::filesystem::exists(tempDir / "prune.log.1", ec));
+    EXPECT_TRUE(std::filesystem::exists(tempDir / "prune.log.2", ec));
+    EXPECT_TRUE(std::filesystem::exists(tempDir / "prune.log.3", ec));
+
+    // .4 through .15 should have been pruned
+    for (int i = 4; i <= 15; ++i) {
+        EXPECT_FALSE(std::filesystem::exists(tempDir / ("prune.log." + std::to_string(i)), ec));
+    }
+    // Unrelated file should remain
+    EXPECT_TRUE(std::filesystem::exists(tempDir / "other.log.10", ec));
+
+    logger.closeLogFile();
+    std::filesystem::remove_all(tempDir, ec);
+    logger.setConsoleEnabled(origConsole);
+    logger.setFileFormat(origFormat);
+    logger.setRotation(origMaxFileSize, origMaxFiles);
+    logger.setLevel(origLevel);
 }
 
 TEST(TypesTest, ExifDataJsonSerialization) {

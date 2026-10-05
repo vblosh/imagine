@@ -245,7 +245,6 @@ int handleServe(int argc, char** argv) {
     std::string webDir = "web";
     std::string logFile = "";
     std::string logLevel = "info";
-    bool logFileExplicitlySet = false;
 
     const char* envPhotos = std::getenv("IMAGINE_PHOTOS_DIR");
     if (envPhotos && *envPhotos) {
@@ -270,7 +269,6 @@ int handleServe(int argc, char** argv) {
     const char* envLogFile = std::getenv("IMAGINE_LOG_FILE");
     if (envLogFile && *envLogFile) {
         logFile = envLogFile;
-        logFileExplicitlySet = true;
     }
     const char* envLogLevel = std::getenv("IMAGINE_LOG_LEVEL");
     if (envLogLevel && *envLogLevel) {
@@ -293,12 +291,10 @@ int handleServe(int argc, char** argv) {
             webDir = argv[++i];
         } else if (arg == "--log-file" && i + 1 < argc) {
             logFile = argv[++i];
-            logFileExplicitlySet = true;
         } else if (arg == "--log-level" && i + 1 < argc) {
             logLevel = argv[++i];
         } else if (arg == "--no-log-file") {
             logFile = "";
-            logFileExplicitlySet = true;
         }
     }
 
