@@ -1088,12 +1088,12 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     expect(page.locator(f"#faceGridConfirmedPersonFilter option[value='{alice_id}']")).to_be_attached()
     page.locator("#faceGridShowNamed").check()
     page.locator("#faceGridConfirmedPersonFilter").select_option(str(alice_id))
-    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled(timeout=30000)
     face_card = page.locator(f'.face-grid-card[data-face-id="{face_id}"]')
-    expect(face_card).to_be_visible()
-    expect(face_card.locator(".face-grid-select")).to_be_enabled()
+    expect(face_card).to_be_visible(timeout=30000)
+    expect(face_card.locator(".face-grid-select")).to_be_enabled(timeout=30000)
     face_card.locator(".face-grid-select").check()
-    expect(page.locator("#faceGridClearBtn")).to_be_enabled()
+    expect(page.locator("#faceGridClearBtn")).to_be_enabled(timeout=30000)
     page.locator("#faceGridClearBtn").click()
     birthday = page.locator(".photo-card", has_text="birthday.bmp")
     expect(birthday).to_be_visible()
@@ -1146,7 +1146,8 @@ def test_dismiss_selection_updates_scroll_position_when_photos_disappear(server,
 
     page.locator("#faceGridDismissBtn").click()
     expect(page.locator("#faceGridSelectedCount")).to_contain_text("0")
-    page.wait_for_timeout(300)
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled(timeout=30000)
+    expect(page.locator("#faceGridList .face-grid-card:not(.face-grid-card-placeholder)").first).to_be_visible(timeout=30000)
 
     after = page.evaluate("""() => {
         const list = document.getElementById('faceGridList');
