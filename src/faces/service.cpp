@@ -27,6 +27,14 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#include <immintrin.h>
+#elif defined(__GNUC__) || defined(__clang__)
+#include <cpuid.h>
+#include <immintrin.h>
+#endif
+
 namespace imagine::faces {
 namespace {
 
@@ -59,6 +67,80 @@ float envFloat(const char* key, float fallback) {
 
 Status dbError(Connection& conn, const std::string& context) {
     return Status::databaseError(context + ": " + conn.lastErrorMessage());
+}
+
+inline float dotProduct512Scalar(const float* a, const float* b) {
+    double dot = 0;
+    for (size_t i = 0; i < kEmbeddingDimensions; ++i) {
+        dot += static_cast<double>(a[i]) * b[i];
+    }
+    return static_cast<float>(dot);
+}
+
+#if (defined(_M_X64) || defined(__x86_64__))
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((target("avx2,fma")))
+#endif
+inline float dotProduct512Avx2(const float* a, const float* b) {
+    __m256d sum0 = _mm256_setzero_pd();
+    __m256d sum1 = _mm256_setzero_pd();
+    __m256d sum2 = _mm256_setzero_pd();
+    __m256d sum3 = _mm256_setzero_pd();
+    for (size_t i = 0; i < kEmbeddingDimensions; i += 16) {
+        __m128 a0 = _mm_loadu_ps(a + i);
+        __m128 b0 = _mm_loadu_ps(b + i);
+        __m128 a1 = _mm_loadu_ps(a + i + 4);
+        __m128 b1 = _mm_loadu_ps(b + i + 4);
+        __m128 a2 = _mm_loadu_ps(a + i + 8);
+        __m128 b2 = _mm_loadu_ps(b + i + 8);
+        __m128 a3 = _mm_loadu_ps(a + i + 12);
+        __m128 b3 = _mm_loadu_ps(b + i + 12);
+
+        sum0 = _mm256_fmadd_pd(_mm256_cvtps_pd(a0), _mm256_cvtps_pd(b0), sum0);
+        sum1 = _mm256_fmadd_pd(_mm256_cvtps_pd(a1), _mm256_cvtps_pd(b1), sum1);
+        sum2 = _mm256_fmadd_pd(_mm256_cvtps_pd(a2), _mm256_cvtps_pd(b2), sum2);
+        sum3 = _mm256_fmadd_pd(_mm256_cvtps_pd(a3), _mm256_cvtps_pd(b3), sum3);
+    }
+    __m256d sum = _mm256_add_pd(_mm256_add_pd(sum0, sum1), _mm256_add_pd(sum2, sum3));
+    alignas(32) double vals[4];
+    _mm256_store_pd(vals, sum);
+    return static_cast<float>(vals[0] + vals[1] + vals[2] + vals[3]);
+}
+
+inline bool checkAvx2FmaSupport() {
+#if defined(_MSC_VER)
+    int cpuInfo[4];
+    __cpuid(cpuInfo, 0);
+    if (cpuInfo[0] < 7) return false;
+    __cpuid(cpuInfo, 1);
+    bool osxsave = (cpuInfo[2] & (1 << 27)) != 0;
+    bool fma = (cpuInfo[2] & (1 << 12)) != 0;
+    bool avx = (cpuInfo[2] & (1 << 28)) != 0;
+    if (!osxsave || !fma || !avx) return false;
+    unsigned long long xcrFeatureMask = _xgetbv(0);
+    if ((xcrFeatureMask & 0x6) != 0x6) return false;
+    __cpuidex(cpuInfo, 7, 0);
+    return (cpuInfo[1] & (1 << 5)) != 0;
+#elif defined(__GNUC__) || defined(__clang__)
+    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
+#else
+    return false;
+#endif
+}
+
+inline bool hasAvx2Fma() {
+    static const bool supported = checkAvx2FmaSupport();
+    return supported;
+}
+#endif
+
+inline float dotProduct512(const float* a, const float* b) {
+#if (defined(_M_X64) || defined(__x86_64__))
+    if (hasAvx2Fma()) {
+        return dotProduct512Avx2(a, b);
+    }
+#endif
+    return dotProduct512Scalar(a, b);
 }
 
 struct ReviewStamp {
@@ -157,6 +239,7 @@ std::vector<float> readVector(const Statement& stmt, int col, int expectedSize) 
 std::vector<Exemplar> loadExemplars(Connection& conn, const std::string& recognizerChecksum,
                                     const std::string& pipelineVersion) {
     std::vector<Exemplar> exemplars;
+    exemplars.reserve(1024);
     auto stmtRes = conn.prepare(R"SQL(
         SELECT f.id,t.id,t.name,f.embedding,f.embedding_size
         FROM faces f
@@ -187,13 +270,12 @@ std::vector<Suggestion> suggestionsFromExemplars(
     if (query.size() != kEmbeddingDimensions) return result;
 
     std::unordered_map<TagId, Suggestion> best;
+    const bool hasExclusions = !excludedTagIds.empty();
+    const float* queryData = query.data();
     for (const auto& exemplar : exemplars) {
-        if (exemplar.faceId == faceId || excludedTagIds.contains(exemplar.tagId)) continue;
-        double dot = 0;
-        for (size_t i = 0; i < kEmbeddingDimensions; ++i) {
-            dot += static_cast<double>(query[i]) * exemplar.embedding[i];
-        }
-        float score = static_cast<float>(dot);
+        if (exemplar.faceId == faceId || (hasExclusions && excludedTagIds.contains(exemplar.tagId)) ||
+            exemplar.embedding.size() != kEmbeddingDimensions) continue;
+        float score = dotProduct512(queryData, exemplar.embedding.data());
         if (!std::isfinite(score) || score < threshold) continue;
         score = std::clamp(score, -1.0f, 1.0f);
         auto it = best.find(exemplar.tagId);
@@ -989,7 +1071,8 @@ std::vector<RankedPerson> rankExemplars(
     const std::vector<Exemplar>& exemplars, float threshold,
     const std::unordered_set<TagId>& excludedTagIds,
     bool& rankingComplete, bool& omittedBoundaryTie,
-    std::optional<RankedPerson>& omittedUpperBound) {
+    std::optional<RankedPerson>& omittedUpperBound,
+    const float* packedEmbeddings = nullptr) {
     std::unordered_map<TagId, RankedPerson> best;
     if (query.size() != kEmbeddingDimensions) {
         rankingComplete = true;
@@ -997,14 +1080,16 @@ std::vector<RankedPerson> rankExemplars(
         omittedUpperBound.reset();
         return {};
     }
-    for (const auto& exemplar : exemplars) {
-        if (exemplar.faceId == faceId || excludedTagIds.contains(exemplar.tagId) ||
+    const size_t numExemplars = exemplars.size();
+    const bool hasExclusions = !excludedTagIds.empty();
+    const float* queryData = query.data();
+
+    for (size_t i = 0; i < numExemplars; ++i) {
+        const auto& exemplar = exemplars[i];
+        if (exemplar.faceId == faceId || (hasExclusions && excludedTagIds.contains(exemplar.tagId)) ||
             exemplar.embedding.size() != kEmbeddingDimensions) continue;
-        double dot = 0;
-        for (size_t i = 0; i < kEmbeddingDimensions; ++i) {
-            dot += static_cast<double>(query[i]) * exemplar.embedding[i];
-        }
-        float score = static_cast<float>(dot);
+        const float* exemplarData = packedEmbeddings ? (packedEmbeddings + i * kEmbeddingDimensions) : exemplar.embedding.data();
+        float score = dotProduct512(queryData, exemplarData);
         if (!std::isfinite(score) || score < threshold) continue;
         score = std::clamp(score, -1.0f, 1.0f);
         auto found = best.find(exemplar.tagId);
@@ -1052,10 +1137,11 @@ std::vector<RankedPerson> rankExemplars(
 }
 
 void exactRankFace(GroupReviewFace& face, const std::vector<Exemplar>& exemplars,
-                   float threshold) {
+                   float threshold, const float* packedEmbeddings = nullptr) {
     face.ranked = rankExemplars(face.id, face.embedding, exemplars, threshold,
                                 face.rejectedTags, face.rankingComplete,
-                                face.omittedBoundaryTie, face.omittedUpperBound);
+                                face.omittedBoundaryTie, face.omittedUpperBound,
+                                packedEmbeddings);
     applyRankedSuggestions(face);
 }
 
@@ -1140,6 +1226,19 @@ Result<GroupReviewBuild> buildGroupReviewIndex(
     }
     if (rejectionStep == StepResult::Error) return dbError(conn, "Failed to load face suggestion rejections");
 
+    auto countRes = conn.prepare("SELECT count(*)" + analysisJoin + completeScope + ";");
+    if (countRes.isOk()) {
+        auto countStmt = std::move(countRes.value());
+        if (jobId) countStmt.bind(1, *jobId);
+        if (countStmt.step() == StepResult::Row) {
+            int64_t count = countStmt.getInt64(0);
+            if (count > 0) {
+                index->faces.reserve(static_cast<size_t>(count));
+                index->facePositions.reserve(static_cast<size_t>(count));
+            }
+        }
+    }
+
     auto facesRes = conn.prepare(
         "SELECT f.id,f.media_id,f.revision,f.person_tag_id,t.name,f.dismissed,f.embedding_error,"
         "CASE WHEN f.person_tag_id IS NULL AND f.dismissed=0 AND f.embedding_error='' AND f.embedding_size=512 "
@@ -1182,9 +1281,39 @@ describeExemplars(const ExemplarCache& exemplars) {
     for (const auto& [key, rows] : exemplars) {
         auto& output = described[key];
         output.reserve(rows.size());
-        for (const auto& exemplar : rows) {
-            output.emplace(exemplar.faceId, ExemplarDescriptor{
-                exemplar.tagId, exemplar.name, embeddingDigest(exemplar.embedding)});
+        if (rows.size() < 128) {
+            for (const auto& exemplar : rows) {
+                output.emplace(exemplar.faceId, ExemplarDescriptor{
+                    exemplar.tagId, exemplar.name, embeddingDigest(exemplar.embedding)});
+            }
+        } else {
+            std::vector<std::array<unsigned char, SHA256_DIGEST_LENGTH>> digests(rows.size());
+            unsigned int hw = std::thread::hardware_concurrency();
+            if (hw == 0) hw = 4;
+            const size_t numThreads = std::min<size_t>(hw, (rows.size() + 127) / 128);
+            const size_t chunkSize = (rows.size() + numThreads - 1) / numThreads;
+            std::vector<std::jthread> threads;
+            threads.reserve(numThreads - 1);
+            for (size_t t = 1; t < numThreads; ++t) {
+                const size_t start = t * chunkSize;
+                const size_t end = std::min(start + chunkSize, rows.size());
+                if (start < end) {
+                    threads.emplace_back([&rows, &digests, start, end]() {
+                        for (size_t i = start; i < end; ++i) {
+                            digests[i] = embeddingDigest(rows[i].embedding);
+                        }
+                    });
+                }
+            }
+            const size_t chunk0End = std::min(chunkSize, rows.size());
+            for (size_t i = 0; i < chunk0End; ++i) {
+                digests[i] = embeddingDigest(rows[i].embedding);
+            }
+            threads.clear();
+            for (size_t i = 0; i < rows.size(); ++i) {
+                output.emplace(rows[i].faceId, ExemplarDescriptor{
+                    rows[i].tagId, rows[i].name, digests[i]});
+            }
         }
     }
     return described;
@@ -1263,11 +1392,10 @@ ExemplarChanges diffExemplars(
 }
 
 float exemplarScore(const std::vector<float>& query, const Exemplar& exemplar) {
-    double dot = 0;
-    for (size_t i = 0; i < kEmbeddingDimensions; ++i) {
-        dot += static_cast<double>(query[i]) * exemplar.embedding[i];
+    if (query.size() != kEmbeddingDimensions || exemplar.embedding.size() != kEmbeddingDimensions) {
+        return -std::numeric_limits<float>::infinity();
     }
-    float score = static_cast<float>(dot);
+    float score = dotProduct512(query.data(), exemplar.embedding.data());
     return std::isfinite(score) ? score : -std::numeric_limits<float>::infinity();
 }
 
@@ -1477,47 +1605,94 @@ void finishGroupReviewBuild(GroupReviewBuild& built, float matchThreshold,
         if (position != index.facePositions.end()) index.faces[position->second].rejectedTags = rejected;
     }
 
-    for (auto& face : index.faces) {
-        if (!face.queryEligible) continue;
-        bool reused = false;
-        if (previous) {
-            auto oldPosition = previous->facePositions.find(face.id);
-            if (oldPosition != previous->facePositions.end()) {
-                const auto& old = previous->faces[oldPosition->second];
-                if (old.queryEligible && old.embedding == face.embedding &&
-                    old.recognizerChecksum == face.recognizerChecksum &&
-                    old.pipelineVersion == face.pipelineVersion && old.rejectedTags == face.rejectedTags) {
-                    face.ranked = old.ranked;
-                    face.omittedUpperBound = old.omittedUpperBound;
-                    face.rankingComplete = old.rankingComplete;
-                    face.frontierExact = old.frontierExact;
-                    face.omittedBoundaryTie = old.omittedBoundaryTie;
-                    face.suggestions = old.suggestions;
-                    reused = true;
-                }
+    struct PackedExemplars {
+        const std::vector<Exemplar>* exemplars{nullptr};
+        std::vector<float> embeddings;
+    };
+
+    std::unordered_map<std::string, PackedExemplars> packedByKey;
+    packedByKey.reserve(built.exemplars.size());
+    for (const auto& [key, exemplars] : built.exemplars) {
+        PackedExemplars packed;
+        packed.exemplars = &exemplars;
+        packed.embeddings.resize(exemplars.size() * kEmbeddingDimensions);
+        for (size_t i = 0; i < exemplars.size(); ++i) {
+            if (exemplars[i].embedding.size() == kEmbeddingDimensions) {
+                std::memcpy(packed.embeddings.data() + i * kEmbeddingDimensions,
+                            exemplars[i].embedding.data(),
+                            kEmbeddingDimensions * sizeof(float));
             }
         }
-        if (!reused) {
-            auto exemplars = built.exemplars.find(exemplarKey(face.recognizerChecksum, face.pipelineVersion));
-            if (exemplars != built.exemplars.end()) exactRankFace(face, exemplars->second, matchThreshold);
-            else exactRankFace(face, {}, matchThreshold);
-            continue;
-        }
+        packedByKey.emplace(key, std::move(packed));
+    }
 
-        const std::string key = exemplarKey(face.recognizerChecksum, face.pipelineVersion);
-        const auto changes = changesByKey.find(key);
+    const size_t totalFaces = index.faces.size();
+    unsigned int hardwareThreads = std::thread::hardware_concurrency();
+    if (hardwareThreads == 0) hardwareThreads = 4;
+    const size_t numThreads = (totalFaces < 32) ? 1 : std::min<size_t>(hardwareThreads, (totalFaces + 31) / 32);
+
+    auto processFaceRange = [&](size_t start, size_t end) {
         static const std::vector<Exemplar> kNoExemplars;
         static const ExemplarChanges kNoChanges;
-        const auto exemplars = built.exemplars.find(key);
-        const std::vector<Exemplar>& currentExemplars = exemplars == built.exemplars.end()
-            ? kNoExemplars : exemplars->second;
-        const ExemplarChanges& currentChanges = changes == changesByKey.end() ? kNoChanges : changes->second;
-        const bool updated = incrementallyUpdateFace(face, currentChanges, currentExemplars, matchThreshold);
-        if (!updated) {
-            auto exemplars = built.exemplars.find(key);
-            if (exemplars != built.exemplars.end()) exactRankFace(face, exemplars->second, matchThreshold);
-            else exactRankFace(face, {}, matchThreshold);
+
+        for (size_t idx = start; idx < end; ++idx) {
+            auto& face = index.faces[idx];
+            if (!face.queryEligible) continue;
+            bool reused = false;
+            if (previous) {
+                auto oldPosition = previous->facePositions.find(face.id);
+                if (oldPosition != previous->facePositions.end()) {
+                    const auto& old = previous->faces[oldPosition->second];
+                    if (old.queryEligible && old.embedding == face.embedding &&
+                        old.recognizerChecksum == face.recognizerChecksum &&
+                        old.pipelineVersion == face.pipelineVersion && old.rejectedTags == face.rejectedTags) {
+                        face.ranked = old.ranked;
+                        face.omittedUpperBound = old.omittedUpperBound;
+                        face.rankingComplete = old.rankingComplete;
+                        face.frontierExact = old.frontierExact;
+                        face.omittedBoundaryTie = old.omittedBoundaryTie;
+                        face.suggestions = old.suggestions;
+                        reused = true;
+                    }
+                }
+            }
+
+            const std::string key = exemplarKey(face.recognizerChecksum, face.pipelineVersion);
+            auto packedIt = packedByKey.find(key);
+            const std::vector<Exemplar>& currentExemplars = (packedIt != packedByKey.end() && packedIt->second.exemplars)
+                ? *packedIt->second.exemplars : kNoExemplars;
+            const float* packedEmbs = (packedIt != packedByKey.end() && !packedIt->second.embeddings.empty())
+                ? packedIt->second.embeddings.data() : nullptr;
+
+            if (!reused) {
+                exactRankFace(face, currentExemplars, matchThreshold, packedEmbs);
+                continue;
+            }
+
+            const auto changes = changesByKey.find(key);
+            const ExemplarChanges& currentChanges = changes == changesByKey.end() ? kNoChanges : changes->second;
+            const bool updated = incrementallyUpdateFace(face, currentChanges, currentExemplars, matchThreshold);
+            if (!updated) {
+                exactRankFace(face, currentExemplars, matchThreshold, packedEmbs);
+            }
         }
+    };
+
+    if (numThreads <= 1) {
+        processFaceRange(0, totalFaces);
+    } else {
+        std::vector<std::jthread> threads;
+        threads.reserve(numThreads - 1);
+        const size_t chunkSize = (totalFaces + numThreads - 1) / numThreads;
+        for (size_t t = 1; t < numThreads; ++t) {
+            const size_t start = t * chunkSize;
+            const size_t end = std::min(start + chunkSize, totalFaces);
+            if (start < end) {
+                threads.emplace_back(processFaceRange, start, end);
+            }
+        }
+        const size_t chunk0End = std::min(chunkSize, totalFaces);
+        processFaceRange(0, chunk0End);
     }
 
     // Exemplar vectors and temporary query/rejection maps are large. Keep only
