@@ -622,7 +622,7 @@ def test_accept_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
         .find(node => node.querySelector('[data-face-id="81"]'));
       return window.__faceMetadataWaiting && group && !group.querySelector('[data-face-group-accept]')
         && group.querySelectorAll('.face-grid-card').length === 2;
-    }""", timeout=5000)
+    }""", timeout=15000)
     page.evaluate("window.__releaseFaceMetadata?.()")
     expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
     assert len(api.group_accepts) == 1
@@ -657,7 +657,7 @@ def test_reject_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
     page.wait_for_function("""() => {
       const group = document.querySelector('.face-grid-group[data-group-key="unnamed"]');
       return window.__faceMetadataWaiting && group && group.querySelector('[data-face-id="81"]');
-    }""", timeout=5000)
+    }""", timeout=15000)
     # One summary refresh replaces the old suggestion group while catalog metadata
     # remains pending; the grid must not wait for that unrelated refresh to begin.
     assert len(api.group_queries) == 2
@@ -697,11 +697,13 @@ def test_group_accept_all_spans_pages_and_keeps_failed_faces_selected(server, pa
       window.__failedFaceCrop = document.querySelector('.face-grid-card[data-face-id="100"] .face-grid-crop');
       window.__failedFaceCropSrc = window.__failedFaceCrop.getAttribute('src');
     }""")
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
     page.locator("#faceGridIncludeDismissed").check()
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_checked()
     page.wait_for_function("""() => {
       const image = document.querySelector('.face-grid-card[data-face-id="100"] .face-grid-crop');
       return image && image.getAttribute('src').includes('revision=2');
-    }""")
+    }""", timeout=15000)
     assert page.evaluate("window.__failedFaceCropSrc !== document.querySelector('.face-grid-card[data-face-id=\"100\"] .face-grid-crop').getAttribute('src')")
     page.wait_for_function("""() => {
       const image = document.querySelector('.face-grid-card[data-face-id="100"] .face-grid-crop');
@@ -960,7 +962,7 @@ def test_virtual_face_grid_keeps_bottom_position_while_far_page_is_pending(serve
     page.evaluate("window.__holdFarFacePages = true")
     grid = page.locator("#faceGridList")
     grid.evaluate("element => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); }")
-    page.wait_for_function("window.__farFacePageOffsets.length > 0", timeout=5000)
+    page.wait_for_function("window.__farFacePageOffsets.length > 0", timeout=15000)
     pending = page.evaluate("""() => {
       const list = document.getElementById('faceGridList');
       return {

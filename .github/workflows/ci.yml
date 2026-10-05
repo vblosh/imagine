@@ -132,7 +132,7 @@ jobs:
       - name: Run Playwright UI Tests
         env:
           ASAN_OPTIONS: detect_leaks=0
-        run: pytest tests/ui -n 4 --dist loadfile --junitxml=build/ui-test-results.xml -v
+        run: pytest tests/ui -n 2 --dist loadfile --junitxml=build/ui-test-results.xml -v
 
       - name: Upload Artifacts on Failure
         if: failure()
