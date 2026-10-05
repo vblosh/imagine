@@ -308,6 +308,7 @@ def _open_existing_grid(page):
     expect(page.locator("#faceJobModal")).to_be_visible()
     page.locator("#faceViewFacesBtn").click()
     expect(page.locator("#faceGridModal")).to_be_visible()
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
 
 
 def test_inspector_faces_last_and_clear_identity_with_visible_conflict(server, page: Page):
@@ -613,16 +614,18 @@ def test_accept_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
     group = page.locator(".face-grid-group").filter(has=page.locator('[data-face-id="81"]'))
     page.evaluate("window.__holdFaceMetadata = true")
     group.locator("[data-face-group-accept]").click()
-    page.wait_for_function("""() => {
-      const group = [...document.querySelectorAll('.face-grid-group')]
-        .find(node => node.querySelector('[data-face-id="81"]'));
-      return window.__faceMetadataWaiting && group && !group.querySelector('[data-face-group-accept]')
-        && group.querySelectorAll('.face-grid-card').length === 2;
-    }""", timeout=30000)
-    page.evaluate("window.__releaseFaceMetadata?.()")
+    try:
+        page.wait_for_function("""() => {
+          const group = [...document.querySelectorAll('.face-grid-group')]
+            .find(node => node.querySelector('[data-face-id="81"]'));
+          return window.__faceMetadataWaiting && group && !group.querySelector('[data-face-group-accept]')
+            && group.querySelectorAll('.face-grid-card').length === 2;
+        }""", timeout=30000)
+        assert len(api.group_accepts) == 1
+        assert len(api.batches) == 0
+    finally:
+        page.evaluate("window.__releaseFaceMetadata?.()")
     expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled(timeout=30000)
-    assert len(api.group_accepts) == 1
-    assert len(api.batches) == 0
 
 
 def test_reject_refreshes_review_grid_while_metadata_is_pending(server, page: Page):
@@ -647,19 +650,25 @@ def test_reject_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
     suggestion = [dict(tag_id=alice["id"], name="Alice", score=.9)]
     api.faces = {81: _face(81, media_id, suggestion)}
     _open_existing_grid(page)
-    page.locator('.face-grid-card[data-face-id="81"] .face-grid-select').check()
+    card_checkbox = page.locator('.face-grid-card[data-face-id="81"] .face-grid-select')
+    card_checkbox.check()
+    expect(card_checkbox).to_be_checked()
+    reject_btn = page.locator("#faceGridRejectBtn")
+    expect(reject_btn).to_be_enabled()
     page.evaluate("window.__holdFaceMetadata = true")
-    page.locator("#faceGridRejectBtn").click()
-    page.wait_for_function("""() => {
-      const group = document.querySelector('.face-grid-group[data-group-key="unnamed"]');
-      return window.__faceMetadataWaiting && group && group.querySelector('[data-face-id="81"]');
-    }""", timeout=30000)
-    # One summary refresh replaces the old suggestion group while catalog metadata
-    # remains pending; the grid must not wait for that unrelated refresh to begin.
-    assert len(api.group_queries) == 2
-    assert (len(api.batches) > 0 and api.batches[0][0]["action"] == "reject") or (len(api.face_actions) > 0 and api.face_actions[0][1] == "reject")
-    assert api.group_accepts == []
-    page.evaluate("window.__releaseFaceMetadata?.()")
+    reject_btn.click()
+    try:
+        page.wait_for_function("""() => {
+          const group = document.querySelector('.face-grid-group[data-group-key="unnamed"]');
+          return window.__faceMetadataWaiting && group && group.querySelector('[data-face-id="81"]');
+        }""", timeout=30000)
+        # One summary refresh replaces the old suggestion group while catalog metadata
+        # remains pending; the grid must not wait for that unrelated refresh to begin.
+        assert len(api.group_queries) == 2
+        assert (len(api.batches) > 0 and api.batches[0][0]["action"] == "reject") or (len(api.face_actions) > 0 and api.face_actions[0][1] == "reject")
+        assert api.group_accepts == []
+    finally:
+        page.evaluate("window.__releaseFaceMetadata?.()")
     expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled(timeout=30000)
 
 
