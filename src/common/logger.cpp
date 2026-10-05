@@ -77,8 +77,84 @@ Logger& Logger::instance() {
     return logger;
 }
 
+static std::filesystem::path rotatedPath(const std::string& basePath, size_t index) {
+    return pathFromUtf8(basePath + "." + std::to_string(index));
+}
+
+void Logger::rotateLogFiles() {
+    if (logFilePath_.empty()) {
+        return;
+    }
+
+    if (logFile_.is_open()) {
+        logFile_.flush();
+        logFile_.close();
+    }
+    logFile_.clear();
+
+    std::error_code ec;
+    auto fsPath = pathFromUtf8(logFilePath_);
+
+    if (maxFiles_ > 0) {
+        // Delete any existing rotated files beyond maxFiles_
+        for (size_t i = maxFiles_ + 1; i <= maxFiles_ + 10; ++i) {
+            auto p = rotatedPath(logFilePath_, i);
+            if (std::filesystem::exists(p, ec)) {
+                std::filesystem::remove(p, ec);
+            }
+        }
+
+        // Delete the oldest backup (e.g. .3) if it exists
+        auto oldest = rotatedPath(logFilePath_, maxFiles_);
+        if (std::filesystem::exists(oldest, ec)) {
+            std::filesystem::remove(oldest, ec);
+        }
+
+        // Shift existing backups: (maxFiles_ - 1) -> maxFiles_, ..., 1 -> 2
+        for (size_t i = maxFiles_ - 1; i >= 1; --i) {
+            auto src = rotatedPath(logFilePath_, i);
+            auto dst = rotatedPath(logFilePath_, i + 1);
+            if (std::filesystem::exists(src, ec)) {
+                std::filesystem::remove(dst, ec);
+                std::filesystem::rename(src, dst, ec);
+                if (ec) {
+                    ec.clear();
+                    std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, ec);
+                    if (!ec) {
+                        std::filesystem::remove(src, ec);
+                    }
+                }
+            }
+        }
+
+        // Move active log file to .1
+        auto firstBackup = rotatedPath(logFilePath_, 1);
+        if (std::filesystem::exists(fsPath, ec)) {
+            std::filesystem::remove(firstBackup, ec);
+            std::filesystem::rename(fsPath, firstBackup, ec);
+            if (ec) {
+                ec.clear();
+                std::filesystem::copy_file(fsPath, firstBackup, std::filesystem::copy_options::overwrite_existing, ec);
+                if (!ec) {
+                    std::filesystem::remove(fsPath, ec);
+                }
+            }
+        }
+    } else {
+        std::filesystem::remove(fsPath, ec);
+    }
+
+    auto parent = fsPath.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, ec);
+    }
+    logFile_.open(fsPath, std::ios::out | std::ios::trunc);
+    currentFileSize_ = 0;
+}
+
 Logger::~Logger() {
     if (logFile_.is_open()) {
+        logFile_.flush();
         logFile_.close();
     }
 }
@@ -93,12 +169,18 @@ LogLevel Logger::level() const {
     return level_;
 }
 
-bool Logger::setLogFile(const std::string& path) {
+bool Logger::setLogFile(const std::string& path, size_t maxFileSize, size_t maxFiles) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (logFile_.is_open()) {
+        logFile_.flush();
         logFile_.close();
     }
     logFile_.clear();
+    logFilePath_.clear();
+    currentFileSize_ = 0;
+    maxFileSize_ = maxFileSize;
+    maxFiles_ = maxFiles;
+
     if (path.empty()) {
         return false;
     }
@@ -111,7 +193,31 @@ bool Logger::setLogFile(const std::string& path) {
     if (!parent.empty()) {
         std::filesystem::create_directories(parent, ec);
     }
-    logFile_.open(fsPath, std::ios::app);
+
+    logFilePath_ = path;
+
+    // Delete any stale old files beyond maxFiles_
+    if (maxFiles_ > 0) {
+        for (size_t i = maxFiles_ + 1; i <= maxFiles_ + 10; ++i) {
+            auto p = rotatedPath(logFilePath_, i);
+            if (std::filesystem::exists(p, ec)) {
+                std::filesystem::remove(p, ec);
+            }
+        }
+    }
+
+    // Check existing file size
+    if (std::filesystem::exists(fsPath, ec)) {
+        auto sz = std::filesystem::file_size(fsPath, ec);
+        currentFileSize_ = ec ? 0 : static_cast<size_t>(sz);
+    }
+
+    if (maxFileSize_ > 0 && currentFileSize_ >= maxFileSize_) {
+        rotateLogFiles();
+    } else {
+        logFile_.open(fsPath, std::ios::app);
+    }
+
     return logFile_.is_open();
 }
 
@@ -123,8 +229,38 @@ void Logger::setFileFormat(LogFormat fmt) {
 void Logger::closeLogFile() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (logFile_.is_open()) {
+        logFile_.flush();
         logFile_.close();
     }
+    logFile_.clear();
+    logFilePath_.clear();
+    currentFileSize_ = 0;
+}
+
+void Logger::setRotation(size_t maxFileSize, size_t maxFiles) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    maxFileSize_ = maxFileSize;
+    maxFiles_ = maxFiles;
+}
+
+size_t Logger::maxFileSize() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return maxFileSize_;
+}
+
+size_t Logger::maxFiles() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return maxFiles_;
+}
+
+std::string Logger::logFilePath() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return logFilePath_;
+}
+
+bool Logger::isLogFileOpen() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return logFile_.is_open();
 }
 
 void Logger::setConsoleEnabled(bool enabled) {
@@ -309,10 +445,24 @@ void Logger::log(LogLevel level, std::string_view file, int line, std::string_vi
     }
 
     if (logFile_.is_open()) {
+        std::string formatted;
         if (fileFormat_ == LogFormat::Json) {
-            logFile_ << formatJson(level, file, line, message) << '\n' << std::flush;
+            formatted = formatJson(level, file, line, message);
+            formatted += '\n';
         } else {
-            logFile_ << formatText(level, file, line, message, false) << std::flush;
+            formatted = formatText(level, file, line, message, false);
+        }
+
+        if (maxFileSize_ > 0 && (currentFileSize_ + formatted.size() > maxFileSize_)) {
+            if (currentFileSize_ > 0) {
+                rotateLogFiles();
+            }
+        }
+
+        if (logFile_.is_open()) {
+            logFile_.write(formatted.data(), formatted.size());
+            logFile_.flush();
+            currentFileSize_ += formatted.size();
         }
     }
 }

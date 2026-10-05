@@ -29,10 +29,22 @@ public:
     void setLevel(LogLevel level);
     LogLevel level() const;
 
-    // File output. Returns false if the file could not be opened.
-    bool setLogFile(const std::string& path);
+    static constexpr size_t kDefaultMaxLogFileSize = 10 * 1024 * 1024; // 10MB
+    static constexpr size_t kDefaultMaxLogFiles = 3;                  // 3 rotated files
+
+    // File output with rotation. Returns false if the file could not be opened.
+    bool setLogFile(const std::string& path,
+                    size_t maxFileSize = kDefaultMaxLogFileSize,
+                    size_t maxFiles = kDefaultMaxLogFiles);
     void setFileFormat(LogFormat fmt);
     void closeLogFile();
+
+    // Rotation control
+    void setRotation(size_t maxFileSize, size_t maxFiles);
+    size_t maxFileSize() const;
+    size_t maxFiles() const;
+    std::string logFilePath() const;
+    bool isLogFileOpen() const;
 
     // Console control
     void setConsoleEnabled(bool enabled);
@@ -54,12 +66,17 @@ private:
 
     static const char* levelStr(LogLevel level);
     static std::string escapeJson(std::string_view sv);
+    void rotateLogFiles();
 
     LogLevel level_{LogLevel::Info};
     LogFormat fileFormat_{LogFormat::Json};
     bool consoleEnabled_{true};
     bool consoleColors_{true};
+    std::string logFilePath_;
     std::ofstream logFile_;
+    size_t currentFileSize_{0};
+    size_t maxFileSize_{kDefaultMaxLogFileSize};
+    size_t maxFiles_{kDefaultMaxLogFiles};
     mutable std::mutex mutex_;
 };
 

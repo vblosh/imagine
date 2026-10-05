@@ -104,7 +104,7 @@ Options for 'serve':
   --host <ip>         Host address to bind to (default: 0.0.0.0)
   --port <port>       Port number to listen on (default: 8080)
   --web-dir <dir>     Path to directory containing web UI assets (default: web)
-  --log-file <path>   Path to log file (default: alongside catalog DB, or 'none')
+  --log-file <path>   Path to log file (default: none; set explicitly or via IMAGINE_LOG_FILE)
   --log-level <level> Log level: debug, info, warn, error, none (default: info)
   --no-log-file       Disable writing log to file
 
@@ -302,19 +302,7 @@ int handleServe(int argc, char** argv) {
         }
     }
 
-    if (!logFileExplicitlySet && logFile.empty()) {
-        std::filesystem::path catPath(catalogDb);
-        std::string extension = catPath.extension().string();
-        std::transform(extension.begin(), extension.end(), extension.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (catPath.has_extension() && extension != ".log") {
-            catPath.replace_extension(".log");
-        } else {
-            // Append when replacing the extension could select the database itself.
-            catPath += ".log";
-        }
-        logFile = imagine::pathToUtf8(catPath);
-    }
+
     if (logFile == "none" || logFile == "off") {
         logFile.clear();
     }
@@ -349,6 +337,8 @@ int handleServe(int argc, char** argv) {
             return 1;
         }
         imagine::Logger::instance().setFileFormat(imagine::LogFormat::Json);
+    } else {
+        imagine::Logger::instance().closeLogFile();
     }
 
     if (!std::filesystem::exists(webDir) && argc > 0 && argv[0]) {
@@ -872,7 +862,22 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    const char* envLogLevel = std::getenv("IMAGINE_LOG_LEVEL");
+    if (envLogLevel && *envLogLevel) {
+        imagine::Logger::instance().setLevel(imagine::Logger::parseLevel(envLogLevel));
+    }
+
     std::string command = argv[1];
+
+    if (command != "serve") {
+        const char* envLogFile = std::getenv("IMAGINE_LOG_FILE");
+        if (envLogFile && *envLogFile) {
+            std::string envLog(envLogFile);
+            if (envLog != "none" && envLog != "off") {
+                imagine::Logger::instance().setLogFile(envLog);
+            }
+        }
+    }
 
     if (command == "--help" || command == "-h" || command == "help") {
         printHelp();

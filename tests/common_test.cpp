@@ -300,6 +300,176 @@ TEST(LoggerTest, UnicodeLoggingAndFilePath) {
     logger.setLevel(origLevel);
 }
 
+TEST(LoggerTest, RotationStrategyThreeFilesDeleteOld) {
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
+    logger.setLevel(LogLevel::Info);
+    logger.setConsoleEnabled(false);
+    logger.setFileFormat(LogFormat::Text);
+
+    auto tempDir = std::filesystem::temp_directory_path() /
+        ("imagine_rotation_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(tempDir);
+    auto logPath = tempDir / "rotate.log";
+    std::string logPathStr = logPath.string();
+
+    // Default configuration should be 10MB and 3 files
+    EXPECT_EQ(Logger::kDefaultMaxLogFileSize, 10 * 1024 * 1024);
+    EXPECT_EQ(Logger::kDefaultMaxLogFiles, 3);
+
+    // Set rotation with maxFileSize = 300 bytes and maxFiles = 3
+    const size_t maxBytes = 300;
+    const size_t maxFiles = 3;
+    ASSERT_TRUE(logger.setLogFile(logPathStr, maxBytes, maxFiles));
+    EXPECT_EQ(logger.maxFileSize(), maxBytes);
+    EXPECT_EQ(logger.maxFiles(), maxFiles);
+    EXPECT_TRUE(logger.isLogFileOpen());
+    EXPECT_EQ(logger.logFilePath(), logPathStr);
+
+    auto backup1 = tempDir / "rotate.log.1";
+    auto backup2 = tempDir / "rotate.log.2";
+    auto backup3 = tempDir / "rotate.log.3";
+    auto backup4 = tempDir / "rotate.log.4";
+
+    std::error_code ec;
+
+    // Write log batch 1 (under 300 bytes)
+    for (int i = 0; i < 3; ++i) {
+        IMAGINE_LOG_INFO("Batch 1 message " + std::to_string(i));
+    }
+    EXPECT_TRUE(std::filesystem::exists(logPath, ec));
+    EXPECT_FALSE(std::filesystem::exists(backup1, ec));
+
+    // Write enough logs to trigger rotation 1 -> backup1 created
+    while (!std::filesystem::exists(backup1, ec)) {
+        IMAGINE_LOG_INFO("Trigger rotation 1 filling up file with some text");
+    }
+    EXPECT_TRUE(std::filesystem::exists(logPath, ec));
+    EXPECT_TRUE(std::filesystem::exists(backup1, ec));
+    EXPECT_FALSE(std::filesystem::exists(backup2, ec));
+
+    // Write enough logs to trigger rotation 2 -> backup2 created
+    while (!std::filesystem::exists(backup2, ec)) {
+        IMAGINE_LOG_INFO("Trigger rotation 2 filling up file with more text");
+    }
+    EXPECT_TRUE(std::filesystem::exists(logPath, ec));
+    EXPECT_TRUE(std::filesystem::exists(backup1, ec));
+    EXPECT_TRUE(std::filesystem::exists(backup2, ec));
+    EXPECT_FALSE(std::filesystem::exists(backup3, ec));
+
+    // Write enough logs to trigger rotation 3 -> backup3 created
+    while (!std::filesystem::exists(backup3, ec)) {
+        IMAGINE_LOG_INFO("Trigger rotation 3 filling up file with even more text");
+    }
+    EXPECT_TRUE(std::filesystem::exists(logPath, ec));
+    EXPECT_TRUE(std::filesystem::exists(backup1, ec));
+    EXPECT_TRUE(std::filesystem::exists(backup2, ec));
+    EXPECT_TRUE(std::filesystem::exists(backup3, ec));
+    EXPECT_FALSE(std::filesystem::exists(backup4, ec));
+
+    // Capture contents of backup3 and backup2 before 4th rotation
+    std::string b3ContentBefore;
+    {
+        std::ifstream ifs(backup3);
+        b3ContentBefore = std::string((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    }
+    std::string b2ContentBefore;
+    {
+        std::ifstream ifs(backup2);
+        b2ContentBefore = std::string((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    }
+
+    // Now write messages until rotation 4 occurs (backup3 changes)
+    int counter = 0;
+    while (true) {
+        std::string currentB3;
+        {
+            std::ifstream ifs(backup3);
+            currentB3 = std::string((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        }
+        if (currentB3 != b3ContentBefore) {
+            // Exactly one rotation happened: backup2 was shifted to backup3 and old backup3 was deleted
+            EXPECT_EQ(currentB3, b2ContentBefore);
+            break;
+        }
+        IMAGINE_LOG_INFO("Single step to trigger rotation 4: " + std::to_string(counter++));
+    }
+
+    // Now write many more messages to trigger numerous additional rotations
+    for (int i = 0; i < 100; ++i) {
+        IMAGINE_LOG_INFO("Lots of logs after 4th rotation " + std::to_string(i));
+    }
+
+    // Verify backup4 still does NOT exist (old deleted)
+    EXPECT_FALSE(std::filesystem::exists(backup4, ec));
+    EXPECT_TRUE(std::filesystem::exists(backup3, ec));
+    EXPECT_TRUE(std::filesystem::exists(backup2, ec));
+    EXPECT_TRUE(std::filesystem::exists(backup1, ec));
+    EXPECT_TRUE(std::filesystem::exists(logPath, ec));
+
+    logger.closeLogFile();
+    EXPECT_FALSE(logger.isLogFileOpen());
+    EXPECT_TRUE(logger.logFilePath().empty());
+
+    // Clean up
+    std::filesystem::remove_all(tempDir, ec);
+    logger.setConsoleEnabled(true);
+    logger.setLevel(origLevel);
+}
+
+TEST(LoggerTest, RotateOnOpenWhenOverLimit) {
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
+    logger.setLevel(LogLevel::Info);
+    logger.setConsoleEnabled(false);
+
+    auto tempDir = std::filesystem::temp_directory_path() /
+        ("imagine_rotate_open_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(tempDir);
+    auto logPath = tempDir / "over_limit.log";
+    auto backup1 = tempDir / "over_limit.log.1";
+
+    // Create a pre-existing file with 500 bytes
+    {
+        std::ofstream ofs(logPath);
+        ofs << std::string(500, 'X');
+    }
+
+    // Open with maxFileSize = 300 bytes
+    std::error_code ec;
+    EXPECT_TRUE(std::filesystem::exists(logPath, ec));
+    EXPECT_FALSE(std::filesystem::exists(backup1, ec));
+
+    ASSERT_TRUE(logger.setLogFile(logPath.string(), 300, 3));
+    // It should have rotated immediately on open because existing file > 300 bytes
+    EXPECT_TRUE(std::filesystem::exists(backup1, ec));
+    EXPECT_EQ(std::filesystem::file_size(backup1, ec), 500);
+
+    logger.closeLogFile();
+    std::filesystem::remove_all(tempDir, ec);
+    logger.setConsoleEnabled(true);
+    logger.setLevel(origLevel);
+}
+
+TEST(LoggerTest, SetRotationAndGetters) {
+    auto& logger = Logger::instance();
+    logger.setRotation(5 * 1024 * 1024, 5);
+    EXPECT_EQ(logger.maxFileSize(), 5 * 1024 * 1024);
+    EXPECT_EQ(logger.maxFiles(), 5);
+
+    // Restore defaults
+    logger.setRotation(Logger::kDefaultMaxLogFileSize, Logger::kDefaultMaxLogFiles);
+    EXPECT_EQ(logger.maxFileSize(), 10 * 1024 * 1024);
+    EXPECT_EQ(logger.maxFiles(), 3);
+}
+
+TEST(LoggerTest, LogFileNotCreatedWhenClosed) {
+    auto& logger = Logger::instance();
+    logger.closeLogFile();
+    EXPECT_FALSE(logger.isLogFileOpen());
+    EXPECT_TRUE(logger.logFilePath().empty());
+}
+
 TEST(TypesTest, ExifDataJsonSerialization) {
     ExifData original;
     original.camera_make = "Nikon";
