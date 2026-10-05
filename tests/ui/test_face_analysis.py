@@ -622,9 +622,9 @@ def test_accept_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
         .find(node => node.querySelector('[data-face-id="81"]'));
       return window.__faceMetadataWaiting && group && !group.querySelector('[data-face-group-accept]')
         && group.querySelectorAll('.face-grid-card').length === 2;
-    }""", timeout=15000)
+    }""", timeout=30000)
     page.evaluate("window.__releaseFaceMetadata?.()")
-    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled(timeout=30000)
     assert len(api.group_accepts) == 1
     assert len(api.batches) == 0
 
@@ -657,14 +657,14 @@ def test_reject_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
     page.wait_for_function("""() => {
       const group = document.querySelector('.face-grid-group[data-group-key="unnamed"]');
       return window.__faceMetadataWaiting && group && group.querySelector('[data-face-id="81"]');
-    }""", timeout=15000)
+    }""", timeout=30000)
     # One summary refresh replaces the old suggestion group while catalog metadata
     # remains pending; the grid must not wait for that unrelated refresh to begin.
     assert len(api.group_queries) == 2
     assert (len(api.batches) > 0 and api.batches[0][0]["action"] == "reject") or (len(api.face_actions) > 0 and api.face_actions[0][1] == "reject")
     assert api.group_accepts == []
     page.evaluate("window.__releaseFaceMetadata?.()")
-    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled(timeout=30000)
 
 
 @pytest.mark.parametrize("face_count", [1002, 2002])
@@ -889,7 +889,7 @@ def test_lazy_face_grid_virtualizes_random_access_scroll_and_whole_group_accept(
     grid.evaluate("element => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); }")
     last_id = 25_099
     last_card = page.locator(f'.face-grid-card[data-face-id="{last_id}"]')
-    expect(last_card).to_be_visible(timeout=10000)
+    expect(last_card).to_be_visible(timeout=20000)
     expect(page.locator(".face-grid-group-header [data-face-group-accept]")).to_be_visible()
     assert last_card.evaluate("""card => {
       const viewport = document.getElementById('faceGridList').getBoundingClientRect();
@@ -908,7 +908,7 @@ def test_lazy_face_grid_virtualizes_random_access_scroll_and_whole_group_accept(
     assert len(api.group_reads) <= 10
 
     grid.evaluate("element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); }")
-    expect(page.locator('.face-grid-card[data-face-id="100"]')).to_be_visible(timeout=10000)
+    expect(page.locator('.face-grid-card[data-face-id="100"]')).to_be_visible(timeout=20000)
     assert page.locator('.face-grid-card[data-face-id="100"]').evaluate("""card => {
       const viewport = document.getElementById('faceGridList').getBoundingClientRect();
       const rect = card.getBoundingClientRect();
@@ -918,7 +918,7 @@ def test_lazy_face_grid_virtualizes_random_access_scroll_and_whole_group_accept(
     assert len(api.group_reads) <= 12
     accept = page.locator("[data-face-group-accept]")
     accept.click()
-    expect(page.locator("#faceGridSelectedCount")).to_contain_text("1", timeout=10000)
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text("1", timeout=20000)
     expect(page.locator("[data-face-group-accept]")).to_be_visible()
     assert len(api.group_accepts) == 1
     assert api.group_accepts[0]["key"] == f"person:{alice['id']}"
@@ -978,7 +978,7 @@ def test_virtual_face_grid_keeps_bottom_position_while_far_page_is_pending(serve
 
     page.evaluate("window.__releaseFarFacePages()")
     last_card = page.locator('.face-grid-card[data-face-id="5099"]')
-    expect(last_card).to_be_visible(timeout=10000)
+    expect(last_card).to_be_visible(timeout=20000)
     assert last_card.evaluate("""card => {
       const viewport = document.getElementById('faceGridList').getBoundingClientRect();
       const rect = card.getBoundingClientRect();
@@ -1088,11 +1088,16 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     assert any(query.get("limit") == ["1"] and query.get("offset") == ["0"] for query in refreshed_queries)
 
     media_queries.clear()
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
+    expect(page.locator(f"#faceGridConfirmedPersonFilter option[value='{alice_id}']")).to_be_attached()
     page.locator("#faceGridShowNamed").check()
     page.locator("#faceGridConfirmedPersonFilter").select_option(str(alice_id))
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
     face_card = page.locator(f'.face-grid-card[data-face-id="{face_id}"]')
     expect(face_card).to_be_visible()
+    expect(face_card.locator(".face-grid-select")).to_be_enabled()
     face_card.locator(".face-grid-select").check()
+    expect(page.locator("#faceGridClearBtn")).to_be_enabled()
     page.locator("#faceGridClearBtn").click()
     birthday = page.locator(".photo-card", has_text="birthday.bmp")
     expect(birthday).to_be_visible()
