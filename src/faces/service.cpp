@@ -2532,12 +2532,15 @@ Result<std::vector<SuggestionRejectionOutcome>> Service::rejectSuggestionsBatch(
             continue;
         }
 
+        conn.execute("SAVEPOINT reject_item;");
         ins.reset();
         ins.bind(1, r.id);
         ins.bind(2, r.tagId);
         ins.bind(3, now);
         Status s = execDone(conn, ins, "Failed to record rejected identity");
         if (!s.isOk()) {
+            conn.execute("ROLLBACK TO SAVEPOINT reject_item;");
+            conn.execute("RELEASE SAVEPOINT reject_item;");
             outcome.status = s;
             outcomes.push_back(std::move(outcome));
             continue;
@@ -2548,22 +2551,32 @@ Result<std::vector<SuggestionRejectionOutcome>> Service::rejectSuggestionsBatch(
         upd.bind(2, r.id);
         upd.bind(3, r.revision);
         s = execDone(conn, upd, "Failed to update face revision");
-        if (!s.isOk()) {
-            outcome.status = s;
+        if (!s.isOk() || conn.changes() == 0) {
+            conn.execute("ROLLBACK TO SAVEPOINT reject_item;");
+            conn.execute("RELEASE SAVEPOINT reject_item;");
+            outcome.status = !s.isOk() ? s : Status::alreadyExists("Face review is stale; reload before rejecting a suggestion");
             outcomes.push_back(std::move(outcome));
             continue;
         }
 
+        conn.execute("RELEASE SAVEPOINT reject_item;");
+
         rejectionCache[r.id].insert(r.tagId);
 
-        outcome.face = std::move(face.value());
-        outcome.face["revision"] = r.revision + 1;
-        outcome.face["crop_url"] = "/api/faces/" + std::to_string(r.id) +
-                                   "/crop?revision=" + std::to_string(r.revision + 1);
-        auto& suggs = outcome.face["suggestions"];
-        suggs.erase(std::remove_if(suggs.begin(), suggs.end(), [&](const nlohmann::json& s) {
-            return s["tag_id"].get<int64_t>() == r.tagId;
-        }), suggs.end());
+        auto updatedFace = faceJson(conn, r.id, impl_->config.matchThreshold,
+                                    &exemplarCache, &rejectionCache, false, nullptr, true);
+        if (updatedFace.isOk()) {
+            outcome.face = std::move(updatedFace.value());
+        } else {
+            outcome.face = std::move(face.value());
+            outcome.face["revision"] = r.revision + 1;
+            outcome.face["crop_url"] = "/api/faces/" + std::to_string(r.id) +
+                                       "/crop?revision=" + std::to_string(r.revision + 1);
+            auto& suggs = outcome.face["suggestions"];
+            suggs.erase(std::remove_if(suggs.begin(), suggs.end(), [&](const nlohmann::json& s) {
+                return s["tag_id"].get<int64_t>() == r.tagId;
+            }), suggs.end());
+        }
 
         outcome.status = Status::ok();
         outcomes.push_back(std::move(outcome));

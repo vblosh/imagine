@@ -2341,6 +2341,115 @@ TEST_F(ServerTest, FaceBatchReviewSupportsReject) {
     server_->setApiToken("");
 }
 
+TEST_F(ServerTest, BatchRejectPromotesNextEligibleSuggestion) {
+    auto addPhoto = [&](const std::string& suffix) {
+        MediaItem media;
+        media.file_path = suffix + ".jpg"; media.file_name = suffix + ".jpg";
+        media.content_hash = "batch-promote-hash-" + suffix; media.width = 100; media.height = 80;
+        return catalog_->db().insertMedia(media).value();
+    };
+    auto addAnalysis = [&](MediaId mediaId) {
+        auto stmtRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,
+                recognizer_checksum,pipeline_version,detector_provider,recognizer_provider,device,
+                confidence,nms_threshold,analyzed_at)
+            VALUES(?,'complete','batch-source',100,80,'det','rec','batch-v1','cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return;
+        auto stmt = std::move(stmtRes.value()); stmt.bind(1, mediaId);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+    };
+    auto addFaceWithVector = [&](MediaId mediaId, float val0, float val1) {
+        auto stmtRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,embedding,embedding_size,created_at,updated_at)
+            VALUES(?,10,10,20,20,0.9,'[]',?,512,1,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return int64_t{0};
+        auto stmt = std::move(stmtRes.value()); stmt.bind(1, mediaId);
+        std::array<float, 512> vector{};
+        vector[0] = val0;
+        vector[1] = val1;
+        EXPECT_EQ(sqlite3_bind_blob(stmt.raw(), 2, vector.data(), sizeof(vector), SQLITE_TRANSIENT), SQLITE_OK);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+        return catalog_->db().connection().lastInsertRowId();
+    };
+
+    // Create 4 exemplar faces with 4 distinct people
+    // Query face has embedding (1.0, 0.0, ...)
+    // Exemplar 1: (0.95, ...), Exemplar 2: (0.90, ...), Exemplar 3: (0.85, ...), Exemplar 4: (0.80, ...)
+    std::vector<int64_t> exemplarFaces;
+    std::vector<TagId> personTags;
+    for (int i = 0; i < 4; ++i) {
+        MediaId m = addPhoto("exemplar-" + std::to_string(i));
+        addAnalysis(m);
+        float score = 0.95f - i * 0.05f;
+        float other = std::sqrt(std::max(0.0f, 1.0f - score * score));
+        int64_t f = addFaceWithVector(m, score, other);
+        exemplarFaces.push_back(f);
+    }
+    MediaId queryMedia = addPhoto("query-photo");
+    addAnalysis(queryMedia);
+    int64_t queryFace = addFaceWithVector(queryMedia, 1.0f, 0.0f);
+
+    httplib::Client client("127.0.0.1", port_);
+    server_->setApiToken("face-batch-token");
+    httplib::Headers auth = {{"Authorization", "Bearer face-batch-token"}};
+
+    // Assign 4 distinct names to the 4 exemplars
+    for (int i = 0; i < 4; ++i) {
+        auto identity = client.Post("/api/faces/batch", auth,
+            nlohmann::json{{"action", "identity"},
+                {"faces", {{{"id", exemplarFaces[i]}, {"revision", 1}}}},
+                {"name", "Person " + std::to_string(i + 1)}}.dump(), "application/json");
+        ASSERT_TRUE(identity);
+        ASSERT_EQ(identity->status, 200);
+        auto j = nlohmann::json::parse(identity->body);
+        personTags.push_back(j["updated"][0]["person_tag_id"].get<TagId>());
+    }
+
+    // Query face initially should have Person 1, Person 2, Person 3 (capped to 3)
+    auto queryFaceRes = client.Get("/api/faces/" + std::to_string(queryFace), auth);
+    ASSERT_TRUE(queryFaceRes);
+    ASSERT_EQ(queryFaceRes->status, 200);
+    auto initialJson = nlohmann::json::parse(queryFaceRes->body);
+    ASSERT_EQ(initialJson["suggestions"].size(), 3u);
+    EXPECT_EQ(initialJson["suggestions"][0]["tag_id"], personTags[0]);
+    EXPECT_EQ(initialJson["suggestions"][1]["tag_id"], personTags[1]);
+    EXPECT_EQ(initialJson["suggestions"][2]["tag_id"], personTags[2]);
+
+    // Batch reject Person 1
+    auto reject = client.Post("/api/faces/batch", auth,
+        nlohmann::json{{"action", "reject"},
+            {"faces", {{{"id", queryFace}, {"revision", 1}, {"tag_id", personTags[0]}}}}}.dump(),
+        "application/json");
+    ASSERT_TRUE(reject);
+    ASSERT_EQ(reject->status, 200) << reject->body;
+    auto rejectJson = nlohmann::json::parse(reject->body);
+    ASSERT_EQ(rejectJson["updated"].size(), 1u);
+    EXPECT_EQ(rejectJson["updated"][0]["revision"], 2);
+    // Person 4 should now be promoted into the 3rd slot!
+    ASSERT_EQ(rejectJson["updated"][0]["suggestions"].size(), 3u);
+    EXPECT_EQ(rejectJson["updated"][0]["suggestions"][0]["tag_id"], personTags[1]);
+    EXPECT_EQ(rejectJson["updated"][0]["suggestions"][1]["tag_id"], personTags[2]);
+    EXPECT_EQ(rejectJson["updated"][0]["suggestions"][2]["tag_id"], personTags[3]);
+
+    // Retrying with stale revision 1 must fail with 409
+    auto staleRetry = client.Post("/api/faces/batch", auth,
+        nlohmann::json{{"action", "reject"},
+            {"faces", {{{"id", queryFace}, {"revision", 1}, {"tag_id", personTags[1]}}}}}.dump(),
+        "application/json");
+    ASSERT_TRUE(staleRetry);
+    ASSERT_EQ(staleRetry->status, 200);
+    auto staleJson = nlohmann::json::parse(staleRetry->body);
+    EXPECT_TRUE(staleJson["updated"].empty());
+    ASSERT_EQ(staleJson["failed"].size(), 1u);
+    EXPECT_EQ(staleJson["failed"][0]["status"], 409);
+
+    server_->setApiToken("");
+}
+
 TEST_F(ServerTest, BatchAcceptPreservesSequentialNewExemplarEligibility) {
     auto addPhoto = [&](const std::string& suffix) {
         MediaItem media;
