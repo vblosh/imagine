@@ -147,13 +147,15 @@ class FaceApi:
             confirmed_person_id = query.get("person_tag_id", [""])[0]
             filtered = []
             for face in self.faces.values():
-                if face["dismissed"] and not include_dismissed:
-                    continue
-                confirmed = face["person_tag_id"] is not None
-                if confirmed and not show_named or not confirmed and not show_unnamed:
-                    continue
                 if confirmed_person_id and str(face["person_tag_id"] or "") != confirmed_person_id:
                     continue
+                if face["dismissed"]:
+                    if not include_dismissed:
+                        continue
+                else:
+                    confirmed = face["person_tag_id"] is not None
+                    if confirmed and not show_named or not confirmed and not show_unnamed:
+                        continue
                 filtered.append(face)
             members = {}
             for face in filtered:
@@ -1291,4 +1293,63 @@ def test_people_tab_review_faces_shows_busy_modal_while_scan_running(server, pag
     page.locator("#faceScanBusyOkBtn").click()
     expect(page.locator("#faceScanBusyModal")).to_be_hidden()
     expect(page.locator("#faceGridModal")).to_be_hidden()
+
+
+def test_show_checkboxes_independent_named_unnamed_or_dismissed(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {
+        1: _face(1, media_id),
+        2: _face(2, media_id),
+        3: _face(3, media_id),
+        4: _face(4, media_id),
+    }
+    api.faces[1].update(person_tag_id=98, person_name="Alice")
+    api.faces[3].update(dismissed=True)
+    api.faces[4].update(person_tag_id=99, person_name="Bob", dismissed=True)
+
+    _open_existing_grid(page)
+    # Default: only Unnamed is checked
+    expect(page.locator("#faceGridShowNamed")).not_to_be_checked()
+    expect(page.locator("#faceGridShowUnnamed")).to_be_checked()
+    expect(page.locator("#faceGridIncludeDismissed")).not_to_be_checked()
+    expect(page.locator('.face-grid-card[data-face-id="2"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_have_count(0)
+    expect(page.locator('.face-grid-card[data-face-id="3"]')).to_have_count(0)
+    expect(page.locator('.face-grid-card[data-face-id="4"]')).to_have_count(0)
+
+    # 1. Only Dismissed checked (uncheck Unnamed, check Dismissed)
+    page.locator("#faceGridShowUnnamed").uncheck()
+    page.locator("#faceGridIncludeDismissed").check()
+    expect(page.locator('.face-grid-group[data-group-key="dismissed"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="3"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="4"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_have_count(0)
+    expect(page.locator('.face-grid-card[data-face-id="2"]')).to_have_count(0)
+
+    # 2. Only Named checked (uncheck Dismissed, check Named)
+    page.locator("#faceGridIncludeDismissed").uncheck()
+    page.locator("#faceGridShowNamed").check()
+    expect(page.locator('.face-grid-group[data-group-key="person:98"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="2"]')).to_have_count(0)
+    expect(page.locator('.face-grid-card[data-face-id="3"]')).to_have_count(0)
+    expect(page.locator('.face-grid-card[data-face-id="4"]')).to_have_count(0)
+
+    # 3. None checked (uncheck Named)
+    page.locator("#faceGridShowNamed").uncheck()
+    expect(page.locator("#faceGridEmpty")).to_be_visible()
+    expect(page.locator('.face-grid-card')).to_have_count(0)
+
+    # 4. Named AND Dismissed checked (both show, unnamed does not)
+    page.locator("#faceGridShowNamed").check()
+    page.locator("#faceGridIncludeDismissed").check()
+    expect(page.locator('.face-grid-card[data-face-id="1"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="2"]')).to_have_count(0)
+    page.locator("#faceGridNextBtn").click()
+    expect(page.locator('.face-grid-card[data-face-id="3"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="4"]')).to_be_visible()
+    expect(page.locator('.face-grid-card[data-face-id="2"]')).to_have_count(0)
+
 

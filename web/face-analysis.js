@@ -741,13 +741,19 @@ function updateFaceGridCard(card, face, groupKey, { stale = false, index = null 
 }
 
 function faceMatchesGridFilters(face) {
-  const showNamed = byId('faceGridShowNamed')?.checked ?? false;
-  const showUnnamed = byId('faceGridShowUnnamed')?.checked ?? true;
+  const showNamed = Boolean(byId('faceGridShowNamed')?.checked ?? false);
+  const showUnnamed = Boolean(byId('faceGridShowUnnamed')?.checked ?? true);
+  const showDismissed = Boolean(byId('faceGridIncludeDismissed')?.checked ?? false);
   const confirmedPersonId = byId('faceGridConfirmedPersonFilter')?.value || '';
-  if (face.dismissed && !Boolean(byId('faceGridIncludeDismissed')?.checked)) return false;
+
+  if (confirmedPersonId && String(face.person_tag_id ?? '') !== confirmedPersonId) {
+    return false;
+  }
+  if (face.dismissed) {
+    return showDismissed;
+  }
   const named = face.person_tag_id != null;
-  if (named ? !showNamed : !showUnnamed) return false;
-  return !confirmedPersonId || String(face.person_tag_id ?? '') === confirmedPersonId;
+  return named ? showNamed : showUnnamed;
 }
 
 function filteredGridFaces() {
@@ -1095,7 +1101,7 @@ function updateGridSelectionUi() {
   if (personSelect) personSelect.disabled = gridIsLoading || gridActionBusy;
   const confirmedPersonFilter = byId('faceGridConfirmedPersonFilter');
   if (confirmedPersonFilter) confirmedPersonFilter.disabled = gridIsLoading || gridActionBusy || confirmedPersonFilter.options.length <= 1;
-  for (const id of ['faceGridShowNamed', 'faceGridShowUnnamed']) {
+  for (const id of ['faceGridShowNamed', 'faceGridShowUnnamed', 'faceGridIncludeDismissed']) {
     byId(id)?.toggleAttribute('disabled', gridIsLoading || gridActionBusy);
   }
 }
@@ -1104,7 +1110,6 @@ function updateFaceGridLoading(loading) {
   gridIsLoading = loading;
   const stateNode = byId('faceGridState');
   if (loading && stateNode && !stateNode.textContent) stateNode.textContent = t('face_grid_loading');
-  byId('faceGridIncludeDismissed')?.toggleAttribute('disabled', loading || gridActionBusy);
   updateGridSelectionUi();
 }
 
@@ -1676,7 +1681,6 @@ async function applyFaceBatch(action, faces, fields = {}) {
   } finally {
     if (stateNode && stateNode.textContent === t('face_grid_applying', { count: targetFaces.length })) stateNode.textContent = '';
     gridActionBusy = false;
-    byId('faceGridIncludeDismissed')?.toggleAttribute('disabled', gridIsLoading);
     updateGridSelectionUi();
   }
 }
@@ -1830,7 +1834,6 @@ async function acceptSuggestionGroup(groupKey) {
       stateNode.textContent = '';
     }
     gridActionBusy = false;
-    byId('faceGridIncludeDismissed')?.toggleAttribute('disabled', gridIsLoading);
     updateGridSelectionUi();
   }
 }

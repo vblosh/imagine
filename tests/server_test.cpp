@@ -1911,6 +1911,36 @@ TEST_F(ServerTest, FaceGroupsPageLazilyAndAcceptWholeTopSuggestionGroup) {
     EXPECT_EQ(dismissedJson["total"], 7);
     EXPECT_EQ(findGroup(dismissedJson, "dismissed")["faces_count"], 1);
 
+    auto onlyDismissed = client.Get("/api/faces/groups?show_named=false&show_unnamed=false&include_dismissed=true");
+    ASSERT_TRUE(onlyDismissed);
+    ASSERT_EQ(onlyDismissed->status, 200);
+    const auto onlyDismissedJson = nlohmann::json::parse(onlyDismissed->body);
+    EXPECT_EQ(onlyDismissedJson["total"], 1);
+    EXPECT_EQ(onlyDismissedJson["group_count"], 1);
+    EXPECT_EQ(findGroup(onlyDismissedJson, "dismissed")["faces_count"], 1);
+
+    auto onlyNamed = client.Get("/api/faces/groups?show_named=true&show_unnamed=false&include_dismissed=false");
+    ASSERT_TRUE(onlyNamed);
+    ASSERT_EQ(onlyNamed->status, 200);
+    const auto onlyNamedJson = nlohmann::json::parse(onlyNamed->body);
+    EXPECT_EQ(onlyNamedJson["total"], 2);
+    EXPECT_EQ(findGroup(onlyNamedJson, "dismissed").is_null(), true);
+    EXPECT_EQ(findGroup(onlyNamedJson, "unnamed").is_null(), true);
+
+    auto onlyUnnamed = client.Get("/api/faces/groups?show_named=false&show_unnamed=true&include_dismissed=false");
+    ASSERT_TRUE(onlyUnnamed);
+    ASSERT_EQ(onlyUnnamed->status, 200);
+    const auto onlyUnnamedJson = nlohmann::json::parse(onlyUnnamed->body);
+    EXPECT_EQ(onlyUnnamedJson["total"], 4);
+    EXPECT_EQ(findGroup(onlyUnnamedJson, "dismissed").is_null(), true);
+
+    auto noneIncluded = client.Get("/api/faces/groups?show_named=false&show_unnamed=false&include_dismissed=false");
+    ASSERT_TRUE(noneIncluded);
+    ASSERT_EQ(noneIncluded->status, 200);
+    const auto noneJson = nlohmann::json::parse(noneIncluded->body);
+    EXPECT_EQ(noneJson["total"], 0);
+    EXPECT_EQ(noneJson["group_count"], 0);
+
     auto currentGroups = client.Get("/api/faces/groups");
     ASSERT_TRUE(currentGroups);
     ASSERT_EQ(currentGroups->status, 200);

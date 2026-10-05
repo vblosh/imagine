@@ -1745,8 +1745,7 @@ std::shared_ptr<GroupReviewSnapshot> makeGroupReviewSnapshot(
     for (size_t i = 0; i < snapshot->index->faces.size(); ++i) {
         const auto& face = snapshot->index->faces[i];
         if (face.dismissed) {
-            const bool visibleByIdentity = face.personTagId ? showNamed : showUnnamed;
-            if (includeDismissed && visibleByIdentity &&
+            if (includeDismissed &&
                 (!personTagId || (face.personTagId && *face.personTagId == *personTagId))) {
                 addFace("dismissed", "dismissed", std::nullopt, "", i, false);
             }
