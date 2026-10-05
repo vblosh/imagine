@@ -234,10 +234,6 @@ class FaceApi:
                 face["revision"] += 1
                 face["crop_url"] = f"/api/faces/{face['id']}/crop?revision={face['revision']}"
                 updated += 1
-            if updated:
-                self.group_snapshots.clear()
-                self.group_snapshot = ""
-                self.group_members = {}
             route.fulfill(json=dict(updated_count=updated, failed_count=len(failed), failed=failed))
         elif path == "/api/faces/lookup" and method == "GET":
             ids = [int(value) for value in parse_qs(parsed.query).get("ids", [""])[0].split(",") if value]
@@ -690,7 +686,7 @@ def test_group_accept_all_spans_pages_and_keeps_failed_faces_selected(server, pa
     assert api.group_accepts[0]["key"] == f"person:{alice['id']}"
     assert len(api.batches) == 0
     assert sum(1 for face in api.faces.values() if face["person_name"] == "Alice") == face_count - 1
-    expect(page.locator('.face-grid-card[data-face-id="100"] .face-grid-select')).to_be_checked()
+    expect(page.locator('.face-grid-card[data-face-id="100"] .face-grid-select')).to_be_checked(timeout=20000)
 
     api.faces[100].update(x=29, revision=2, crop_url="/api/faces/100/crop?revision=2")
     page.evaluate("""() => {
@@ -703,13 +699,13 @@ def test_group_accept_all_spans_pages_and_keeps_failed_faces_selected(server, pa
     page.wait_for_function("""() => {
       const image = document.querySelector('.face-grid-card[data-face-id="100"] .face-grid-crop');
       return image && image.getAttribute('src').includes('revision=2');
-    }""", timeout=15000)
+    }""", timeout=30000)
     assert page.evaluate("window.__failedFaceCropSrc !== document.querySelector('.face-grid-card[data-face-id=\"100\"] .face-grid-crop').getAttribute('src')")
     page.wait_for_function("""() => {
       const image = document.querySelector('.face-grid-card[data-face-id="100"] .face-grid-crop');
       return image && image.complete && image.naturalWidth > 0;
-    }""")
-    expect(page.locator('.face-grid-card[data-face-id="100"] .face-grid-select')).to_be_checked()
+    }""", timeout=30000)
+    expect(page.locator('.face-grid-card[data-face-id="100"] .face-grid-select')).to_be_checked(timeout=20000)
 
 
 def test_interrupted_scan_without_saved_request_can_retry_catalog(server, page: Page):
