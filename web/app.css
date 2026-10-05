@@ -278,6 +278,10 @@ body, html {
   user-select: none;
 }
 
+.btn[hidden] {
+  display: none !important;
+}
+
 .btn-primary {
   background-color: var(--accent-color);
   color: #ffffff;
@@ -949,7 +953,7 @@ body, html {
 }
 
 .face-grid-modal { z-index: 1200; }
-.face-force-modal { z-index: 1300; }
+.face-force-modal, .face-busy-modal { z-index: 1300; }
 
 .modal-dialog.face-grid-dialog {
   width: min(1180px, calc(100vw - 28px));
@@ -1197,8 +1201,8 @@ body, html {
 .face-grid-pagination[hidden],
 #faceGridRetryBtn[hidden] { display: none; }
 .face-grid-action-error { flex: 1 1 auto; color: #ffd58a; }
-.face-force-dialog { width: min(470px, calc(100vw - 24px)); }
-.face-force-warning { margin: 0; color: #ffd58a; font-size: 13px; line-height: 1.5; }
+.face-force-dialog, .face-busy-dialog { width: min(470px, calc(100vw - 24px)); }
+.face-force-warning, .face-busy-message { margin: 0; color: #ffd58a; font-size: 13px; line-height: 1.5; }
 
 .face-card {
   min-width: 0;

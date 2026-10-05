@@ -22,6 +22,10 @@ let currentRequest = null;
 let submissionError = '';
 let jobPollTimer = null;
 let jobPollInFlight = false;
+
+function isScanRunning() {
+  return Boolean(currentJob && !TERMINAL_JOB_STATES.has(currentJob.state));
+}
 let scanDialogSelectedIds = [];
 let gridFaces = [];
 let gridTotal = 0;
@@ -184,6 +188,7 @@ function closeJobModal(restoreFocus = true) {
 function setJobButton(button, visible, disabled = false) {
   if (!button) return;
   button.hidden = !visible;
+  button.style.display = visible ? '' : 'none';
   button.disabled = disabled;
 }
 
@@ -235,15 +240,10 @@ function renderJobState() {
     byId('faceSelectedScopeOption').disabled = scanDialogSelectedIds.length === 0;
   }
 
-  setJobButton(byId('faceJobCancelBtn'), initial);
+  setJobButton(byId('faceViewFacesBtn'), true);
   setJobButton(byId('faceJobStartBtn'), initial, !isFaceReady());
   setJobButton(byId('faceJobStopBtn'), running, currentJob && currentJob.state === 'cancelling');
-  const canRetry = hasJob && !running && Boolean(currentRequest)
-    && ((Number(currentJob.remaining) || 0) > 0 || (Number(currentJob.failed) || 0) > 0);
-  setJobButton(byId('faceJobRetryBtn'), canRetry, !isFaceReady());
-  setJobButton(byId('faceJobDoneBtn'), hasJob && !running);
-
-  setJobButton(byId('faceViewFacesBtn'), !running || Boolean(currentJob));
+  setJobButton(byId('faceJobDoneBtn'), true);
 }
 
 function selectedPhotoIds() {
@@ -257,7 +257,7 @@ function selectedPhotoIds() {
 }
 
 function openFaceAnalysisDialog() {
-  if (currentJob && (!TERMINAL_JOB_STATES.has(currentJob.state) || faceJobNeedsRetry(currentJob))) {
+  if (currentJob && !TERMINAL_JOB_STATES.has(currentJob.state)) {
     openJobModal();
     return;
   }
@@ -1351,6 +1351,10 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
 }
 
 function openFaceGrid({ jobId = null, includeDismissed = false, showNamed = false, showUnnamed = true, title = null } = {}) {
+  if (isScanRunning()) {
+    openScanBusyModal();
+    return;
+  }
   const modal = byId('faceGridModal');
   if (!modal) return;
   if (modal.style.display !== 'flex') gridModalReturnFocus = document.activeElement;
@@ -1454,7 +1458,30 @@ function openFailedJobFromGrid() {
   if (returnFocus) scanModalReturnFocus = returnFocus;
 }
 
+let scanBusyModalReturnFocus = null;
+
+function openScanBusyModal() {
+  const modal = byId('faceScanBusyModal');
+  if (!modal) return;
+  scanBusyModalReturnFocus = document.activeElement;
+  modal.style.display = 'flex';
+  byId('faceScanBusyOkBtn')?.focus();
+}
+
+function closeScanBusyModal() {
+  const modal = byId('faceScanBusyModal');
+  if (modal) modal.style.display = 'none';
+  if (scanBusyModalReturnFocus && typeof scanBusyModalReturnFocus.focus === 'function' && document.contains(scanBusyModalReturnFocus)) {
+    scanBusyModalReturnFocus.focus();
+  }
+  scanBusyModalReturnFocus = null;
+}
+
 async function openFaceGridFromScanDialog() {
+  if (isScanRunning()) {
+    openScanBusyModal();
+    return;
+  }
   const returnFocus = scanModalReturnFocus;
   closeJobModal(false);
   openFaceGrid({ jobId: null, includeDismissed: false });
@@ -1462,6 +1489,10 @@ async function openFaceGridFromScanDialog() {
 }
 
 async function openPeopleFaceReview() {
+  if (isScanRunning()) {
+    openScanBusyModal();
+    return;
+  }
   openFaceGrid({ jobId: null, includeDismissed: false });
 }
 
@@ -1899,6 +1930,7 @@ async function handleCompletedJob(job) {
     clearSavedJobRequest(job.id);
   }
   const returnFocus = scanModalReturnFocus;
+  closeScanBusyModal();
   closeJobModal(false);
   openFaceGrid({ jobId: job.id, includeDismissed: false });
   renderGridJobIssue(job.id);
@@ -2028,6 +2060,10 @@ function bindFaceActions() {
   byId('faceJobModal')?.addEventListener('keydown', event => trapModalFocus(event, byId('faceJobModal'), closeJobModal));
   byId('faceForceWarningModal')?.addEventListener('keydown', event => trapModalFocus(event, byId('faceForceWarningModal'), closeForceWarningModal));
   byId('faceGridModal')?.addEventListener('keydown', event => trapModalFocus(event, byId('faceGridModal'), () => closeFaceGrid()));
+  byId('faceScanBusyModal')?.addEventListener('keydown', event => trapModalFocus(event, byId('faceScanBusyModal'), closeScanBusyModal));
+  byId('faceScanBusyCloseBtn')?.addEventListener('click', closeScanBusyModal);
+  byId('faceScanBusyOkBtn')?.addEventListener('click', closeScanBusyModal);
+  byId('faceScanBusyBackdrop')?.addEventListener('click', closeScanBusyModal);
 
   window.addEventListener('imagine:inspectorMediaChanged', event => {
     const detail = event.detail || {};

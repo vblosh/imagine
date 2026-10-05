@@ -1589,11 +1589,25 @@
         </div>
         <div class="modal-footer face-job-footer">
           <button type="button" class="btn btn-secondary face-view-faces" id="faceViewFacesBtn" data-i18n="face_view_existing">View faces</button>
-          <button type="button" class="btn btn-secondary" id="faceJobCancelBtn" data-i18n="cancel">Cancel</button>
-          <button type="button" class="btn btn-danger-outline" id="faceJobStopBtn" data-i18n="face_cancel_scan" hidden>Cancel scan</button>
-          <button type="button" class="btn btn-secondary" id="faceJobRetryBtn" data-i18n="face_retry_scan" hidden>Retry remaining</button>
           <button type="button" class="btn btn-primary" id="faceJobStartBtn" data-i18n="face_start_scan">Start scan</button>
-          <button type="button" class="btn btn-secondary" id="faceJobDoneBtn" data-i18n="close" hidden>Close</button>
+          <button type="button" class="btn btn-danger-outline" id="faceJobStopBtn" data-i18n="face_cancel_scan" hidden>Cancel scan</button>
+          <button type="button" class="btn btn-secondary" id="faceJobDoneBtn" data-i18n="close">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal face-busy-modal" id="faceScanBusyModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="faceScanBusyHeading">
+      <div class="modal-backdrop" id="faceScanBusyBackdrop"></div>
+      <div class="modal-dialog face-busy-dialog">
+        <div class="modal-header">
+          <h3 id="faceScanBusyHeading" data-i18n="face_scan_busy_title">Face analysis</h3>
+          <button type="button" class="btn-icon-sm" id="faceScanBusyCloseBtn" data-i18n-title="close_panel" aria-label="Close" data-i18n-aria-label="close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="face-busy-message" id="faceScanBusyMessage" data-i18n="face_scan_busy_message">Cannot show Review faces during the scan, please cancel or wait to the end.</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="faceScanBusyOkBtn" data-i18n="close">Close</button>
         </div>
       </div>
     </div>

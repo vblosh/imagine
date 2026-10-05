@@ -410,20 +410,18 @@ def test_completed_scan_with_photo_failures_keeps_retry_entry_in_face_grid(serve
     expect(retry_from_grid).to_be_visible()
     retry_from_grid.click()
     expect(page.locator("#faceJobModal")).to_be_visible()
-    expect(page.locator("#faceJobRetryBtn")).to_be_visible()
+    expect(page.locator("#faceJobRetryBtn")).to_have_count(0)
+    expect(page.locator("#faceJobCancelBtn")).to_have_count(0)
+    expect(page.locator("#faceViewFacesBtn")).to_be_visible()
+    expect(page.locator("#faceJobDoneBtn")).to_be_visible()
     page.locator("#faceJobCloseBtn").click()
     page.locator("#faceToolbarBtn").click()
-    expect(page.locator("#faceJobError")).to_contain_text("2 photos failed")
-    expect(page.locator("#faceJobRetryBtn")).to_be_visible()
-    api.initial_job = api.jobs[1]
-    page.reload()
     expect(page.locator("#faceJobModal")).to_be_visible()
-    expect(page.locator("#faceJobError")).to_contain_text("2 photos failed")
-    expect(page.locator("#faceJobRetryBtn")).to_be_visible()
-    page.locator("#faceJobRetryBtn").click()
-    expect(page.locator("#faceGridModal")).to_be_visible()
-    expect(page.locator("#faceGridJobIssue")).to_be_hidden()
-    assert len(api.posts) == 2
+    expect(page.locator("#faceViewFacesBtn")).to_be_visible()
+    expect(page.locator("#faceJobStartBtn")).to_be_visible()
+    expect(page.locator("#faceJobDoneBtn")).to_be_visible()
+    expect(page.locator("#faceJobCancelBtn")).to_have_count(0)
+    expect(page.locator("#faceJobRetryBtn")).to_have_count(0)
 
 
 def test_toolbar_scan_warning_cancel_retry_and_automatic_grid(server, page: Page):
@@ -440,6 +438,12 @@ def test_toolbar_scan_warning_cancel_retry_and_automatic_grid(server, page: Page
     expect(page.locator("#inspectorAnalyzeFacesBtn")).to_have_count(0)
     page.locator("#faceToolbarBtn").click()
     expect(page.locator("#faceScanScope")).to_have_value("selected")
+    expect(page.locator("#faceViewFacesBtn")).to_be_visible()
+    expect(page.locator("#faceJobStartBtn")).to_be_visible()
+    expect(page.locator("#faceJobDoneBtn")).to_be_visible()
+    expect(page.locator("#faceJobCancelBtn")).to_have_count(0)
+    expect(page.locator("#faceJobRetryBtn")).to_have_count(0)
+    expect(page.locator("#faceJobStopBtn")).to_be_hidden()
     page.locator("#faceForceReanalysis").check()
     page.locator("#faceJobStartBtn").click()
     expect(page.locator("#faceForceWarningModal .modal-dialog")).to_be_visible()
@@ -453,18 +457,34 @@ def test_toolbar_scan_warning_cancel_retry_and_automatic_grid(server, page: Page
     page.locator("#faceJobStartBtn").click()
     page.locator("#faceForceConfirmBtn").click()
     expect(page.locator("#faceJobState")).to_contain_text("running")
-    page.locator("#faceJobCloseBtn").click()
+    expect(page.locator("#faceViewFacesBtn")).to_be_visible()
+    expect(page.locator("#faceJobStopBtn")).to_be_visible()
+    expect(page.locator("#faceJobDoneBtn")).to_be_visible()
+    expect(page.locator("#faceJobStartBtn")).to_be_hidden()
+    expect(page.locator("#faceJobCancelBtn")).to_have_count(0)
+    expect(page.locator("#faceJobRetryBtn")).to_have_count(0)
+    page.locator("#faceViewFacesBtn").click()
+    expect(page.locator("#faceGridModal")).to_be_hidden()
+    expect(page.locator("#faceScanBusyModal")).to_be_visible()
+    expect(page.locator("#faceScanBusyHeading")).to_contain_text("Face analysis")
+    expect(page.locator("#faceScanBusyMessage")).to_contain_text("Cannot show Review faces during the scan, please cancel or wait to the end")
+    page.locator("#faceScanBusyOkBtn").click()
+    expect(page.locator("#faceScanBusyModal")).to_be_hidden()
+    expect(page.locator("#faceGridModal")).to_be_hidden()
+    page.locator("#faceJobDoneBtn").click()
     expect(page.locator("#faceJobModal")).to_be_hidden()
     page.locator("#faceToolbarBtn").click()
+    expect(page.locator("#faceJobModal")).to_be_visible()
     page.locator("#faceJobStopBtn").click()
-    expect(page.locator("#faceJobRetryBtn")).to_be_visible()
-    page.locator("#faceJobRetryBtn").click()
+    expect(page.locator("#faceJobRetryBtn")).to_have_count(0)
+    expect(page.locator("#faceJobStopBtn")).to_be_hidden()
+    expect(page.locator("#faceViewFacesBtn")).to_be_visible()
+    expect(page.locator("#faceJobDoneBtn")).to_be_visible()
+    page.locator("#faceViewFacesBtn").click()
     expect(page.locator("#faceGridModal")).to_be_visible()
     expect(page.locator("#faceGridList .face-grid-card")).to_have_count(1)
-    assert [body for body, _ in api.posts] == [dict(scope="selected", media_ids=[media_id], force=True),
-                                            dict(scope="selected", media_ids=[media_id], force=False)]
+    assert [body for body, _ in api.posts] == [dict(scope="selected", media_ids=[media_id], force=True)]
     assert all(header == "Bearer face-ui-test-token" for _, header in api.posts)
-    assert any(query.get("job_id") == ["2"] for query in api.group_queries)
     assert native_dialogs == []
     expect(photo).to_have_class(re.compile(r"\bselected\b"))
 
@@ -691,10 +711,13 @@ def test_interrupted_scan_without_saved_request_can_retry_catalog(server, page: 
     api = FaceApi(page)
     api.initial_job = dict(id=12, state="interrupted", total=5, processed=2, skipped=0, failed=1, remaining=2, error="server restarted")
     page.goto(server["url"])
-    expect(page.locator("#faceJobRetryBtn")).to_be_visible()
-    page.locator("#faceJobRetryBtn").click()
-    expect(page.locator("#faceGridModal")).to_be_visible()
-    assert api.posts[0][0] == dict(scope="catalog", force=False)
+    expect(page.locator("#faceJobModal")).to_be_visible()
+    expect(page.locator("#faceJobRetryBtn")).to_have_count(0)
+    expect(page.locator("#faceJobCancelBtn")).to_have_count(0)
+    expect(page.locator("#faceViewFacesBtn")).to_be_visible()
+    expect(page.locator("#faceJobDoneBtn")).to_be_visible()
+    page.locator("#faceJobDoneBtn").click()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
 
 
 def test_named_unnamed_filters_selection_pagination_and_dismissed(server, page: Page):
@@ -1226,4 +1249,31 @@ def test_review_faces_dialog_starts_with_only_show_unnamed_selected(server, page
     expect(page.locator("#faceGridIncludeDismissed")).not_to_be_checked()
     expect(page.locator('.face-grid-card[data-face-id="1"]')).to_have_count(0)
     expect(page.locator('.face-grid-card[data-face-id="2"]')).to_be_visible()
+
+
+def test_people_tab_review_faces_shows_busy_modal_while_scan_running(server, page: Page):
+    api = FaceApi(page)
+    job = dict(id=1, state="running", total=10, processed=2, skipped=0, failed=0, remaining=8, error="")
+    api.initial_job = job
+    api.jobs[1] = job
+    page.goto(server["url"])
+    expect(page.locator("#faceJobModal")).to_be_visible()
+    page.locator("#faceJobDoneBtn").click()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
+
+    page.locator('.tab-btn[data-tab="people"]').click()
+    expect(page.locator("#facePeopleActions")).to_be_visible()
+    review_btn = page.locator("#faceReviewBtn")
+    expect(review_btn).to_be_visible()
+    review_btn.click()
+
+    expect(page.locator("#faceGridModal")).to_be_hidden()
+    expect(page.locator("#faceScanBusyModal")).to_be_visible()
+    expect(page.locator("#faceScanBusyHeading")).to_contain_text("Face analysis")
+    expect(page.locator("#faceScanBusyMessage")).to_contain_text(
+        "Cannot show Review faces during the scan, please cancel or wait to the end."
+    )
+    page.locator("#faceScanBusyOkBtn").click()
+    expect(page.locator("#faceScanBusyModal")).to_be_hidden()
+    expect(page.locator("#faceGridModal")).to_be_hidden()
 
