@@ -3172,15 +3172,15 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
                 sendError(res, "action and faces are required", 400); return;
             }
             const std::string action = body["action"].get<std::string>();
-            if (action != "identity" && action != "accept" && action != "dismiss") {
-                sendError(res, "action must be identity, accept, or dismiss", 400); return;
+            if (action != "identity" && action != "accept" && action != "dismiss" && action != "reject") {
+                sendError(res, "action must be identity, accept, dismiss, or reject", 400); return;
             }
             const auto& faces = body["faces"];
             if (faces.empty() || faces.size() > 1000) {
                 sendError(res, "faces must contain between 1 and 1000 entries", 400); return;
             }
 
-            struct FaceRevision { int64_t id; int64_t revision; };
+            struct FaceRevision { int64_t id; int64_t revision; std::optional<TagId> tagId; };
             std::vector<FaceRevision> edits;
             edits.reserve(faces.size());
             std::unordered_set<int64_t> uniqueIds;
@@ -3194,7 +3194,14 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
                 if (id <= 0 || revision <= 0 || !uniqueIds.insert(id).second) {
                     sendError(res, "face IDs and revisions must be positive and IDs unique", 400); return;
                 }
-                edits.push_back({id, revision});
+                std::optional<TagId> faceTagId;
+                if (face.contains("tag_id") && !face["tag_id"].is_null()) {
+                    if (!face["tag_id"].is_number_integer() || face["tag_id"].get<int64_t>() <= 0) {
+                        sendError(res, "tag_id must be a positive integer", 400); return;
+                    }
+                    faceTagId = face["tag_id"].get<TagId>();
+                }
+                edits.push_back({id, revision, faceTagId});
             }
 
             std::optional<TagId> tagId;
@@ -3220,6 +3227,13 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
                     sendError(res, "accept requires a positive tag_id", 400); return;
                 }
                 tagId = body["tag_id"].get<TagId>();
+            } else if (action == "reject") {
+                if (body.contains("tag_id") && !body["tag_id"].is_null()) {
+                    if (!body["tag_id"].is_number_integer() || body["tag_id"].get<int64_t>() <= 0) {
+                        sendError(res, "tag_id must be a positive integer", 400); return;
+                    }
+                    tagId = body["tag_id"].get<TagId>();
+                }
             } else {
                 if (!body.contains("dismissed") || !body["dismissed"].is_boolean()) {
                     sendError(res, "dismiss requires a boolean dismissed value", 400); return;
@@ -3232,6 +3246,33 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
                 acceptances.reserve(edits.size());
                 for (const auto& edit : edits) acceptances.push_back({edit.id, edit.revision, *tagId});
                 auto outcomes = faceService_->acceptSuggestionsBatch(acceptances);
+                if (!outcomes.isOk()) { sendStatusError(res, outcomes.status()); return; }
+                nlohmann::json updated = nlohmann::json::array();
+                nlohmann::json failed = nlohmann::json::array();
+                for (auto& outcome : outcomes.value()) {
+                    if (outcome.status.isOk()) {
+                        updated.push_back(std::move(outcome.face));
+                    } else {
+                        failed.push_back({{"id", outcome.id}, {"status", statusToHttpCode(outcome.status)},
+                                          {"error", sanitizeUtf8(outcome.status.message())}});
+                    }
+                }
+                sendJson(res, {{"updated", std::move(updated)}, {"failed", std::move(failed)}});
+                return;
+            }
+
+            if (action == "reject") {
+                std::vector<faces::SuggestionRejection> rejections;
+                rejections.reserve(edits.size());
+                for (const auto& edit : edits) {
+                    const std::optional<TagId> tId = edit.tagId.has_value() ? edit.tagId : tagId;
+                    if (!tId.has_value()) {
+                        sendError(res, "reject requires tag_id either per face or in top-level body", 400);
+                        return;
+                    }
+                    rejections.push_back({edit.id, edit.revision, *tId});
+                }
+                auto outcomes = faceService_->rejectSuggestionsBatch(rejections);
                 if (!outcomes.isOk()) { sendStatusError(res, outcomes.status()); return; }
                 nlohmann::json updated = nlohmann::json::array();
                 nlohmann::json failed = nlohmann::json::array();

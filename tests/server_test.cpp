@@ -2268,6 +2268,79 @@ TEST_F(ServerTest, FaceBatchReviewSupportsPartialIdentityAcceptAndDismiss) {
     server_->setApiToken("");
 }
 
+TEST_F(ServerTest, FaceBatchReviewSupportsReject) {
+    auto addPhoto = [&](const std::string& suffix) {
+        MediaItem media;
+        media.file_path = suffix + ".jpg"; media.file_name = suffix + ".jpg";
+        media.content_hash = "batch-reject-hash-" + suffix; media.width = 100; media.height = 80;
+        return catalog_->db().insertMedia(media).value();
+    };
+    auto addAnalysis = [&](MediaId mediaId) {
+        auto stmtRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO face_media_analysis(media_id,state,source_hash,width,height,detector_checksum,
+                recognizer_checksum,pipeline_version,detector_provider,recognizer_provider,device,
+                confidence,nms_threshold,analyzed_at)
+            VALUES(?,'complete','batch-source',100,80,'det','rec','batch-v1','cpu','cpu','cpu',0.5,0.4,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return;
+        auto stmt = std::move(stmtRes.value()); stmt.bind(1, mediaId);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+    };
+    auto addFace = [&](MediaId mediaId) {
+        auto stmtRes = catalog_->db().connection().prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,embedding,embedding_size,created_at,updated_at)
+            VALUES(?,10,10,20,20,0.9,'[]',?,512,1,1);
+        )SQL");
+        EXPECT_TRUE(stmtRes.isOk());
+        if (!stmtRes.isOk()) return int64_t{0};
+        auto stmt = std::move(stmtRes.value()); stmt.bind(1, mediaId);
+        std::array<float, 512> vector{}; vector[0] = 1.0f;
+        EXPECT_EQ(sqlite3_bind_blob(stmt.raw(), 2, vector.data(), sizeof(vector), SQLITE_TRANSIENT), SQLITE_OK);
+        EXPECT_EQ(stmt.step(), StepResult::Done);
+        return catalog_->db().connection().lastInsertRowId();
+    };
+    const MediaId firstMedia = addPhoto("reject-first");
+    const MediaId secondMedia = addPhoto("reject-second");
+    const MediaId thirdMedia = addPhoto("reject-third");
+    addAnalysis(firstMedia); addAnalysis(secondMedia); addAnalysis(thirdMedia);
+    const int64_t firstFace = addFace(firstMedia);
+    const int64_t secondFace = addFace(secondMedia);
+    const int64_t thirdFace = addFace(thirdMedia);
+
+    httplib::Client client("127.0.0.1", port_);
+    server_->setApiToken("face-batch-token");
+    httplib::Headers auth = {{"Authorization", "Bearer face-batch-token"}};
+
+    // Confirm identity on firstFace so it becomes an exemplar
+    auto identity = client.Post("/api/faces/batch", auth,
+        nlohmann::json{{"action", "identity"},
+            {"faces", {{{"id", firstFace}, {"revision", 1}}}},
+            {"name", "Batch Person"}}.dump(), "application/json");
+    ASSERT_TRUE(identity);
+    ASSERT_EQ(identity->status, 200) << identity->body;
+    const auto identityJson = nlohmann::json::parse(identity->body);
+    ASSERT_EQ(identityJson["updated"].size(), 1u);
+    const TagId personId = identityJson["updated"][0]["person_tag_id"].get<TagId>();
+
+    // Batch reject suggestions for secondFace and thirdFace
+    auto reject = client.Post("/api/faces/batch", auth,
+        nlohmann::json{{"action", "reject"},
+            {"faces", {{{"id", secondFace}, {"revision", 1}, {"tag_id", personId}},
+                       {{"id", thirdFace}, {"revision", 1}, {"tag_id", personId}}}}}.dump(),
+        "application/json");
+    ASSERT_TRUE(reject);
+    ASSERT_EQ(reject->status, 200) << reject->body;
+    const auto rejectJson = nlohmann::json::parse(reject->body);
+    ASSERT_EQ(rejectJson["updated"].size(), 2u);
+    EXPECT_TRUE(rejectJson["failed"].empty());
+    for (const auto& face : rejectJson["updated"]) {
+        EXPECT_EQ(face["revision"], 2);
+        EXPECT_TRUE(face["suggestions"].empty());
+    }
+    server_->setApiToken("");
+}
+
 TEST_F(ServerTest, BatchAcceptPreservesSequentialNewExemplarEligibility) {
     auto addPhoto = [&](const std::string& suffix) {
         MediaItem media;

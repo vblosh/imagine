@@ -1636,7 +1636,15 @@ async function applyFaceBatch(action, faces, fields = {}) {
   try {
     for (let offset = 0; offset < targetFaces.length; offset += FACE_BATCH_SIZE) {
       const chunk = targetFaces.slice(offset, offset + FACE_BATCH_SIZE);
-      const body = { action, faces: chunk.map(face => ({ id: Number(face.id), revision: Number(face.revision) })), ...fields };
+      const body = {
+        action,
+        faces: chunk.map(face => {
+          const item = { id: Number(face.id), revision: Number(face.revision) };
+          if (face.tag_id != null) item.tag_id = Number(face.tag_id);
+          return item;
+        }),
+        ...fields
+      };
       try {
         const result = await api.post('/api/faces/batch', body);
         successFaces.push(...(Array.isArray(result.updated) ? result.updated : []));
@@ -1691,58 +1699,11 @@ function showGridActionResult(successCount, failures) {
 async function rejectSelectedSuggestions(faces) {
   const targetFaces = faces.filter(face => !face.dismissed && face.person_tag_id == null && Number(face.suggestions?.[0]?.tag_id) > 0);
   if (!targetFaces.length || gridActionBusy) return;
-  const actionViewToken = gridViewToken;
-  const actionJobId = gridJobId;
-  const actionGroupKey = gridGroups[gridGroupIndex]?.key || null;
-  const actionGroupIndex = gridGroupIndex;
-  gridActionBusy = true;
-  updateGridSelectionUi();
-  const stateNode = byId('faceGridState');
-  if (stateNode) stateNode.textContent = t('face_grid_applying', { count: targetFaces.length });
-  const updated = [];
-  const failures = [];
-  try {
-    for (let offset = 0; offset < targetFaces.length; offset += 24) {
-      const batch = targetFaces.slice(offset, offset + 24);
-      const outcomes = await Promise.all(batch.map(async face => {
-        try {
-          const response = await api.post(`/api/faces/${encodeURIComponent(Number(face.id))}/reject`, {
-            revision: Number(face.revision), tag_id: Number(face.suggestions[0].tag_id)
-          });
-          return { updated: response && response.face ? response.face : response };
-        } catch (err) {
-          return { failed: { id: Number(face.id), error: err.message } };
-        }
-      }));
-      updated.push(...outcomes.map(item => item.updated).filter(Boolean));
-      failures.push(...outcomes.map(item => item.failed).filter(Boolean));
-    }
-    const refreshPromise = updated.length ? refreshAfterFaceChanges(updated) : Promise.resolve();
-    let gridRefreshPromise = Promise.resolve(false);
-    if (actionViewToken === gridViewToken && byId('faceGridModal')?.style.display === 'flex') {
-      gridSelection = new Set(failures.map(item => String(item.id)));
-      gridSelectedFaceById = new Map(failures.map(item => {
-        const face = item.face || targetFaces.find(target => String(target.id) === String(item.id));
-        return face ? [String(item.id), face] : null;
-      }).filter(Boolean));
-      gridGroupIndex = actionGroupIndex;
-      const removedFaceIds = new Set(updated.map(item => String(item.id)));
-      gridRefreshPromise = loadFaceGroups({ jobId: actionJobId, preserveSelection: true, preserveGroupKey: actionGroupKey, preserveGroupIndex: true, removedFaceIds });
-    }
-    const [, gridLoaded] = await Promise.all([refreshPromise, gridRefreshPromise]);
-    populateFaceGridPeople();
-    populateFaceGridConfirmedPeople();
-    if (actionViewToken === gridViewToken && byId('faceGridModal')?.style.display === 'flex'
-        && (gridLoaded || failures.length)) {
-      showGridActionResult(updated.length, failures);
-    }
-  } finally {
-    if (stateNode && stateNode.textContent === t('face_grid_applying', { count: targetFaces.length })) stateNode.textContent = '';
-    gridActionBusy = false;
-    byId('faceGridIncludeDismissed')?.toggleAttribute('disabled', gridIsLoading);
-    updateGridSelectionUi();
-    renderFaceGrid();
-  }
+  const facesWithTag = targetFaces.map(face => ({
+    ...face,
+    tag_id: Number(face.suggestions[0].tag_id)
+  }));
+  return applyFaceBatch('reject', facesWithTag);
 }
 
 async function applySelectedIdentity() {

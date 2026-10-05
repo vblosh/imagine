@@ -2471,27 +2471,116 @@ Result<std::vector<SuggestionAcceptanceOutcome>> Service::acceptSuggestionsBatch
     return outcomes;
 }
 
-Result<json> Service::rejectSuggestion(int64_t faceId, int64_t revision, TagId tagId) {
-    if (faceId <= 0 || revision <= 0 || tagId <= 0) return Status::invalidArgument("face ID, revision, and tag_id must be positive");
+Result<std::vector<SuggestionRejectionOutcome>> Service::rejectSuggestionsBatch(
+    const std::vector<SuggestionRejection>& rejections) {
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+    std::vector<int64_t> faceIds;
+    faceIds.reserve(rejections.size());
+    for (const auto& r : rejections) faceIds.push_back(r.id);
+    RejectionCache rejectionCache;
+    Status rejectionStatus = loadRejections(impl_->db.conn_, faceIds, rejectionCache);
+    if (!rejectionStatus.isOk()) return rejectionStatus;
+
+    ExemplarCache exemplarCache;
+    std::vector<SuggestionRejectionOutcome> outcomes;
+    outcomes.reserve(rejections.size());
     Connection& conn = impl_->db.conn_;
     db::Transaction tx(conn);
-    auto faceRes = faceJson(conn, faceId, impl_->config.matchThreshold);
-    if (!faceRes.isOk()) return faceRes.status();
-    if (faceRes.value()["revision"].get<int64_t>() != revision) return Status::alreadyExists("Face review is stale; reload before rejecting a suggestion");
-    bool found = false;
-    for (const auto& suggestion : faceRes.value()["suggestions"]) if (suggestion["tag_id"].get<int64_t>() == tagId) found = true;
-    if (!found) return Status::alreadyExists("That identity is no longer an eligible suggestion");
+
     auto insRes = conn.prepare("INSERT OR IGNORE INTO face_rejections(face_id,tag_id,rejected_at) VALUES(?,?,?);");
     if (!insRes.isOk()) return insRes.status();
-    auto ins = std::move(insRes.value()); ins.bind(1, faceId); ins.bind(2, tagId); ins.bind(3, nowSeconds());
-    Status s = execDone(conn, ins, "Failed to record rejected identity"); if (!s.isOk()) return s;
+    auto ins = std::move(insRes.value());
+
     auto updRes = conn.prepare("UPDATE faces SET revision=revision+1,updated_at=? WHERE id=? AND revision=?;");
     if (!updRes.isOk()) return updRes.status();
-    auto upd = std::move(updRes.value()); upd.bind(1, nowSeconds()); upd.bind(2, faceId); upd.bind(3, revision);
-    s = execDone(conn, upd, "Failed to update face revision"); if (!s.isOk()) return s;
-    s = tx.commit(); if (!s.isOk()) return s;
-    return faceJson(conn, faceId, impl_->config.matchThreshold);
+    auto upd = std::move(updRes.value());
+
+    const int64_t now = nowSeconds();
+
+    for (const auto& r : rejections) {
+        SuggestionRejectionOutcome outcome;
+        outcome.id = r.id;
+        if (r.id <= 0 || r.revision <= 0 || r.tagId <= 0) {
+            outcome.status = Status::invalidArgument("face ID, revision, and tag_id must be positive");
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        FaceMatchInfo matchInfo;
+        auto face = faceJson(conn, r.id, impl_->config.matchThreshold,
+                             &exemplarCache, &rejectionCache, false, &matchInfo);
+        if (!face.isOk()) {
+            outcome.status = face.status();
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+        if (face.value()["revision"].get<int64_t>() != r.revision) {
+            outcome.status = Status::alreadyExists("Face review is stale; reload before rejecting a suggestion");
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+        bool found = false;
+        for (const auto& s : face.value()["suggestions"]) {
+            if (s["tag_id"].get<int64_t>() == r.tagId) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            outcome.status = Status::alreadyExists("That identity is no longer an eligible suggestion");
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        ins.reset();
+        ins.bind(1, r.id);
+        ins.bind(2, r.tagId);
+        ins.bind(3, now);
+        Status s = execDone(conn, ins, "Failed to record rejected identity");
+        if (!s.isOk()) {
+            outcome.status = s;
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        upd.reset();
+        upd.bind(1, now);
+        upd.bind(2, r.id);
+        upd.bind(3, r.revision);
+        s = execDone(conn, upd, "Failed to update face revision");
+        if (!s.isOk()) {
+            outcome.status = s;
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        rejectionCache[r.id].insert(r.tagId);
+
+        outcome.face = std::move(face.value());
+        outcome.face["revision"] = r.revision + 1;
+        outcome.face["crop_url"] = "/api/faces/" + std::to_string(r.id) +
+                                   "/crop?revision=" + std::to_string(r.revision + 1);
+        auto& suggs = outcome.face["suggestions"];
+        suggs.erase(std::remove_if(suggs.begin(), suggs.end(), [&](const nlohmann::json& s) {
+            return s["tag_id"].get<int64_t>() == r.tagId;
+        }), suggs.end());
+
+        outcome.status = Status::ok();
+        outcomes.push_back(std::move(outcome));
+    }
+
+    Status commitStatus = tx.commit();
+    if (!commitStatus.isOk()) return commitStatus;
+    return outcomes;
+}
+
+Result<json> Service::rejectSuggestion(int64_t faceId, int64_t revision, TagId tagId) {
+    if (faceId <= 0 || revision <= 0 || tagId <= 0) return Status::invalidArgument("face ID, revision, and tag_id must be positive");
+    auto outcomes = rejectSuggestionsBatch({{faceId, revision, tagId}});
+    if (!outcomes.isOk()) return outcomes.status();
+    if (outcomes.value().empty()) return Status::internal("Empty outcome for reject suggestion");
+    if (!outcomes.value()[0].status.isOk()) return outcomes.value()[0].status;
+    return std::move(outcomes.value()[0].face);
 }
 
 Result<json> Service::setDismissed(int64_t faceId, int64_t revision, bool dismissed) {

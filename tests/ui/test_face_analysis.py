@@ -294,6 +294,9 @@ class FaceApi:
                     face["suggestions"] = []
                 elif body["action"] == "dismiss":
                     face["dismissed"] = body["dismissed"]
+                elif body["action"] == "reject":
+                    tag_id = item.get("tag_id") or body.get("tag_id")
+                    face["suggestions"] = [s for s in face["suggestions"] if s["tag_id"] != tag_id]
                 face["revision"] += 1
                 face["crop_url"] = f"/api/faces/{face['id']}/crop?revision={face['revision']}"
                 updated.append(face)
@@ -658,7 +661,7 @@ def test_reject_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
     # One summary refresh replaces the old suggestion group while catalog metadata
     # remains pending; the grid must not wait for that unrelated refresh to begin.
     assert len(api.group_queries) == 2
-    assert api.face_actions[0][1] == "reject"
+    assert (len(api.batches) > 0 and api.batches[0][0]["action"] == "reject") or (len(api.face_actions) > 0 and api.face_actions[0][1] == "reject")
     assert api.group_accepts == []
     page.evaluate("window.__releaseFaceMetadata?.()")
     expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
