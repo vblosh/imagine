@@ -37,7 +37,10 @@ export const quickEditState = {
   smartFixIntensity: 100,
   isComparing: false,
   smartFixLUT: null,
+  previewCanvas: null,
 };
+
+export const MAX_SMART_FIX_PREVIEW_DIM = 1200;
 
 function computeSmartFixLUT(imgData) {
   const data = imgData.data;
@@ -296,6 +299,7 @@ export function closeQuickEdit(promptIfDirty = true) {
   quickEditState.workingCanvas = null;
   quickEditState.workingCtx = null;
   quickEditState.smartFixLUT = null;
+  quickEditState.previewCanvas = null;
 }
 
 function initWorkingCanvas(img) {
@@ -479,7 +483,21 @@ export function applyCrop() {
   croppedCanvas.width = srcW;
   croppedCanvas.height = srcH;
   const croppedCtx = croppedCanvas.getContext("2d");
-  croppedCtx.drawImage(canvas, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+
+  // Crop from full-resolution rotated source so crop is never degraded by preview downsampling
+  const rot = quickEditState.rotation;
+  const srcCanvas = quickEditState.workingCanvas;
+  const fullRotCanvas = document.createElement("canvas");
+  fullRotCanvas.width = canvas.width;
+  fullRotCanvas.height = canvas.height;
+  const fullRotCtx = fullRotCanvas.getContext("2d");
+  fullRotCtx.save();
+  fullRotCtx.translate(canvas.width / 2, canvas.height / 2);
+  fullRotCtx.rotate((rot * Math.PI) / 180);
+  fullRotCtx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
+  fullRotCtx.restore();
+
+  croppedCtx.drawImage(fullRotCanvas, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
 
   quickEditState.workingCanvas = croppedCanvas;
   quickEditState.workingCtx = croppedCtx;
@@ -488,6 +506,7 @@ export function applyCrop() {
   quickEditState.hasCropped = true;
   quickEditState.isDirty = true;
   quickEditState.smartFixLUT = null;
+  quickEditState.previewCanvas = null;
 
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
   updateQuickEditToolbarUI();
@@ -599,15 +618,98 @@ export function renderQuickEditCanvas() {
       quickEditState.smartFixLUT = computeSmartFixLUT(sampleData);
     }
 
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const outData = ctx.createImageData(canvas.width, canvas.height);
-    applySmartFixToImageData(imgData, outData, quickEditState.smartFixLUT, quickEditState.smartFixIntensity);
-    ctx.putImageData(outData, 0, 0);
+    if (targetW > MAX_SMART_FIX_PREVIEW_DIM || targetH > MAX_SMART_FIX_PREVIEW_DIM) {
+      // High-resolution image: render smart fix on a scaled preview canvas to prevent main thread blocking
+      let pW = targetW;
+      let pH = targetH;
+      if (pW > pH) {
+        pH = Math.round((pH * MAX_SMART_FIX_PREVIEW_DIM) / pW);
+        pW = MAX_SMART_FIX_PREVIEW_DIM;
+      } else {
+        pW = Math.round((pW * MAX_SMART_FIX_PREVIEW_DIM) / pH);
+        pH = MAX_SMART_FIX_PREVIEW_DIM;
+      }
+
+      if (!quickEditState.previewCanvas) {
+        quickEditState.previewCanvas = document.createElement("canvas");
+      }
+      const prevCanvas = quickEditState.previewCanvas;
+      if (prevCanvas.width !== pW || prevCanvas.height !== pH) {
+        prevCanvas.width = pW;
+        prevCanvas.height = pH;
+      }
+      const prevCtx = prevCanvas.getContext("2d");
+      prevCtx.drawImage(canvas, 0, 0, pW, pH);
+
+      const imgData = prevCtx.getImageData(0, 0, pW, pH);
+      const outData = prevCtx.createImageData(pW, pH);
+      applySmartFixToImageData(imgData, outData, quickEditState.smartFixLUT, quickEditState.smartFixIntensity);
+      prevCtx.putImageData(outData, 0, 0);
+
+      // Blit preview back to main canvas for crisp display
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(prevCanvas, 0, 0, targetW, targetH);
+    } else {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const outData = ctx.createImageData(canvas.width, canvas.height);
+      applySmartFixToImageData(imgData, outData, quickEditState.smartFixLUT, quickEditState.smartFixIntensity);
+      ctx.putImageData(outData, 0, 0);
+    }
   }
 
   if (quickEditState.cropActive) {
     updateCropOverlayDOM();
   }
+}
+
+export function getFullResolutionExportCanvas() {
+  const rot = quickEditState.rotation;
+  const srcCanvas = quickEditState.workingCanvas;
+  const is90or270 = rot === 90 || rot === 270;
+  const targetW = is90or270 ? srcCanvas.height : srcCanvas.width;
+  const targetH = is90or270 ? srcCanvas.width : srcCanvas.height;
+
+  const exportCanvas = document.createElement("canvas");
+  exportCanvas.width = targetW;
+  exportCanvas.height = targetH;
+  const expCtx = exportCanvas.getContext("2d");
+
+  expCtx.save();
+  expCtx.translate(targetW / 2, targetH / 2);
+  expCtx.rotate((rot * Math.PI) / 180);
+  expCtx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
+  expCtx.restore();
+
+  if (quickEditState.smartFixActive) {
+    if (!quickEditState.smartFixLUT) {
+      const sampleCanvas = document.createElement("canvas");
+      const maxDim = 800;
+      let sW = srcCanvas.width;
+      let sH = srcCanvas.height;
+      if (sW > maxDim || sH > maxDim) {
+        if (sW > sH) {
+          sH = Math.round((sH * maxDim) / sW);
+          sW = maxDim;
+        } else {
+          sW = Math.round((sW * maxDim) / sH);
+          sH = maxDim;
+        }
+      }
+      sampleCanvas.width = sW;
+      sampleCanvas.height = sH;
+      const sCtx = sampleCanvas.getContext("2d");
+      sCtx.drawImage(srcCanvas, 0, 0, sW, sH);
+      const sampleData = sCtx.getImageData(0, 0, sW, sH);
+      quickEditState.smartFixLUT = computeSmartFixLUT(sampleData);
+    }
+
+    const imgData = expCtx.getImageData(0, 0, targetW, targetH);
+    const outData = expCtx.createImageData(targetW, targetH);
+    applySmartFixToImageData(imgData, outData, quickEditState.smartFixLUT, quickEditState.smartFixIntensity);
+    expCtx.putImageData(outData, 0, 0);
+  }
+
+  return exportCanvas;
 }
 
 export async function saveEdits(mode = "overwrite") {
@@ -635,7 +737,10 @@ export async function saveEdits(mode = "overwrite") {
       throw new Error("Failed to load original image");
     }
 
-    const canvas = dom.quickEditCanvas;
+    // Use full-resolution export canvas for saving (deferring full-resolution processing to export/save)
+    const canvas = quickEditState.smartFixActive
+      ? getFullResolutionExportCanvas()
+      : dom.quickEditCanvas;
 
     let res;
     if (typeof canvas.toBlob === "function") {

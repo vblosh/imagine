@@ -452,6 +452,57 @@ def test_quick_edit_cancel_while_loading_settles_and_restores_buttons(server, pa
     expect(save_copy_btn).to_be_enabled()
 
 
+def test_smart_fix_high_resolution_scaled_preview_and_deferred_export(server, page: Page):
+    """Smart Fix on high-resolution images (mountain.bmp is 1920x1080 > 1200) downsamples preview
+    to MAX_SMART_FIX_PREVIEW_DIM (1200x675) during active editing, while getFullResolutionExportCanvas
+    processes the full 1920x1080 resolution on save/export."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Toggle Smart Fix on
+    sf_btn = page.locator("#quickEditSmartFixBtn")
+    sf_btn.click()
+    expect(sf_btn).to_have_class(re.compile(r"\bactive\b"))
+
+    # Verify that during active editing, previewCanvas was created and scaled to MAX_SMART_FIX_PREVIEW_DIM (1200x675)
+    prev_dim = page.evaluate('''() => {
+        const qe = window._imagineQuickEdit;
+        const pc = qe.quickEditState.previewCanvas;
+        return pc ? { width: pc.width, height: pc.height } : null;
+    }''')
+    assert prev_dim is not None
+    assert prev_dim["width"] == 1200
+    assert prev_dim["height"] == 675
+
+    # Display canvas reports full dimensions (1920x1080) for crop coordinates and UI display
+    canvas = page.locator("#quickEditCanvas")
+    assert int(canvas.evaluate("el => el.width")) == 1920
+    assert int(canvas.evaluate("el => el.height")) == 1080
+
+    # Verify that getFullResolutionExportCanvas processes the full 1920x1080 dimensions
+    export_dim = page.evaluate('''() => {
+        const qe = window._imagineQuickEdit;
+        const exp = qe.getFullResolutionExportCanvas();
+        return { width: exp.width, height: exp.height };
+    }''')
+    assert export_dim["width"] == 1920
+    assert export_dim["height"] == 1080
+
+    # Reset edits and cancel quick edit cleanly
+    page.locator("#quickEditResetBtn").click()
+    page.locator("#quickEditCancelBtn").click()
+    expect(page.locator("#loupeModal")).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
+
+    # Verify previewCanvas is cleaned up on close
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.previewCanvas") is None
+
+
+
 
 
 

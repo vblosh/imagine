@@ -650,5 +650,98 @@ def test_map_bubble_place_here_for_unmapped_photo(server, page: Page):
     assert abs(portrait_gps["longitude"] - (-157.85833)) < 0.001
 
 
+def test_map_place_search_rapid_typing_strictly_debounced(server, page: Page):
+    """Rapid typing in map place search resets the debounce timer and issues only
+    one geocoding request for the settled query, preventing rate-limiting backlogs."""
+    page.goto(server["url"])
+    page.locator("#viewMapBtn").click()
+    expect(page.locator("#mapViewContainer")).to_be_visible()
+
+    geocode_requests = []
+
+    def handle_geocode(route):
+        geocode_requests.append(route.request.url)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps([{
+                "place_id": 999,
+                "lat": "48.8566",
+                "lon": "2.3522",
+                "name": "Paris",
+                "display_name": "Paris, France",
+                "type": "city",
+                "addresstype": "city"
+            }])
+        )
+
+    page.route("**/api/geocode*", handle_geocode)
+
+    search_input = page.locator("#mapSearchInput")
+
+    # Rapid typing simulation: typing multiple characters rapidly with intervals < debounce
+    search_input.press_sequentially("Paris", delay=10)
+
+    # Wait for search results
+    results = page.locator("#mapSearchResults")
+    expect(results).to_be_visible()
+    expect(results.locator(".map-search-item", has_text="Paris")).to_be_visible()
+
+    # Verify strictly debounced: ONLY 1 geocode request was sent for "Paris", no backlog of "Par", "Pari", etc.
+    assert len(geocode_requests) == 1
+    assert "q=Paris" in geocode_requests[0]
+
+
+def test_map_place_search_enter_and_clear_cancels_debounce(server, page: Page):
+    """Pressing Enter cancels the pending debounce timer and executes immediately.
+    Clearing the search cancels pending timer and aborts search."""
+    page.goto(server["url"])
+    page.locator("#viewMapBtn").click()
+    expect(page.locator("#mapViewContainer")).to_be_visible()
+
+    geocode_requests = []
+
+    def handle_geocode(route):
+        geocode_requests.append(route.request.url)
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps([{
+                "place_id": 888,
+                "lat": "40.7128",
+                "lon": "-74.0060",
+                "name": "New York",
+                "display_name": "New York, USA",
+                "type": "city",
+                "addresstype": "city"
+            }])
+        )
+
+    page.route("**/api/geocode*", handle_geocode)
+
+    search_input = page.locator("#mapSearchInput")
+
+    # Type and immediately hit Enter
+    search_input.fill("New York")
+    search_input.press("Enter")
+
+    # Enter automatically selects the top result and navigates to the place pin
+    expect(page.locator(".search-location-pin")).to_be_visible()
+    expect(page.locator(".search-result-popup")).to_be_visible()
+
+    # Wait 100ms (longer than test debounce 50ms) to ensure NO second/redundant request was fired
+    page.wait_for_timeout(100)
+    assert len(geocode_requests) == 1
+
+    # Now click Clear button: input cleared, pin removed, and debounce timer cleared
+    clear_btn = page.locator("#clearMapSearchBtn")
+    expect(clear_btn).to_be_visible()
+    clear_btn.click()
+    expect(search_input).to_have_value("")
+    expect(page.locator(".search-location-pin")).to_be_hidden()
+    assert page.evaluate("() => window._imagineState.mapSearchDebounceTimer") is None
+
+
+
 
 

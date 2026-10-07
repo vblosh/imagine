@@ -52,7 +52,8 @@ import {
   expandTagCategory,
   collapseTagCategory,
   expandFolders,
-  collapseFolders
+  collapseFolders,
+  updateRovingTabindex
 } from './media-grid.js';
 import {
   saveFoldersCollapsedState,
@@ -128,7 +129,9 @@ import {
   resetAllEdits,
   saveEdits,
   setupCropMouseListeners,
-  quickEditState
+  quickEditState,
+  MAX_SMART_FIX_PREVIEW_DIM,
+  getFullResolutionExportCanvas
 } from './quick-edit.js';
 import {
   openImportModal,
@@ -168,7 +171,10 @@ import {
   openSettingsModal,
   closeSettingsModal,
   saveSettings,
-  clearSettingsToken
+  clearSettingsToken,
+  showModal,
+  hideModal,
+  initModalSemantics
 } from './modals.js';
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
 import { setupAutoEventListeners } from './auto-events.js';
@@ -198,6 +204,7 @@ async function removeSelectedFromActiveAlbum() {
 }
 
 export function setupEventListeners() {
+  initModalSemantics();
   initCategoryView();
   setupAutoEventListeners();
 
@@ -469,22 +476,17 @@ export function setupEventListeners() {
   if (dom.mapSearchInput) {
     dom.mapSearchInput.addEventListener('input', (e) => {
       clearTimeout(state.mapSearchDebounceTimer);
+      state.mapSearchDebounceTimer = null;
       const q = e.target.value;
       const hasText = q.length > 0;
       if (dom.mapSearchIcon) dom.mapSearchIcon.style.display = hasText ? 'none' : '';
       if (dom.mapSearchBox) dom.mapSearchBox.classList.toggle('has-input', hasText);
       if (!q.trim()) {
-        if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'none';
-        if (dom.mapSearchResults) {
-          dom.mapSearchResults.style.display = 'none';
-          dom.mapSearchResults.innerHTML = '';
-        }
-        state.mapSearchResults = [];
-        state.mapSearchActiveIdx = -1;
+        clearMapSearch();
         return;
       }
       if (dom.clearMapSearchBtn) dom.clearMapSearchBtn.style.display = 'block';
-      const debounceDelay = window.__TEST_MODE__ ? 50 : 800;
+      const debounceDelay = window.__TEST_MODE__ ? 50 : 1000;
       state.mapSearchDebounceTimer = setTimeout(() => {
         performMapPlaceSearch(q);
       }, debounceDelay);
@@ -508,6 +510,8 @@ export function setupEventListeners() {
         }
       } else if (e.key === 'Enter') {
         e.preventDefault();
+        clearTimeout(state.mapSearchDebounceTimer);
+        state.mapSearchDebounceTimer = null;
         if (state.mapSearchActiveIdx >= 0 && state.mapSearchResults[state.mapSearchActiveIdx]) {
           selectMapSearchResult(state.mapSearchResults[state.mapSearchActiveIdx]);
         } else if (state.mapSearchResults.length > 0) {
@@ -527,6 +531,8 @@ export function setupEventListeners() {
 
   if (dom.clearMapSearchBtn) {
     dom.clearMapSearchBtn.addEventListener('click', () => {
+      clearTimeout(state.mapSearchDebounceTimer);
+      state.mapSearchDebounceTimer = null;
       clearMapSearch();
       if (dom.mapSearchInput) dom.mapSearchInput.focus();
     });
@@ -1597,13 +1603,13 @@ export function isStandaloneMode() {
 
 export function openIosInstallModal() {
   if (dom.iosInstallModal) {
-    dom.iosInstallModal.style.display = 'flex';
+    showModal(dom.iosInstallModal, dom.confirmIosInstallBtn);
   }
 }
 
 export function closeIosInstallModal() {
   if (dom.iosInstallModal) {
-    dom.iosInstallModal.style.display = 'none';
+    hideModal(dom.iosInstallModal);
   }
 }
 
@@ -1747,6 +1753,11 @@ window._imaginePersistence = {
   restoreNavigationPreferences,
   getSavedViewMode
 };
+window._imagineQuickEdit = {
+  quickEditState,
+  MAX_SMART_FIX_PREVIEW_DIM,
+  getFullResolutionExportCanvas,
+};
 window._imagineApp = {
   state,
   dom,
@@ -1798,5 +1809,9 @@ window._imagineApp = {
   closeIosInstallModal,
   updateFullscreenBtnState,
   toggleFullscreen,
-  toggleMobileSidebar
+  toggleMobileSidebar,
+  showModal,
+  hideModal,
+  initModalSemantics,
+  updateRovingTabindex
 };

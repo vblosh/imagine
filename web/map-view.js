@@ -933,6 +933,10 @@ export async function clearGeotag(mediaId) {
 }
 
 export function clearMapSearch() {
+  if (state.mapSearchDebounceTimer) {
+    clearTimeout(state.mapSearchDebounceTimer);
+    state.mapSearchDebounceTimer = null;
+  }
   if (mapSearchAbortController) {
     mapSearchAbortController.abort();
     mapSearchAbortController = null;
@@ -1129,7 +1133,13 @@ export async function performMapPlaceSearch(rawQuery) {
         const now = Date.now();
         const elapsed = now - lastNominatimRequestTime;
         if (!window.__TEST_MODE__ && elapsed < 1000) {
-          await new Promise(r => setTimeout(r, 1000 - elapsed));
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, 1000 - elapsed);
+            abortController.signal.addEventListener('abort', () => {
+              clearTimeout(timer);
+              reject(new DOMException('Aborted', 'AbortError'));
+            }, { once: true });
+          });
         }
         if (searchId !== currentMapSearchId) return;
         lastNominatimRequestTime = Date.now();
@@ -1145,6 +1155,8 @@ export async function performMapPlaceSearch(rawQuery) {
           if (searchId !== currentMapSearchId) return;
           data = Array.isArray(rawJson) ? rawJson : [];
           geocodeCache.set(cacheKey, data);
+        } else if (resp.status === 429) {
+          console.warn('Nominatim rate limit backlog exceeded, request throttled');
         }
       } catch (e) {
         if (e.name === 'AbortError' || searchId !== currentMapSearchId) return;
