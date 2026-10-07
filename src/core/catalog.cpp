@@ -886,4 +886,12 @@ Importer& Catalog::importer() {
     return *importer_;
 }
 
+Status Catalog::runInTransaction(std::function<Status()> fn) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+    return db_->runInTransaction(fn);
+}
+
 } // namespace imagine::core

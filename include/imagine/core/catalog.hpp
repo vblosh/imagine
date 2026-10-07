@@ -89,6 +89,8 @@ public:
     Result<CatalogStats> getStats();
     Result<std::vector<std::string>> getFolders();
 
+    Status runInTransaction(std::function<Status()> fn);
+
     // Component accessors
     db::CatalogDb& db();
     const db::CatalogDb& db() const;

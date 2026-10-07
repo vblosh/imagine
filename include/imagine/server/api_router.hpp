@@ -72,6 +72,8 @@ private:
     std::jthread importThread_;
     mutable std::mutex importThreadMutex_;
     std::atomic<bool> cancelFallbackImport_{false};
+    struct FallbackImportState;
+    std::unique_ptr<FallbackImportState> fallbackImportState_;
     std::string apiToken_;
     std::string allowedOrigin_{"*"};
 };

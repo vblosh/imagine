@@ -10,6 +10,7 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <fstream>
+#include <sstream>
 #include <filesystem>
 #include <thread>
 #include <mutex>
@@ -100,14 +101,74 @@ int64_t parseDateStringToTimestamp(const std::string& dateStr) {
     return t < 0 ? 0 : static_cast<int64_t>(t);
 }
 
-constexpr size_t kMaxBatchSize = 1000;
-constexpr size_t kMaxSearchLength = 500;
-constexpr size_t kMaxFolderLength = 1000;
-constexpr size_t kMaxNameLength = 100;
-constexpr size_t kMaxCategoryLength = 50;
-constexpr size_t kMaxAlbumNameLength = 200;
-constexpr size_t kMaxAlbumDescLength = 2000;
-constexpr size_t kMaxAlbumOrderSize = 100000;
+std::string formatTimestampToDateString(int64_t timestamp) {
+    if (timestamp <= 0) return "";
+    std::time_t tt = static_cast<std::time_t>(timestamp);
+    std::tm tm{};
+#if defined(_WIN32)
+    gmtime_s(&tm, &tt);
+#else
+    gmtime_r(&tt, &tm);
+#endif
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04d:%02d:%02d %02d:%02d:%02d",
+                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                  tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return std::string(buf);
+}
+
+template <typename T>
+bool inRange(long long val) {
+    if constexpr (std::is_signed_v<T>) {
+        return val >= static_cast<long long>(std::numeric_limits<T>::min()) &&
+               val <= static_cast<long long>(std::numeric_limits<T>::max());
+    } else {
+        if (val < 0) return false;
+        return static_cast<unsigned long long>(val) <= static_cast<unsigned long long>(std::numeric_limits<T>::max());
+    }
+}
+
+template <typename T>
+bool parseInt(const std::string& str, T& out) {
+    try {
+        size_t idx = 0;
+        auto v = std::stoll(str, &idx);
+        if (idx != str.size()) return false;
+        if (!inRange<T>(v)) return false;
+        out = static_cast<T>(v);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool parseDouble(const std::string& str, double& out) {
+    try {
+        size_t idx = 0;
+        double v = std::stod(str, &idx);
+        if (idx != str.size()) return false;
+        out = v;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+std::optional<int> parseQueryInt(const httplib::Request& req, const char* key, int fallback,
+                                 int minVal = std::numeric_limits<int>::min(),
+                                 int maxVal = std::numeric_limits<int>::max()) {
+    if (!req.has_param(key)) return fallback;
+    try {
+        std::string value = req.get_param_value(key);
+        size_t used = 0;
+        long long val = std::stoll(value, &used);
+        if (used != value.size()) return std::nullopt;
+        if (val < minVal || val > maxVal) return std::nullopt;
+        return static_cast<int>(val);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
 
 void sendJson(httplib::Response& res, const nlohmann::json& j, int status = 200) {
     res.status = status;
@@ -134,6 +195,32 @@ void sendError(httplib::Response& res, const std::string& message, int status = 
         res.set_content(R"({"error":"Error"})", "application/json");
     }
 }
+
+template <typename T = int64_t>
+std::optional<T> parseMatchId(const httplib::Request& req, size_t matchIndex, httplib::Response& res, const std::string& fieldName = "ID") {
+    try {
+        size_t used = 0;
+        const std::string& str = req.matches[matchIndex];
+        long long val = std::stoll(str, &used);
+        if (used != str.size() || !inRange<T>(val) || val <= 0) {
+            sendError(res, "Invalid " + fieldName, 400);
+            return std::nullopt;
+        }
+        return static_cast<T>(val);
+    } catch (...) {
+        sendError(res, "Invalid " + fieldName, 400);
+        return std::nullopt;
+    }
+}
+
+constexpr size_t kMaxBatchSize = 1000;
+constexpr size_t kMaxSearchLength = 500;
+constexpr size_t kMaxFolderLength = 1000;
+constexpr size_t kMaxNameLength = 100;
+constexpr size_t kMaxCategoryLength = 50;
+constexpr size_t kMaxAlbumNameLength = 200;
+constexpr size_t kMaxAlbumDescLength = 2000;
+constexpr size_t kMaxAlbumOrderSize = 100000;
 
 int statusToHttpCode(const Status& s) {
     switch (s.code()) {
@@ -176,6 +263,29 @@ bool isSensitiveSystemPath(const std::filesystem::path& canonicalPath) {
             return true;
         }
     }
+
+#if defined(_WIN32)
+    if (canonicalPath.has_root_path() && canonicalPath == canonicalPath.root_path()) {
+        return true;
+    }
+    std::string sLower = s;
+    std::transform(sLower.begin(), sLower.end(), sLower.begin(), [](unsigned char c) {
+        return c == '/' ? '\\' : static_cast<char>(std::tolower(c));
+    });
+    static const std::vector<std::string> kWinSensitivePrefixes = {
+        "\\windows", "\\system32", "\\syswow64", "\\program files", "\\program files (x86)", "\\programdata"
+    };
+    std::string noDrive = sLower;
+    if (noDrive.size() >= 2 && noDrive[1] == ':') {
+        noDrive = noDrive.substr(2);
+    }
+    for (const auto& prefix : kWinSensitivePrefixes) {
+        if (noDrive == prefix || (noDrive.rfind(prefix + "\\", 0) == 0)) {
+            return true;
+        }
+    }
+#endif
+
     return false;
 }
 
@@ -272,12 +382,13 @@ bool isWithinAllowedRoots(const std::filesystem::path& canonicalPath, std::strin
     return true;
 }
 
-// Fallback progress state if catalog is not used
-static std::mutex g_importMutex;
-static ImportProgress g_fallbackProgress;
-static std::atomic<bool> g_isImporting{false};
-
 } // anonymous namespace
+
+struct ApiRouter::FallbackImportState {
+    std::mutex mutex;
+    ImportProgress progress;
+    std::atomic<bool> isImporting{false};
+};
 
 void ApiRouter::initFromEnvironment() {
     const char* envToken = std::getenv("IMAGINE_API_TOKEN");
@@ -291,14 +402,14 @@ void ApiRouter::initFromEnvironment() {
 }
 
 ApiRouter::ApiRouter(core::Catalog& catalog)
-    : catalog_(&catalog) {
+    : catalog_(&catalog), fallbackImportState_(std::make_unique<FallbackImportState>()) {
     initFromEnvironment();
     faceService_ = std::make_unique<faces::Service>(this->db(), this->cache().cacheDir(),
         [this](const std::string& path) { return resolvePhotoPath(path); });
 }
 
 ApiRouter::ApiRouter(db::CatalogDb& db, thumbnail::Cache& cache)
-    : db_(&db), cache_(&cache) {
+    : db_(&db), cache_(&cache), fallbackImportState_(std::make_unique<FallbackImportState>()) {
     initFromEnvironment();
     faceService_ = std::make_unique<faces::Service>(this->db(), this->cache().cacheDir(),
         [this](const std::string& path) { return resolvePhotoPath(path); });
@@ -327,13 +438,16 @@ void ApiRouter::stopImport() {
         importThread_.request_stop();
         importThread_.join();
     }
+    if (fallbackImportState_) {
+        fallbackImportState_->isImporting.store(false);
+    }
 }
 
 bool ApiRouter::isImportRunning() const {
     if (catalog_) {
         return catalog_->importer().isRunning();
     }
-    return g_isImporting.load();
+    return fallbackImportState_ ? fallbackImportState_->isImporting.load() : false;
 }
 
 bool ApiRouter::checkAuth(const httplib::Request& req, httplib::Response& res) const {
@@ -398,10 +512,9 @@ void ApiRouter::registerRoutes(httplib::Server& server) {
 void ApiRouter::registerCorsHandler(httplib::Server& server) {
     server.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
         // Record request start time for access log duration measurement
-        thread_local std::chrono::steady_clock::time_point t_requestStart;
-        t_requestStart = std::chrono::steady_clock::now();
+        auto requestStart = std::chrono::steady_clock::now();
         res.set_header("X-Internal-Start-Ns",
-            std::to_string(t_requestStart.time_since_epoch().count()));
+            std::to_string(requestStart.time_since_epoch().count()));
 
         std::string requestId;
         if (req.has_header("X-Request-ID")) {
@@ -443,7 +556,9 @@ void ApiRouter::registerAccessLog(httplib::Server& server) {
                 auto endNs = std::chrono::steady_clock::now().time_since_epoch().count();
                 auto elapsedMs = (static_cast<unsigned long long>(endNs) - startNs) / 1000000ULL;
                 durationStr = std::to_string(elapsedMs);
-            } catch (...) {}
+            } catch (const std::exception& ex) {
+                IMAGINE_LOG_DEBUG("Failed to parse request start timestamp: " + std::string(ex.what()));
+            }
             // Remove internal header so it's not sent to the client
             res.headers.erase("X-Internal-Start-Ns");
         }
@@ -476,30 +591,6 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // GET /api/media
     server.Get("/api/media", [this](const httplib::Request& req, httplib::Response& res) {
         core::QueryCriteria criteria;
-
-        auto parseInt = [](const std::string& str, auto& out) -> bool {
-            try {
-                size_t idx = 0;
-                auto v = std::stoll(str, &idx);
-                if (idx != str.size()) return false;
-                out = static_cast<std::decay_t<decltype(out)>>(v);
-                return true;
-            } catch (...) {
-                return false;
-            }
-        };
-
-        auto parseDouble = [](const std::string& str, double& out) -> bool {
-            try {
-                size_t idx = 0;
-                double v = std::stod(str, &idx);
-                if (idx != str.size()) return false;
-                out = v;
-                return true;
-            } catch (...) {
-                return false;
-            }
-        };
 
         if (req.has_param("rating")) {
             int32_t val = 0;
@@ -608,7 +699,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                                 }
                             }
                         }
-                    } catch (...) {}
+                    } catch (const std::exception& ex) {
+                        IMAGINE_LOG_WARN("Failed to parse folders JSON parameter: " + std::string(ex.what()));
+                    }
                 } else {
                     char delim = (foldersStr.find('|') != std::string::npos) ? '|' : ',';
                     std::stringstream ss(foldersStr);
@@ -798,13 +891,19 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
         }
         if (req.has_param("bbox")) {
             std::string bbox = req.get_param_value("bbox");
+            if (bbox.empty() || bbox.back() == ',') {
+                sendError(res, "Invalid bbox format: expected min_lon,min_lat,max_lon,max_lat", 400);
+                return;
+            }
             std::stringstream ss(bbox);
-            std::string sMinLon, sMinLat, sMaxLon, sMaxLat;
+            std::string sMinLon, sMinLat, sMaxLon, sMaxLat, extra;
             if (std::getline(ss, sMinLon, ',') && std::getline(ss, sMinLat, ',') &&
-                std::getline(ss, sMaxLon, ',') && std::getline(ss, sMaxLat, ',')) {
+                std::getline(ss, sMaxLon, ',') && std::getline(ss, sMaxLat, ',') &&
+                !std::getline(ss, extra, ',')) {
                 double minLon = 0.0, minLat = 0.0, maxLon = 0.0, maxLat = 0.0;
                 if (!parseDouble(sMinLon, minLon) || !parseDouble(sMinLat, minLat) ||
                     !parseDouble(sMaxLon, maxLon) || !parseDouble(sMaxLat, maxLat) ||
+                    sMinLon.empty() || sMinLat.empty() || sMaxLon.empty() || sMaxLat.empty() ||
                     minLat < -90.0 || minLat > 90.0 || maxLat < -90.0 || maxLat > 90.0 || minLat > maxLat ||
                     minLon < -180.0 || minLon > 180.0 || maxLon < -180.0 || maxLon > 180.0 || minLon > maxLon) {
                     sendError(res, "Invalid bbox format: must be min_lon,min_lat,max_lon,max_lat within bounds", 400);
@@ -860,7 +959,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
     // GET /api/media/:id
     server.Get(R"(/api/media/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         auto mediaRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
         if (!mediaRes.isOk()) {
             sendStatusError(res, mediaRes.status());
@@ -873,7 +974,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // POST /api/media/:id/rating
     server.Post(R"(/api/media/(\d+)/rating)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("rating") || !body["rating"].is_number_integer()) {
@@ -901,7 +1004,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // POST /api/media/:id/flag
     server.Post(R"(/api/media/(\d+)/flag)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("flag") || !body["flag"].is_number_integer()) {
@@ -931,7 +1036,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // POST /api/media/:id/caption
     server.Post(R"(/api/media/(\d+)/caption)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("caption") || !body["caption"].is_string()) {
@@ -954,7 +1061,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // POST /api/media/:id/rename
     server.Post(R"(/api/media/(\d+)/rename)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             std::string newName;
@@ -1009,7 +1118,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // POST /api/media/:id/move
     server.Post(R"(/api/media/(\d+)/move)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             std::string destPath;
@@ -1050,7 +1161,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // POST /api/media/:id/date
     server.Post(R"(/api/media/(\d+)/date)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             int64_t dateTaken = 0;
@@ -1075,18 +1188,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
 
             if (dateTakenStr.empty() && dateTaken > 0) {
-                std::time_t tt = static_cast<std::time_t>(dateTaken);
-                std::tm tm{};
-#if defined(_WIN32)
-                gmtime_s(&tm, &tt);
-#else
-                gmtime_r(&tt, &tm);
-#endif
-                char buf[32];
-                std::snprintf(buf, sizeof(buf), "%04d:%02d:%02d %02d:%02d:%02d",
-                              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                              tm.tm_hour, tm.tm_min, tm.tm_sec);
-                dateTakenStr = buf;
+                dateTakenStr = formatTimestampToDateString(dateTaken);
             }
 
             Status s = catalog_
@@ -1113,7 +1215,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // POST /api/media/:id/gps
     server.Post(R"(/api/media/(\d+)/gps)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             bool hasGps = true;
@@ -1169,7 +1273,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // POST /api/media/:id/tags
     server.Post(R"(/api/media/(\d+)/tags)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("name") || !body["name"].is_string()) {
@@ -1209,8 +1315,12 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // DELETE /api/media/:id/tags/:tag_id
     server.Delete(R"(/api/media/(\d+)/tags/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
-        TagId tagId = std::stoll(req.matches[2]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
+        auto tagIdOpt = parseMatchId<TagId>(req, 2, res, "tag ID");
+        if (!tagIdOpt) return;
+        TagId tagId = *tagIdOpt;
 
         Status s = catalog_ ? catalog_->removeTag(id, tagId) : db().removeTagFromMedia(id, tagId);
         if (!s.isOk()) {
@@ -1224,7 +1334,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
     // DELETE /api/media/:id
     server.Delete(R"(/api/media/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
 
         bool deleteFromDisk = false;
         if (req.has_param("delete_from_disk")) {
@@ -1328,13 +1440,32 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
-            for (MediaId id : ids) {
-                Status s = catalog_ ? catalog_->setRating(id, rating) : db().updateRating(id, rating);
-                if (s.isOk()) {
-                    updatedCount++;
-                } else {
-                    failedIds.push_back(id);
-                }
+            Status batchStatus = catalog_
+                ? catalog_->runInTransaction([&]() -> Status {
+                    for (MediaId id : ids) {
+                        Status s = catalog_->setRating(id, rating);
+                        if (s.isOk()) {
+                            updatedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                })
+                : db().runInTransaction([&]() -> Status {
+                    for (MediaId id : ids) {
+                        Status s = db().updateRating(id, rating);
+                        if (s.isOk()) {
+                            updatedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                });
+            if (!batchStatus.isOk()) {
+                sendStatusError(res, batchStatus);
+                return;
             }
             sendJson(res, {
                 {"status", failedIds.empty() ? "ok" : "partial"},
@@ -1374,13 +1505,32 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
-            for (MediaId id : ids) {
-                Status s = catalog_ ? catalog_->setFlag(id, flag) : db().updateFlag(id, flag);
-                if (s.isOk()) {
-                    updatedCount++;
-                } else {
-                    failedIds.push_back(id);
-                }
+            Status batchStatus = catalog_
+                ? catalog_->runInTransaction([&]() -> Status {
+                    for (MediaId id : ids) {
+                        Status s = catalog_->setFlag(id, flag);
+                        if (s.isOk()) {
+                            updatedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                })
+                : db().runInTransaction([&]() -> Status {
+                    for (MediaId id : ids) {
+                        Status s = db().updateFlag(id, flag);
+                        if (s.isOk()) {
+                            updatedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                });
+            if (!batchStatus.isOk()) {
+                sendStatusError(res, batchStatus);
+                return;
             }
             sendJson(res, {
                 {"status", failedIds.empty() ? "ok" : "partial"},
@@ -1440,13 +1590,32 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             TagId tagId = tagRes.value();
             int taggedCount = 0;
             std::vector<MediaId> failedIds;
-            for (MediaId id : ids) {
-                Status s = catalog_ ? catalog_->addTag(id, tagId) : db().addTagToMedia(id, tagId);
-                if (s.isOk()) {
-                    taggedCount++;
-                } else {
-                    failedIds.push_back(id);
-                }
+            Status batchStatus = catalog_
+                ? catalog_->runInTransaction([&]() -> Status {
+                    for (MediaId id : ids) {
+                        Status s = catalog_->addTag(id, tagId);
+                        if (s.isOk()) {
+                            taggedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                })
+                : db().runInTransaction([&]() -> Status {
+                    for (MediaId id : ids) {
+                        Status s = db().addTagToMedia(id, tagId);
+                        if (s.isOk()) {
+                            taggedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                });
+            if (!batchStatus.isOk()) {
+                sendStatusError(res, batchStatus);
+                return;
             }
             sendJson(res, {
                 {"status", failedIds.empty() ? "ok" : "partial"},
@@ -1511,30 +1680,82 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 return;
             }
 
+            auto batchRes = catalog_
+                ? catalog_->getTagsForMediaBatch(ids)
+                : db().getTagsForMediaBatch(ids);
+            if (!batchRes.isOk()) {
+                sendStatusError(res, batchRes.status());
+                return;
+            }
+            const auto& tagsMap = batchRes.value();
+
             int removedCount = 0;
             int unchangedCount = 0;
             std::vector<MediaId> failedIds;
-            for (const MediaId id : ids) {
-                auto mediaRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
-                if (!mediaRes.isOk()) {
-                    failedIds.push_back(id);
-                    continue;
-                }
+            Status batchStatus = catalog_
+                ? catalog_->runInTransaction([&]() -> Status {
+                    for (const MediaId id : ids) {
+                        auto it = tagsMap.find(id);
+                        if (it == tagsMap.end()) {
+                            auto mediaRes = catalog_->getMedia(id);
+                            if (!mediaRes.isOk()) {
+                                failedIds.push_back(id);
+                                continue;
+                            }
+                            unchangedCount++;
+                            continue;
+                        }
 
-                const auto& mediaTags = mediaRes.value().tags;
-                const bool hasTag = std::any_of(mediaTags.begin(), mediaTags.end(),
-                    [tagId](const Tag& tag) { return tag.id == tagId; });
-                if (!hasTag) {
-                    unchangedCount++;
-                    continue;
-                }
+                        const auto& mediaTags = it->second;
+                        const bool hasTag = std::any_of(mediaTags.begin(), mediaTags.end(),
+                            [tagId](const Tag& tag) { return tag.id == tagId; });
+                        if (!hasTag) {
+                            unchangedCount++;
+                            continue;
+                        }
 
-                Status status = catalog_ ? catalog_->removeTag(id, tagId) : db().removeTagFromMedia(id, tagId);
-                if (status.isOk()) {
-                    removedCount++;
-                } else {
-                    failedIds.push_back(id);
-                }
+                        Status status = catalog_->removeTag(id, tagId);
+                        if (status.isOk()) {
+                            removedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                })
+                : db().runInTransaction([&]() -> Status {
+                    for (const MediaId id : ids) {
+                        auto it = tagsMap.find(id);
+                        if (it == tagsMap.end()) {
+                            auto mediaRes = db().getMediaById(id);
+                            if (!mediaRes.isOk()) {
+                                failedIds.push_back(id);
+                                continue;
+                            }
+                            unchangedCount++;
+                            continue;
+                        }
+
+                        const auto& mediaTags = it->second;
+                        const bool hasTag = std::any_of(mediaTags.begin(), mediaTags.end(),
+                            [tagId](const Tag& tag) { return tag.id == tagId; });
+                        if (!hasTag) {
+                            unchangedCount++;
+                            continue;
+                        }
+
+                        Status status = db().removeTagFromMedia(id, tagId);
+                        if (status.isOk()) {
+                            removedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                });
+            if (!batchStatus.isOk()) {
+                sendStatusError(res, batchStatus);
+                return;
             }
 
             sendJson(res, {
@@ -1585,15 +1806,32 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
-            for (MediaId id : ids) {
-                Status s = catalog_
-                    ? catalog_->setGps(id, hasGps, latitude, longitude, altitude)
-                    : db().updateGps(id, hasGps, latitude, longitude, altitude);
-                if (s.isOk()) {
-                    updatedCount++;
-                } else {
-                    failedIds.push_back(id);
-                }
+            Status batchStatus = catalog_
+                ? catalog_->runInTransaction([&]() -> Status {
+                    for (MediaId id : ids) {
+                        Status s = catalog_->setGps(id, hasGps, latitude, longitude, altitude);
+                        if (s.isOk()) {
+                            updatedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                })
+                : db().runInTransaction([&]() -> Status {
+                    for (MediaId id : ids) {
+                        Status s = db().updateGps(id, hasGps, latitude, longitude, altitude);
+                        if (s.isOk()) {
+                            updatedCount++;
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                });
+            if (!batchStatus.isOk()) {
+                sendStatusError(res, batchStatus);
+                return;
             }
             sendJson(res, {
                 {"status", failedIds.empty() ? "ok" : "partial"},
@@ -1757,37 +1995,52 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
             nlohmann::json updatedItems = nlohmann::json::array();
+            Status batchStatus = catalog_
+                ? catalog_->runInTransaction([&]() -> Status {
+                    for (const auto& [id, dateTaken] : updates) {
+                        std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
+                        if (dateTakenStr.empty() && dateTaken > 0) {
+                            dateTakenStr = formatTimestampToDateString(dateTaken);
+                        }
 
-            for (const auto& [id, dateTaken] : updates) {
-                std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
-                if (dateTakenStr.empty() && dateTaken > 0) {
-                    std::time_t tt = static_cast<std::time_t>(dateTaken);
-                    std::tm tm{};
-#if defined(_WIN32)
-                    gmtime_s(&tm, &tt);
-#else
-                    gmtime_r(&tt, &tm);
-#endif
-                    char buf[32];
-                    std::snprintf(buf, sizeof(buf), "%04d:%02d:%02d %02d:%02d:%02d",
-                                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                                  tm.tm_hour, tm.tm_min, tm.tm_sec);
-                    dateTakenStr = buf;
-                }
+                        Status s = catalog_->setDateTaken(id, dateTaken, dateTakenStr);
+                        if (s.isOk()) {
+                            updatedCount++;
+                            updatedItems.push_back({
+                                {"id", id},
+                                {"date_taken", dateTaken},
+                                {"date_taken_str", dateTakenStr}
+                            });
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                })
+                : db().runInTransaction([&]() -> Status {
+                    for (const auto& [id, dateTaken] : updates) {
+                        std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
+                        if (dateTakenStr.empty() && dateTaken > 0) {
+                            dateTakenStr = formatTimestampToDateString(dateTaken);
+                        }
 
-                Status s = catalog_
-                    ? catalog_->setDateTaken(id, dateTaken, dateTakenStr)
-                    : db().updateDateTaken(id, dateTaken, dateTakenStr);
-                if (s.isOk()) {
-                    updatedCount++;
-                    updatedItems.push_back({
-                        {"id", id},
-                        {"date_taken", dateTaken},
-                        {"date_taken_str", dateTakenStr}
-                    });
-                } else {
-                    failedIds.push_back(id);
-                }
+                        Status s = db().updateDateTaken(id, dateTaken, dateTakenStr);
+                        if (s.isOk()) {
+                            updatedCount++;
+                            updatedItems.push_back({
+                                {"id", id},
+                                {"date_taken", dateTaken},
+                                {"date_taken_str", dateTakenStr}
+                            });
+                        } else {
+                            failedIds.push_back(id);
+                        }
+                    }
+                    return Status::ok();
+                });
+            if (!batchStatus.isOk()) {
+                sendStatusError(res, batchStatus);
+                return;
             }
 
             sendJson(res, {
@@ -1905,13 +2158,9 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
     // GET /api/thumbnails/:hash/:size
     server.Get(R"(/api/thumbnails/([a-zA-Z0-9_-]+)/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         std::string hash = req.matches[1];
-        int size = 0;
-        try {
-            size = std::stoi(req.matches[2]);
-        } catch (...) {
-            sendError(res, "Invalid thumbnail size", 400);
-            return;
-        }
+        auto sizeOpt = parseMatchId<int>(req, 2, res, "thumbnail size");
+        if (!sizeOpt) return;
+        int size = *sizeOpt;
 
         if (size <= 0 || size > 2048) {
             sendError(res, "Thumbnail size must be between 1 and 2048", 400);
@@ -1966,13 +2215,9 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
 
     // GET /api/photos/:id/original (and /api/media/:id/file, /api/media/:id/original)
     auto handleServeFile = [this](const httplib::Request& req, httplib::Response& res) {
-        MediaId id = 0;
-        try {
-            id = std::stoll(req.matches[1]);
-        } catch (...) {
-            sendError(res, "Invalid media ID", 400);
-            return;
-        }
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         auto mediaRes = db().getMediaById(id);
         if (!mediaRes.isOk()) {
             sendError(res, "Media not found", 404);
@@ -1983,7 +2228,8 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         std::string photoPath = resolvePhotoPath(item.file_path);
         std::error_code ec;
         if (!std::filesystem::exists(photoPath, ec) || !std::filesystem::is_regular_file(photoPath, ec)) {
-            sendError(res, "File not found on disk: " + photoPath, 404);
+            IMAGINE_LOG_WARN("File not found on disk: " + photoPath);
+            sendError(res, "File not found on disk", 404);
             return;
         }
 
@@ -2029,13 +2275,9 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
     // POST /api/media/:id/thumbnail
     server.Post(R"(/api/media/(\d+)/thumbnail)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = 0;
-        try {
-            id = std::stoll(req.matches[1]);
-        } catch (...) {
-            sendError(res, "Invalid media ID", 400);
-            return;
-        }
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
 
         auto mediaRes = db().getMediaById(id);
         if (!mediaRes.isOk()) {
@@ -2091,7 +2333,9 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
     // POST /api/photos/:id/edit and POST /api/media/:id/edit
     auto handleEditPhoto = [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        MediaId id = std::stoll(req.matches[1]);
+        auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!idOpt) return;
+        MediaId id = *idOpt;
         auto mediaRes = db().getMediaById(id);
         if (!mediaRes.isOk()) {
             sendError(res, "Media not found", 404);
@@ -2099,7 +2343,7 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         }
 
         auto item = mediaRes.value();
-        if (item.media_type == "video" || item.media_type == "audio" || item.media_type != "photo") {
+        if (item.media_type != "photo") {
             sendError(res, "Quick edit is not supported for " + item.media_type + " files", 400);
             return;
         }
@@ -2107,7 +2351,8 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         std::string photoPath = resolvePhotoPath(item.file_path);
         std::error_code ec;
         if (!std::filesystem::exists(photoPath, ec) || !std::filesystem::is_regular_file(photoPath, ec)) {
-            sendError(res, "Source photo not found on disk: " + photoPath, 404);
+            IMAGINE_LOG_WARN("Source photo not found on disk: " + photoPath);
+            sendError(res, "Source photo not found on disk", 404);
             return;
         }
 
@@ -2376,7 +2621,9 @@ void ApiRouter::registerTagRoutes(httplib::Server& server) {
     // DELETE /api/tags/:id
     server.Delete(R"(/api/tags/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        TagId tagId = std::stoll(req.matches[1]);
+        auto tagIdOpt = parseMatchId<TagId>(req, 1, res, "tag ID");
+        if (!tagIdOpt) return;
+        TagId tagId = *tagIdOpt;
         Status s = catalog_ ? catalog_->deleteTag(tagId) : db().deleteTag(tagId);
         if (!s.isOk()) {
             sendStatusError(res, s);
@@ -2437,7 +2684,9 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
     // POST /api/albums/:id/media
     server.Post(R"(/api/albums/(\d+)/media)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        AlbumId albumId = std::stoll(req.matches[1]);
+        auto albumIdOpt = parseMatchId<AlbumId>(req, 1, res, "album ID");
+        if (!albumIdOpt) return;
+        AlbumId albumId = *albumIdOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             std::vector<MediaId> mediaIds;
@@ -2476,7 +2725,9 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
     // POST /api/albums/:id/order
     server.Post(R"(/api/albums/(\d+)/order)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        AlbumId albumId = std::stoll(req.matches[1]);
+        auto albumIdOpt = parseMatchId<AlbumId>(req, 1, res, "album ID");
+        if (!albumIdOpt) return;
+        AlbumId albumId = *albumIdOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("media_ids") || !body["media_ids"].is_array()) {
@@ -2515,7 +2766,9 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
     // POST /api/albums/:id/cover
     server.Post(R"(/api/albums/(\d+)/cover)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        AlbumId albumId = std::stoll(req.matches[1]);
+        auto albumIdOpt = parseMatchId<AlbumId>(req, 1, res, "album ID");
+        if (!albumIdOpt) return;
+        AlbumId albumId = *albumIdOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.contains("media_id") || !body["media_id"].is_number_integer()) {
@@ -2537,7 +2790,9 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
     // DELETE /api/albums/:id/media
     server.Delete(R"(/api/albums/(\d+)/media)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        AlbumId albumId = std::stoll(req.matches[1]);
+        auto albumIdOpt = parseMatchId<AlbumId>(req, 1, res, "album ID");
+        if (!albumIdOpt) return;
+        AlbumId albumId = *albumIdOpt;
         try {
             auto body = nlohmann::json::parse(req.body);
             std::vector<MediaId> mediaIds;
@@ -2586,7 +2841,9 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
     // DELETE /api/albums/:id
     server.Delete(R"(/api/albums/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        AlbumId albumId = std::stoll(req.matches[1]);
+        auto albumIdOpt = parseMatchId<AlbumId>(req, 1, res, "album ID");
+        if (!albumIdOpt) return;
+        AlbumId albumId = *albumIdOpt;
         Status s = catalog_ ? catalog_->deleteAlbum(albumId) : db().deleteAlbum(albumId);
         if (!s.isOk()) {
             sendStatusError(res, s);
@@ -2715,7 +2972,9 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
                     }
                 });
             } else {
-                g_isImporting.store(true);
+                if (fallbackImportState_) {
+                    fallbackImportState_->isImporting.store(true);
+                }
                 cancelFallbackImport_.store(false);
 
                 importThread_ = std::jthread([this, path, recursive](std::stop_token stopToken) {
@@ -2725,15 +2984,17 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
                         if (stopToken.stop_requested() || cancelFallbackImport_.load()) {
                             imp.cancel();
                         }
-                        std::lock_guard<std::mutex> lock(g_importMutex);
-                        g_fallbackProgress = p;
-                    });
-                    {
-                        std::lock_guard<std::mutex> lock(g_importMutex);
-                        if (res.isOk()) {
-                            g_fallbackProgress = res.value();
+                        if (fallbackImportState_) {
+                            std::lock_guard<std::mutex> lock(fallbackImportState_->mutex);
+                            fallbackImportState_->progress = p;
                         }
-                        g_isImporting.store(false);
+                    });
+                    if (fallbackImportState_) {
+                        std::lock_guard<std::mutex> lock(fallbackImportState_->mutex);
+                        if (res.isOk()) {
+                            fallbackImportState_->progress = res.value();
+                        }
+                        fallbackImportState_->isImporting.store(false);
                     }
                 });
             }
@@ -2762,8 +3023,12 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
                 auto progress = catalog_->importer().currentProgress();
                 sendJson(res, progress);
             } else {
-                std::lock_guard<std::mutex> lock(g_importMutex);
-                sendJson(res, g_fallbackProgress);
+                if (fallbackImportState_) {
+                    std::lock_guard<std::mutex> lock(fallbackImportState_->mutex);
+                    sendJson(res, fallbackImportState_->progress);
+                } else {
+                    sendJson(res, ImportProgress{});
+                }
             }
         } catch (const std::exception& ex) {
             IMAGINE_LOG_ERROR("Error getting import progress: " + std::string(ex.what()));
@@ -2777,9 +3042,10 @@ struct GeocodeCacheEntry {
     std::chrono::steady_clock::time_point timestamp;
     std::string responseBody;
 };
-static std::mutex g_geocodeMutex;
+static std::mutex g_geocodeCacheMutex;
 static std::unordered_map<std::string, GeocodeCacheEntry> g_geocodeCache;
-static std::chrono::steady_clock::time_point g_lastGeocodeRequestTime{};
+static std::mutex g_geocodeRateMutex;
+static std::chrono::steady_clock::time_point g_nextAllowedGeocodeTime{};
 } // anonymous namespace
 
 void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
@@ -2814,7 +3080,7 @@ void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
 
         std::string cacheKey = query + "|" + std::to_string(limitVal);
         {
-            std::lock_guard<std::mutex> lock(g_geocodeMutex);
+            std::lock_guard<std::mutex> lock(g_geocodeCacheMutex);
             auto it = g_geocodeCache.find(cacheKey);
             if (it != g_geocodeCache.end()) {
                 auto age = std::chrono::duration_cast<std::chrono::hours>(std::chrono::steady_clock::now() - it->second.timestamp);
@@ -2827,15 +3093,40 @@ void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
         }
 
         try {
-            // Respect Nominatim rate limit: max 1 request per second
+            // Respect Nominatim rate limit: max 1 request per second without holding lock while sleeping
+            // Bound backlog to avoid starving worker threads
+            constexpr auto kMaxWait = std::chrono::seconds(5);
+            std::chrono::milliseconds waitMs{0};
             {
-                std::unique_lock<std::mutex> lock(g_geocodeMutex);
+                std::lock_guard<std::mutex> lock(g_geocodeRateMutex);
                 auto now = std::chrono::steady_clock::now();
-                auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastGeocodeRequestTime).count();
-                if (elapsedMs < 1000) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1000 - elapsedMs));
+                if (g_nextAllowedGeocodeTime > now) {
+                    waitMs = std::chrono::duration_cast<std::chrono::milliseconds>(g_nextAllowedGeocodeTime - now);
+                    if (waitMs > kMaxWait) {
+                        sendError(res, "Geocoding service rate limit backlog exceeded, try again later", 429);
+                        return;
+                    }
+                    g_nextAllowedGeocodeTime = g_nextAllowedGeocodeTime + std::chrono::milliseconds(1000);
+                } else {
+                    g_nextAllowedGeocodeTime = now + std::chrono::milliseconds(1000);
                 }
-                g_lastGeocodeRequestTime = std::chrono::steady_clock::now();
+            }
+            if (waitMs.count() > 0) {
+                std::this_thread::sleep_for(waitMs);
+            }
+
+            // Re-check cache after wait in case a concurrent request with the same query finished
+            {
+                std::lock_guard<std::mutex> lock(g_geocodeCacheMutex);
+                auto it = g_geocodeCache.find(cacheKey);
+                if (it != g_geocodeCache.end()) {
+                    auto age = std::chrono::duration_cast<std::chrono::hours>(std::chrono::steady_clock::now() - it->second.timestamp);
+                    if (age < std::chrono::hours(24)) {
+                        res.status = 200;
+                        res.set_content(it->second.responseBody, "application/json");
+                        return;
+                    }
+                }
             }
 
             httplib::SSLClient cli("nominatim.openstreetmap.org");
@@ -2864,7 +3155,7 @@ void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
             auto osmRes = cli.Get(path.c_str(), headers);
             if (osmRes && osmRes->status == 200) {
                 {
-                    std::lock_guard<std::mutex> lock(g_geocodeMutex);
+                    std::lock_guard<std::mutex> lock(g_geocodeCacheMutex);
                     g_geocodeCache[cacheKey] = GeocodeCacheEntry{std::chrono::steady_clock::now(), osmRes->body};
                 }
                 res.status = 200;
@@ -2925,65 +3216,53 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
     });
 
     server.Get(R"(/api/faces/jobs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto result = faceService_->getJob(std::stoll(req.matches[1]));
-            if (!result.isOk()) { sendStatusError(res, result.status()); return; }
-            sendJson(res, result.value());
-        } catch (...) { sendError(res, "Invalid job ID", 400); }
+        auto jobIdOpt = parseMatchId<int64_t>(req, 1, res, "job ID");
+        if (!jobIdOpt) return;
+        auto result = faceService_->getJob(*jobIdOpt);
+        if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+        sendJson(res, result.value());
     });
 
     server.Post(R"(/api/faces/jobs/(\d+)/cancel)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
-        try {
-            Status status = faceService_->cancelJob(std::stoll(req.matches[1]));
-            if (!status.isOk()) { sendStatusError(res, status); return; }
-            auto job = faceService_->getJob(std::stoll(req.matches[1]));
-            if (!job.isOk()) { sendStatusError(res, job.status()); return; }
-            sendJson(res, job.value());
-        } catch (...) { sendError(res, "Invalid job ID", 400); }
+        auto jobIdOpt = parseMatchId<int64_t>(req, 1, res, "job ID");
+        if (!jobIdOpt) return;
+        Status status = faceService_->cancelJob(*jobIdOpt);
+        if (!status.isOk()) { sendStatusError(res, status); return; }
+        auto job = faceService_->getJob(*jobIdOpt);
+        if (!job.isOk()) { sendStatusError(res, job.status()); return; }
+        sendJson(res, job.value());
     });
 
     server.Get(R"(/api/faces/media/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
-        try {
-            auto result = faceService_->getMedia(std::stoll(req.matches[1]));
-            if (!result.isOk()) { sendStatusError(res, result.status()); return; }
-            sendJson(res, result.value());
-        } catch (...) { sendError(res, "Invalid media ID", 400); }
+        auto mediaIdOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
+        if (!mediaIdOpt) return;
+        auto result = faceService_->getMedia(*mediaIdOpt);
+        if (!result.isOk()) { sendStatusError(res, result.status()); return; }
+        sendJson(res, result.value());
     });
 
     server.Get("/api/faces/review", [this](const httplib::Request& req, httplib::Response& res) {
-        auto parse = [&](const char* key, int fallback) -> std::optional<int> {
-            if (!req.has_param(key)) return fallback;
-            try {
-                std::string value = req.get_param_value(key);
-                size_t used = 0;
-                int parsed = std::stoi(value, &used);
-                if (used != value.size()) return std::nullopt;
-                return parsed;
-            } catch (...) { return std::nullopt; }
-        };
-        auto offset = parse("offset", 0);
-        auto limit = parse("limit", 50);
+        auto offset = parseQueryInt(req, "offset", 0);
+        auto limit = parseQueryInt(req, "limit", 50);
         if (!offset || !limit) { sendError(res, "offset and limit must be integers", 400); return; }
+        if (*offset < 0 || *limit < 1 || *limit > 200) {
+            sendError(res, "offset must be nonnegative and limit must be between 1 and 200", 400);
+            return;
+        }
         auto result = faceService_->getReview(*offset, *limit);
         if (!result.isOk()) { sendStatusError(res, result.status()); return; }
         sendJson(res, result.value());
     });
 
     server.Get("/api/faces/grid", [this](const httplib::Request& req, httplib::Response& res) {
-        auto parseInteger = [&](const char* key, int fallback) -> std::optional<int> {
-            if (!req.has_param(key)) return fallback;
-            try {
-                std::string value = req.get_param_value(key);
-                size_t used = 0;
-                int parsed = std::stoi(value, &used);
-                if (used != value.size()) return std::nullopt;
-                return parsed;
-            } catch (...) { return std::nullopt; }
-        };
-        auto offset = parseInteger("offset", 0);
-        auto limit = parseInteger("limit", 200);
+        auto offset = parseQueryInt(req, "offset", 0);
+        auto limit = parseQueryInt(req, "limit", 200);
         if (!offset || !limit) { sendError(res, "offset and limit must be integers", 400); return; }
+        if (*offset < 0 || *limit < 1 || *limit > 1000) {
+            sendError(res, "job_id must be positive, offset nonnegative, and limit between 1 and 1000", 400);
+            return;
+        }
 
         std::optional<int64_t> jobId;
         if (req.has_param("job_id")) {
@@ -3008,18 +3287,9 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
     });
 
     server.Get(R"(/api/faces/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
-        int64_t faceId = 0;
-        try {
-            const std::string value = req.matches[1];
-            size_t used = 0;
-            faceId = std::stoll(value, &used);
-            if (used != value.size() || faceId <= 0) {
-                sendError(res, "face ID must be a positive integer", 400); return;
-            }
-        } catch (...) {
-            sendError(res, "face ID must be a positive integer", 400); return;
-        }
-        auto result = faceService_->getFace(faceId);
+        auto faceIdOpt = parseMatchId<int64_t>(req, 1, res, "face ID");
+        if (!faceIdOpt) return;
+        auto result = faceService_->getFace(*faceIdOpt);
         if (!result.isOk()) { sendStatusError(res, result.status()); return; }
         sendJson(res, result.value());
     });
@@ -3116,19 +3386,13 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
         if (!req.has_param("snapshot") || !req.has_param("key")) {
             sendError(res, "snapshot and key are required", 400); return;
         }
-        auto parseInteger = [&](const char* key, int fallback) -> std::optional<int> {
-            if (!req.has_param(key)) return fallback;
-            try {
-                const std::string value = req.get_param_value(key);
-                size_t used = 0;
-                const int parsed = std::stoi(value, &used);
-                if (used != value.size()) return std::nullopt;
-                return parsed;
-            } catch (...) { return std::nullopt; }
-        };
-        auto offset = parseInteger("offset", 0);
-        auto limit = parseInteger("limit", 100);
+        auto offset = parseQueryInt(req, "offset", 0);
+        auto limit = parseQueryInt(req, "limit", 100);
         if (!offset || !limit) { sendError(res, "offset and limit must be integers", 400); return; }
+        if (*offset < 0 || *limit < 1 || *limit > 200) {
+            sendError(res, "snapshot and key are required; offset must be nonnegative and limit between 1 and 200", 400);
+            return;
+        }
         auto result = faceService_->getGroupPage(req.get_param_value("snapshot"),
             req.get_param_value("key"), *offset, *limit);
         if (!result.isOk()) { sendStatusError(res, result.status()); return; }
@@ -3310,6 +3574,8 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
 
     server.Post(R"(/api/faces/(\d+)/identity)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
+        auto faceIdOpt = parseMatchId<int64_t>(req, 1, res, "face ID");
+        if (!faceIdOpt) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.is_object() || !body.contains("revision") || !body["revision"].is_number_integer()) {
@@ -3330,7 +3596,7 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
             }
             int64_t revision = body["revision"].get<int64_t>();
             if (revision <= 0) { sendError(res, "revision must be positive", 400); return; }
-            auto result = faceService_->setIdentity(std::stoll(req.matches[1]), revision, tagId, name);
+            auto result = faceService_->setIdentity(*faceIdOpt, revision, tagId, name);
             if (!result.isOk()) { sendStatusError(res, result.status()); return; }
             sendJson(res, result.value());
         } catch (const std::exception& ex) { sendError(res, std::string("Invalid request: ") + ex.what(), 400); }
@@ -3338,6 +3604,8 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
 
     auto suggestionRoute = [this](const httplib::Request& req, httplib::Response& res, bool accept) {
         if (!checkAuth(req, res)) return;
+        auto faceIdOpt = parseMatchId<int64_t>(req, 1, res, "face ID");
+        if (!faceIdOpt) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.is_object() || !body.contains("revision") || !body["revision"].is_number_integer() ||
@@ -3347,7 +3615,7 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
             int64_t revision = body["revision"].get<int64_t>();
             TagId tagId = body["tag_id"].get<TagId>();
             if (revision <= 0 || tagId <= 0) { sendError(res, "revision and tag_id must be positive", 400); return; }
-            int64_t faceId = std::stoll(req.matches[1]);
+            int64_t faceId = *faceIdOpt;
             auto result = accept ? faceService_->acceptSuggestion(faceId, revision, tagId)
                                  : faceService_->rejectSuggestion(faceId, revision, tagId);
             if (!result.isOk()) { sendStatusError(res, result.status()); return; }
@@ -3359,6 +3627,8 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
 
     server.Post(R"(/api/faces/(\d+)/dismiss)", [this](const httplib::Request& req, httplib::Response& res) {
         if (!checkAuth(req, res)) return;
+        auto faceIdOpt = parseMatchId<int64_t>(req, 1, res, "face ID");
+        if (!faceIdOpt) return;
         try {
             auto body = nlohmann::json::parse(req.body);
             if (!body.is_object() || !body.contains("revision") || !body["revision"].is_number_integer() ||
@@ -3367,20 +3637,22 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
             }
             int64_t revision = body["revision"].get<int64_t>();
             if (revision <= 0) { sendError(res, "revision must be positive", 400); return; }
-            auto result = faceService_->setDismissed(std::stoll(req.matches[1]), revision, body["dismissed"].get<bool>());
+            auto result = faceService_->setDismissed(*faceIdOpt, revision, body["dismissed"].get<bool>());
             if (!result.isOk()) { sendStatusError(res, result.status()); return; }
             sendJson(res, result.value());
         } catch (const std::exception& ex) { sendError(res, std::string("Invalid request: ") + ex.what(), 400); }
     });
 
     server.Get(R"(/api/faces/(\d+)/crop)", [this](const httplib::Request& req, httplib::Response& res) {
+        auto faceIdOpt = parseMatchId<int64_t>(req, 1, res, "face ID");
+        if (!faceIdOpt) return;
         if (!req.has_param("revision")) { sendError(res, "revision query parameter is required", 400); return; }
         try {
             size_t used = 0;
             std::string value = req.get_param_value("revision");
             int64_t revision = std::stoll(value, &used);
             if (used != value.size() || revision <= 0) { sendError(res, "revision must be a positive integer", 400); return; }
-            auto path = faceService_->cropPath(std::stoll(req.matches[1]), revision);
+            auto path = faceService_->cropPath(*faceIdOpt, revision);
             if (!path.isOk()) { sendStatusError(res, path.status()); return; }
             std::ifstream file(pathFromUtf8(path.value()), std::ios::binary);
             if (!file) { sendError(res, "Face crop is unavailable", 404); return; }

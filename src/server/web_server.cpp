@@ -32,52 +32,49 @@ struct CachedStaticFile {
 
 class StaticFileCache {
 public:
-    bool get(const std::filesystem::path& path, std::string& outContent, std::string& outMime, std::string& outEtag) {
+    std::shared_ptr<const CachedStaticFile> get(const std::filesystem::path& path) {
         std::error_code ec;
         if (!std::filesystem::exists(path, ec) || !std::filesystem::is_regular_file(path, ec)) {
-            return false;
+            return nullptr;
         }
 
         auto mtime = std::filesystem::last_write_time(path, ec);
         auto fsize = std::filesystem::file_size(path, ec);
-        if (ec) return false;
+        if (ec) return nullptr;
 
         std::string key = path.string();
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = cache_.find(key);
-            if (it != cache_.end() && it->second.lastWriteTime == mtime && it->second.fileSize == fsize) {
-                outContent = it->second.content;
-                outMime = it->second.mime;
-                outEtag = it->second.etag;
-                return true;
+            if (it != cache_.end() && it->second->lastWriteTime == mtime && it->second->fileSize == fsize) {
+                return it->second;
             }
         }
 
         std::string content;
         if (!readTextOrBinaryFile(path, content)) {
-            return false;
+            return nullptr;
         }
 
         auto mtimeSec = std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
         std::string etag = "\"" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
         std::string mime = getMimeType(path.string());
 
+        auto entry = std::make_shared<CachedStaticFile>(
+            CachedStaticFile{std::move(content), std::move(mime), std::move(etag), mtime, fsize});
+
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            cache_[key] = CachedStaticFile{content, mime, etag, mtime, fsize};
+            cache_[key] = entry;
         }
 
-        outContent = std::move(content);
-        outMime = std::move(mime);
-        outEtag = std::move(etag);
-        return true;
+        return entry;
     }
 
 private:
     std::mutex mutex_;
-    std::unordered_map<std::string, CachedStaticFile> cache_;
+    std::unordered_map<std::string, std::shared_ptr<const CachedStaticFile>> cache_;
 };
 
 } // anonymous namespace
@@ -99,7 +96,11 @@ WebServer::WebServer(core::Catalog& catalog, std::string webRoot)
             if (mb > 0) {
                 payloadMaxLength_ = mb * 1024 * 1024;
             }
-        } catch (...) {}
+        } catch (const std::exception& ex) {
+            IMAGINE_LOG_WARN("Failed to parse IMAGINE_MAX_PAYLOAD_MB: " + std::string(ex.what()));
+        } catch (...) {
+            IMAGINE_LOG_WARN("Failed to parse IMAGINE_MAX_PAYLOAD_MB: unknown exception");
+        }
     }
 }
 
@@ -236,7 +237,11 @@ void WebServer::stop() {
             } else {
                 t->detach();
             }
-        } catch (...) {}
+        } catch (const std::exception& ex) {
+            IMAGINE_LOG_WARN("Exception during web server thread shutdown: " + std::string(ex.what()));
+        } catch (...) {
+            IMAGINE_LOG_WARN("Unknown exception during web server thread shutdown");
+        }
     }
     {
         std::lock_guard<std::mutex> lock(lifecycleMutex_);
@@ -289,21 +294,21 @@ void WebServer::setupStaticFileServing() {
         }
 
         auto serveCached = [&](const std::filesystem::path& target, bool isSpaFallback) -> bool {
-            std::string content, mime, etag;
-            if (!cache->get(target, content, mime, etag)) {
+            auto entry = cache->get(target);
+            if (!entry) {
                 return false;
             }
 
-            res.set_header("ETag", etag);
+            res.set_header("ETag", entry->etag);
             res.set_header("Cache-Control", "no-cache");
 
-            if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {
+            if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == entry->etag) {
                 res.status = 304;
                 return true;
             }
 
             res.status = 200;
-            res.set_content(std::move(content), mime);
+            res.set_content(entry->content.data(), entry->content.size(), entry->mime);
             return true;
         };
 

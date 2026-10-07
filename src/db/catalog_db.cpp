@@ -1512,4 +1512,15 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
     return static_cast<int64_t>(updates.size());
 }
 
+Status CatalogDb::runInTransaction(std::function<Status()> fn) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Transaction tx(conn_);
+    Status s = fn();
+    if (!s.isOk()) {
+        tx.rollback();
+        return s;
+    }
+    return tx.commit();
+}
+
 } // namespace imagine::db

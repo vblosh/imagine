@@ -218,7 +218,8 @@ int Connection::lastErrorCode() const {
 // --- Transaction ---
 
 Transaction::Transaction(Connection& conn) : conn_(conn) {
-    if (conn_.execute("BEGIN TRANSACTION;").isOk()) {
+    savepointName_ = "sp_" + std::to_string(conn_.nextSavepointId());
+    if (conn_.execute("SAVEPOINT " + savepointName_ + ";").isOk()) {
         active_ = true;
     }
 }
@@ -231,7 +232,7 @@ Transaction::~Transaction() {
 
 Status Transaction::commit() {
     if (!active_) return Status::databaseError("No active transaction to commit");
-    Status s = conn_.execute("COMMIT;");
+    Status s = conn_.execute("RELEASE " + savepointName_ + ";");
     if (s.isOk()) {
         active_ = false;
     }
@@ -240,9 +241,10 @@ Status Transaction::commit() {
 
 Status Transaction::rollback() {
     if (!active_) return Status::databaseError("No active transaction to rollback");
-    Status s = conn_.execute("ROLLBACK;");
+    Status s1 = conn_.execute("ROLLBACK TO " + savepointName_ + ";");
+    Status s2 = conn_.execute("RELEASE " + savepointName_ + ";");
     active_ = false;
-    return s;
+    return s1.isOk() ? s2 : s1;
 }
 
 } // namespace imagine::db

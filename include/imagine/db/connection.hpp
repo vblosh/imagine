@@ -85,10 +85,13 @@ public:
     std::string lastErrorMessage() const;
     int lastErrorCode() const;
 
+    int nextSavepointId() { return ++savepointCounter_; }
+
     sqlite3* raw() const { return db_; }
 
 private:
     sqlite3* db_{nullptr};
+    int savepointCounter_{0};
 };
 
 class Transaction {
@@ -104,6 +107,7 @@ public:
 
 private:
     Connection& conn_;
+    std::string savepointName_;
     bool active_{false};
 };
 

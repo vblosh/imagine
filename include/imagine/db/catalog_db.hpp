@@ -6,6 +6,7 @@
 #include <optional>
 #include <mutex>
 #include <memory>
+#include <functional>
 #include "imagine/db/connection.hpp"
 #include "imagine/common/types.hpp"
 #include "imagine/common/error.hpp"
@@ -84,6 +85,8 @@ public:
         const std::string& whereClause,
         const std::vector<std::string>& params
     );
+
+    Status runInTransaction(std::function<Status()> fn);
 
     Connection& connection() { return conn_; }
 
