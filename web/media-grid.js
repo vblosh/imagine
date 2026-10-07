@@ -64,7 +64,10 @@ export function clearCardSelections() {
   if (state.selectedIds.size === 0) return;
   for (const id of state.selectedIds) {
     const card = getCardElement(id);
-    if (card) card.classList.remove('selected');
+    if (card) {
+      card.classList.remove('selected');
+      card.setAttribute('aria-selected', 'false');
+    }
   }
   state.selectedIds.clear();
   previousSelectedIds.clear();
@@ -72,6 +75,7 @@ export function clearCardSelections() {
   updateBatchBar();
   updateInspector();
   updateMapMarkerSelections();
+  updateRovingTabindex();
 }
 
 let currentLoadMediaId = 0;
@@ -605,6 +609,8 @@ export function renderGrid() {
   dom.mediaGrid.innerHTML = '';
   dom.mediaGrid.appendChild(fragment);
   previousSelectedIds = new Set(state.selectedIds);
+  initGridAccessibility();
+  updateRovingTabindex();
 }
 
 export function appendMediaToGrid(newItems) {
@@ -738,13 +744,20 @@ export function appendMediaToGrid(newItems) {
     dom.mediaGrid.appendChild(moreWrap);
   }
   previousSelectedIds = new Set(state.selectedIds);
+  updateRovingTabindex();
 }
 
 export function createPhotoCard(item) {
   const card = document.createElement('div');
-  card.className = 'photo-card' + (state.selectedIds.has(item.id) ? ' selected' : '');
+  const isSelected = state.selectedIds.has(item.id);
+  card.className = 'photo-card' + (isSelected ? ' selected' : '');
   card.dataset.id = item.id;
   card.dataset.mediaType = item.media_type || 'photo';
+  card.setAttribute('role', 'article');
+  card.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+  card.setAttribute('tabindex', '-1');
+  const dateStr = item.date_taken ? `, ${formatDate(item.date_taken)}` : '';
+  card.setAttribute('aria-label', `${item.file_name || 'Photo'}${dateStr}`);
 
   if (isAlbumOrderMode()) {
     card.classList.add('album-order-card');
@@ -913,16 +926,27 @@ export function handleCardSelection(id, event) {
   for (const oldId of previousSelectedIds) {
     if (!state.selectedIds.has(oldId)) {
       const c = getCardElement(oldId);
-      if (c) c.classList.remove('selected');
+      if (c) {
+        c.classList.remove('selected');
+        c.setAttribute('aria-selected', 'false');
+      }
     }
   }
   for (const newId of state.selectedIds) {
     if (!previousSelectedIds.has(newId)) {
       const c = getCardElement(newId);
-      if (c) c.classList.add('selected');
+      if (c) {
+        c.classList.add('selected');
+        c.setAttribute('aria-selected', 'true');
+      }
     }
   }
   previousSelectedIds = new Set(state.selectedIds);
+
+  const selectedCard = state.lastSelectedId ? getCardElement(state.lastSelectedId) : null;
+  if (selectedCard) {
+    updateRovingTabindex(selectedCard);
+  }
 
   updateBatchBar();
   updateInspector();
@@ -1933,4 +1957,189 @@ export async function batchUpdateDates(updates) {
     });
     throw err;
   }
+}
+
+// --- Grid Keyboard Accessibility & Roving Tabindex ---
+export function updateRovingTabindex(preferredCard = null) {
+  if (!dom.mediaGrid) return null;
+  const cards = Array.from(dom.mediaGrid.querySelectorAll('.photo-card'));
+  if (cards.length === 0) return null;
+
+  let activeCard = preferredCard;
+  if (!activeCard) {
+    if (document.activeElement && document.activeElement.classList.contains('photo-card') && dom.mediaGrid.contains(document.activeElement)) {
+      activeCard = document.activeElement;
+    } else if (state.lastSelectedId !== null) {
+      activeCard = getCardElement(state.lastSelectedId);
+    } else if (state.selectedIds && state.selectedIds.size > 0) {
+      const firstSelectedId = state.selectedIds.values().next().value;
+      activeCard = getCardElement(firstSelectedId);
+    }
+  }
+
+  if (!activeCard || !cards.includes(activeCard)) {
+    activeCard = cards[0];
+  }
+
+  for (const card of cards) {
+    if (card === activeCard) {
+      card.setAttribute('tabindex', '0');
+    } else {
+      card.setAttribute('tabindex', '-1');
+    }
+  }
+  return activeCard;
+}
+
+function findCardInNextRow(currentCard, cards, currentIndex) {
+  const currentRect = currentCard.getBoundingClientRect();
+  const currentCenterX = currentRect.left + currentRect.width / 2;
+
+  let nextRowCards = [];
+  let minRowTop = Infinity;
+
+  for (let i = currentIndex + 1; i < cards.length; i++) {
+    const card = cards[i];
+    const rect = card.getBoundingClientRect();
+    if (rect.top >= currentRect.bottom - 4) {
+      if (rect.top < minRowTop - 10) {
+        minRowTop = rect.top;
+        nextRowCards = [{ index: i, rect }];
+      } else if (Math.abs(rect.top - minRowTop) <= 10) {
+        nextRowCards.push({ index: i, rect });
+      }
+    }
+  }
+
+  if (nextRowCards.length > 0) {
+    let bestIndex = nextRowCards[0].index;
+    let minDiff = Infinity;
+    for (const item of nextRowCards) {
+      const centerX = item.rect.left + item.rect.width / 2;
+      const diff = Math.abs(centerX - currentCenterX);
+      if (diff < minDiff) {
+        minDiff = diff;
+        bestIndex = item.index;
+      }
+    }
+    return bestIndex;
+  }
+
+  const gridComputed = window.getComputedStyle ? window.getComputedStyle(dom.mediaGrid) : null;
+  const colsTemplate = gridComputed ? gridComputed.getPropertyValue('grid-template-columns') : '';
+  const colCount = colsTemplate ? colsTemplate.trim().split(/\s+/).length : 4;
+  return Math.min(cards.length - 1, currentIndex + colCount);
+}
+
+function findCardInPreviousRow(currentCard, cards, currentIndex) {
+  const currentRect = currentCard.getBoundingClientRect();
+  const currentCenterX = currentRect.left + currentRect.width / 2;
+
+  let prevRowCards = [];
+  let maxRowBottom = -Infinity;
+
+  for (let i = currentIndex - 1; i >= 0; i--) {
+    const card = cards[i];
+    const rect = card.getBoundingClientRect();
+    if (rect.bottom <= currentRect.top + 4) {
+      if (rect.bottom > maxRowBottom + 10) {
+        maxRowBottom = rect.bottom;
+        prevRowCards = [{ index: i, rect }];
+      } else if (Math.abs(rect.bottom - maxRowBottom) <= 10) {
+        prevRowCards.push({ index: i, rect });
+      }
+    }
+  }
+
+  if (prevRowCards.length > 0) {
+    let bestIndex = prevRowCards[0].index;
+    let minDiff = Infinity;
+    for (const item of prevRowCards) {
+      const centerX = item.rect.left + item.rect.width / 2;
+      const diff = Math.abs(centerX - currentCenterX);
+      if (diff < minDiff) {
+        minDiff = diff;
+        bestIndex = item.index;
+      }
+    }
+    return bestIndex;
+  }
+
+  const gridComputed = window.getComputedStyle ? window.getComputedStyle(dom.mediaGrid) : null;
+  const colsTemplate = gridComputed ? gridComputed.getPropertyValue('grid-template-columns') : '';
+  const colCount = colsTemplate ? colsTemplate.trim().split(/\s+/).length : 4;
+  return Math.max(0, currentIndex - colCount);
+}
+
+export function handleGridArrowNavigation(event) {
+  if (!dom.mediaGrid) return;
+  if (state.loupeIndex >= 0 || (dom.loupeModal && dom.loupeModal.style.display === 'flex')) return;
+  const activeModal = document.querySelector('.modal:not([style*="display: none"]):not([style*="display:none"])');
+  if (activeModal) return;
+
+  const currentCard = event.target.closest('.photo-card');
+  if (!currentCard || !dom.mediaGrid.contains(currentCard)) return;
+
+  const key = event.key;
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(key)) {
+    return;
+  }
+
+  const cards = Array.from(dom.mediaGrid.querySelectorAll('.photo-card'));
+  if (cards.length === 0) return;
+  const currentIndex = cards.indexOf(currentCard);
+  if (currentIndex === -1) return;
+
+  let targetIndex = currentIndex;
+  if (key === 'ArrowLeft') {
+    targetIndex = Math.max(0, currentIndex - 1);
+  } else if (key === 'ArrowRight') {
+    targetIndex = Math.min(cards.length - 1, currentIndex + 1);
+  } else if (key === 'Home') {
+    targetIndex = 0;
+  } else if (key === 'End') {
+    targetIndex = cards.length - 1;
+  } else if (key === 'ArrowDown') {
+    targetIndex = findCardInNextRow(currentCard, cards, currentIndex);
+  } else if (key === 'ArrowUp') {
+    targetIndex = findCardInPreviousRow(currentCard, cards, currentIndex);
+  }
+
+  if (targetIndex !== currentIndex && targetIndex >= 0 && targetIndex < cards.length) {
+    event.preventDefault();
+    const targetCard = cards[targetIndex];
+    updateRovingTabindex(targetCard);
+    targetCard.focus();
+    if (typeof targetCard.scrollIntoView === 'function') {
+      targetCard.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+
+    const cardId = parseInt(targetCard.dataset.id, 10);
+    if (!isNaN(cardId)) {
+      if (event.ctrlKey || event.metaKey) {
+        // Move focus only, do not change selection
+      } else if (event.shiftKey) {
+        // Shift range selection
+        handleCardSelection(cardId, { ctrlKey: false, metaKey: false, shiftKey: true });
+      } else {
+        // Single selection
+        handleCardSelection(cardId, { ctrlKey: false, metaKey: false, shiftKey: false });
+      }
+    }
+  }
+}
+
+let gridA11yInitialized = false;
+
+export function initGridAccessibility() {
+  if (gridA11yInitialized || !dom.mediaGrid) return;
+  gridA11yInitialized = true;
+
+  dom.mediaGrid.addEventListener('keydown', handleGridArrowNavigation);
+  dom.mediaGrid.addEventListener('focusin', (e) => {
+    const card = e.target.closest('.photo-card');
+    if (card) {
+      updateRovingTabindex(card);
+    }
+  });
 }

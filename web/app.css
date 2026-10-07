@@ -1552,6 +1552,11 @@ body, html {
   background-color: #2b3848;
 }
 
+.photo-card:focus-visible {
+  outline: 2px solid var(--accent-color, #4da6ff);
+  outline-offset: 2px;
+}
+
 .photo-thumb-wrap {
   width: 100%;
   aspect-ratio: 1 / 1;

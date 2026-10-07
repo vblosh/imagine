@@ -917,11 +917,11 @@
     </div>
 
     <!-- Import Modal Dialog -->
-    <div class="modal" id="importModal" style="display: none;">
+    <div class="modal" id="importModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
       <div class="modal-backdrop" id="importBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3 data-i18n="import_modal_title">Import Photos to Catalog</h3>
+          <h3 id="importModalTitle" data-i18n="import_modal_title">Import Photos to Catalog</h3>
           <button class="btn-icon-sm" id="closeImportModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
@@ -980,11 +980,11 @@
     </div>
 
     <!-- New Album Modal Dialog -->
-    <div class="modal" id="newAlbumModal" style="display: none;">
+    <div class="modal" id="newAlbumModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="newAlbumModalTitle">
       <div class="modal-backdrop" id="newAlbumBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3 data-i18n="create_album_title">Create New Album</h3>
+          <h3 id="newAlbumModalTitle" data-i18n="create_album_title">Create New Album</h3>
           <button class="btn-icon-sm" id="closeNewAlbumModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
@@ -1005,11 +1005,11 @@
     </div>
 
     <!-- Add to Album Modal Dialog -->
-    <div class="modal" id="addToAlbumModal" style="display: none;">
+    <div class="modal" id="addToAlbumModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="addToAlbumModalTitle">
       <div class="modal-backdrop" id="addToAlbumBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3 data-i18n="add_to_album_title">Add to Album</h3>
+          <h3 id="addToAlbumModalTitle" data-i18n="add_to_album_title">Add to Album</h3>
           <button class="btn-icon-sm" id="closeAddToAlbumModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
@@ -1032,7 +1032,7 @@
     </div>
 
     <!-- Add / Create Tag Modal Dialog -->
-    <div class="modal" id="newTagModal" style="display: none;">
+    <div class="modal" id="newTagModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="tagModalHeading">
       <div class="modal-backdrop" id="newTagBackdrop"></div>
       <div class="modal-dialog tag-modal-dialog">
         <div class="modal-header">
@@ -1226,11 +1226,11 @@
     </div>
 
     <!-- Delete Tag Modal Dialog -->
-    <div class="modal" id="deleteTagModal" style="display: none;">
+    <div class="modal" id="deleteTagModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="deleteTagModalTitle">
       <div class="modal-backdrop" id="deleteTagBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
-          <h3 data-i18n="delete_tag_title">Delete Tag</h3>
+          <h3 id="deleteTagModalTitle" data-i18n="delete_tag_title">Delete Tag</h3>
           <button class="btn-icon-sm" id="closeDeleteTagModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
         <div class="modal-body">
@@ -1247,7 +1247,7 @@
     </div>
 
     <!-- Change Date Modal Dialog -->
-    <div class="modal" id="batchDateModal" style="display: none;">
+    <div class="modal" id="batchDateModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="batchDateModalTitle">
       <div class="modal-backdrop" id="batchDateBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
@@ -1258,7 +1258,7 @@
               <line x1="8" y1="2" x2="8" y2="6"></line>
               <line x1="3" y1="10" x2="21" y2="10"></line>
             </svg>
-            <h3 data-i18n="batch_date_title">Change Date</h3>
+            <h3 id="batchDateModalTitle" data-i18n="batch_date_title">Change Date</h3>
           </div>
           <button class="btn-icon-sm" id="closeBatchDateModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>
@@ -1452,7 +1452,7 @@
     </div>
 
     <!-- Move Media Modal Dialog -->
-    <div class="modal" id="batchMoveModal" style="display: none;">
+    <div class="modal" id="batchMoveModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="batchMoveModalTitle">
       <div class="modal-backdrop" id="batchMoveBackdrop"></div>
       <div class="modal-dialog">
         <div class="modal-header">
@@ -1513,7 +1513,7 @@
     </div>
 
     <!-- iOS Fullscreen & Standalone Guide Modal -->
-    <div class="modal" id="iosInstallModal" style="display: none;">
+    <div class="modal" id="iosInstallModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="iosInstallModalTitle">
       <div class="modal-backdrop" id="iosInstallBackdrop"></div>
       <div class="modal-dialog ios-install-dialog">
         <div class="modal-header">
@@ -1522,7 +1522,7 @@
               <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
               <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
             </svg>
-            <h3 data-i18n="ios_install_title">Fullscreen on iOS</h3>
+            <h3 id="iosInstallModalTitle" data-i18n="ios_install_title">Fullscreen on iOS</h3>
           </div>
           <button class="btn-icon-sm" id="closeIosInstallBtn" title="Close" data-i18n-title="close_panel">&times;</button>
         </div>

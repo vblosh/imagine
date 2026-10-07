@@ -31,18 +31,188 @@ let pendingDeleteMediaIds = [];
 let pendingDeleteTag = null;
 let pendingBatchMoveIds = [];
 
+// --- Modal Dialog Semantics & Focus Trapping ---
+const modalReturnFocusMap = new WeakMap();
+
+const FOCUSABLE_SELECTOR = [
+  'button:not([disabled]):not([hidden]):not([tabindex="-1"])',
+  'input:not([disabled]):not([hidden]):not([type="hidden"]):not([tabindex="-1"])',
+  'select:not([disabled]):not([hidden]):not([tabindex="-1"])',
+  'textarea:not([disabled]):not([hidden]):not([tabindex="-1"])',
+  'a[href]:not([tabindex="-1"])',
+  '[tabindex]:not([tabindex="-1"]):not([disabled]):not([hidden])'
+].join(', ');
+
+export function getFocusableElements(container) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter(el => {
+    return el.offsetParent !== null || el.offsetWidth > 0 || el.offsetHeight > 0 || (typeof el.getClientRects === 'function' && el.getClientRects().length > 0);
+  });
+}
+
+export function getActiveModal() {
+  const modals = Array.from(document.querySelectorAll('.modal, [role="dialog"]'));
+  for (let i = modals.length - 1; i >= 0; i--) {
+    const modal = modals[i];
+    if (modal.style.display !== 'none' && modal.style.display !== '' && !modal.hidden) {
+      return modal;
+    }
+  }
+  return null;
+}
+
+export function focusFirstInModal(modal) {
+  if (!modal) return;
+  const focusables = getFocusableElements(modal);
+  if (focusables.length > 0) {
+    focusables[0].focus();
+  } else {
+    if (!modal.hasAttribute('tabindex')) {
+      modal.setAttribute('tabindex', '-1');
+    }
+    modal.focus();
+  }
+}
+
+export function showModal(modalEl, defaultFocusEl = null) {
+  if (!modalEl) return;
+  const currentActive = document.activeElement;
+  if (currentActive && currentActive !== document.body && !modalEl.contains(currentActive)) {
+    modalReturnFocusMap.set(modalEl, currentActive);
+  }
+
+  // Ensure ARIA semantics
+  if (!modalEl.getAttribute('role')) modalEl.setAttribute('role', 'dialog');
+  if (!modalEl.getAttribute('aria-modal')) modalEl.setAttribute('aria-modal', 'true');
+
+  modalEl.style.display = 'flex';
+
+  const target = (defaultFocusEl && typeof defaultFocusEl.focus === 'function' && modalEl.contains(defaultFocusEl))
+    ? defaultFocusEl
+    : null;
+
+  if (target) {
+    target.focus();
+  } else {
+    focusFirstInModal(modalEl);
+  }
+}
+
+export function hideModal(modalEl) {
+  if (!modalEl) return;
+  modalEl.style.display = 'none';
+
+  let returnEl = modalReturnFocusMap.get(modalEl);
+  modalReturnFocusMap.delete(modalEl);
+
+  // If photos are selected in the media grid, prefer returning focus
+  // to the active photo card so grid keyboard navigation (Enter, Arrows, Escape) continues smoothly
+  if (state.selectedIds && state.selectedIds.size > 0 && dom.mediaGrid) {
+    const activeCard = dom.mediaGrid.querySelector('.photo-card[tabindex="0"]') ||
+      (state.lastSelectedId ? dom.mediaGrid.querySelector(`.photo-card[data-id="${state.lastSelectedId}"]`) : null) ||
+      dom.mediaGrid.querySelector('.photo-card.selected');
+    if (activeCard && document.contains(activeCard)) {
+      returnEl = activeCard;
+    }
+  }
+
+  if (returnEl && typeof returnEl.focus === 'function' && document.contains(returnEl)) {
+    try {
+      returnEl.focus();
+    } catch (_) {}
+  }
+}
+
+export function trapModalFocus(event, modal = null) {
+  const activeModal = modal || getActiveModal();
+  if (!activeModal) return false;
+
+  if (event.key === 'Tab') {
+    const focusable = getFocusableElements(activeModal);
+    if (!focusable.length) {
+      event.preventDefault();
+      return true;
+    }
+
+    const firstEl = focusable[0];
+    const lastEl = focusable[focusable.length - 1];
+    const currentActive = document.activeElement;
+
+    if (event.shiftKey) {
+      if (currentActive === firstEl || !activeModal.contains(currentActive)) {
+        event.preventDefault();
+        lastEl.focus();
+        return true;
+      }
+    } else {
+      if (currentActive === lastEl || !activeModal.contains(currentActive)) {
+        event.preventDefault();
+        firstEl.focus();
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+let modalSemanticsInitialized = false;
+
+export function initModalSemantics() {
+  if (modalSemanticsInitialized) return;
+  modalSemanticsInitialized = true;
+
+  // Enhance all existing modal dialogs
+  const modals = document.querySelectorAll('.modal');
+  modals.forEach(modal => {
+    if (!modal.getAttribute('role')) {
+      modal.setAttribute('role', 'dialog');
+    }
+    if (!modal.getAttribute('aria-modal')) {
+      modal.setAttribute('aria-modal', 'true');
+    }
+    if (!modal.getAttribute('aria-labelledby')) {
+      const heading = modal.querySelector('h1, h2, h3, h4, .modal-header h3');
+      if (heading) {
+        if (!heading.id) {
+          heading.id = `${modal.id || 'modal'}Title`;
+        }
+        modal.setAttribute('aria-labelledby', heading.id);
+      }
+    }
+  });
+
+  // Global keydown capture for Tab focus trapping
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') {
+      const activeModal = getActiveModal();
+      if (activeModal) {
+        trapModalFocus(e, activeModal);
+      }
+    }
+  }, true);
+
+  // Global focusin listener: prevent focus from escaping active modal
+  document.addEventListener('focusin', (e) => {
+    const activeModal = getActiveModal();
+    if (!activeModal) return;
+    const insideAnyModal = Boolean(e.target.closest && e.target.closest('.modal, [role="dialog"]'));
+    if (!insideAnyModal) {
+      focusFirstInModal(activeModal);
+    }
+  });
+}
+
 // --- Settings Modal ---
 export function openSettingsModal() {
   if (!dom.settingsModal) return;
   if (dom.settingsApiTokenInput) {
     dom.settingsApiTokenInput.value = getApiToken();
   }
-  dom.settingsModal.style.display = 'flex';
-  if (dom.settingsApiTokenInput) dom.settingsApiTokenInput.focus();
+  showModal(dom.settingsModal, dom.settingsApiTokenInput);
 }
 
 export function closeSettingsModal() {
-  if (dom.settingsModal) dom.settingsModal.style.display = 'none';
+  hideModal(dom.settingsModal);
 }
 
 export function saveSettings() {
@@ -60,18 +230,19 @@ export function clearSettingsToken() {
 
 // --- Import Modal & Workflow ---
 export function openImportModal() {
-  if (dom.importModal) dom.importModal.style.display = 'flex';
+  if (!dom.importModal) return;
   if (state.isImporting) {
     if (dom.importProgressBox) dom.importProgressBox.style.display = 'flex';
     if (dom.startImportBtn) dom.startImportBtn.disabled = true;
+    showModal(dom.importModal, dom.cancelImportBtn);
   } else {
     if (dom.startImportBtn) dom.startImportBtn.disabled = false;
-    if (dom.importPathInput) dom.importPathInput.focus();
+    showModal(dom.importModal, dom.importPathInput);
   }
 }
 
 export function closeImportModal() {
-  if (dom.importModal) dom.importModal.style.display = 'none';
+  hideModal(dom.importModal);
   if (dom.importProgressBox) dom.importProgressBox.style.display = 'none';
   if (!state.isImporting && state.importPollInterval) {
     clearTimeout(state.importPollInterval);
@@ -142,7 +313,7 @@ export async function pollImportProgress() {
       if (dom.importStatusCounts) dom.importStatusCounts.textContent = summaryMsg;
       if (dom.startImportBtn) dom.startImportBtn.disabled = false;
       setTimeout(() => {
-        if (dom.importModal) dom.importModal.style.display = 'none';
+        hideModal(dom.importModal);
         if (dom.importProgressBox) dom.importProgressBox.style.display = 'none';
         loadMetadata();
         loadMedia();
@@ -184,16 +355,16 @@ export async function triggerImport(path, recursive) {
 
 // --- New Album Modal ---
 export function openAlbumModal() {
-  if (dom.newAlbumModal) dom.newAlbumModal.style.display = 'flex';
+  if (!dom.newAlbumModal) return;
   if (dom.albumNameInput) {
     dom.albumNameInput.value = '';
-    dom.albumNameInput.focus();
   }
   if (dom.albumDescInput) dom.albumDescInput.value = '';
+  showModal(dom.newAlbumModal, dom.albumNameInput);
 }
 
 export function closeAlbumModal() {
-  if (dom.newAlbumModal) dom.newAlbumModal.style.display = 'none';
+  hideModal(dom.newAlbumModal);
 }
 
 export async function submitCreateAlbum() {
@@ -216,7 +387,7 @@ export async function submitCreateAlbum() {
 
 // --- Add to Album Modal ---
 export function openAddToAlbumModal(mediaIds) {
-  if (!mediaIds || mediaIds.length === 0) return;
+  if (!mediaIds || mediaIds.length === 0 || !dom.addToAlbumModal) return;
   pendingAddToAlbumIds = mediaIds;
   const count = mediaIds.length;
   if (dom.addToAlbumTargetCount) {
@@ -225,7 +396,8 @@ export function openAddToAlbumModal(mediaIds) {
       : t('add_to_album_n', { count });
   }
 
-  if (!state.albums || state.albums.length === 0) {
+  const hasAlbums = state.albums && state.albums.length > 0;
+  if (!hasAlbums) {
     if (dom.addToAlbumSelectGroup) dom.addToAlbumSelectGroup.style.display = 'none';
     if (dom.noAlbumsNotice) dom.noAlbumsNotice.style.display = 'block';
     if (dom.confirmAddToAlbumBtn) dom.confirmAddToAlbumBtn.disabled = true;
@@ -242,15 +414,12 @@ export function openAddToAlbumModal(mediaIds) {
     }
   }
 
-  if (dom.addToAlbumModal) {
-    dom.addToAlbumModal.style.display = 'flex';
-  }
+  const focusTarget = hasAlbums ? dom.addToAlbumSelect : dom.cancelAddToAlbumBtn;
+  showModal(dom.addToAlbumModal, focusTarget);
 }
 
 export function closeAddToAlbumModal() {
-  if (dom.addToAlbumModal) {
-    dom.addToAlbumModal.style.display = 'none';
-  }
+  hideModal(dom.addToAlbumModal);
   pendingAddToAlbumIds = [];
 }
 
@@ -467,12 +636,8 @@ export function openTagModal(targetMediaIds = null, mode = 'add') {
   // Render search help chips
   renderModalSearchHelp();
 
-  dom.newTagModal.style.display = 'flex';
-  if (dom.tagNameInput && !removeMode) {
-    dom.tagNameInput.focus();
-  } else if (removeMode && dom.removeTagSelect) {
-    dom.removeTagSelect.focus();
-  }
+  const focusTarget = (removeMode && dom.removeTagSelect) ? dom.removeTagSelect : dom.tagNameInput;
+  showModal(dom.newTagModal, focusTarget);
 }
 export const openNewTagModal = openTagModal;
 
@@ -481,9 +646,7 @@ export function openRemoveTagModal(targetMediaIds = null) {
 }
 
 export function closeTagModal() {
-  if (dom.newTagModal) {
-    dom.newTagModal.style.display = 'none';
-  }
+  hideModal(dom.newTagModal);
   pendingTagTargetMediaIds = [];
   pendingTagModalMode = 'add';
   pendingRemoveTagOptions = [];
@@ -726,18 +889,11 @@ export function openDeleteMediaModal(mediaIds) {
   if (dom.confirmDeleteMediaBtn) {
     dom.confirmDeleteMediaBtn.textContent = t('delete_from_catalog');
   }
-  if (dom.deleteMediaModal) {
-    dom.deleteMediaModal.style.display = 'flex';
-  }
-  if (dom.deleteFromDiskCheckbox) {
-    dom.deleteFromDiskCheckbox.focus();
-  }
+  showModal(dom.deleteMediaModal, dom.deleteFromDiskCheckbox || dom.cancelDeleteMediaBtn);
 }
 
 export function closeDeleteMediaModal() {
-  if (dom.deleteMediaModal) {
-    dom.deleteMediaModal.style.display = 'none';
-  }
+  hideModal(dom.deleteMediaModal);
   if (dom.deleteFromDiskCheckbox) {
     dom.deleteFromDiskCheckbox.checked = false;
   }
@@ -806,7 +962,7 @@ export async function submitDeleteMedia() {
 
 // --- Delete Tag Modal ---
 export function openDeleteTagModal(tag) {
-  if (!tag) return;
+  if (!tag || !dom.deleteTagModal) return;
   if (typeof tag === 'number' || typeof tag === 'string') {
     const found = (state.tags || []).find(t => t.id === tag || t.id === Number(tag));
     pendingDeleteTag = found || { id: tag, name: String(tag) };
@@ -820,15 +976,11 @@ export function openDeleteTagModal(tag) {
   if (dom.deleteTagWarningText) {
     dom.deleteTagWarningText.textContent = t('delete_tag_warning');
   }
-  if (dom.deleteTagModal) {
-    dom.deleteTagModal.style.display = 'flex';
-  }
+  showModal(dom.deleteTagModal, dom.cancelDeleteTagBtn || dom.confirmDeleteTagBtn);
 }
 
 export function closeDeleteTagModal() {
-  if (dom.deleteTagModal) {
-    dom.deleteTagModal.style.display = 'none';
-  }
+  hideModal(dom.deleteTagModal);
   pendingDeleteTag = null;
 }
 
@@ -1040,13 +1192,11 @@ export function openBatchDateModal(mediaIds = null) {
   }
 
   updateBatchDatePreview();
-  dom.batchDateModal.style.display = 'flex';
+  showModal(dom.batchDateModal, dom.batchDateInput);
 }
 
 export function closeBatchDateModal() {
-  if (dom.batchDateModal) {
-    dom.batchDateModal.style.display = 'none';
-  }
+  hideModal(dom.batchDateModal);
   pendingBatchDateIds = [];
   batchDateRefTs = null;
 }
@@ -1157,16 +1307,11 @@ export function openBatchMoveModal(mediaIds = null) {
     dom.batchMovePathInput.value = '';
   }
 
-  dom.batchMoveModal.style.display = 'flex';
-  if (dom.batchMovePathInput) {
-    setTimeout(() => dom.batchMovePathInput.focus(), 50);
-  }
+  showModal(dom.batchMoveModal, dom.batchMovePathInput);
 }
 
 export function closeBatchMoveModal() {
-  if (dom.batchMoveModal) {
-    dom.batchMoveModal.style.display = 'none';
-  }
+  hideModal(dom.batchMoveModal);
   pendingBatchMoveIds = [];
 }
 
