@@ -236,6 +236,8 @@ class FaceApi:
                 face["revision"] += 1
                 face["crop_url"] = f"/api/faces/{face['id']}/crop?revision={face['revision']}"
                 updated += 1
+            if updated:
+                self.group_snapshots.clear()
             route.fulfill(json=dict(updated_count=updated, failed_count=len(failed), failed=failed))
         elif path == "/api/faces/lookup" and method == "GET":
             ids = [int(value) for value in parse_qs(parsed.query).get("ids", [""])[0].split(",") if value]
@@ -628,6 +630,39 @@ def test_accept_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
     finally:
         page.evaluate("window.__releaseFaceMetadata?.()")
     expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled(timeout=30000)
+
+
+def test_accept_suggestions_in_review_faces_dialog_loads_next_face_grid(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    tags = page.evaluate("window._imagineState.tags.filter(t => t.category === 'people')")
+    alice = next(tag for tag in tags if tag["name"] == "Alice")
+    bob = next(tag for tag in tags if tag["name"] == "Bob")
+    api.names[alice["id"]] = "Alice"
+    api.names[bob["id"]] = "Bob"
+    alice_suggestion = [dict(tag_id=alice["id"], name="Alice", score=0.9)]
+    bob_suggestion = [dict(tag_id=bob["id"], name="Bob", score=0.88)]
+    api.faces = {
+        81: _face(81, media_id, alice_suggestion),
+        82: _face(82, media_id, bob_suggestion),
+    }
+    _open_existing_grid(page)
+    expect(page.locator("#faceGridPageStatus")).to_contain_text("Page 1 of 2")
+    group = page.locator(".face-grid-group").filter(has=page.locator('[data-face-id="81"]'))
+    expect(group.locator(".face-grid-card")).to_have_count(1)
+    accept_btn = group.locator("[data-face-group-accept]")
+    expect(accept_btn).to_have_text("Accept 1 suggestions")
+    accept_btn.click()
+
+    expect(page.locator("#faceGridPageStatus")).to_contain_text("Page 1 of 1")
+    bob_id = bob["id"]
+    bob_group = page.locator(f".face-grid-group[data-group-key='person:{bob_id}']")
+    expect(bob_group).to_be_visible()
+    expect(bob_group.locator(".face-grid-card")).to_have_count(1)
+    expect(bob_group.locator('.face-grid-card[data-face-id="82"]')).to_be_visible()
+    expect(page.locator("#faceGridRetryBtn")).to_be_hidden()
+    expect(page.locator("#faceGridState")).not_to_contain_text("snapshot expired")
 
 
 def test_reject_refreshes_review_grid_while_metadata_is_pending(server, page: Page):

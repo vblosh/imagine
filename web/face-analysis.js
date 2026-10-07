@@ -906,8 +906,8 @@ function renderFaceGrid(schedulePages = true) {
     : '';
   const prev = byId('faceGridPrevBtn');
   const next = byId('faceGridNextBtn');
-  if (prev) prev.disabled = gridGroupIndex <= 0 || gridIsLoading;
-  if (next) next.disabled = gridGroupIndex + 1 >= gridGroups.length || gridIsLoading;
+  if (prev) prev.disabled = gridGroupIndex <= 0 || gridIsLoading || gridActionBusy;
+  if (next) next.disabled = gridGroupIndex + 1 >= gridGroups.length || gridIsLoading || gridActionBusy;
   const count = byId('faceGridCount');
   if (count) count.textContent = t('face_grid_loaded_count', { loaded: gridFaces.length, total: gridTotal });
   updateGridSelectionUi();
@@ -966,7 +966,9 @@ async function requestGridGroupPage(offset, group, snapshot, requestToken, viewT
     trimGridPageCache(gridPageOffsetsForRange(gridGroupWindow.start, gridGroupWindow.end));
     return items;
   }).catch(err => {
-    if (requestToken === gridGroupRequestToken && viewToken === gridViewToken && !controller.signal.aborted) {
+    if (requestToken === gridGroupRequestToken && viewToken === gridViewToken && !controller.signal.aborted
+        && snapshot === gridSnapshot && String(group.key) === String(gridGroups[gridGroupIndex]?.key)
+        && byId('faceGridModal')?.style.display === 'flex') {
       gridFailedPageOffsets.add(offset);
       const stateNode = byId('faceGridState');
       if (stateNode) stateNode.textContent = t('face_grid_load_error', { error: err.message });
@@ -1009,9 +1011,10 @@ async function loadGridVisiblePages() {
 }
 
 function scheduleGridVisiblePages() {
-  if (gridScrollFrame) return;
+  if (gridScrollFrame || gridIsLoading || gridActionBusy || !gridSnapshot) return;
   gridScrollFrame = requestAnimationFrame(() => {
     gridScrollFrame = 0;
+    if (gridIsLoading || gridActionBusy || !gridSnapshot) return;
     const group = gridGroups[gridGroupIndex];
     const list = byId('faceGridList');
     const cards = list?.querySelector('.face-grid-group-cards');
@@ -1104,6 +1107,10 @@ function updateGridSelectionUi() {
   for (const id of ['faceGridShowNamed', 'faceGridShowUnnamed', 'faceGridIncludeDismissed']) {
     byId(id)?.toggleAttribute('disabled', gridIsLoading || gridActionBusy);
   }
+  const prev = byId('faceGridPrevBtn');
+  const next = byId('faceGridNextBtn');
+  if (prev) prev.disabled = gridGroupIndex <= 0 || gridIsLoading || gridActionBusy;
+  if (next) next.disabled = gridGroupIndex + 1 >= gridGroups.length || gridIsLoading || gridActionBusy;
 }
 
 function updateFaceGridLoading(loading) {
@@ -1126,6 +1133,10 @@ function currentGridQuery(jobId = gridJobId) {
 }
 
 function clearGridGroupWindow() {
+  if (gridScrollFrame) {
+    cancelAnimationFrame(gridScrollFrame);
+    gridScrollFrame = 0;
+  }
   gridGroupRequestToken += 1;
   for (const request of gridPageInflight.values()) request.controller.abort();
   gridPageInflight.clear();
@@ -1233,11 +1244,11 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
   }
   while (retainedCards.size > GRID_GROUP_DOM_LIMIT) retainedCards.delete(retainedCards.keys().next().value);
   gridRetainedCardsById = retainedCards;
+  gridSnapshot = '';
   clearGridGroupWindow();
   updateFaceGridLoading(true);
   if (!preserveSelection) {
     gridGroups = [];
-    gridSnapshot = '';
     gridTotal = 0;
     gridSelection.clear();
     gridSelectedFaceById.clear();
@@ -1320,7 +1331,8 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
     }
     if (list) list.scrollTop = targetScrollTop;
     if (groups.length) {
-      renderFaceGrid();
+      clearGridGroupWindow();
+      renderFaceGrid(false);
       const loaded = await loadGridVisiblePages();
       if (token !== gridLoadToken || controller.signal.aborted) return false;
       const currentGroup = groups[gridGroupIndex];
@@ -1331,9 +1343,10 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
       gridRetainedGroupKey = '';
       gridRetainedGroupFaceCount = 0;
     } else {
+      clearGridGroupWindow();
       gridFaces = [];
       gridLoadedFaces.clear();
-      renderFaceGrid();
+      renderFaceGrid(false);
       gridRetainedFacesByIndex.clear();
       gridRetainedCardsById.clear();
     }
@@ -1867,7 +1880,7 @@ async function updateGridPage(delta) {
   updateFaceGridLoading(true);
   const stateNode = byId('faceGridState');
   if (stateNode) stateNode.textContent = t('face_grid_loading');
-  renderFaceGrid();
+  renderFaceGrid(false);
   try {
     const loaded = await loadGridVisiblePages();
     if (loaded && stateNode && stateNode.textContent === t('face_grid_loading')) stateNode.textContent = '';
