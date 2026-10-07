@@ -14,6 +14,7 @@
 #include <limits>
 #include <mutex>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 #ifndef IMAGINE_FACE_ANALYSIS_BUILT
@@ -214,17 +215,19 @@ std::vector<std::vector<float>> runModel(LoadedModel& model,
     }
     std::vector<std::vector<float>> result;
     result.reserve(values.size());
+    const size_t batchSize = static_cast<size_t>(shape[0]);
     for (size_t i = 0; i < values.size(); ++i) {
         const auto& value = values[i];
         if (!value.IsTensor()) throw std::runtime_error("ONNX model produced a non-tensor output");
         auto tensorInfo = value.GetTensorTypeAndShapeInfo();
+        const size_t expectedOutputCount = model.outputElementCounts[i] * batchSize;
         if (tensorInfo.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT ||
-            tensorInfo.GetElementCount() != model.outputElementCounts[i]) {
+            tensorInfo.GetElementCount() != expectedOutputCount) {
             throw std::runtime_error("ONNX model returned an output incompatible with its declared shape");
         }
         const float* data = value.GetTensorData<float>();
-        if (!data && model.outputElementCounts[i] != 0) throw std::runtime_error("ONNX model returned a null tensor buffer");
-        result.emplace_back(data, data + model.outputElementCounts[i]);
+        if (!data && expectedOutputCount != 0) throw std::runtime_error("ONNX model returned a null tensor buffer");
+        result.emplace_back(data, data + expectedOutputCount);
     }
     return result;
 }
@@ -346,6 +349,7 @@ std::vector<Candidate> decodeDetections(const std::vector<std::vector<float>>& o
         throw std::runtime_error("SCRFD output layout or resize scale is invalid");
     }
     std::vector<Candidate> candidates;
+    candidates.reserve(64);
     size_t globalIndex = 0;
     for (size_t level = 0; level < kFeatureStrides.size(); ++level) {
         const int stride = kFeatureStrides[level];
@@ -484,8 +488,9 @@ Affine estimateArcFaceTransform(const std::array<Point, 5>& source) {
     return transform;
 }
 
-std::vector<float> alignAndNormalize(const thumbnail::ImageBuffer& image,
-                                     const std::array<Point, 5>& landmarks) {
+void alignAndNormalizeTo(const thumbnail::ImageBuffer& image,
+                         const std::array<Point, 5>& landmarks,
+                         float* outR, float* outG, float* outB) {
     const Affine transform = estimateArcFaceTransform(landmarks);
     const double determinant = transform.a * transform.d - transform.b * transform.c;
     if (!std::isfinite(determinant) || std::abs(determinant) < 1e-15) {
@@ -496,55 +501,88 @@ std::vector<float> alignAndNormalize(const thumbnail::ImageBuffer& image,
     const double ic = -transform.c / determinant;
     const double id = transform.a / determinant;
 
-    std::vector<float> chw(static_cast<size_t>(3) * kRecognizerSide * kRecognizerSide, 0.0f);
+    static const auto kAlignLut = [] {
+        std::array<float, 256> table{};
+        for (int i = 0; i < 256; ++i) {
+            table[i] = static_cast<float>(static_cast<double>(i) / 127.5 - 1.0);
+        }
+        return table;
+    }();
+
+    const uint8_t* imgBytes = image.data.data();
+    const size_t imgStride = static_cast<size_t>(image.width) * 3;
+    const int imgW = image.width;
+    const int imgH = image.height;
+
+    const double stepX_x = ia * 32.0;
+    const double stepX_y = ic * 32.0;
+
     for (int y = 0; y < kRecognizerSide; ++y) {
+        const double dy = static_cast<double>(y) - transform.ty;
+        const double rowSx = (-ia * transform.tx + ib * dy) * 32.0 + 0.5;
+        const double rowSy = (-ic * transform.tx + id * dy) * 32.0 + 0.5;
+        const size_t destRow = static_cast<size_t>(y) * kRecognizerSide;
+
         for (int x = 0; x < kRecognizerSide; ++x) {
-            const double dx = x - transform.tx;
-            const double dy = y - transform.ty;
-            const double sx = ia * dx + ib * dy;
-            const double sy = ic * dx + id * dy;
-            // Avoid converting malformed out-of-range floating coordinates to
-            // int. OpenCV's constant-border warp yields black for these pixels.
-            if (!std::isfinite(sx) || !std::isfinite(sy) || sx <= -1.0 || sy <= -1.0 ||
-                sx >= image.width || sy >= image.height) {
-                const size_t outPixel = static_cast<size_t>(y) * kRecognizerSide + x;
-                const float black = -1.0f;
-                chw[static_cast<size_t>(0) * kRecognizerSide * kRecognizerSide + outPixel] = black;
-                chw[static_cast<size_t>(1) * kRecognizerSide * kRecognizerSide + outPixel] = black;
-                chw[static_cast<size_t>(2) * kRecognizerSide * kRecognizerSide + outPixel] = black;
+            const double sx32 = rowSx + stepX_x * static_cast<double>(x);
+            const double sy32 = rowSy + stepX_y * static_cast<double>(x);
+
+            const int coordX = static_cast<int>(std::floor(sx32));
+            const int coordY = static_cast<int>(std::floor(sy32));
+
+            const int ix = coordX >> 5;
+            const int iy = coordY >> 5;
+            const int ax = coordX & 31;
+            const int ay = coordY & 31;
+
+            if (coordX < -32 || coordY < -32 || ix >= imgW || iy >= imgH) {
+                constexpr float black = -1.0f;
+                outR[destRow + x] = black;
+                outG[destRow + x] = black;
+                outB[destRow + x] = black;
                 continue;
             }
-            const int x0 = static_cast<int>(std::floor(sx));
-            const int y0 = static_cast<int>(std::floor(sy));
-            const double fx = sx - x0;
-            const double fy = sy - y0;
-            // OpenCV INTER_LINEAR uses a 1/32 interpolation table for uint8 images.
-            int ax = static_cast<int>(std::floor(fx * 32.0 + 0.5));
-            int ay = static_cast<int>(std::floor(fy * 32.0 + 0.5));
-            int ix = x0;
-            int iy = y0;
-            if (ax == 32) { ax = 0; ++ix; }
-            if (ay == 32) { ay = 0; ++iy; }
-            const double w00 = static_cast<double>((32 - ax) * (32 - ay)) / 1024.0;
-            const double w10 = static_cast<double>(ax * (32 - ay)) / 1024.0;
-            const double w01 = static_cast<double>((32 - ax) * ay) / 1024.0;
-            const double w11 = static_cast<double>(ax * ay) / 1024.0;
-            const size_t outPixel = static_cast<size_t>(y) * kRecognizerSide + x;
-            for (int channel = 0; channel < 3; ++channel) {
-                double pixel = 0.0;
-                auto sample = [&](int px, int py) -> uint8_t {
-                    if (px < 0 || py < 0 || px >= image.width || py >= image.height) return 0;
-                    return image.data[(static_cast<size_t>(py) * image.width + px) * 3 + channel];
+
+            const int w00 = (32 - ax) * (32 - ay);
+            const int w10 = ax * (32 - ay);
+            const int w01 = (32 - ax) * ay;
+            const int w11 = ax * ay;
+
+            if (ix >= 0 && iy >= 0 && ix + 1 < imgW && iy + 1 < imgH) {
+                const uint8_t* p0 = imgBytes + static_cast<size_t>(iy) * imgStride + static_cast<size_t>(ix) * 3;
+                const uint8_t* p1 = p0 + imgStride;
+
+                const int r = (p0[0] * w00 + p0[3] * w10 + p1[0] * w01 + p1[3] * w11 + 512) >> 10;
+                const int g = (p0[1] * w00 + p0[4] * w10 + p1[1] * w01 + p1[4] * w11 + 512) >> 10;
+                const int b = (p0[2] * w00 + p0[5] * w10 + p1[2] * w01 + p1[5] * w11 + 512) >> 10;
+
+                outR[destRow + x] = kAlignLut[static_cast<size_t>(std::clamp(r, 0, 255))];
+                outG[destRow + x] = kAlignLut[static_cast<size_t>(std::clamp(g, 0, 255))];
+                outB[destRow + x] = kAlignLut[static_cast<size_t>(std::clamp(b, 0, 255))];
+            } else {
+                auto sample = [&](int px, int py, int channel) -> int {
+                    if (px < 0 || py < 0 || px >= imgW || py >= imgH) return 0;
+                    return imgBytes[(static_cast<size_t>(py) * imgW + px) * 3 + channel];
                 };
-                pixel += sample(ix, iy) * w00;
-                pixel += sample(ix + 1, iy) * w10;
-                pixel += sample(ix, iy + 1) * w01;
-                pixel += sample(ix + 1, iy + 1) * w11;
-                const float normalized = static_cast<float>(std::clamp(std::floor(pixel + 0.5), 0.0, 255.0) / 127.5 - 1.0);
-                chw[static_cast<size_t>(channel) * kRecognizerSide * kRecognizerSide + outPixel] = normalized;
+                for (int c = 0; c < 3; ++c) {
+                    const int pixel = sample(ix, iy, c) * w00 + sample(ix + 1, iy, c) * w10 +
+                                      sample(ix, iy + 1, c) * w01 + sample(ix + 1, iy + 1, c) * w11;
+                    const int val = std::clamp((pixel + 512) >> 10, 0, 255);
+                    const float norm = kAlignLut[static_cast<size_t>(val)];
+                    if (c == 0) outR[destRow + x] = norm;
+                    else if (c == 1) outG[destRow + x] = norm;
+                    else outB[destRow + x] = norm;
+                }
             }
         }
     }
+}
+
+std::vector<float> alignAndNormalize(const thumbnail::ImageBuffer& image,
+                                     const std::array<Point, 5>& landmarks) {
+    constexpr size_t kPlaneSize = static_cast<size_t>(kRecognizerSide) * kRecognizerSide;
+    std::vector<float> chw(static_cast<size_t>(3) * kPlaneSize, 0.0f);
+    alignAndNormalizeTo(image, landmarks, chw.data(), chw.data() + kPlaneSize, chw.data() + 2 * kPlaneSize);
     return chw;
 }
 
@@ -721,38 +759,103 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
                                          -127.5f / 128.0f);
         constexpr int kResizeCoefficientBits = 11;
         constexpr int kResizeCoefficientScale = 1 << kResizeCoefficientBits;
-        for (int y = 0; y < resizedHeight; ++y) {
-            float sourceY = static_cast<float>((static_cast<double>(y) + 0.5) * image.height / resizedHeight - 0.5);
-            int y0 = static_cast<int>(std::floor(sourceY));
-            float fy = sourceY - y0;
-            if (y0 < 0) { y0 = 0; fy = 0.0f; }
-            if (y0 >= image.height - 1) { y0 = image.height - 1; fy = 0.0f; }
-            const int y1 = std::min(y0 + 1, image.height - 1);
-            const int beta0 = static_cast<int>(std::lrint((1.0f - fy) * kResizeCoefficientScale));
-            const int beta1 = static_cast<int>(std::lrint(fy * kResizeCoefficientScale));
-            for (int x = 0; x < resizedWidth; ++x) {
-                float sourceX = static_cast<float>((static_cast<double>(x) + 0.5) * image.width / resizedWidth - 0.5);
-                int x0 = static_cast<int>(std::floor(sourceX));
-                float fx = sourceX - x0;
-                if (x0 < 0) { x0 = 0; fx = 0.0f; }
-                if (x0 >= image.width - 1) { x0 = image.width - 1; fx = 0.0f; }
-                const int x1 = std::min(x0 + 1, image.width - 1);
-                const int alpha0 = static_cast<int>(std::lrint((1.0f - fx) * kResizeCoefficientScale));
-                const int alpha1 = static_cast<int>(std::lrint(fx * kResizeCoefficientScale));
-                const size_t p00 = (static_cast<size_t>(y0) * image.width + x0) * 3;
-                const size_t p10 = (static_cast<size_t>(y0) * image.width + x1) * 3;
-                const size_t p01 = (static_cast<size_t>(y1) * image.width + x0) * 3;
-                const size_t p11 = (static_cast<size_t>(y1) * image.width + x1) * 3;
-                const size_t dest = static_cast<size_t>(y) * kDetectorSide + x;
-                for (int channel = 0; channel < 3; ++channel) {
-                    const int top = image.data[p00 + channel] * alpha0 + image.data[p10 + channel] * alpha1;
-                    const int bottom = image.data[p01 + channel] * alpha0 + image.data[p11 + channel] * alpha1;
-                    const int value = (top * beta0 + bottom * beta1 + (1 << (2 * kResizeCoefficientBits - 1))) >>
-                                      (2 * kResizeCoefficientBits);
-                    detectorInput[static_cast<size_t>(channel) * kDetectorSide * kDetectorSide + dest] =
-                        (static_cast<float>(value) - 127.5f) / 128.0f;
+
+        static const auto kNormLut = [] {
+            std::array<float, 256> table{};
+            for (int i = 0; i < 256; ++i) {
+                table[i] = (static_cast<float>(i) - 127.5f) / 128.0f;
+            }
+            return table;
+        }();
+
+        struct ResampleX {
+            size_t off0;
+            size_t off1;
+            int alpha0;
+            int alpha1;
+        };
+        std::vector<ResampleX> xWeights(resizedWidth);
+        for (int x = 0; x < resizedWidth; ++x) {
+            float sourceX = static_cast<float>((static_cast<double>(x) + 0.5) * image.width / resizedWidth - 0.5);
+            int x0 = static_cast<int>(std::floor(sourceX));
+            float fx = sourceX - x0;
+            if (x0 < 0) { x0 = 0; fx = 0.0f; }
+            if (x0 >= image.width - 1) { x0 = image.width - 1; fx = 0.0f; }
+            const int x1 = std::min(x0 + 1, image.width - 1);
+            xWeights[x] = {
+                static_cast<size_t>(x0) * 3,
+                static_cast<size_t>(x1) * 3,
+                static_cast<int>(std::lrint((1.0f - fx) * kResizeCoefficientScale)),
+                static_cast<int>(std::lrint(fx * kResizeCoefficientScale))
+            };
+        }
+
+        constexpr size_t kPlaneSize = static_cast<size_t>(kDetectorSide) * kDetectorSide;
+        float* planeR = detectorInput.data();
+        float* planeG = planeR + kPlaneSize;
+        float* planeB = planeG + kPlaneSize;
+        const uint8_t* imgBytes = image.data.data();
+        const size_t imgStride = static_cast<size_t>(image.width) * 3;
+
+        const int numThreads = std::max(1, impl_->config.cpuThreads);
+        auto processRows = [&](int startY, int endY) {
+            for (int y = startY; y < endY; ++y) {
+                float sourceY = static_cast<float>((static_cast<double>(y) + 0.5) * image.height / resizedHeight - 0.5);
+                int y0 = static_cast<int>(std::floor(sourceY));
+                float fy = sourceY - y0;
+                if (y0 < 0) { y0 = 0; fy = 0.0f; }
+                if (y0 >= image.height - 1) { y0 = image.height - 1; fy = 0.0f; }
+                const int y1 = std::min(y0 + 1, image.height - 1);
+                const int beta0 = static_cast<int>(std::lrint((1.0f - fy) * kResizeCoefficientScale));
+                const int beta1 = static_cast<int>(std::lrint(fy * kResizeCoefficientScale));
+
+                const uint8_t* row0 = imgBytes + static_cast<size_t>(y0) * imgStride;
+                const uint8_t* row1 = imgBytes + static_cast<size_t>(y1) * imgStride;
+                const size_t destRow = static_cast<size_t>(y) * kDetectorSide;
+                float* outR = planeR + destRow;
+                float* outG = planeG + destRow;
+                float* outB = planeB + destRow;
+
+                for (int x = 0; x < resizedWidth; ++x) {
+                    const auto& xw = xWeights[x];
+                    const size_t off0 = xw.off0;
+                    const size_t off1 = xw.off1;
+
+                    const int topR = row0[off0] * xw.alpha0 + row0[off1] * xw.alpha1;
+                    const int botR = row1[off0] * xw.alpha0 + row1[off1] * xw.alpha1;
+                    const int valR = (topR * beta0 + botR * beta1 + (1 << (2 * kResizeCoefficientBits - 1))) >>
+                                     (2 * kResizeCoefficientBits);
+                    outR[x] = kNormLut[static_cast<size_t>(std::clamp(valR, 0, 255))];
+
+                    const int topG = row0[off0 + 1] * xw.alpha0 + row0[off1 + 1] * xw.alpha1;
+                    const int botG = row1[off0 + 1] * xw.alpha0 + row1[off1 + 1] * xw.alpha1;
+                    const int valG = (topG * beta0 + botG * beta1 + (1 << (2 * kResizeCoefficientBits - 1))) >>
+                                     (2 * kResizeCoefficientBits);
+                    outG[x] = kNormLut[static_cast<size_t>(std::clamp(valG, 0, 255))];
+
+                    const int topB = row0[off0 + 2] * xw.alpha0 + row0[off1 + 2] * xw.alpha1;
+                    const int botB = row1[off0 + 2] * xw.alpha0 + row1[off1 + 2] * xw.alpha1;
+                    const int valB = (topB * beta0 + botB * beta1 + (1 << (2 * kResizeCoefficientBits - 1))) >>
+                                     (2 * kResizeCoefficientBits);
+                    outB[x] = kNormLut[static_cast<size_t>(std::clamp(valB, 0, 255))];
                 }
             }
+        };
+
+        if (numThreads <= 1 || resizedHeight <= 16) {
+            processRows(0, resizedHeight);
+        } else {
+            std::vector<std::jthread> threads;
+            threads.reserve(numThreads - 1);
+            const int chunkSize = (resizedHeight + numThreads - 1) / numThreads;
+            for (int t = 1; t < numThreads; ++t) {
+                const int start = t * chunkSize;
+                const int end = std::min(start + chunkSize, resizedHeight);
+                if (start < end) {
+                    threads.emplace_back(processRows, start, end);
+                }
+            }
+            processRows(0, std::min(chunkSize, resizedHeight));
         }
         const auto detectorStart = std::chrono::steady_clock::now();
         timings.detectorPreprocessMs = std::chrono::duration<double, std::milli>(detectorStart - preprocessStart).count();
@@ -768,38 +871,81 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
         timings.detectorNmsMs = std::chrono::duration<double, std::milli>(recognitionStart - nmsStart).count();
 
         std::vector<Detection> detections;
-        detections.reserve(candidates.size());
-        for (const auto& candidate : candidates) {
-            Detection detection;
-            detection.x = candidate.x1;
-            detection.y = candidate.y1;
-            detection.width = candidate.x2 - candidate.x1;
-            detection.height = candidate.y2 - candidate.y1;
-            detection.score = candidate.score;
-            detection.landmarks = candidate.landmarks;
+        detections.resize(candidates.size());
+
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            const auto& candidate = candidates[i];
+            detections[i].x = candidate.x1;
+            detections[i].y = candidate.y1;
+            detections[i].width = candidate.x2 - candidate.x1;
+            detections[i].height = candidate.y2 - candidate.y1;
+            detections[i].score = candidate.score;
+            detections[i].landmarks = candidate.landmarks;
+        }
+
+        constexpr size_t kMaxRecognizerBatch = 16;
+        constexpr size_t kCropElements = static_cast<size_t>(3) * kRecognizerSide * kRecognizerSide;
+        constexpr size_t kPlaneElements = static_cast<size_t>(kRecognizerSide) * kRecognizerSide;
+
+        for (size_t chunkStart = 0; chunkStart < candidates.size(); chunkStart += kMaxRecognizerBatch) {
+            const size_t chunkSize = std::min(kMaxRecognizerBatch, candidates.size() - chunkStart);
+            std::vector<float> batchInput(chunkSize * kCropElements);
+            std::vector<size_t> validChunkIndices;
+            validChunkIndices.reserve(chunkSize);
+
+            for (size_t b = 0; b < chunkSize; ++b) {
+                const size_t candIdx = chunkStart + b;
+                try {
+                    float* crop = batchInput.data() + validChunkIndices.size() * kCropElements;
+                    alignAndNormalizeTo(image, candidates[candIdx].landmarks,
+                                        crop, crop + kPlaneElements, crop + 2 * kPlaneElements);
+                    validChunkIndices.push_back(candIdx);
+                } catch (const std::exception& ex) {
+                    detections[candIdx].embeddingError = exceptionMessage(ex);
+                }
+            }
+
+            if (validChunkIndices.empty()) continue;
+
+            const size_t validCount = validChunkIndices.size();
+            const std::vector<int64_t> batchShape{static_cast<int64_t>(validCount), 3, kRecognizerSide, kRecognizerSide};
             try {
-                auto aligned = alignAndNormalize(image, candidate.landmarks);
-                auto embeddingOutput = runModel(*impl_->recognizer, aligned.data(), impl_->recognizerInputShape);
-                if (embeddingOutput.size() != 1 || embeddingOutput.front().size() != kEmbeddingDimensions) {
+                auto embeddingOutput = runModel(*impl_->recognizer, batchInput.data(), batchShape);
+                if (embeddingOutput.size() != 1 || embeddingOutput.front().size() != validCount * kEmbeddingDimensions) {
                     throw std::runtime_error("ArcFace inference returned an invalid embedding shape");
                 }
-                const auto& raw = embeddingOutput.front();
-                double normSquared = 0.0;
-                for (float value : raw) {
-                    if (!std::isfinite(value)) throw std::runtime_error("ArcFace inference returned a non-finite embedding");
-                    normSquared += static_cast<double>(value) * value;
+                const auto& rawAll = embeddingOutput.front();
+                for (size_t b = 0; b < validCount; ++b) {
+                    const size_t candIdx = validChunkIndices[b];
+                    const float* raw = rawAll.data() + b * kEmbeddingDimensions;
+                    double normSquared = 0.0;
+                    for (size_t d = 0; d < kEmbeddingDimensions; ++d) {
+                        const float value = raw[d];
+                        if (!std::isfinite(value)) {
+                            detections[candIdx].embeddingError = "ArcFace inference returned a non-finite embedding";
+                            break;
+                        }
+                        normSquared += static_cast<double>(value) * value;
+                    }
+                    if (!detections[candIdx].embeddingError.empty()) continue;
+                    const double norm = std::sqrt(normSquared);
+                    if (!std::isfinite(norm) || norm <= 1e-12) {
+                        detections[candIdx].embeddingError = "ArcFace inference returned a zero-norm embedding";
+                        continue;
+                    }
+                    detections[candIdx].embedding.reserve(kEmbeddingDimensions);
+                    for (size_t d = 0; d < kEmbeddingDimensions; ++d) {
+                        detections[candIdx].embedding.push_back(static_cast<float>(raw[d] / norm));
+                    }
                 }
-                const double norm = std::sqrt(normSquared);
-                if (!std::isfinite(norm) || norm <= 1e-12) {
-                    throw std::runtime_error("ArcFace inference returned a zero-norm embedding");
-                }
-                detection.embedding.reserve(kEmbeddingDimensions);
-                for (float value : raw) detection.embedding.push_back(static_cast<float>(value / norm));
             } catch (const std::exception& ex) {
-                detection.embeddingError = exceptionMessage(ex);
-                detection.embedding.clear();
+                const std::string err = exceptionMessage(ex);
+                for (size_t b = 0; b < validCount; ++b) {
+                    const size_t candIdx = validChunkIndices[b];
+                    detections[candIdx].embeddingError = err;
+                    detections[candIdx].embedding.clear();
+                }
             }
-            detections.push_back(std::move(detection));
         }
         const auto finish = std::chrono::steady_clock::now();
         timings.recognitionMs = std::chrono::duration<double, std::milli>(finish - recognitionStart).count();

@@ -576,6 +576,8 @@ OrientedRgb orientRgb(const thumbnail::ImageBuffer& src, int orientation) {
 struct EncodedSource {
     std::vector<uint8_t> bytes;
     std::string hash;
+    std::filesystem::file_time_type writeTime{};
+    uintmax_t fileSize{0};
 };
 
 Result<EncodedSource> readEncodedSource(const std::string& path) {
@@ -583,7 +585,10 @@ Result<EncodedSource> readEncodedSource(const std::string& path) {
     if (!bytes.isOk()) return bytes.status();
     auto hash = metadata::Hasher::computeBytesSha256(bytes.value().data(), bytes.value().size());
     if (hash.empty()) return Status::internal("Failed to compute SHA-256 digest");
-    return EncodedSource{std::move(bytes.value()), std::move(hash)};
+    std::error_code ec;
+    auto writeTime = std::filesystem::last_write_time(path, ec);
+    auto fileSize = std::filesystem::file_size(path, ec);
+    return EncodedSource{std::move(bytes.value()), std::move(hash), writeTime, fileSize};
 }
 
 class SourcePrefetcher {
@@ -678,6 +683,9 @@ std::vector<float> checkedEmbedding(const Detection& d, std::string& error) {
     if (!std::isfinite(norm2) || norm2 <= 1e-20) {
         error = "Recognition model returned a zero-norm embedding";
         return {};
+    }
+    if (std::abs(norm2 - 1.0) < 1e-4) {
+        return d.embedding;
     }
     float norm = static_cast<float>(std::sqrt(norm2));
     std::vector<float> normalized = d.embedding;
@@ -867,6 +875,19 @@ Status persistAnalysis(Connection& conn, MediaId mediaId, const MediaItem& media
         struct OldFace { int64_t id; double x,y,w,h; bool used{false}; };
         std::vector<OldFace> previous;
         while (oldFaces.step() == StepResult::Row) previous.push_back({oldFaces.getInt64(0),oldFaces.getDouble(1),oldFaces.getDouble(2),oldFaces.getDouble(3),oldFaces.getDouble(4),false});
+        auto upRes = conn.prepare("UPDATE faces SET embedding=?,embedding_size=?,embedding_error=?,updated_at=? WHERE id=?;");
+        if (!upRes.isOk()) return upRes.status();
+        auto up = std::move(upRes.value());
+
+        auto insRes = conn.prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,embedding,embedding_size,embedding_error,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?);
+        )SQL");
+        if (!insRes.isOk()) return insRes.status();
+        auto ins = std::move(insRes.value());
+
+        const int64_t now = nowSeconds();
+
         for (const auto& detection : detections) {
             double bestIou = 0;
             OldFace* match = nullptr;
@@ -885,39 +906,33 @@ Status persistAnalysis(Connection& conn, MediaId mediaId, const MediaItem& media
             auto embedding = checkedEmbedding(detection, embedError);
             if (match && bestIou >= 0.5) {
                 match->used = true;
-                auto upRes = conn.prepare("UPDATE faces SET embedding=?,embedding_size=?,embedding_error=?,updated_at=? WHERE id=?;");
-                if (!upRes.isOk()) return upRes.status();
-                auto up = std::move(upRes.value());
                 bindEmbedding(up, 1, embedding); up.bind(2, static_cast<int32_t>(embedding.size()));
-                up.bind(3, embedError); up.bind(4, nowSeconds()); up.bind(5, match->id);
+                up.bind(3, embedError); up.bind(4, now); up.bind(5, match->id);
                 Status s = execDone(conn, up, "Failed to refresh face embedding");
                 if (!s.isOk()) return s;
+                up.reset();
             } else {
-                auto insRes = conn.prepare(R"SQL(
-                    INSERT INTO faces(media_id,x,y,width,height,score,landmarks,embedding,embedding_size,embedding_error,created_at,updated_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?);
-                )SQL");
-                if (!insRes.isOk()) return insRes.status();
-                auto ins = std::move(insRes.value());
                 ins.bind(1, mediaId); ins.bind(2, detection.x); ins.bind(3, detection.y);
                 ins.bind(4, detection.width); ins.bind(5, detection.height); ins.bind(6, detection.score);
                 ins.bind(7, pointsJson(detection.landmarks).dump()); bindEmbedding(ins, 8, embedding);
                 ins.bind(9, static_cast<int32_t>(embedding.size())); ins.bind(10, embedError);
-                ins.bind(11, nowSeconds()); ins.bind(12, nowSeconds());
+                ins.bind(11, now); ins.bind(12, now);
                 Status s = execDone(conn, ins, "Failed to insert refreshed face");
                 if (!s.isOk()) return s;
+                ins.reset();
             }
         }
+        auto clearRes = conn.prepare(
+            "UPDATE faces SET embedding=NULL,embedding_size=0,embedding_error=?,updated_at=? WHERE id=?;");
+        if (!clearRes.isOk()) return clearRes.status();
+        auto clear = std::move(clearRes.value());
         for (const auto& old : previous) {
             if (old.used) continue;
-            auto clearRes = conn.prepare(
-                "UPDATE faces SET embedding=NULL,embedding_size=0,embedding_error=?,updated_at=? WHERE id=?;");
-            if (!clearRes.isOk()) return clearRes.status();
-            auto clear = std::move(clearRes.value());
             clear.bind(1, "No compatible refreshed embedding was produced");
-            clear.bind(2, nowSeconds()); clear.bind(3, old.id);
+            clear.bind(2, now); clear.bind(3, old.id);
             Status s = execDone(conn, clear, "Failed to invalidate unmatched old face embedding");
             if (!s.isOk()) return s;
+            clear.reset();
         }
     } else {
         auto oldTagsRes = conn.prepare("SELECT DISTINCT person_tag_id FROM faces WHERE media_id=? AND person_tag_id IS NOT NULL;");
@@ -935,22 +950,26 @@ Status persistAnalysis(Connection& conn, MediaId mediaId, const MediaItem& media
             s = syncFaceTagOwnership(conn, mediaId, tagId);
             if (!s.isOk()) return s;
         }
+
+        auto insRes = conn.prepare(R"SQL(
+            INSERT INTO faces(media_id,x,y,width,height,score,landmarks,embedding,embedding_size,embedding_error,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?);
+        )SQL");
+        if (!insRes.isOk()) return insRes.status();
+        auto ins = std::move(insRes.value());
+        const int64_t now = nowSeconds();
+
         for (const auto& detection : detections) {
             std::string embedError;
             auto embedding = checkedEmbedding(detection, embedError);
-            auto insRes = conn.prepare(R"SQL(
-                INSERT INTO faces(media_id,x,y,width,height,score,landmarks,embedding,embedding_size,embedding_error,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?);
-            )SQL");
-            if (!insRes.isOk()) return insRes.status();
-            auto ins = std::move(insRes.value());
             ins.bind(1, mediaId); ins.bind(2, detection.x); ins.bind(3, detection.y);
             ins.bind(4, detection.width); ins.bind(5, detection.height); ins.bind(6, detection.score);
             ins.bind(7, pointsJson(detection.landmarks).dump()); bindEmbedding(ins, 8, embedding);
             ins.bind(9, static_cast<int32_t>(embedding.size())); ins.bind(10, embedError);
-            ins.bind(11, nowSeconds()); ins.bind(12, nowSeconds());
+            ins.bind(11, now); ins.bind(12, now);
             s = execDone(conn, ins, "Failed to persist detected face");
             if (!s.isOk()) return s;
+            ins.reset();
         }
     }
 
@@ -2952,6 +2971,8 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
                 recordFailure(mediaId, media, media, message);
                 continue;
             }
+            const auto sourceWriteTime = source.value().writeTime;
+            const auto sourceFileSize = source.value().fileSize;
 
             auto loaded = [&]() {
                 auto encodedBytes = std::move(source.value().bytes);
@@ -3007,12 +3028,18 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
                 recordFailure(mediaId, analysisMedia, media, geometryStatus.message());
                 continue;
             }
-            auto hashAfter = metadata::Hasher::computeFileSha256(photoPath);
-            if (!hashAfter.isOk() || hashAfter.value() != media.content_hash) {
-                const std::string message = "Photo file changed during face analysis; reimport it before face analysis";
-                IMAGINE_LOG_ERROR("Face scan file changed during analysis for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + message);
-                recordFailure(mediaId, analysisMedia, media, message);
-                continue;
+            std::error_code hashCheckEc;
+            const auto writeTimeAfter = std::filesystem::last_write_time(photoPath, hashCheckEc);
+            const auto fileSizeAfter = std::filesystem::file_size(photoPath, hashCheckEc);
+            const bool fileUnchanged = !hashCheckEc && writeTimeAfter == sourceWriteTime && fileSizeAfter == sourceFileSize;
+            if (!fileUnchanged) {
+                auto hashAfter = metadata::Hasher::computeFileSha256(photoPath);
+                if (!hashAfter.isOk() || hashAfter.value() != media.content_hash) {
+                    const std::string message = "Photo file changed during face analysis; reimport it before face analysis";
+                    IMAGINE_LOG_ERROR("Face scan file changed during analysis for media ID " + std::to_string(mediaId) + " (" + photoPath + "): " + message);
+                    recordFailure(mediaId, analysisMedia, media, message);
+                    continue;
+                }
             }
 
             Status persisted;
