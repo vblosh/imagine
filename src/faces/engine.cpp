@@ -99,7 +99,8 @@ bool isExpectedOrDynamic(int64_t actual, int64_t expected) {
 }
 
 std::vector<int64_t> inputShape(Ort::Session& session, int64_t expectedSide, const char* label, bool* dynamicBatchOut = nullptr) {
-    auto info = session.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
+    auto typeInfo = session.GetInputTypeInfo(0);
+    auto info = typeInfo.GetTensorTypeAndShapeInfo();
     if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
         throw std::runtime_error(std::string(label) + " input must be float32");
     }
@@ -137,7 +138,8 @@ LoadedModel inspectSession(std::unique_ptr<Ort::Session> session, const char* la
     for (size_t i = 0; i < outputs; ++i) {
         auto outName = model.session->GetOutputNameAllocated(i, allocator);
         model.outputNames.emplace_back(outName.get());
-        auto type = model.session->GetOutputTypeInfo(i).GetTensorTypeAndShapeInfo();
+        auto typeInfo = model.session->GetOutputTypeInfo(i);
+        auto type = typeInfo.GetTensorTypeAndShapeInfo();
         if (type.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
             throw std::runtime_error(std::string(label) + " outputs must be float32");
         }
