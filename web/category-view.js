@@ -306,6 +306,8 @@ export function renderCategoryView(category) {
 
   // Switch display containers and toolbars
   dom.categoryViewContainer.style.display = 'flex';
+  dom.categoryViewContainer.scrollTop = 0;
+  dom.categoryViewContainer.scrollLeft = 0;
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'none';
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'flex';
   if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
@@ -475,7 +477,11 @@ export function selectCategoryAlbum(album) {
   if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
-  if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+  if (dom.gridScrollContainer) {
+    dom.gridScrollContainer.style.display = 'block';
+    dom.gridScrollContainer.scrollTop = 0;
+    dom.gridScrollContainer.scrollLeft = 0;
+  }
   if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
 
   updateSidebarActive();
@@ -503,7 +509,11 @@ export function selectCategoryItem(tag) {
   if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
-  if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+  if (dom.gridScrollContainer) {
+    dom.gridScrollContainer.style.display = 'block';
+    dom.gridScrollContainer.scrollTop = 0;
+    dom.gridScrollContainer.scrollLeft = 0;
+  }
   if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
 
   updateSidebarActive();

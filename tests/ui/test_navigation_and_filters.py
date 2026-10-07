@@ -869,6 +869,97 @@ def test_folders_collapse_expand(server, page: Page):
     expect(arrow).to_have_text("▶")
 
 
+def test_scroll_resets_on_folder_and_filter_selection(server, page: Page):
+    """When user scrolls down and selects a folder or another filter, scrollbar resets to start (0)."""
+    page.goto(server["url"])
+    expect(page.locator(".photo-card")).to_have_count(6)
+
+    # Make container scrollable and scroll down
+    page.evaluate("""() => {
+        const container = document.getElementById('gridScrollContainer');
+        container.style.height = '100px';
+        container.scrollTop = 80;
+    }""")
+    initial_scroll = page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop")
+    assert initial_scroll > 0
+
+    # Expand folders
+    page.locator("#foldersHeader").click()
+    family_folder = page.locator("#foldersTree .folder-item", has_text="family")
+    nature_folder = page.locator("#foldersTree .folder-item", has_text="nature")
+    expect(family_folder).to_be_visible()
+    expect(nature_folder).to_be_visible()
+
+    # 1. Select folder -> scrollbar resets to start
+    family_folder.click()
+    expect(page.locator(".photo-card")).to_have_count(2)
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
+
+    # 2. Scroll down again in folder view
+    page.evaluate("""() => {
+        const container = document.getElementById('gridScrollContainer');
+        container.scrollTop = 50;
+    }""")
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") > 0
+
+    # 3. Select another folder -> scrollbar resets to start
+    nature_folder.click()
+    expect(page.locator(".photo-card")).to_have_count(2)
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
+
+    # 4. Scroll down again and select another filter (Picks)
+    page.evaluate("""() => {
+        const container = document.getElementById('gridScrollContainer');
+        container.scrollTop = 50;
+    }""")
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") > 0
+
+    page.locator("#navPicks").click()
+    expect(page.locator(".photo-card")).to_have_count(2)
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
+
+    # 5. Scroll down again and click All Media (Clear filters)
+    page.evaluate("""() => {
+        const container = document.getElementById('gridScrollContainer');
+        container.scrollTop = 50;
+    }""")
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") > 0
+
+    page.locator("#navAllMedia").click()
+    expect(page.locator(".photo-card")).to_have_count(6)
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
+
+    # 6. Scroll down, select folder, scroll down, toggle folder off
+    page.evaluate("""() => {
+        const container = document.getElementById('gridScrollContainer');
+        container.scrollTop = 50;
+    }""")
+    family_folder.click()
+    expect(page.locator(".photo-card")).to_have_count(2)
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
+
+    page.evaluate("""() => {
+        const container = document.getElementById('gridScrollContainer');
+        container.scrollTop = 50;
+    }""")
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") > 0
+    family_folder.click()  # toggle off -> back to all media
+    expect(page.locator(".photo-card")).to_have_count(6)
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
+
+    # 7. Scroll down, apply search filter
+    page.evaluate("""() => {
+        const container = document.getElementById('gridScrollContainer');
+        container.scrollTop = 50;
+    }""")
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") > 0
+    search_input = page.locator("#searchInput")
+    search_input.fill("mountain")
+    expect(page.locator(".photo-card")).to_have_count(1)
+    assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
+
+
+
 
 
 

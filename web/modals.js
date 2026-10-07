@@ -1354,7 +1354,7 @@ export async function submitBatchMove() {
 
     const prevScroll = dom.gridScrollContainer ? dom.gridScrollContainer.scrollTop : 0;
     await loadMetadata();
-    await loadMedia();
+    await loadMedia(false, { preserveScroll: true });
     if (dom.gridScrollContainer) dom.gridScrollContainer.scrollTop = prevScroll;
     updateInspector();
 

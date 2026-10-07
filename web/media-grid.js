@@ -210,11 +210,20 @@ export function buildMediaParams() {
   return params;
 }
 
-export async function loadMedia(append = false) {
+export async function loadMedia(append = false, { preserveScroll = false } = {}) {
+  let isAppend = append;
+  let shouldPreserveScroll = preserveScroll;
+  if (typeof append === 'object' && append !== null) {
+    isAppend = Boolean(append.append);
+    shouldPreserveScroll = Boolean(append.preserveScroll);
+  } else {
+    isAppend = Boolean(append);
+  }
+
   syncAlbumOrderSortOption();
   prepareAlbumOrderMode();
 
-  if (append) {
+  if (isAppend) {
     return loadMoreMedia();
   }
 
@@ -243,11 +252,20 @@ export async function loadMedia(append = false) {
   state.isLoadingMedia = true;
   state.mediaOffset = 0;
 
+  if (!shouldPreserveScroll && dom.gridScrollContainer) {
+    dom.gridScrollContainer.scrollTop = 0;
+    dom.gridScrollContainer.scrollLeft = 0;
+  }
+
   try {
     if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
     if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
     if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
     if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
+    if (!shouldPreserveScroll && dom.gridScrollContainer) {
+      dom.gridScrollContainer.scrollTop = 0;
+      dom.gridScrollContainer.scrollLeft = 0;
+    }
 
     const albumOrderMode = isAlbumOrderMode();
     const pageLimit = albumOrderMode ? 1000 : state.mediaLimit;
@@ -315,6 +333,10 @@ export async function loadMedia(append = false) {
 
     if (state.viewMode !== 'map') {
       renderGrid();
+      if (!shouldPreserveScroll && dom.gridScrollContainer) {
+        dom.gridScrollContainer.scrollTop = 0;
+        dom.gridScrollContainer.scrollLeft = 0;
+      }
     }
     if (state.viewMode === 'map' || state.mapInstance) {
       renderMapMarkers();
@@ -1028,6 +1050,10 @@ export function handleSidebarItemClick(itemType, itemValue, e) {
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
   if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
   if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
+  if (dom.gridScrollContainer) {
+    dom.gridScrollContainer.scrollTop = 0;
+    dom.gridScrollContainer.scrollLeft = 0;
+  }
 
   clearTimelineSelection();
 
@@ -1747,7 +1773,11 @@ export function clearAllFilters() {
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
   if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
-  if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+  if (dom.gridScrollContainer) {
+    dom.gridScrollContainer.style.display = 'block';
+    dom.gridScrollContainer.scrollTop = 0;
+    dom.gridScrollContainer.scrollLeft = 0;
+  }
   if (dom.viewTabs) {
     dom.viewTabs.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'media'));
   }
