@@ -2293,8 +2293,24 @@ TEST_F(ServerTest, FaceBatchReviewSupportsPartialIdentityAcceptAndDismiss) {
     ASSERT_EQ(dismiss->status, 200) << dismiss->body;
     const auto dismissJson = nlohmann::json::parse(dismiss->body);
     ASSERT_EQ(dismissJson["updated"].size(), 2u);
-    EXPECT_TRUE(dismissJson["failed"].empty());
-    for (const auto& face : dismissJson["updated"]) EXPECT_TRUE(face["dismissed"].get<bool>());
+    for (const auto& face : dismissJson["updated"]) {
+        EXPECT_TRUE(face["dismissed"].get<bool>());
+        EXPECT_TRUE(face["suggestions"].empty());
+    }
+
+    auto partialRestore = client.Post("/api/faces/batch", auth,
+        nlohmann::json{{"action", "dismiss"}, {"dismissed", false},
+            {"faces", {{{"id", firstFace}, {"revision", 3}}, {{"id", secondFace}, {"revision", 99}}}}}.dump(),
+        "application/json");
+    ASSERT_TRUE(partialRestore);
+    ASSERT_EQ(partialRestore->status, 200) << partialRestore->body;
+    const auto partialJson = nlohmann::json::parse(partialRestore->body);
+    ASSERT_EQ(partialJson["updated"].size(), 1u);
+    ASSERT_EQ(partialJson["failed"].size(), 1u);
+    EXPECT_FALSE(partialJson["updated"][0]["dismissed"].get<bool>());
+    EXPECT_EQ(partialJson["failed"][0]["id"], secondFace);
+    EXPECT_EQ(partialJson["failed"][0]["status"], 409);
+
     server_->setApiToken("");
 }
 

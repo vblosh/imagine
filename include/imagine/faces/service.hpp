@@ -46,6 +46,17 @@ struct SuggestionRejectionOutcome {
     nlohmann::json face;
 };
 
+struct FaceDismissal {
+    int64_t id{0};
+    int64_t revision{0};
+};
+
+struct FaceDismissalOutcome {
+    int64_t id{0};
+    Status status;
+    nlohmann::json face;
+};
+
 class Service {
 public:
     using PathResolver = std::function<std::string(const std::string&)>;
@@ -86,6 +97,8 @@ public:
     Result<std::vector<SuggestionRejectionOutcome>> rejectSuggestionsBatch(
         const std::vector<SuggestionRejection>& rejections);
     Result<nlohmann::json> setDismissed(int64_t faceId, int64_t revision, bool dismissed);
+    Result<std::vector<FaceDismissalOutcome>> setDismissedBatch(
+        const std::vector<FaceDismissal>& dismissals, bool dismissed);
     Result<std::string> cropPath(int64_t faceId, int64_t revision);
 
 private:

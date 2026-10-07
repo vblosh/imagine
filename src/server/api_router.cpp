@@ -3552,12 +3552,32 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
                 return;
             }
 
+            if (action == "dismiss") {
+                std::vector<faces::FaceDismissal> dismissals;
+                dismissals.reserve(edits.size());
+                for (const auto& edit : edits) dismissals.push_back({edit.id, edit.revision});
+                auto outcomes = faceService_->setDismissedBatch(dismissals, dismissed);
+                if (!outcomes.isOk()) { sendStatusError(res, outcomes.status()); return; }
+                nlohmann::json updated = nlohmann::json::array();
+                nlohmann::json failed = nlohmann::json::array();
+                for (auto& outcome : outcomes.value()) {
+                    if (outcome.status.isOk()) {
+                        updated.push_back(std::move(outcome.face));
+                    } else {
+                        failed.push_back({{"id", outcome.id}, {"status", statusToHttpCode(outcome.status)},
+                                          {"error", sanitizeUtf8(outcome.status.message())}});
+                    }
+                }
+                sendJson(res, {{"updated", std::move(updated)}, {"failed", std::move(failed)}});
+                return;
+            }
+
             nlohmann::json updated = nlohmann::json::array();
             nlohmann::json failed = nlohmann::json::array();
             for (const auto& edit : edits) {
-                Result<nlohmann::json> result = action == "identity"
-                    ? faceService_->setIdentity(edit.id, edit.revision, tagId, name)
-                    : faceService_->setDismissed(edit.id, edit.revision, dismissed);
+                const bool includeSuggestions = !tagId.has_value() && !name.has_value();
+                Result<nlohmann::json> result = faceService_->setIdentity(
+                    edit.id, edit.revision, tagId, name, includeSuggestions);
                 if (result.isOk()) {
                     updated.push_back(std::move(result.value()));
                 } else {

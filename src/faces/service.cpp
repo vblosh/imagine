@@ -393,8 +393,8 @@ Result<json> faceJson(Connection& conn, int64_t faceId, float matchThreshold,
                 {"person_name", stmt.isNull(9) ? json(nullptr) : json(stmt.getString(10))},
                 {"dismissed", stmt.getInt(11) != 0}, {"embedding_error", stmt.getString(12)},
                 {"suggestions", json::array()}, {"crop_url", "/api/faces/" + std::to_string(faceId) + "/crop?revision=" + std::to_string(stmt.getInt64(2))}};
-    const bool suggestionTarget = !suppressReviewedSuggestions ||
-        (!info.personTagId.has_value() && !info.dismissed);
+    const bool suggestionTarget = !info.dismissed &&
+        (!suppressReviewedSuggestions || !info.personTagId.has_value());
     if (includeSuggestions && suggestionTarget && info.analysisState == "complete" &&
         info.embeddingError.empty() && info.embedding.size() == 512) {
         const std::unordered_set<TagId>* rejected = nullptr;
@@ -2809,27 +2809,119 @@ Result<json> Service::rejectSuggestion(int64_t faceId, int64_t revision, TagId t
     return std::move(outcomes.value()[0].face);
 }
 
-Result<json> Service::setDismissed(int64_t faceId, int64_t revision, bool dismissed) {
-    if (faceId <= 0 || revision <= 0) return Status::invalidArgument("face ID and revision must be positive");
+Result<std::vector<FaceDismissalOutcome>> Service::setDismissedBatch(
+    const std::vector<FaceDismissal>& dismissals, bool dismissed) {
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
     Connection& conn = impl_->db.conn_;
     db::Transaction tx(conn);
+
     auto getRes = conn.prepare("SELECT media_id,person_tag_id,revision FROM faces WHERE id=?;");
     if (!getRes.isOk()) return getRes.status();
-    auto get = std::move(getRes.value()); get.bind(1, faceId);
-    if (get.step() != StepResult::Row) return Status::notFound("Face not found");
-    MediaId mediaId = get.getInt64(0);
-    std::optional<TagId> tagId;
-    if (!get.isNull(1)) tagId = get.getInt64(1);
-    if (get.getInt64(2) != revision) return Status::alreadyExists("Face review is stale; reload before changing dismissal");
+    auto get = std::move(getRes.value());
+
     auto updateRes = conn.prepare("UPDATE faces SET dismissed=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?;");
     if (!updateRes.isOk()) return updateRes.status();
-    auto update = std::move(updateRes.value()); update.bind(1, dismissed ? 1 : 0);
-    update.bind(2, nowSeconds()); update.bind(3, faceId); update.bind(4, revision);
-    Status s = execDone(conn, update, "Failed to update face dismissal"); if (!s.isOk()) return s;
-    if (tagId) { s = syncFaceTagOwnership(conn, mediaId, *tagId); if (!s.isOk()) return s; }
-    s = tx.commit(); if (!s.isOk()) return s;
-    return faceJson(conn, faceId, impl_->config.matchThreshold);
+    auto update = std::move(updateRes.value());
+
+    ExemplarCache exemplarCache;
+    RejectionCache rejectionCache;
+    if (!dismissed) {
+        std::vector<int64_t> faceIds;
+        faceIds.reserve(dismissals.size());
+        for (const auto& d : dismissals) {
+            if (d.id > 0) faceIds.push_back(d.id);
+        }
+        Status rejectionStatus = loadRejections(conn, faceIds, rejectionCache);
+        if (!rejectionStatus.isOk()) return rejectionStatus;
+    }
+
+    const int64_t now = nowSeconds();
+    std::vector<FaceDismissalOutcome> outcomes;
+    outcomes.reserve(dismissals.size());
+
+    for (const auto& d : dismissals) {
+        FaceDismissalOutcome outcome;
+        outcome.id = d.id;
+        if (d.id <= 0 || d.revision <= 0) {
+            outcome.status = Status::invalidArgument("face ID and revision must be positive");
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        get.reset();
+        get.bind(1, d.id);
+        if (get.step() != StepResult::Row) {
+            outcome.status = Status::notFound("Face not found");
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        MediaId mediaId = get.getInt64(0);
+        std::optional<TagId> tagId;
+        if (!get.isNull(1)) tagId = get.getInt64(1);
+        if (get.getInt64(2) != d.revision) {
+            outcome.status = Status::alreadyExists("Face review is stale; reload before changing dismissal");
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        conn.execute("SAVEPOINT dismiss_item;");
+
+        update.reset();
+        update.bind(1, dismissed ? 1 : 0);
+        update.bind(2, now);
+        update.bind(3, d.id);
+        update.bind(4, d.revision);
+
+        Status s = execDone(conn, update, "Failed to update face dismissal");
+        if (!s.isOk()) {
+            conn.execute("ROLLBACK TO dismiss_item;");
+            conn.execute("RELEASE dismiss_item;");
+            outcome.status = s;
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        if (tagId) {
+            s = syncFaceTagOwnership(conn, mediaId, *tagId);
+            if (!s.isOk()) {
+                conn.execute("ROLLBACK TO dismiss_item;");
+                conn.execute("RELEASE dismiss_item;");
+                outcome.status = s;
+                outcomes.push_back(std::move(outcome));
+                continue;
+            }
+        }
+
+        conn.execute("RELEASE dismiss_item;");
+
+        auto face = faceJson(conn, d.id, impl_->config.matchThreshold,
+                             dismissed ? nullptr : &exemplarCache,
+                             dismissed ? nullptr : &rejectionCache,
+                             true, nullptr, !dismissed);
+        if (!face.isOk()) {
+            outcome.status = face.status();
+            outcomes.push_back(std::move(outcome));
+            continue;
+        }
+
+        outcome.face = std::move(face.value());
+        outcome.status = Status::ok();
+        outcomes.push_back(std::move(outcome));
+    }
+
+    Status commitStatus = tx.commit();
+    if (!commitStatus.isOk()) return commitStatus;
+    return outcomes;
+}
+
+Result<json> Service::setDismissed(int64_t faceId, int64_t revision, bool dismissed) {
+    if (faceId <= 0 || revision <= 0) return Status::invalidArgument("face ID and revision must be positive");
+    auto outcomes = setDismissedBatch({{faceId, revision}}, dismissed);
+    if (!outcomes.isOk()) return outcomes.status();
+    if (outcomes.value().empty()) return Status::internal("Empty outcome for dismiss face");
+    if (!outcomes.value()[0].status.isOk()) return outcomes.value()[0].status;
+    return std::move(outcomes.value()[0].face);
 }
 
 Result<std::string> Service::cropPath(int64_t faceId, int64_t revision) {
