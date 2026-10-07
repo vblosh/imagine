@@ -79,6 +79,7 @@ struct LoadedModel {
     std::vector<std::vector<int64_t>> outputShapes;
     std::vector<size_t> outputElementCounts;
     std::string provider;
+    bool dynamicBatch{false};
 };
 
 Ort::Env& ortEnvironment() {
@@ -97,7 +98,7 @@ bool isExpectedOrDynamic(int64_t actual, int64_t expected) {
     return actual == expected || actual == -1;
 }
 
-std::vector<int64_t> inputShape(Ort::Session& session, int64_t expectedSide, const char* label) {
+std::vector<int64_t> inputShape(Ort::Session& session, int64_t expectedSide, const char* label, bool* dynamicBatchOut = nullptr) {
     auto info = session.GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
     if (info.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
         throw std::runtime_error(std::string(label) + " input must be float32");
@@ -110,6 +111,9 @@ std::vector<int64_t> inputShape(Ort::Session& session, int64_t expectedSide, con
     }
     if (!isExpectedOrDynamic(shape[0], 1)) {
         throw std::runtime_error(std::string(label) + " model must accept a single image per call");
+    }
+    if (dynamicBatchOut) {
+        *dynamicBatchOut = (shape[0] == -1);
     }
     shape[0] = 1;
     shape[1] = 3;
@@ -296,12 +300,12 @@ LoadedModel openModel(const std::filesystem::path& path,
     auto model = inspectSession(std::move(session), label);
     validateOutputContract(model, label);
     if (std::string(label) == "SCRFD detector") {
-        inputShape(*model.session, kDetectorSide, label);
+        inputShape(*model.session, kDetectorSide, label, &model.dynamicBatch);
         if (model.outputNames.size() != 9) {
             throw std::runtime_error("SCRFD buffalo_l detector must expose nine outputs (three score, box, and landmark heads)");
         }
     } else {
-        inputShape(*model.session, kRecognizerSide, label);
+        inputShape(*model.session, kRecognizerSide, label, &model.dynamicBatch);
         if (model.outputNames.size() != 1) {
             throw std::runtime_error("ArcFace buffalo_l recognizer must expose exactly one embedding output");
         }
@@ -527,6 +531,17 @@ void alignAndNormalizeTo(const thumbnail::ImageBuffer& image,
             const double sx32 = rowSx + stepX_x * static_cast<double>(x);
             const double sy32 = rowSy + stepX_y * static_cast<double>(x);
 
+            const double maxCoordX = 32.0 * imgW;
+            const double maxCoordY = 32.0 * imgH;
+            if (!std::isfinite(sx32) || !std::isfinite(sy32) ||
+                sx32 <= -31.5 || sy32 <= -31.5 || sx32 >= maxCoordX || sy32 >= maxCoordY) {
+                constexpr float black = -1.0f;
+                outR[destRow + x] = black;
+                outG[destRow + x] = black;
+                outB[destRow + x] = black;
+                continue;
+            }
+
             const int coordX = static_cast<int>(std::floor(sx32));
             const int coordY = static_cast<int>(std::floor(sy32));
 
@@ -534,14 +549,6 @@ void alignAndNormalizeTo(const thumbnail::ImageBuffer& image,
             const int iy = coordY >> 5;
             const int ax = coordX & 31;
             const int ay = coordY & 31;
-
-            if (coordX < -32 || coordY < -32 || ix >= imgW || iy >= imgH) {
-                constexpr float black = -1.0f;
-                outR[destRow + x] = black;
-                outG[destRow + x] = black;
-                outB[destRow + x] = black;
-                continue;
-            }
 
             const int w00 = (32 - ax) * (32 - ay);
             const int w10 = ax * (32 - ay);
@@ -797,7 +804,9 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
         const uint8_t* imgBytes = image.data.data();
         const size_t imgStride = static_cast<size_t>(image.width) * 3;
 
-        const int numThreads = std::max(1, impl_->config.cpuThreads);
+        const int hardwareThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+        const int targetThreads = impl_->config.cpuThreads > 0 ? impl_->config.cpuThreads : hardwareThreads;
+        const int numThreads = std::clamp(targetThreads, 1, std::min(4, hardwareThreads));
         auto processRows = [&](int startY, int endY) {
             for (int y = startY; y < endY; ++y) {
                 float sourceY = static_cast<float>((static_cast<double>(y) + 0.5) * image.height / resizedHeight - 0.5);
@@ -883,12 +892,12 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
             detections[i].landmarks = candidate.landmarks;
         }
 
-        constexpr size_t kMaxRecognizerBatch = 16;
+        const size_t maxBatch = impl_->recognizer->dynamicBatch ? 16 : 1;
         constexpr size_t kCropElements = static_cast<size_t>(3) * kRecognizerSide * kRecognizerSide;
         constexpr size_t kPlaneElements = static_cast<size_t>(kRecognizerSide) * kRecognizerSide;
 
-        for (size_t chunkStart = 0; chunkStart < candidates.size(); chunkStart += kMaxRecognizerBatch) {
-            const size_t chunkSize = std::min(kMaxRecognizerBatch, candidates.size() - chunkStart);
+        for (size_t chunkStart = 0; chunkStart < candidates.size(); chunkStart += maxBatch) {
+            const size_t chunkSize = std::min(maxBatch, candidates.size() - chunkStart);
             std::vector<float> batchInput(chunkSize * kCropElements);
             std::vector<size_t> validChunkIndices;
             validChunkIndices.reserve(chunkSize);

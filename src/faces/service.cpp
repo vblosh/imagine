@@ -543,14 +543,18 @@ Status assignExistingPersonTag(Connection& conn, int64_t faceId, int64_t revisio
     return tx.commit();
 }
 
-void bindEmbedding(Statement& stmt, int index, const std::vector<float>& embedding) {
+void bindEmbedding(Statement& stmt, int index, const float* data, size_t size) {
     sqlite3_stmt* raw = stmt.raw();
-    if (embedding.empty()) {
+    if (!data || size == 0) {
         sqlite3_bind_null(raw, index);
     } else {
-        sqlite3_bind_blob(raw, index, embedding.data(),
-                          static_cast<int>(embedding.size() * sizeof(float)), SQLITE_TRANSIENT);
+        sqlite3_bind_blob(raw, index, data,
+                          static_cast<int>(size * sizeof(float)), SQLITE_TRANSIENT);
     }
+}
+
+void bindEmbedding(Statement& stmt, int index, const std::vector<float>& embedding) {
+    bindEmbedding(stmt, index, embedding.data(), embedding.size());
 }
 
 json pointsJson(const std::array<Point, 5>& points) {
@@ -578,17 +582,22 @@ struct EncodedSource {
     std::string hash;
     std::filesystem::file_time_type writeTime{};
     uintmax_t fileSize{0};
+    bool validStats{false};
 };
 
 Result<EncodedSource> readEncodedSource(const std::string& path) {
+    std::error_code ecTime;
+    std::error_code ecSize;
+    // Capture filesystem timestamp and size BEFORE reading bytes to avoid TOCTOU races
+    auto writeTime = std::filesystem::last_write_time(path, ecTime);
+    auto fileSize = std::filesystem::file_size(path, ecSize);
+    const bool validStats = !ecTime && !ecSize;
+
     auto bytes = thumbnail::Generator::loadImageBytes(path);
     if (!bytes.isOk()) return bytes.status();
     auto hash = metadata::Hasher::computeBytesSha256(bytes.value().data(), bytes.value().size());
     if (hash.empty()) return Status::internal("Failed to compute SHA-256 digest");
-    std::error_code ec;
-    auto writeTime = std::filesystem::last_write_time(path, ec);
-    auto fileSize = std::filesystem::file_size(path, ec);
-    return EncodedSource{std::move(bytes.value()), std::move(hash), writeTime, fileSize};
+    return EncodedSource{std::move(bytes.value()), std::move(hash), writeTime, fileSize, validStats};
 }
 
 class SourcePrefetcher {
@@ -672,25 +681,34 @@ private:
     std::thread worker_;
 };
 
-std::vector<float> checkedEmbedding(const Detection& d, std::string& error) {
-    if (!d.embeddingError.empty()) { error = d.embeddingError; return {}; }
-    if (d.embedding.size() != 512) { error = "Recognition model returned an invalid embedding size"; return {}; }
+std::pair<const float*, size_t> checkedEmbedding(
+    const Detection& d, std::vector<float>& fallbackBuffer, std::string& error) {
+    if (!d.embeddingError.empty()) { error = d.embeddingError; return {nullptr, 0}; }
+    if (d.embedding.size() != 512) { error = "Recognition model returned an invalid embedding size"; return {nullptr, 0}; }
     double norm2 = 0;
     for (float value : d.embedding) {
-        if (!std::isfinite(value)) { error = "Recognition model returned a non-finite embedding"; return {}; }
+        if (!std::isfinite(value)) { error = "Recognition model returned a non-finite embedding"; return {nullptr, 0}; }
         norm2 += static_cast<double>(value) * value;
     }
     if (!std::isfinite(norm2) || norm2 <= 1e-20) {
         error = "Recognition model returned a zero-norm embedding";
-        return {};
+        return {nullptr, 0};
     }
     if (std::abs(norm2 - 1.0) < 1e-4) {
-        return d.embedding;
+        return {d.embedding.data(), d.embedding.size()};
     }
     float norm = static_cast<float>(std::sqrt(norm2));
-    std::vector<float> normalized = d.embedding;
-    for (float& value : normalized) value /= norm;
-    return normalized;
+    fallbackBuffer = d.embedding;
+    for (float& value : fallbackBuffer) value /= norm;
+    return {fallbackBuffer.data(), fallbackBuffer.size()};
+}
+
+std::vector<float> checkedEmbedding(const Detection& d, std::string& error) {
+    std::vector<float> buf;
+    auto [data, count] = checkedEmbedding(d, buf, error);
+    if (!data || count == 0) return {};
+    if (!buf.empty()) return buf;
+    return d.embedding;
 }
 
 Status normalizeCandidateGeometry(std::vector<Detection>& detections, int width, int height) {
@@ -888,6 +906,7 @@ Status persistAnalysis(Connection& conn, MediaId mediaId, const MediaItem& media
 
         const int64_t now = nowSeconds();
 
+        std::vector<float> fallbackEmbedding;
         for (const auto& detection : detections) {
             double bestIou = 0;
             OldFace* match = nullptr;
@@ -903,10 +922,10 @@ Status persistAnalysis(Connection& conn, MediaId mediaId, const MediaItem& media
                 if (iou > bestIou) { bestIou = iou; match = &old; }
             }
             std::string embedError;
-            auto embedding = checkedEmbedding(detection, embedError);
+            auto [embData, embSize] = checkedEmbedding(detection, fallbackEmbedding, embedError);
             if (match && bestIou >= 0.5) {
                 match->used = true;
-                bindEmbedding(up, 1, embedding); up.bind(2, static_cast<int32_t>(embedding.size()));
+                bindEmbedding(up, 1, embData, embSize); up.bind(2, static_cast<int32_t>(embSize));
                 up.bind(3, embedError); up.bind(4, now); up.bind(5, match->id);
                 Status s = execDone(conn, up, "Failed to refresh face embedding");
                 if (!s.isOk()) return s;
@@ -914,8 +933,8 @@ Status persistAnalysis(Connection& conn, MediaId mediaId, const MediaItem& media
             } else {
                 ins.bind(1, mediaId); ins.bind(2, detection.x); ins.bind(3, detection.y);
                 ins.bind(4, detection.width); ins.bind(5, detection.height); ins.bind(6, detection.score);
-                ins.bind(7, pointsJson(detection.landmarks).dump()); bindEmbedding(ins, 8, embedding);
-                ins.bind(9, static_cast<int32_t>(embedding.size())); ins.bind(10, embedError);
+                ins.bind(7, pointsJson(detection.landmarks).dump()); bindEmbedding(ins, 8, embData, embSize);
+                ins.bind(9, static_cast<int32_t>(embSize)); ins.bind(10, embedError);
                 ins.bind(11, now); ins.bind(12, now);
                 Status s = execDone(conn, ins, "Failed to insert refreshed face");
                 if (!s.isOk()) return s;
@@ -959,13 +978,14 @@ Status persistAnalysis(Connection& conn, MediaId mediaId, const MediaItem& media
         auto ins = std::move(insRes.value());
         const int64_t now = nowSeconds();
 
+        std::vector<float> fallbackEmbedding;
         for (const auto& detection : detections) {
             std::string embedError;
-            auto embedding = checkedEmbedding(detection, embedError);
+            auto [embData, embSize] = checkedEmbedding(detection, fallbackEmbedding, embedError);
             ins.bind(1, mediaId); ins.bind(2, detection.x); ins.bind(3, detection.y);
             ins.bind(4, detection.width); ins.bind(5, detection.height); ins.bind(6, detection.score);
-            ins.bind(7, pointsJson(detection.landmarks).dump()); bindEmbedding(ins, 8, embedding);
-            ins.bind(9, static_cast<int32_t>(embedding.size())); ins.bind(10, embedError);
+            ins.bind(7, pointsJson(detection.landmarks).dump()); bindEmbedding(ins, 8, embData, embSize);
+            ins.bind(9, static_cast<int32_t>(embSize)); ins.bind(10, embedError);
             ins.bind(11, now); ins.bind(12, now);
             s = execDone(conn, ins, "Failed to persist detected face");
             if (!s.isOk()) return s;
@@ -2973,6 +2993,7 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             }
             const auto sourceWriteTime = source.value().writeTime;
             const auto sourceFileSize = source.value().fileSize;
+            const bool sourceValidStats = source.value().validStats;
 
             auto loaded = [&]() {
                 auto encodedBytes = std::move(source.value().bytes);
@@ -3028,10 +3049,16 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
                 recordFailure(mediaId, analysisMedia, media, geometryStatus.message());
                 continue;
             }
-            std::error_code hashCheckEc;
-            const auto writeTimeAfter = std::filesystem::last_write_time(photoPath, hashCheckEc);
-            const auto fileSizeAfter = std::filesystem::file_size(photoPath, hashCheckEc);
-            const bool fileUnchanged = !hashCheckEc && writeTimeAfter == sourceWriteTime && fileSizeAfter == sourceFileSize;
+            std::error_code ecTimeAfter;
+            std::error_code ecSizeAfter;
+            const auto writeTimeAfter = std::filesystem::last_write_time(photoPath, ecTimeAfter);
+            const auto fileSizeAfter = std::filesystem::file_size(photoPath, ecSizeAfter);
+            // Fast path: if timestamps and size match, skip expensive SHA-256 computation.
+            // Note: On filesystems with coarse timestamps (e.g. FAT with 2 s resolution),
+            // in-place edits within one tick and of identical file size are undetected by mtime,
+            // which is acceptable for face scanning. If stats fail or differ, re-hash checks content.
+            const bool fileUnchanged = sourceValidStats && !ecTimeAfter && !ecSizeAfter &&
+                                       writeTimeAfter == sourceWriteTime && fileSizeAfter == sourceFileSize;
             if (!fileUnchanged) {
                 auto hashAfter = metadata::Hasher::computeFileSha256(photoPath);
                 if (!hashAfter.isOk() || hashAfter.value() != media.content_hash) {
