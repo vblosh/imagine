@@ -97,6 +97,7 @@ export const dom = {
   newTagBtn: document.getElementById('newTagBtn'),
   leftSidebar: document.getElementById('leftSidebar'),
   sidebarResizerRight: document.getElementById('sidebarResizerRight'),
+  // Backward compatibility alias for inspector sidebar resizer reference
   sidebarResizer: document.getElementById('sidebarResizerRight'),
   foldersTree: document.getElementById('foldersTree'),
   foldersHeader: document.getElementById('foldersHeader'),

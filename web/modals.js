@@ -764,6 +764,11 @@ export async function submitDeleteMedia() {
   try {
     await api.post('/api/media/batch-delete', { ids: idsToDelete, delete_from_disk: deleteFromDisk });
   } catch (e) {
+    if (idsToDelete.length > 25) {
+      console.error('Batch delete failed:', e);
+      showToast(`Batch delete failed: ${e.message || 'Server error'}`, 'error');
+      return;
+    }
     for (const id of idsToDelete) {
       try {
         await api.del(`/api/media/${id}${deleteFromDisk ? '?delete_from_disk=true' : ''}`);

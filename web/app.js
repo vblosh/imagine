@@ -261,6 +261,7 @@ export function setupEventListeners() {
     dom.searchInput.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         if (dom.searchInput.value) {
+          clearTimeout(searchTimer);
           dom.searchInput.value = '';
           state.searchText = '';
           saveSearchPreference('');
@@ -289,6 +290,7 @@ export function setupEventListeners() {
 
   if (dom.clearSearchBtn) {
     dom.clearSearchBtn.addEventListener('click', () => {
+      clearTimeout(searchTimer);
       if (dom.searchInput) dom.searchInput.value = '';
       state.searchText = '';
       saveSearchPreference('');
