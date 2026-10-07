@@ -126,7 +126,10 @@ export async function fetchAlbumCover(albumId) {
       albumCoverCache.set(albumId, url);
       return url;
     }
-  } catch (_) {}
+    albumCoverCache.set(albumId, null);
+  } catch (_) {
+    albumCoverCache.set(albumId, null);
+  }
   return null;
 }
 

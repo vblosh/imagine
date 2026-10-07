@@ -679,7 +679,7 @@ export function appendMediaToGrid(newItems) {
       for (const grp of existingGroups) {
         const firstCard = grp.querySelector('.photo-card');
         if (firstCard) {
-          const firstId = parseInt(firstCard.dataset.id, 10);
+          const firstId = Number(firstCard.dataset.id);
           const grpIdx = state.mediaItems.findIndex(m => m.id === firstId);
           if (grpIdx !== -1 && itemIdx !== -1 && grpIdx > itemIdx) {
             nextGroupEl = grp;
@@ -703,7 +703,7 @@ export function appendMediaToGrid(newItems) {
       // Reconcile card ordering within date group
       let nextCardEl = null;
       for (const existingCard of cardsWrap.children) {
-        const existingId = parseInt(existingCard.dataset.id, 10);
+        const existingId = Number(existingCard.dataset.id);
         const existingIdx = state.mediaItems.findIndex(m => m.id === existingId);
         if (existingIdx !== -1 && itemIdx !== -1 && existingIdx > itemIdx) {
           nextCardEl = existingCard;

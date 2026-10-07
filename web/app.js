@@ -428,8 +428,9 @@ export function setupEventListeners() {
       dom.mapLoadAllBtn.disabled = true;
       try {
         while (state.mediaItems.length < state.totalCount) {
+          const prevCount = state.mediaItems.length;
           const added = await loadMoreMedia();
-          if (!added || added.length === 0) break;
+          if (!added || added.length === 0 || state.mediaItems.length <= prevCount) break;
         }
       } finally {
         dom.mapLoadAllBtn.disabled = false;
