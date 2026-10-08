@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <shared_mutex>
@@ -48,10 +49,6 @@ int envInt(const char* key, int fallback) {
     } catch (...) {
         return fallback;
     }
-}
-
-Status dbError(Connection& conn, const std::string& context) {
-    return Status::databaseError(context + ": " + conn.lastErrorMessage());
 }
 
 inline float dotProductScalar(const float* a, const float* b, int dim) {

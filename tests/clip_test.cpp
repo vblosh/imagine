@@ -3,6 +3,7 @@
 #include "imagine/clip/service.hpp"
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/db/schema.hpp"
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sqlite3.h>
@@ -11,6 +12,30 @@
 #include "../src/clip/tokenizer.hpp"
 
 namespace fs = std::filesystem;
+
+namespace {
+
+void setTestEnv(const char* name, const std::string& value) {
+#if defined(_WIN32)
+    _putenv_s(name, value.c_str());
+#else
+    if (value.empty()) {
+        unsetenv(name);
+    } else {
+        setenv(name, value.c_str(), 1);
+    }
+#endif
+}
+
+void unsetTestEnv(const char* name) {
+#if defined(_WIN32)
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+} // namespace
 
 TEST(ClipEngineTest, InfoReportsBuiltStatus) {
     imagine::clip::ClipConfig config;
@@ -96,11 +121,11 @@ TEST(ClipServiceTest, StatusAndSearchWhenNotReady) {
     
     const char* prevEnv = std::getenv("IMAGINE_CLIP_MODEL_DIR");
     std::string prevModelDir = prevEnv ? prevEnv : "";
-    _putenv_s("IMAGINE_CLIP_MODEL_DIR", (tempCache / "nonexistent_models").string().c_str());
+    setTestEnv("IMAGINE_CLIP_MODEL_DIR", (tempCache / "nonexistent_models").string());
     struct EnvCleanup {
         std::string prev;
         ~EnvCleanup() {
-            _putenv_s("IMAGINE_CLIP_MODEL_DIR", prev.c_str());
+            setTestEnv("IMAGINE_CLIP_MODEL_DIR", prev);
         }
     } envCleanup{prevModelDir};
 
@@ -307,14 +332,14 @@ TEST(ClipServiceTest, StatusReflectsLazyLoadingAndUnload) {
 
     const char* prevEnv = std::getenv("IMAGINE_CLIP_MODEL_DIR");
     std::string prevModelDir = prevEnv ? prevEnv : "";
-    _putenv_s("IMAGINE_CLIP_MODEL_DIR", tempModels.string().c_str());
-    _putenv_s("IMAGINE_CLIP_IDLE_UNLOAD_SEC", "0");
+    setTestEnv("IMAGINE_CLIP_MODEL_DIR", tempModels.string());
+    setTestEnv("IMAGINE_CLIP_IDLE_UNLOAD_SEC", "0");
 
     struct EnvGuard {
         std::string prevModel;
         ~EnvGuard() {
-            _putenv_s("IMAGINE_CLIP_MODEL_DIR", prevModel.c_str());
-            _putenv_s("IMAGINE_CLIP_IDLE_UNLOAD_SEC", "");
+            setTestEnv("IMAGINE_CLIP_MODEL_DIR", prevModel);
+            unsetTestEnv("IMAGINE_CLIP_IDLE_UNLOAD_SEC");
         }
     } guard{prevModelDir};
 
@@ -396,10 +421,10 @@ TEST(ClipServiceTest, RealModelsSearchPerformsOnDemandLoadAndUnload) {
         GTEST_SKIP() << "This build does not include ONNX Runtime";
     }
 
-    _putenv_s("IMAGINE_CLIP_IDLE_UNLOAD_SEC", "0");
+    setTestEnv("IMAGINE_CLIP_IDLE_UNLOAD_SEC", "0");
     struct EnvGuard {
         ~EnvGuard() {
-            _putenv_s("IMAGINE_CLIP_IDLE_UNLOAD_SEC", "");
+            unsetTestEnv("IMAGINE_CLIP_IDLE_UNLOAD_SEC");
         }
     } guard;
 
