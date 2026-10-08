@@ -12,6 +12,7 @@
 #include "imagine/common/error.hpp"
 
 namespace imagine::faces { class Service; }
+namespace imagine::clip { class Service; }
 
 namespace imagine::db {
 
@@ -92,6 +93,7 @@ public:
 
 private:
     friend class ::imagine::faces::Service;
+    friend class ::imagine::clip::Service;
     MediaItem extractMediaItem(Statement& stmt);
 
     mutable std::recursive_mutex mutex_;

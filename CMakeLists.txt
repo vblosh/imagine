@@ -108,6 +108,9 @@ set(IMAGINE_LIB_SOURCES
     src/thumbnail/cache.cpp
     src/faces/engine.cpp
     src/faces/service.cpp
+    src/clip/engine.cpp
+    src/clip/tokenizer.cpp
+    src/clip/service.cpp
     src/concurrency/thread_pool.cpp
     src/core/query.cpp
     src/core/event_suggestions.cpp
@@ -187,6 +190,7 @@ if (BUILD_TESTING)
         tests/exif_test.cpp
         tests/thumbnail_test.cpp
         tests/faces_engine_test.cpp
+        tests/clip_test.cpp
         tests/importer_test.cpp
         tests/query_test.cpp
         tests/event_suggestions_test.cpp

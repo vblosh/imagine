@@ -98,11 +98,17 @@ export const state = {
   mapSearchResults: [],
   mapSearchActiveIdx: -1,
   mapSearchDebounceTimer: null,
+  searchDebounceTimer: null,
   mediaLimit: 500,
   mediaOffset: 0,
   isLoadingMedia: false,
   isLoadingMore: false,
-  isImporting: false
+  isImporting: false,
+  semanticSearchAvailable: false,
+  semanticSearchEnabled: false,
+  semanticBuilt: false,
+  semanticIndexSize: 0,
+  semanticModelId: ''
 };
 
 export function getGpsMediaItems() {

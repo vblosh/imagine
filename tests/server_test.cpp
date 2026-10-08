@@ -3650,7 +3650,7 @@ TEST(FaceServiceTest, CatalogScopeQueuesOnlyEligiblePhotos) {
         return db.insertMedia(item).value();
     };
     MediaId id1 = addPhoto(path1);
-    MediaId id2 = addPhoto(path2);
+    addPhoto(path2);
 
     std::atomic<int> analyzerCalls{0};
     faces::Service service(db, (root / "cache").string(), [](const std::string& path) { return path; },
@@ -3730,13 +3730,23 @@ TEST(FaceServiceTest, ServicePerformsLazyLoadAndUnload) {
         GTEST_SKIP() << "This build does not include the optional ONNX Runtime feature";
     }
 
+#if defined(_WIN32)
     _putenv_s("IMAGINE_FACE_MODELS", modelDirectory);
     _putenv_s("IMAGINE_FACE_IDLE_UNLOAD_SEC", "0");
+#else
+    setenv("IMAGINE_FACE_MODELS", modelDirectory, 1);
+    setenv("IMAGINE_FACE_IDLE_UNLOAD_SEC", "0", 1);
+#endif
 
     struct EnvGuard {
         ~EnvGuard() {
+#if defined(_WIN32)
             _putenv_s("IMAGINE_FACE_MODELS", "");
             _putenv_s("IMAGINE_FACE_IDLE_UNLOAD_SEC", "");
+#else
+            unsetenv("IMAGINE_FACE_MODELS");
+            unsetenv("IMAGINE_FACE_IDLE_UNLOAD_SEC");
+#endif
         }
     } guard;
 

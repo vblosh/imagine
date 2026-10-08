@@ -7,6 +7,7 @@
 #include "imagine/metadata/hasher.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/logger.hpp"
+#include "imagine/clip/service.hpp"
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -406,6 +407,8 @@ ApiRouter::ApiRouter(core::Catalog& catalog)
     initFromEnvironment();
     faceService_ = std::make_unique<faces::Service>(this->db(), this->cache().cacheDir(),
         [this](const std::string& path) { return resolvePhotoPath(path); });
+    clipService_ = std::make_unique<clip::Service>(this->db(), this->cache().cacheDir(),
+        [this](const std::string& path) { return resolvePhotoPath(path); });
 }
 
 ApiRouter::ApiRouter(db::CatalogDb& db, thumbnail::Cache& cache)
@@ -413,10 +416,13 @@ ApiRouter::ApiRouter(db::CatalogDb& db, thumbnail::Cache& cache)
     initFromEnvironment();
     faceService_ = std::make_unique<faces::Service>(this->db(), this->cache().cacheDir(),
         [this](const std::string& path) { return resolvePhotoPath(path); });
+    clipService_ = std::make_unique<clip::Service>(this->db(), this->cache().cacheDir(),
+        [this](const std::string& path) { return resolvePhotoPath(path); });
 }
 
 ApiRouter::~ApiRouter() {
     stopImport();
+    clipService_.reset();
     faceService_.reset();
 }
 
@@ -507,6 +513,7 @@ void ApiRouter::registerRoutes(httplib::Server& server) {
     registerImportRoutes(server);
     registerGeocodeRoutes(server);
     registerFaceRoutes(server);
+    registerSemanticRoutes(server);
 }
 
 void ApiRouter::registerCorsHandler(httplib::Server& server) {
@@ -3680,6 +3687,188 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
             res.set_content(bytes, "image/jpeg");
             res.set_header("Cache-Control", "private, max-age=3600");
         } catch (...) { sendError(res, "Invalid crop request", 400); }
+    });
+}
+
+void ApiRouter::registerSemanticRoutes(httplib::Server& server) {
+    server.Get("/api/semantic/status", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (clipService_) {
+            sendJson(res, clipService_->status());
+        } else {
+            nlohmann::json j;
+            j["built"] = false;
+            j["ready"] = false;
+            sendJson(res, j);
+        }
+    });
+
+    server.Post("/api/semantic/search", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (!clipService_) {
+            sendError(res, "Semantic search not built", 400);
+            return;
+        }
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            clip::SearchRequest sreq;
+            if (body.contains("query") && body["query"].is_string()) {
+                sreq.query = body["query"].get<std::string>();
+            }
+            if (sreq.query.empty() || sreq.query.size() > 500) {
+                sendError(res, "Query required, non-empty, max 500 chars", 400);
+                return;
+            }
+            if (body.contains("limit") && body["limit"].is_number_integer()) {
+                sreq.limit = body["limit"].get<int>();
+            }
+            if (sreq.limit < 1 || sreq.limit > 1000) {
+                sendError(res, "Limit must be between 1 and 1000", 400);
+                return;
+            }
+            if (body.contains("filters") && body["filters"].is_object()) {
+                auto& f = body["filters"];
+                if (f.contains("dateFrom")) {
+                    if (f["dateFrom"].is_number()) {
+                        sreq.dateFrom = f["dateFrom"].get<int64_t>();
+                    } else if (f["dateFrom"].is_string()) {
+                        try { sreq.dateFrom = std::stoll(f["dateFrom"].get<std::string>()); } catch (...) {}
+                    }
+                }
+                if (f.contains("dateTo")) {
+                    if (f["dateTo"].is_number()) {
+                        sreq.dateTo = f["dateTo"].get<int64_t>();
+                    } else if (f["dateTo"].is_string()) {
+                        try { sreq.dateTo = std::stoll(f["dateTo"].get<std::string>()); } catch (...) {}
+                    }
+                }
+                if (f.contains("ratingMin") && f["ratingMin"].is_number()) sreq.ratingMin = f["ratingMin"].get<int32_t>();
+                if (f.contains("mediaType") && f["mediaType"].is_string()) sreq.mediaType = f["mediaType"].get<std::string>();
+            }
+            
+            auto result = clipService_->search(sreq);
+            if (result.isOk()) {
+                nlohmann::json j = result.value();
+                std::vector<MediaItem> mediaItems;
+                mediaItems.reserve(result.value().items.size());
+                for (const auto& hit : result.value().items) {
+                    auto mRes = catalog_ ? catalog_->getMedia(hit.mediaId) : db().getMediaById(hit.mediaId);
+                    if (mRes.isOk()) {
+                        mediaItems.push_back(std::move(mRes.value()));
+                    }
+                }
+                j["media_items"] = mediaItems;
+                sendJson(res, j);
+            } else {
+                sendStatusError(res, result.status());
+            }
+        } catch (...) {
+            sendError(res, "Invalid JSON", 400);
+        }
+    });
+
+    server.Post(R"(/api/semantic/similar/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (!clipService_) {
+            sendError(res, "Semantic search not built", 400);
+            return;
+        }
+        auto mediaIdOpt = parseMatchId<MediaId>(req, 1, res, "Media ID");
+        if (!mediaIdOpt) return;
+        
+        int limit = 20;
+        try {
+            if (!req.body.empty()) {
+                auto body = nlohmann::json::parse(req.body);
+                if (body.contains("limit") && body["limit"].is_number_integer()) {
+                    limit = body["limit"].get<int>();
+                }
+            }
+        } catch (...) {}
+        
+        auto result = clipService_->findSimilar(*mediaIdOpt, limit);
+        if (result.isOk()) {
+            nlohmann::json j = result.value();
+            std::vector<MediaItem> mediaItems;
+            mediaItems.reserve(result.value().items.size());
+            for (const auto& hit : result.value().items) {
+                auto mRes = catalog_ ? catalog_->getMedia(hit.mediaId) : db().getMediaById(hit.mediaId);
+                if (mRes.isOk()) {
+                    mediaItems.push_back(std::move(mRes.value()));
+                }
+            }
+            j["media_items"] = mediaItems;
+            sendJson(res, j);
+        } else {
+            sendStatusError(res, result.status());
+        }
+    });
+
+    server.Post("/api/semantic/jobs", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (!clipService_) {
+            sendError(res, "Semantic search not built", 400);
+            return;
+        }
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string scope = body.value("scope", "catalog");
+            bool force = body.value("force", false);
+            std::vector<MediaId> mediaIds;
+            if (body.contains("media_ids") && body["media_ids"].is_array()) {
+                for (const auto& el : body["media_ids"]) {
+                    mediaIds.push_back(el.get<MediaId>());
+                }
+            }
+            int64_t jobId = 0;
+            auto status = clipService_->startJob(scope, mediaIds, force, jobId);
+            if (status.isOk()) {
+                nlohmann::json j;
+                j["job_id"] = jobId;
+                j["status"] = "ok";
+                sendJson(res, j);
+            } else {
+                sendStatusError(res, status);
+            }
+        } catch (...) {
+            sendError(res, "Invalid JSON", 400);
+        }
+    });
+
+    server.Get(R"(/api/semantic/jobs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (!clipService_) {
+            sendError(res, "Semantic search not built", 400);
+            return;
+        }
+        auto jobIdOpt = parseMatchId<int64_t>(req, 1, res, "Job ID");
+        if (!jobIdOpt) return;
+        
+        auto result = clipService_->getJob(*jobIdOpt);
+        if (result.isOk()) {
+            sendJson(res, result.value());
+        } else {
+            sendStatusError(res, result.status());
+        }
+    });
+
+    server.Post(R"(/api/semantic/jobs/(\d+)/cancel)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (!clipService_) {
+            sendError(res, "Semantic search not built", 400);
+            return;
+        }
+        auto jobIdOpt = parseMatchId<int64_t>(req, 1, res, "Job ID");
+        if (!jobIdOpt) return;
+        
+        auto status = clipService_->cancelJob(*jobIdOpt);
+        if (status.isOk()) {
+            nlohmann::json j;
+            j["status"] = "ok";
+            sendJson(res, j);
+        } else {
+            sendStatusError(res, status);
+        }
     });
 }
 

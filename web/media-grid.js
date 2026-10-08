@@ -46,6 +46,7 @@ import {
   saveFoldersCollapsedState,
   saveTagCategoryCollapsedState
 } from './persistence.js';
+import { performSemanticSearch } from './semantic-search.js';
 
 // DOM Caching & Query Scoping
 export const cardMap = new Map();
@@ -118,6 +119,10 @@ function prepareAlbumOrderMode() {
   state.activeTagIds.clear();
   state.activeFolders.clear();
   clearTimelineSelection();
+  if (state.searchDebounceTimer) {
+    clearTimeout(state.searchDebounceTimer);
+    state.searchDebounceTimer = null;
+  }
   state.searchText = '';
   if (dom.searchInput) dom.searchInput.value = '';
   if (filtersWereActive) {
@@ -268,19 +273,32 @@ export async function loadMedia(append = false, { preserveScroll = false } = {})
     }
 
     const albumOrderMode = isAlbumOrderMode();
-    const pageLimit = albumOrderMode ? 1000 : state.mediaLimit;
+    const isSemantic = Boolean(state.semanticSearchEnabled && state.searchText && state.semanticSearchAvailable);
+    const pageLimit = albumOrderMode ? 1000 : (isSemantic ? 100 : state.mediaLimit);
     const params = {
       ...buildMediaParams(),
       limit: pageLimit,
       offset: 0
     };
 
-    const res = await api.get('/api/media', params, { signal: abortController.signal });
+    let res;
+    if (isSemantic) {
+      res = await performSemanticSearch(state.searchText, pageLimit, { signal: abortController.signal });
+    } else {
+      res = await api.get('/api/media', params, { signal: abortController.signal });
+    }
     if (fetchId !== currentLoadMediaId) return;
 
-    let rawList = (res && Array.isArray(res.items)) ? [...res.items] : [];
-    const reportedTotal = (res && Number.isFinite(Number(res.total))) ? Number(res.total) : rawList.length;
-    while (albumOrderMode && rawList.length < reportedTotal) {
+    let rawList = [];
+    if (isSemantic) {
+      rawList = (res && Array.isArray(res.media_items)) ? [...res.media_items] : ((res && Array.isArray(res.items)) ? [...res.items] : []);
+    } else {
+      rawList = (res && Array.isArray(res.items)) ? [...res.items] : [];
+    }
+    const reportedTotal = isSemantic
+      ? rawList.length
+      : ((res && Number.isFinite(Number(res.total))) ? Number(res.total) : rawList.length);
+    while (!isSemantic && albumOrderMode && rawList.length < reportedTotal) {
       const nextPage = await api.get('/api/media', {
         ...buildMediaParams(),
         limit: pageLimit,
@@ -364,7 +382,7 @@ export async function loadMedia(append = false, { preserveScroll = false } = {})
 
 export async function loadMoreMedia() {
   // Avoid concurrent non-append and append requests, or multiple append requests
-  if (state.isLoadingMore || state.isLoadingMedia || state.mediaItems.length >= state.totalCount) {
+  if (state.isLoadingMore || state.isLoadingMedia || state.mediaItems.length >= state.totalCount || (state.semanticSearchEnabled && state.searchText && state.semanticSearchAvailable)) {
     return;
   }
 
@@ -1729,7 +1747,11 @@ export function updateFilterLabel() {
   }
 
   if (state.searchText) {
-    parts.push(`Search: "${state.searchText}"`);
+    if (state.semanticSearchEnabled && state.semanticSearchAvailable) {
+      parts.push(`Semantic: "${state.searchText}"`);
+    } else {
+      parts.push(`Search: "${state.searchText}"`);
+    }
   }
 
   if (state.activeTimelinePeriod) {
@@ -1766,6 +1788,10 @@ export function clearAllFilters() {
   state.activeFolders.clear();
   state.lastSidebarClickedItem = null;
   clearTimelineSelection();
+  if (state.searchDebounceTimer) {
+    clearTimeout(state.searchDebounceTimer);
+    state.searchDebounceTimer = null;
+  }
   state.activeTab = 'media';
   state.searchText = '';
   if (dom.searchInput) dom.searchInput.value = '';

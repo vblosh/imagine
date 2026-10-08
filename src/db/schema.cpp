@@ -314,6 +314,61 @@ Status Schema::applyMigrationV6(Connection& conn) {
     return tx.commit();
 }
 
+Status Schema::applyMigrationV7(Connection& conn) {
+    const char* v7_sql = R"SQL(
+        CREATE TABLE IF NOT EXISTS semantic_models (
+            model_id          TEXT PRIMARY KEY,
+            revision          TEXT NOT NULL,
+            image_model_path  TEXT NOT NULL,
+            text_model_path   TEXT NOT NULL,
+            vector_dim        INTEGER NOT NULL,
+            preprocess_json   TEXT NOT NULL,
+            tokenizer_json    TEXT NOT NULL,
+            created_at        INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS semantic_index_state (
+            media_id       INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+            content_hash   TEXT NOT NULL,
+            model_id       TEXT NOT NULL,
+            model_revision TEXT NOT NULL,
+            preprocess_id  TEXT NOT NULL,
+            vector_dim     INTEGER NOT NULL,
+            embedding      BLOB,
+            indexed_at     INTEGER NOT NULL,
+            error_text     TEXT DEFAULT ''
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_semantic_state_model
+            ON semantic_index_state(model_id, model_revision);
+
+        CREATE TABLE IF NOT EXISTS semantic_jobs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            state       TEXT NOT NULL,
+            scope       TEXT NOT NULL,
+            model_id    TEXT NOT NULL DEFAULT '',
+            total       INTEGER NOT NULL DEFAULT 0,
+            processed   INTEGER NOT NULL DEFAULT 0,
+            skipped     INTEGER NOT NULL DEFAULT 0,
+            failed      INTEGER NOT NULL DEFAULT 0,
+            remaining   INTEGER NOT NULL DEFAULT 0,
+            error       TEXT NOT NULL DEFAULT '',
+            created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_semantic_one_active_job
+            ON semantic_jobs((1)) WHERE state IN ('running','cancelling');
+    )SQL";
+
+    Transaction tx(conn);
+    Status s = conn.execute(v7_sql);
+    if (!s.isOk()) return s;
+    s = conn.execute("INSERT INTO schema_version (version) VALUES (7);");
+    if (!s.isOk()) return s;
+    return tx.commit();
+}
+
 Status Schema::migrate(Connection& conn) {
     auto verResult = getCurrentVersion(conn);
     if (!verResult.isOk()) {
@@ -357,7 +412,12 @@ Status Schema::migrate(Connection& conn) {
         if (!s.isOk()) return s;
         current = 6;
     }
-
+    if (current < 7) {
+        IMAGINE_LOG_INFO("Applying database migration v7...");
+        Status s = applyMigrationV7(conn);
+        if (!s.isOk()) return s;
+        current = 7;
+    }
     IMAGINE_LOG_INFO("Database schema up to date at version " + std::to_string(current));
     return Status::ok();
 }

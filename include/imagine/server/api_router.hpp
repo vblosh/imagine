@@ -7,6 +7,7 @@
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/thumbnail/cache.hpp"
 #include "imagine/faces/service.hpp"
+#include "imagine/clip/service.hpp"
 
 #include <thread>
 #include <mutex>
@@ -58,6 +59,7 @@ private:
     void registerImportRoutes(httplib::Server& server);
     void registerGeocodeRoutes(httplib::Server& server);
     void registerFaceRoutes(httplib::Server& server);
+    void registerSemanticRoutes(httplib::Server& server);
     void registerAccessLog(httplib::Server& server);
 
     bool checkAuth(const httplib::Request& req, httplib::Response& res) const;
@@ -68,6 +70,7 @@ private:
     db::CatalogDb* db_{nullptr};
     thumbnail::Cache* cache_{nullptr};
     std::unique_ptr<faces::Service> faceService_;
+    std::unique_ptr<clip::Service> clipService_;
 
     std::jthread importThread_;
     mutable std::mutex importThreadMutex_;
