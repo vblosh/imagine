@@ -13,9 +13,20 @@
 #include <iterator>
 #include <limits>
 #include <mutex>
+#include <shared_mutex>
 #include <sstream>
 #include <thread>
 #include <utility>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #ifndef IMAGINE_FACE_ANALYSIS_BUILT
 #define IMAGINE_FACE_ANALYSIS_BUILT 0
@@ -612,84 +623,66 @@ struct Engine::Impl {
 
     Config config;
     RuntimeInfo info;
+    mutable std::shared_mutex sessionMutex;
     mutable std::mutex timingsMutex;
     AnalysisTimings timings;
     bool initialized{false};
 #if IMAGINE_FACE_ANALYSIS_BUILT
+    std::filesystem::path detectorPath;
+    std::filesystem::path recognizerPath;
     std::unique_ptr<LoadedModel> detector;
     std::unique_ptr<LoadedModel> recognizer;
     std::vector<int64_t> detectorInputShape;
     std::vector<int64_t> recognizerInputShape;
+
+    Status loadLocked();
 #endif
 };
 
-Engine::Engine(Config config) : impl_(std::make_unique<Impl>(std::move(config))) {}
-Engine::~Engine() = default;
-
-Status Engine::initialize() {
-    if (const auto configStatus = validateConfig(impl_->config); !configStatus.isOk()) {
-        impl_->info.error = configStatus.message();
-        return configStatus;
+#if IMAGINE_FACE_ANALYSIS_BUILT
+Status Engine::Impl::loadLocked() {
+    if (initialized && detector && recognizer) {
+        return Status::ok();
     }
-#if !IMAGINE_FACE_ANALYSIS_BUILT
-    impl_->info.ready = false;
-    impl_->info.error = "Face analysis is unavailable: this build was configured without ONNX Runtime 1.30.0";
-    return Status::internal(impl_->info.error);
-#else
-    impl_->info.ready = false;
-    impl_->info.error.clear();
-    impl_->info.fallbackReason.clear();
-    try {
-        const std::filesystem::path directory(impl_->config.modelDirectory);
-        if (impl_->config.modelDirectory.empty() || !std::filesystem::is_directory(directory)) {
-            throw std::runtime_error("Face model directory does not exist: " + impl_->config.modelDirectory);
+    if (detectorPath.empty() || recognizerPath.empty()) {
+        const std::filesystem::path directory(config.modelDirectory);
+        if (config.modelDirectory.empty() || !std::filesystem::is_directory(directory)) {
+            return Status::internal("Face model directory does not exist: " + config.modelDirectory);
         }
-        const auto detectorPath = directory / "det_10g.onnx";
-        const auto recognizerPath = directory / "w600k_r50.onnx";
+        detectorPath = directory / "det_10g.onnx";
+        recognizerPath = directory / "w600k_r50.onnx";
         if (!std::filesystem::is_regular_file(detectorPath) || !std::filesystem::is_regular_file(recognizerPath)) {
-            throw std::runtime_error("Model directory must contain det_10g.onnx and w600k_r50.onnx from buffalo_l");
+            return Status::internal("Model directory must contain det_10g.onnx and w600k_r50.onnx from buffalo_l");
         }
+    }
 
-        auto detectorHash = metadata::Hasher::computeFileSha256(detectorPath.string());
-        auto recognizerHash = metadata::Hasher::computeFileSha256(recognizerPath.string());
-        if (!detectorHash.isOk() || !recognizerHash.isOk()) {
-            throw std::runtime_error(!detectorHash.isOk() ? detectorHash.status().message() : recognizerHash.status().message());
-        }
-        impl_->info.detectorChecksum = detectorHash.value();
-        impl_->info.recognizerChecksum = recognizerHash.value();
-
-        const char* runtimeVersion = OrtGetApiBase()->GetVersionString();
-        impl_->info.runtimeVersion = runtimeVersion ? runtimeVersion : "unknown";
-        if (impl_->info.runtimeVersion != "1.30.0") {
-            throw std::runtime_error("ONNX Runtime 1.30.0 is required; loaded " + impl_->info.runtimeVersion);
-        }
-
-        impl_->detector = std::make_unique<LoadedModel>();
-        impl_->recognizer = std::make_unique<LoadedModel>();
-        const bool tryCuda = impl_->config.device != "cpu";
+    try {
+        detector = std::make_unique<LoadedModel>();
+        recognizer = std::make_unique<LoadedModel>();
+        const bool tryCuda = config.device != "cpu";
         auto loadOne = [&](LoadedModel& target, const std::filesystem::path& path, const char* label) {
             if (!tryCuda) {
-                target = openModel(path, label, impl_->config.cpuThreads, false);
+                target = openModel(path, label, config.cpuThreads, false);
                 return;
             }
             try {
-                target = openModel(path, label, impl_->config.cpuThreads, true);
+                target = openModel(path, label, config.cpuThreads, true);
             } catch (const std::exception& ex) {
-                if (impl_->config.device == "cuda") throw;
+                if (config.device == "cuda") throw;
                 const std::string fallback = std::string(label) + ": " + exceptionMessage(ex);
-                impl_->info.fallbackReason = appendReason(impl_->info.fallbackReason, fallback);
-                target = openModel(path, label, impl_->config.cpuThreads, false);
+                info.fallbackReason = appendReason(info.fallbackReason, fallback);
+                target = openModel(path, label, config.cpuThreads, false);
             }
         };
-        loadOne(*impl_->detector, detectorPath, "SCRFD detector");
-        loadOne(*impl_->recognizer, recognizerPath, "ArcFace recognizer");
+        loadOne(*detector, detectorPath, "SCRFD detector");
+        loadOne(*recognizer, recognizerPath, "ArcFace recognizer");
 
-        impl_->detectorInputShape = inputShape(*impl_->detector->session, kDetectorSide, "SCRFD detector");
-        impl_->recognizerInputShape = inputShape(*impl_->recognizer->session, kRecognizerSide, "ArcFace recognizer");
-        if (impl_->recognizer->outputShapes.empty()) {
+        detectorInputShape = inputShape(*detector->session, kDetectorSide, "SCRFD detector");
+        recognizerInputShape = inputShape(*recognizer->session, kRecognizerSide, "ArcFace recognizer");
+        if (recognizer->outputShapes.empty()) {
             throw std::runtime_error("ArcFace recognizer output metadata is missing");
         }
-        const auto& embeddingShape = impl_->recognizer->outputShapes.front();
+        const auto& embeddingShape = recognizer->outputShapes.front();
         size_t embeddingSize = 1;
         for (size_t i = 0; i < embeddingShape.size(); ++i) {
             const int64_t dimension = embeddingShape[i];
@@ -702,16 +695,83 @@ Status Engine::initialize() {
         if (embeddingSize != kEmbeddingDimensions) {
             throw std::runtime_error("ArcFace recognizer output must contain 512 values");
         }
-        impl_->info.detectorProvider = impl_->detector->provider;
-        impl_->info.recognizerProvider = impl_->recognizer->provider;
+        info.detectorProvider = detector->provider;
+        info.recognizerProvider = recognizer->provider;
+        info.ready = true;
+        info.loaded = true;
+        info.error.clear();
+        initialized = true;
+        IMAGINE_LOG_INFO("Face analysis engine models loaded successfully: detector=" + info.detectorProvider +
+                        ", recognizer=" + info.recognizerProvider);
+        return Status::ok();
+    } catch (const std::exception& ex) {
+        info.loaded = false;
+        initialized = false;
+        detector.reset();
+        recognizer.reset();
+        const std::string err = exceptionMessage(ex);
+        IMAGINE_LOG_WARN("Face analysis engine loading failed: " + err);
+        return Status::internal(err);
+    }
+}
+#endif
+
+Engine::Engine(Config config) : impl_(std::make_unique<Impl>(std::move(config))) {}
+Engine::~Engine() = default;
+
+Status Engine::initialize(bool eager) {
+    std::unique_lock lock(impl_->sessionMutex);
+    if (const auto configStatus = validateConfig(impl_->config); !configStatus.isOk()) {
+        impl_->info.error = configStatus.message();
+        return configStatus;
+    }
+#if !IMAGINE_FACE_ANALYSIS_BUILT
+    impl_->info.ready = false;
+    impl_->info.loaded = false;
+    impl_->info.error = "Face analysis is unavailable: this build was configured without ONNX Runtime 1.30.0";
+    return Status::internal(impl_->info.error);
+#else
+    impl_->info.ready = false;
+    impl_->info.loaded = false;
+    impl_->info.error.clear();
+    impl_->info.fallbackReason.clear();
+    try {
+        const std::filesystem::path directory(impl_->config.modelDirectory);
+        if (impl_->config.modelDirectory.empty() || !std::filesystem::is_directory(directory)) {
+            throw std::runtime_error("Face model directory does not exist: " + impl_->config.modelDirectory);
+        }
+        impl_->detectorPath = directory / "det_10g.onnx";
+        impl_->recognizerPath = directory / "w600k_r50.onnx";
+        if (!std::filesystem::is_regular_file(impl_->detectorPath) || !std::filesystem::is_regular_file(impl_->recognizerPath)) {
+            throw std::runtime_error("Model directory must contain det_10g.onnx and w600k_r50.onnx from buffalo_l");
+        }
+
+        auto detectorHash = metadata::Hasher::computeFileSha256(impl_->detectorPath.string());
+        auto recognizerHash = metadata::Hasher::computeFileSha256(impl_->recognizerPath.string());
+        if (!detectorHash.isOk() || !recognizerHash.isOk()) {
+            throw std::runtime_error(!detectorHash.isOk() ? detectorHash.status().message() : recognizerHash.status().message());
+        }
+        impl_->info.detectorChecksum = detectorHash.value();
+        impl_->info.recognizerChecksum = recognizerHash.value();
+
+        const char* runtimeVersion = OrtGetApiBase()->GetVersionString();
+        impl_->info.runtimeVersion = runtimeVersion ? runtimeVersion : "unknown";
+        if (impl_->info.runtimeVersion != "1.30.0") {
+            throw std::runtime_error("ONNX Runtime 1.30.0 is required; loaded " + impl_->info.runtimeVersion);
+        }
+
+        impl_->info.detectorProvider = (impl_->config.device == "cpu") ? "CPUExecutionProvider" : "pending";
+        impl_->info.recognizerProvider = (impl_->config.device == "cpu") ? "CPUExecutionProvider" : "pending";
         impl_->info.ready = true;
         impl_->info.error.clear();
-        impl_->initialized = true;
-        IMAGINE_LOG_INFO("Face analysis engine initialized successfully: detector=" + impl_->info.detectorProvider +
-                        ", recognizer=" + impl_->info.recognizerProvider);
+
+        if (eager) {
+            return impl_->loadLocked();
+        }
         return Status::ok();
     } catch (const std::exception& ex) {
         impl_->info.ready = false;
+        impl_->info.loaded = false;
         impl_->info.error = exceptionMessage(ex);
         impl_->initialized = false;
         impl_->detector.reset();
@@ -722,7 +782,47 @@ Status Engine::initialize() {
 #endif
 }
 
-const RuntimeInfo& Engine::info() const { return impl_->info; }
+Status Engine::load() {
+#if !IMAGINE_FACE_ANALYSIS_BUILT
+    return Status::internal("Face analysis is unavailable: this build was configured without ONNX Runtime 1.30.0");
+#else
+    std::unique_lock lock(impl_->sessionMutex);
+    return impl_->loadLocked();
+#endif
+}
+
+void Engine::unload() {
+#if IMAGINE_FACE_ANALYSIS_BUILT
+    std::unique_lock lock(impl_->sessionMutex);
+    if (!impl_->initialized && !impl_->detector && !impl_->recognizer) {
+        return;
+    }
+    impl_->detector.reset();
+    impl_->recognizer.reset();
+    impl_->detectorInputShape.clear();
+    impl_->recognizerInputShape.clear();
+    impl_->initialized = false;
+    impl_->info.loaded = false;
+#if defined(_WIN32)
+    SetProcessWorkingSetSize(GetCurrentProcess(), static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1));
+#endif
+    IMAGINE_LOG_INFO("Face analysis engine models unloaded; working set memory reclaimed");
+#endif
+}
+
+bool Engine::isLoaded() const {
+#if !IMAGINE_FACE_ANALYSIS_BUILT
+    return false;
+#else
+    std::shared_lock lock(impl_->sessionMutex);
+    return impl_->initialized && impl_->detector != nullptr && impl_->recognizer != nullptr;
+#endif
+}
+
+RuntimeInfo Engine::info() const {
+    std::shared_lock lock(impl_->sessionMutex);
+    return impl_->info;
+}
 AnalysisTimings Engine::lastTimings() const {
     std::lock_guard lock(impl_->timingsMutex);
     return impl_->timings;
@@ -734,6 +834,20 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
     (void)image;
     return Status::internal("Face analysis is unavailable: this build was configured without ONNX Runtime 1.30.0");
 #else
+    {
+        std::shared_lock readLock(impl_->sessionMutex);
+        if (!impl_->initialized || !impl_->detector || !impl_->recognizer) {
+            readLock.unlock();
+            std::unique_lock writeLock(impl_->sessionMutex);
+            if (!impl_->initialized || !impl_->detector || !impl_->recognizer) {
+                Status loadStatus = impl_->loadLocked();
+                if (!loadStatus.isOk()) {
+                    return loadStatus;
+                }
+            }
+        }
+    }
+    std::shared_lock lock(impl_->sessionMutex);
     if (!impl_->initialized || !impl_->info.ready || !impl_->detector || !impl_->recognizer) {
         return Status::internal(impl_->info.error.empty() ? "Face analysis engine is not initialized" : impl_->info.error);
     }

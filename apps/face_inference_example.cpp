@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
 
     imagine::faces::Engine engine(config);
     const auto initializationStart = std::chrono::steady_clock::now();
-    const auto init = engine.initialize();
+    const auto init = engine.initialize(true);
     const double initializationMs = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - initializationStart).count();
     if (!init.isOk()) {
@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
         totalSamples.push_back(timing.totalMs);
     }
 
-    const auto& runtime = engine.info();
+    const auto runtime = engine.info();
     nlohmann::json result{
         {"status", "ok"},
         {"image", imagePath},

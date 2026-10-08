@@ -3712,6 +3712,88 @@ TEST(FaceServiceTest, CatalogScopeQueuesOnlyEligiblePhotos) {
     std::filesystem::remove_all(root, ec);
 }
 
+TEST(FaceServiceTest, StatusReflectsUnloadedEngineInitially) {
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    faces::Service service(db, "", nullptr, nullptr);
+    auto status = service.status();
+    EXPECT_FALSE(status["loaded"].get<bool>());
+    EXPECT_FALSE(status["runtime"]["loaded"].get<bool>());
+}
+
+TEST(FaceServiceTest, ServicePerformsLazyLoadAndUnload) {
+    const char* modelDirectory = std::getenv("IMAGINE_FACE_TEST_MODELS");
+    if (!modelDirectory || !*modelDirectory) {
+        GTEST_SKIP() << "Set IMAGINE_FACE_TEST_MODELS to a buffalo_l model directory for the lazy loading check";
+    }
+    if (IMAGINE_FACE_ANALYSIS_BUILT == 0) {
+        GTEST_SKIP() << "This build does not include the optional ONNX Runtime feature";
+    }
+
+    _putenv_s("IMAGINE_FACE_MODELS", modelDirectory);
+    _putenv_s("IMAGINE_FACE_IDLE_UNLOAD_SEC", "0");
+
+    struct EnvGuard {
+        ~EnvGuard() {
+            _putenv_s("IMAGINE_FACE_MODELS", "");
+            _putenv_s("IMAGINE_FACE_IDLE_UNLOAD_SEC", "");
+        }
+    } guard;
+
+    const auto root = std::filesystem::temp_directory_path() /
+        ("imagine_faces_service_lazy_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+
+    CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    thumbnail::ImageBuffer image;
+    image.width = 64; image.height = 48; image.channels = 3;
+    image.data.assign(static_cast<size_t>(image.width * image.height * 3), 127);
+    const std::string path = (root / "test.jpg").string();
+    ASSERT_TRUE(thumbnail::Generator::saveJpeg(image, path).isOk());
+
+    MediaItem item;
+    item.file_path = path;
+    item.file_name = "test.jpg";
+    item.content_hash = metadata::Hasher::computeFileSha256(path).value();
+    item.width = image.width;
+    item.height = image.height;
+    item.media_type = "photo";
+    const auto mediaId = db.insertMedia(item).value();
+
+    faces::Service service(db, (root / "cache").string(), nullptr, nullptr);
+
+    // 1. Engine is not loaded initially
+    auto statusBefore = service.status();
+    EXPECT_TRUE(statusBefore["ready"].get<bool>());
+    EXPECT_FALSE(statusBefore["loaded"].get<bool>());
+    EXPECT_FALSE(statusBefore["runtime"]["loaded"].get<bool>());
+
+    // 2. Run scan job
+    int64_t jobId = 0;
+    ASSERT_TRUE(service.startJob("selected", {mediaId}, true, jobId).isOk());
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    Result<nlohmann::json> job = service.getJob(jobId);
+    while (std::chrono::steady_clock::now() < deadline) {
+        job = service.getJob(jobId);
+        if (!job.isOk() || (job.value()["state"] != "running" && job.value()["state"] != "cancelling")) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(job.isOk());
+    EXPECT_EQ(job.value()["state"], "completed");
+
+    // 3. Since IMAGINE_FACE_IDLE_UNLOAD_SEC=0, engine was unloaded at job end
+    auto statusAfter = service.status();
+    EXPECT_FALSE(statusAfter["loaded"].get<bool>());
+    EXPECT_FALSE(statusAfter["runtime"]["loaded"].get<bool>());
+    EXPECT_FALSE(statusAfter["runtime"]["detector_provider"].get<std::string>().empty());
+    EXPECT_NE(statusAfter["runtime"]["detector_provider"].get<std::string>(), "pending");
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+}
+
 TEST_F(ServerTest, HttpStatusCodesNotFoundAndConflict) {
     httplib::Client client("127.0.0.1", port_);
 

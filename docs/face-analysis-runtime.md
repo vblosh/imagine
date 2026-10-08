@@ -40,7 +40,10 @@ Configure the server with local paths:
 ```powershell
 $env:IMAGINE_FACE_MODELS = 'C:/Models/buffalo_l'
 $env:IMAGINE_FACE_DEVICE = 'cpu' # cpu, auto, or cuda
+$env:IMAGINE_FACE_IDLE_UNLOAD_SEC = '30' # seconds before unloading idle models from RAM (default 30; 0 for immediate unload)
 ```
+
+The server uses lazy loading for inference models: at server boot only lightweight metadata and model file checksums are validated, keeping baseline process memory at ~3–12 MB. The ~400 MB ONNX Runtime models are loaded into memory on-demand only when a face scan job executes, and automatically unloaded when idle or completed. Non-scan operations (browsing the faces grid, reviewing suggestions, merging/naming people, displaying face crops) run directly against SQLite embeddings and crop thumbnails without loading the ONNX inference models.
 
 The standalone C++ example emits JSON detections and normalized embeddings. An overlay is optional:
 

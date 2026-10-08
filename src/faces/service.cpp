@@ -65,6 +65,17 @@ float envFloat(const char* key, float fallback) {
     return fallback;
 }
 
+int envInt(const char* key, int fallback) {
+    const char* value = std::getenv(key);
+    if (!value) return fallback;
+    try {
+        size_t used = 0;
+        int parsed = std::stoi(value, &used);
+        if (used == std::strlen(value) && parsed >= 0) return parsed;
+    } catch (...) {}
+    return fallback;
+}
+
 Status dbError(Connection& conn, const std::string& context) {
     return Status::databaseError(context + ": " + conn.lastErrorMessage());
 }
@@ -1859,6 +1870,38 @@ struct Service::Impl {
     mutable std::shared_ptr<GroupReviewIndex> matcherIndex;
     mutable std::vector<std::shared_ptr<GroupReviewSnapshot>> reviewSnapshots;
 
+    int idleUnloadSec{0};
+    mutable std::mutex idleMutex;
+    std::condition_variable idleCv;
+    bool idleWorkerStop{false};
+    std::chrono::steady_clock::time_point lastScanEndTime{};
+    bool scanRunning{false};
+    std::jthread idleWorker;
+
+    void idleLoop(std::stop_token stopToken) {
+        std::unique_lock lock(idleMutex);
+        while (!stopToken.stop_requested() && !idleWorkerStop) {
+            if (!scanRunning && engine.isLoaded()) {
+                auto now = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastScanEndTime).count();
+                if (elapsed >= idleUnloadSec) {
+                    if (!scanRunning) {
+                        engine.unload();
+                    }
+                } else {
+                    auto waitTime = std::chrono::seconds(idleUnloadSec - elapsed);
+                    idleCv.wait_for(lock, waitTime, [&] {
+                        return stopToken.stop_requested() || idleWorkerStop || scanRunning;
+                    });
+                }
+            } else {
+                idleCv.wait(lock, [&] {
+                    return stopToken.stop_requested() || idleWorkerStop || (!scanRunning && engine.isLoaded());
+                });
+            }
+        }
+    }
+
     Impl(db::CatalogDb& dbRef, std::string cacheDir, PathResolver resolve, Analyzer analyze)
         : db(dbRef), cacheDirectory(std::move(cacheDir)), resolver(std::move(resolve)), analyzer(std::move(analyze)),
           config{envString("IMAGINE_FACE_MODELS", ""), envString("IMAGINE_FACE_DEVICE", "cpu"),
@@ -1875,7 +1918,7 @@ struct Service::Impl {
             runtime.recognizerProvider = "test";
             runtime.fallbackReason = "test-fallback";
         } else {
-            engineStatus = engine.initialize();
+            engineStatus = engine.initialize(false);
             runtime = engine.info();
         }
         if (!std::isfinite(config.matchThreshold) || config.matchThreshold < -1 || config.matchThreshold > 1) {
@@ -1883,6 +1926,10 @@ struct Service::Impl {
         }
         if (analyzer) {
             runtime.error.clear();
+        }
+        idleUnloadSec = envInt("IMAGINE_FACE_IDLE_UNLOAD_SEC", 30);
+        if (idleUnloadSec > 0 && !analyzer) {
+            idleWorker = std::jthread([this](std::stop_token stopToken) { idleLoop(stopToken); });
         }
     }
 };
@@ -1902,24 +1949,36 @@ Service::Service(db::CatalogDb& db, std::string cacheDirectory, PathResolver res
 Service::~Service() {
     if (!impl_) return;
     impl_->cancelRequested.store(true);
+    {
+        std::lock_guard<std::mutex> lock(impl_->idleMutex);
+        impl_->idleWorkerStop = true;
+    }
+    impl_->idleCv.notify_all();
+    if (impl_->idleWorker.joinable()) {
+        impl_->idleWorker.request_stop();
+        impl_->idleWorker.join();
+    }
     std::lock_guard<std::mutex> lock(impl_->workerMutex);
     if (impl_->worker.joinable()) {
         impl_->worker.request_stop();
         impl_->worker.join();
     }
+    impl_->engine.unload();
 }
 
 json Service::status() const {
-    const auto& info = impl_->runtime;
+    const RuntimeInfo info = impl_->analyzer ? impl_->runtime : impl_->engine.info();
+    const bool isLoaded = impl_->analyzer ? true : info.loaded;
     json result = {
         {"built", info.built}, {"ready", info.ready && impl_->engineStatus.isOk()},
+        {"loaded", isLoaded},
         {"error", impl_->engineStatus.isOk() ? info.error : impl_->engineStatus.message()},
         {"config", {{"device", impl_->config.device}, {"confidence", impl_->config.confidence},
                     {"nms_threshold", impl_->config.nmsThreshold}, {"match_threshold", impl_->config.matchThreshold}}},
         {"runtime", {{"detector_checksum", info.detectorChecksum}, {"recognizer_checksum", info.recognizerChecksum},
                      {"runtime_version", info.runtimeVersion}, {"detector_provider", info.detectorProvider},
                      {"recognizer_provider", info.recognizerProvider}, {"fallback_reason", info.fallbackReason},
-                     {"pipeline_version", info.pipelineVersion}}},
+                     {"pipeline_version", info.pipelineVersion}, {"loaded", isLoaded}}},
         {"job", nullptr}
     };
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
@@ -2983,6 +3042,31 @@ Result<std::string> Service::cropPath(int64_t faceId, int64_t revision) {
 
 void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
     IMAGINE_LOG_INFO("Face-analysis job " + std::to_string(jobId) + " started processing " + std::to_string(mediaIds.size()) + " items");
+    {
+        std::lock_guard<std::mutex> lock(impl_->idleMutex);
+        impl_->scanRunning = true;
+    }
+    impl_->idleCv.notify_all();
+
+    struct SessionGuard {
+        Service::Impl& impl;
+        ~SessionGuard() {
+            {
+                std::lock_guard<std::mutex> lock(impl.idleMutex);
+                impl.scanRunning = false;
+                impl.lastScanEndTime = std::chrono::steady_clock::now();
+            }
+            if (!impl.analyzer) {
+                if (impl.idleUnloadSec <= 0) {
+                    impl.engine.unload();
+                } else {
+                    impl.idleCv.notify_all();
+                }
+            }
+        }
+    };
+    SessionGuard sessionGuard{*impl_};
+
     auto updateProgress = [&](const std::string& kind, const std::string& error = "") {
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
         std::string sql = "UPDATE face_analysis_jobs SET " + kind + "=" + kind + "+1,remaining=MAX(0,total-processed-skipped-failed-1),updated_at=?,error=CASE WHEN error='' AND ?<>'' THEN ? ELSE error END WHERE id=?;";
@@ -3005,24 +3089,39 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             IMAGINE_LOG_INFO("Face-analysis job " + std::to_string(jobId) + " completed successfully");
         }
     };
-    auto recordFailure = [&](MediaId mediaId, const MediaItem& resultMedia,
-                             const MediaItem& catalogSnapshot, const std::string& error) {
-        IMAGINE_LOG_ERROR("Face scan error for media ID " + std::to_string(mediaId) +
-                          " (" + resultMedia.file_path + "): " + error);
-        Status saved;
-        {
-            std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
-            db::Transaction tx(impl_->db.conn_);
-            saved = saveAnalysisFailure(impl_->db.conn_, mediaId, resultMedia, catalogSnapshot,
-                                        impl_->runtime, impl_->config, error);
-            if (saved.isOk()) saved = tx.commit();
-        }
-        if (saved.code() == StatusCode::AlreadyExists) updateProgress("skipped", saved.message());
-        else updateProgress("failed", saved.isOk() ? error : saved.message());
-    };
 
     try {
-        const RuntimeInfo runtime = impl_->runtime;
+        if (!impl_->analyzer) {
+            Status loadStatus = impl_->engine.load();
+            if (!loadStatus.isOk()) {
+                IMAGINE_LOG_ERROR("Face scan unable to load face recognition engine for job " +
+                                  std::to_string(jobId) + ": " + loadStatus.message());
+                finish("failed", "Face analysis engine failed to load: " + loadStatus.message());
+                return;
+            }
+        }
+        {
+            std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+            if (!impl_->analyzer) {
+                impl_->runtime = impl_->engine.info();
+            }
+        }
+        const RuntimeInfo runtime = impl_->analyzer ? impl_->runtime : impl_->engine.info();
+        auto recordFailure = [&](MediaId mediaId, const MediaItem& resultMedia,
+                                 const MediaItem& catalogSnapshot, const std::string& error) {
+            IMAGINE_LOG_ERROR("Face scan error for media ID " + std::to_string(mediaId) +
+                              " (" + resultMedia.file_path + "): " + error);
+            Status saved;
+            {
+                std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+                db::Transaction tx(impl_->db.conn_);
+                saved = saveAnalysisFailure(impl_->db.conn_, mediaId, resultMedia, catalogSnapshot,
+                                            runtime, impl_->config, error);
+                if (saved.isOk()) saved = tx.commit();
+            }
+            if (saved.code() == StatusCode::AlreadyExists) updateProgress("skipped", saved.message());
+            else updateProgress("failed", saved.isOk() ? error : saved.message());
+        };
         SourcePrefetcher sourcePrefetcher;
         std::optional<std::future<Result<EncodedSource>>> prefetchedSource;
         size_t prefetchedIndex = mediaIds.size();

@@ -175,3 +175,54 @@ TEST(FaceEngineTest, RealFaceFixtureProducesNormalizedEmbeddingWhenConfigured) {
     }
     EXPECT_NEAR(std::sqrt(squaredNorm), 1.0, 1e-4);
 }
+
+TEST(FaceEngineTest, EngineSupportsLazyLoadingAndExplicitUnloadCycle) {
+    const char* modelDirectory = std::getenv("IMAGINE_FACE_TEST_MODELS");
+    if (!modelDirectory || !*modelDirectory) {
+        GTEST_SKIP() << "Set IMAGINE_FACE_TEST_MODELS to a buffalo_l model directory for the lazy loading check";
+    }
+    if (IMAGINE_FACE_ANALYSIS_BUILT == 0) {
+        GTEST_SKIP() << "This build does not include the optional ONNX Runtime feature";
+    }
+
+    Config config;
+    config.modelDirectory = modelDirectory;
+    config.device = "cpu";
+    config.cpuThreads = 1;
+    Engine engine(config);
+
+    // 1. By default, initialize() is lazy (eager = false)
+    const auto initialized = engine.initialize(false);
+    ASSERT_TRUE(initialized.isOk()) << initialized.message();
+    EXPECT_TRUE(engine.info().ready);
+    EXPECT_FALSE(engine.info().loaded);
+    EXPECT_FALSE(engine.isLoaded());
+
+    // 2. Explicit load() loads model sessions
+    const auto loaded = engine.load();
+    ASSERT_TRUE(loaded.isOk()) << loaded.message();
+    EXPECT_TRUE(engine.isLoaded());
+    EXPECT_TRUE(engine.info().loaded);
+
+    // 3. Explicit unload() drops sessions and marks unloaded
+    engine.unload();
+    EXPECT_FALSE(engine.isLoaded());
+    EXPECT_FALSE(engine.info().loaded);
+    EXPECT_TRUE(engine.info().ready);
+
+    // 4. Calling analyze() while unloaded automatically reloads on demand
+    ImageBuffer blank;
+    blank.width = 64;
+    blank.height = 48;
+    blank.channels = 3;
+    blank.data.assign(static_cast<size_t>(blank.width) * blank.height * 3, 128);
+    const auto detections = engine.analyze(blank);
+    ASSERT_TRUE(detections.isOk()) << detections.status().message();
+    EXPECT_TRUE(engine.isLoaded());
+    EXPECT_TRUE(engine.info().loaded);
+
+    // 5. Unload again cleans up
+    engine.unload();
+    EXPECT_FALSE(engine.isLoaded());
+    EXPECT_FALSE(engine.info().loaded);
+}

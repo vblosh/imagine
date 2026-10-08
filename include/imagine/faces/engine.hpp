@@ -28,6 +28,7 @@ struct Config {
 struct RuntimeInfo {
     bool built{false};
     bool ready{false};
+    bool loaded{false};
     std::string error;
     std::string detectorChecksum, recognizerChecksum, runtimeVersion;
     std::string detectorProvider, recognizerProvider, fallbackReason;
@@ -50,8 +51,11 @@ public:
     ~Engine();
     Engine(const Engine&) = delete;
     Engine& operator=(const Engine&) = delete;
-    Status initialize();
-    const RuntimeInfo& info() const;
+    Status initialize(bool eager = false);
+    Status load();
+    void unload();
+    bool isLoaded() const;
+    RuntimeInfo info() const;
     // Timings for the most recent analyze() call that passed input validation.
     // Stages exclude initialization so callers can report cold startup separately.
     AnalysisTimings lastTimings() const;

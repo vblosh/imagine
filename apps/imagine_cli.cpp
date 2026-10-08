@@ -393,6 +393,7 @@ int handleServe(int argc, char** argv) {
         "IMAGINE_CATALOG",
         "IMAGINE_CATALOG_DB",
         "IMAGINE_FACE_DEVICE",
+        "IMAGINE_FACE_IDLE_UNLOAD_SEC",
         "IMAGINE_FACE_MATCH_THRESHOLD",
         "IMAGINE_FACE_MODELS",
         "IMAGINE_FFMPEG_PATH",
