@@ -707,6 +707,8 @@ Status Engine::initialize() {
         impl_->info.ready = true;
         impl_->info.error.clear();
         impl_->initialized = true;
+        IMAGINE_LOG_INFO("Face analysis engine initialized successfully: detector=" + impl_->info.detectorProvider +
+                        ", recognizer=" + impl_->info.recognizerProvider);
         return Status::ok();
     } catch (const std::exception& ex) {
         impl_->info.ready = false;
@@ -714,7 +716,7 @@ Status Engine::initialize() {
         impl_->initialized = false;
         impl_->detector.reset();
         impl_->recognizer.reset();
-        IMAGINE_LOG_ERROR("Face analysis engine initialization failed: " + impl_->info.error);
+        IMAGINE_LOG_WARN("Face analysis engine initialization failed: " + impl_->info.error);
         return Status::internal(impl_->info.error);
     }
 #endif

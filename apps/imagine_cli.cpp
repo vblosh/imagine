@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cwctype>
 #include <cctype>
+#include <set>
+#include <string_view>
 #include "imagine/core/catalog.hpp"
 #include "imagine/core/query.hpp"
 #include "imagine/server/web_server.hpp"
@@ -24,6 +26,13 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#define environ (*_NSGetEnviron())
+#else
+extern "C" char** environ;
+#endif
 #endif
 
 namespace {
@@ -363,12 +372,102 @@ int handleServe(int argc, char** argv) {
     std::string effectiveCacheDir = thumbsDir.empty() ? imagine::thumbnail::Cache::defaultCacheDir() : thumbsDir;
     std::string effectivePhotosDir = photosDir.empty() ? "(none / relative to catalog)" : photosDir;
 
-    auto envVal = [](const char* name, bool mask = false) -> std::string {
-        const char* val = std::getenv(name);
+    auto isSensitive = [](std::string_view name) -> bool {
+        return name.find("TOKEN") != std::string_view::npos ||
+               name.find("SECRET") != std::string_view::npos ||
+               name.find("PASSWORD") != std::string_view::npos ||
+               name.find("KEY") != std::string_view::npos;
+    };
+
+    auto envVal = [&](const std::string& name) -> std::string {
+        const char* val = std::getenv(name.c_str());
         if (!val || !*val) return "(not set)";
-        if (mask) return "(configured, " + std::to_string(std::string_view(val).size()) + " chars)";
+        if (isSensitive(name)) return "(configured, " + std::to_string(std::string_view(val).size()) + " chars)";
         return std::string("\"") + val + "\"";
     };
+
+    std::set<std::string> imagineVars = {
+        "IMAGINE_ALLOWED_IMPORT_ROOTS",
+        "IMAGINE_ALLOWED_ORIGIN",
+        "IMAGINE_API_TOKEN",
+        "IMAGINE_CATALOG",
+        "IMAGINE_CATALOG_DB",
+        "IMAGINE_FACE_DEVICE",
+        "IMAGINE_FACE_MATCH_THRESHOLD",
+        "IMAGINE_FACE_MODELS",
+        "IMAGINE_FFMPEG_PATH",
+        "IMAGINE_HOST",
+        "IMAGINE_LOG_FILE",
+        "IMAGINE_LOG_LEVEL",
+        "IMAGINE_MAX_PAYLOAD_MB",
+        "IMAGINE_PHOTOS_DIR",
+        "IMAGINE_PORT",
+        "IMAGINE_THUMBS_DIR",
+        "IMAGINE_WEB_DIR"
+    };
+
+#if defined(_WIN32)
+    LPWCH envBlock = GetEnvironmentStringsW();
+    if (envBlock) {
+        for (LPWCH var = envBlock; *var != L'\0'; var += wcslen(var) + 1) {
+            std::wstring_view entry(var);
+            auto eqPos = entry.find(L'=');
+            if (eqPos != std::wstring_view::npos && eqPos > 0) {
+                std::wstring_view nameW = entry.substr(0, eqPos);
+                if (nameW.rfind(L"IMAGINE_", 0) == 0) {
+                    int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, nameW.data(), static_cast<int>(nameW.size()), nullptr, 0, nullptr, nullptr);
+                    if (sizeNeeded > 0) {
+                        std::string name(sizeNeeded, '\0');
+                        WideCharToMultiByte(CP_UTF8, 0, nameW.data(), static_cast<int>(nameW.size()), name.data(), sizeNeeded, nullptr, nullptr);
+                        imagineVars.insert(name);
+                    }
+                }
+            }
+        }
+        FreeEnvironmentStringsW(envBlock);
+    }
+#elif defined(__APPLE__)
+    char** env = (*_NSGetEnviron());
+    if (env) {
+        for (char** current = env; *current != nullptr; ++current) {
+            std::string_view entry(*current);
+            auto eqPos = entry.find('=');
+            if (eqPos != std::string_view::npos && eqPos > 0) {
+                std::string_view name = entry.substr(0, eqPos);
+                if (name.rfind("IMAGINE_", 0) == 0) {
+                    imagineVars.emplace(name);
+                }
+            }
+        }
+    }
+#else
+    if (environ) {
+        for (char** current = environ; *current != nullptr; ++current) {
+            std::string_view entry(*current);
+            auto eqPos = entry.find('=');
+            if (eqPos != std::string_view::npos && eqPos > 0) {
+                std::string_view name = entry.substr(0, eqPos);
+                if (name.rfind("IMAGINE_", 0) == 0) {
+                    imagineVars.emplace(name);
+                }
+            }
+        }
+    }
+#endif
+
+    size_t maxNameWidth = 0;
+    for (const auto& var : imagineVars) {
+        if (var.size() > maxNameWidth) {
+            maxNameWidth = var.size();
+        }
+    }
+
+    std::string envSection;
+    for (const auto& var : imagineVars) {
+        std::string label = var + ":";
+        size_t padSpaces = (maxNameWidth + 3 > label.size()) ? (maxNameWidth + 3 - label.size()) : 1;
+        envSection += "    " + label + std::string(padSpaces, ' ') + envVal(var) + "\n";
+    }
 
     std::cout << R"(
 ======================================================
@@ -394,18 +493,7 @@ int handleServe(int argc, char** argv) {
     --log-level <level> Log level: debug, info, warn, error, none [current: )" << logLevel << R"(]
     --no-log-file       Disable writing log to file
   Environment Variables:
-    IMAGINE_CATALOG:        )" << envVal("IMAGINE_CATALOG") << R"(
-    IMAGINE_PHOTOS_DIR:     )" << envVal("IMAGINE_PHOTOS_DIR") << R"(
-    IMAGINE_THUMBS_DIR:     )" << envVal("IMAGINE_THUMBS_DIR") << R"(
-    IMAGINE_HOST:           )" << envVal("IMAGINE_HOST") << R"(
-    IMAGINE_PORT:           )" << envVal("IMAGINE_PORT") << R"(
-    IMAGINE_WEB_DIR:        )" << envVal("IMAGINE_WEB_DIR") << R"(
-    IMAGINE_LOG_FILE:       )" << envVal("IMAGINE_LOG_FILE") << R"(
-    IMAGINE_LOG_LEVEL:      )" << envVal("IMAGINE_LOG_LEVEL") << R"(
-    IMAGINE_API_TOKEN:      )" << envVal("IMAGINE_API_TOKEN", true) << R"(
-    IMAGINE_ALLOWED_ORIGIN: )" << envVal("IMAGINE_ALLOWED_ORIGIN") << R"(
-    IMAGINE_MAX_PAYLOAD_MB: )" << envVal("IMAGINE_MAX_PAYLOAD_MB") << R"(
-======================================================
+)" << envSection << R"(======================================================
   Press Ctrl+C to stop the server.
 )" << std::endl;
 
