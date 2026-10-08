@@ -21,6 +21,7 @@ import { loadMetadata, loadMedia, updateBatchBar, batchUpdateDates, renderGrid, 
 import { updateInspector } from './inspector.js';
 import { closeLoupe } from './loupe.js';
 import { t } from './i18n.js';
+import { checkSemanticStatus } from './semantic-search.js';
 
 // Internal pending state
 let pendingAddToAlbumIds = [];
@@ -208,6 +209,7 @@ export function openSettingsModal() {
   if (dom.settingsApiTokenInput) {
     dom.settingsApiTokenInput.value = getApiToken();
   }
+  checkSemanticStatus();
   showModal(dom.settingsModal, dom.settingsApiTokenInput);
 }
 

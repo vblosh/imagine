@@ -71,6 +71,8 @@ def _clean_proc_env() -> Dict[str, str]:
     proc_env.pop("IMAGINE_FACE_MODELS", None)
     proc_env.pop("IMAGINE_FACE_DEVICE", None)
     proc_env.pop("IMAGINE_FACE_MATCH_THRESHOLD", None)
+    proc_env.pop("IMAGINE_CLIP_MODEL_DIR", None)
+    proc_env.pop("IMAGINE_CLIP_DEVICE", None)
     return proc_env
 
 

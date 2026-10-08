@@ -22,6 +22,7 @@ def test_modal_dialog_semantics(server, page: Page):
         "batchDateModal",
         "batchMoveModal",
         "iosInstallModal",
+        "semanticIndexModal",
     ]
 
     for mid in modal_ids:

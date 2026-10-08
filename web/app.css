@@ -135,13 +135,17 @@ body, html {
 .top-bar-center {
   flex: 1;
   max-width: 400px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .search-box {
   position: relative;
   display: flex;
   align-items: center;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
 }
 
 .search-box .search-icon {
@@ -179,7 +183,7 @@ body, html {
   display: none;
 }
 
-.search-box input:not(:placeholder-shown) + .clear-search {
+.search-box input:not(:placeholder-shown) ~ .clear-search {
   display: block;
 }
 
@@ -4989,9 +4993,14 @@ body.resizing-horizontal * {
 }
 
 @media (max-width: 480px) {
+  .logo-text {
+    display: none;
+  }
+
   .top-bar-center {
     flex: 1;
     min-width: 0;
+    gap: 4px;
   }
 
   .search-box input {
@@ -5000,3 +5009,47 @@ body.resizing-horizontal * {
   }
 }
 
+
+/* Semantic search toggle */
+.semantic-toggle {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s, background 0.2s, border-color 0.2s;
+    flex-shrink: 0;
+}
+.semantic-toggle:hover:not(:disabled):not(.disabled-toggle) {
+    color: var(--text-primary, #ffffff);
+    background: rgba(255, 255, 255, 0.08);
+}
+.semantic-toggle.active:not(:disabled):not(.disabled-toggle) {
+    color: var(--accent-color, #0096e6);
+    border-color: var(--accent-color, #0096e6);
+    background: rgba(0, 150, 230, 0.15);
+}
+.semantic-toggle:disabled,
+.semantic-toggle.disabled-toggle {
+    opacity: 0.35;
+    cursor: not-allowed;
+    border-color: transparent;
+    background: none;
+    pointer-events: auto;
+}
+.semantic-toggle:disabled:hover,
+.semantic-toggle.disabled-toggle:hover {
+    opacity: 0.35;
+    color: var(--text-dim);
+    background: none;
+    border-color: transparent;
+}
+.semantic-toggle svg {
+    display: block;
+}

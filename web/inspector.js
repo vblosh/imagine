@@ -1,4 +1,4 @@
-/**
+﻿/**
  * IMAGINE Photo Organizer - Inspector Panel & Resizing
  * Pure Vanilla JavaScript (Offline-ready, no dependencies)
  */
@@ -107,6 +107,10 @@ export function renderInspectorContent(item) {
   }
   if (dom.inspectorNoSelection) dom.inspectorNoSelection.style.display = 'none';
   if (dom.inspectorSelection) dom.inspectorSelection.style.display = 'block';
+  if (dom.inspectorFindSimilarBtn) {
+    const canFindSimilar = Boolean(state.semanticSearchAvailable && item && item.media_type === 'photo');
+    dom.inspectorFindSimilarBtn.style.display = canFindSimilar ? 'flex' : 'none';
+  }
 
   // Inspector Preview
   const previewUrl = item.content_hash

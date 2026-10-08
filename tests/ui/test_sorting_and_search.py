@@ -90,3 +90,51 @@ def test_realtime_search_and_clear(server, page: Page):
     search_input.fill("Alps")
     expect(cards).to_have_count(1)
     expect(cards.first.locator(".card-filename")).to_have_text("mountain.bmp")
+
+
+def test_sparkle_ai_toggle_button_position_and_no_world_icon(server, page: Page):
+    """The Sparkle / AI toggle button is positioned to the right of the search input field, and no world icon is in the language selector."""
+    page.goto(server["url"])
+
+    search_input = page.locator("#searchInput")
+    semantic_toggle = page.locator("#semanticToggle")
+    expect(search_input).to_be_visible()
+    expect(semantic_toggle).to_be_visible()
+
+    input_box = search_input.bounding_box()
+    toggle_box = semantic_toggle.bounding_box()
+    assert input_box is not None and toggle_box is not None
+    # Semantic toggle is to the right of the input field
+    assert toggle_box["x"] >= input_box["x"] + input_box["width"] - 2, (
+        f"Toggle (x={toggle_box['x']}) should be to the right of search input (right edge={input_box['x'] + input_box['width']})"
+    )
+
+    # World icon left of language selector is removed
+    expect(page.locator(".lang-selector .lang-icon")).to_have_count(0)
+    expect(page.locator(".lang-selector svg")).to_have_count(0)
+    expect(page.locator("#langSelect")).to_be_visible()
+
+
+def test_search_input_debounce_and_enter_key(server, page: Page):
+    """Typing in search input sets a debounce timer, and pressing Enter triggers search immediately."""
+    page.goto(server["url"])
+
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    search_input = page.locator("#searchInput")
+
+    # Focus and type rapidly
+    search_input.click()
+    search_input.type("beach", delay=10)
+
+    # Pressing Enter triggers immediate search
+    search_input.press("Enter")
+    expect(cards).to_have_count(1)
+    expect(cards.first.locator(".card-filename")).to_have_text("beach.bmp")
+
+    # Clear search
+    page.locator("#clearSearchBtn").click()
+    expect(cards).to_have_count(6)
+    expect(search_input).to_have_value("")
+

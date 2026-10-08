@@ -20,6 +20,7 @@ Imagine combines a high-speed C++20 core engine with an interactive Command-Line
 11. [Under the Hood: Database & Cache](#11-under-the-hood-database--cache)
 12. [Troubleshooting & FAQ](#12-troubleshooting--faq)
 13. [Face Detection & Recognition](#13-face-detection--recognition)
+14. [Semantic AI Search (Natural Language & Visual Similarity)](#14-semantic-ai-search-natural-language--visual-similarity)
 
 ---
 
@@ -619,3 +620,32 @@ Select face crops and use the grid's shared side panel to **Choose a person** or
 You can change or clear a name, reject an identity suggestion, and dismiss or restore a false detection. SCRFD can detect faces on posters and mannequins; dismiss these when unwanted. Removing a face-derived identity preserves people tags added manually. Explicitly removing a people tag from a photo also clears matching face identities so the tag does not immediately reappear. Bulk review reports individual failures and keeps failed faces selected for retry.
 
 Analysis does not modify originals or upload photos. Editing the original invalidates the old face results. Forced reanalysis resets face review decisions for affected photos and requires confirmation. Back up the catalog to preserve face names and review decisions; cached face crops can be regenerated.
+
+---
+
+## 14. Semantic AI Search (Natural Language & Visual Similarity)
+
+Imagine includes a local, privacy-first semantic AI search engine powered by OpenAI's CLIP (Contrastive Language-Image Pre-Training) via ONNX Runtime. For complete setup, model specifications, and API documentation, see the [Semantic Search Guide](semantic-search.md).
+
+### What is Semantic Search?
+Traditional keyword search matches only filenames, folders, EXIF data, and tags. Semantic search interprets the visual and conceptual meaning of your images:
+- **Natural Language Search**: Find photos describing scenes, objects, lighting, and concepts (e.g., *"sunset on a rocky beach"*, *"dog playing with ball"*, *"vintage red car"*, *"birthday cake with candles"*).
+- **Find Similar**: Select any photo and click **Find Similar** in the Inspector to find visually and compositionally related photos from your catalog.
+
+### Setup & Requirements
+- **Models**: Place `image_encoder.onnx`, `text_encoder.onnx`, `vocab.json`, and `merges.txt` in `~/.cache/imagine/clip_models` or specify a custom folder via the `IMAGINE_CLIP_MODEL_DIR` environment variable.
+- **Acceleration**: Runs automatically on CPU threads, or via CUDA when `IMAGINE_CLIP_DEVICE=cuda` is set.
+- **Privacy**: 100% offline. Zero photos or queries leave your machine.
+
+### Indexing the Catalog
+1. Click the **Settings** gear icon (`⚙️`) in the top navigation bar.
+2. In the **Semantic Search** section, review the status (e.g., `Ready (X vectors indexed)`).
+3. Click **Rebuild Search Index**. A progress modal displays real-time progress (`X / Y` photos) with a live progress bar.
+4. You can cancel at any time; indexed embeddings are saved incrementally in `catalog.db`.
+
+### How to Search
+- Click the **Sparkle / AI toggle button** (`✨` / `☀️`) inside the search bar in the top navigation bar to enable Semantic AI mode.
+- Type any natural English description and press **Enter**.
+- Results are ranked by visual relevance. Combine with star ratings, pick/reject flags, or timeline date filters for fine-grained discovery.
+- Click **✕** in the search bar to clear the search.
+

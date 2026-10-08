@@ -13,7 +13,7 @@
   <link rel="apple-touch-icon" href="icons/icon-192.svg">
   <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
-  <link rel="stylesheet" href="app.css?v=11">
+  <link rel="stylesheet" href="app.css?v=22">
 </head>
 <body>
   <div id="app" class="elements-app">
@@ -66,6 +66,9 @@
           <input type="text" id="searchInput" placeholder="Search photos, camera, tags..." data-i18n-placeholder="search_placeholder" autocomplete="off">
           <button class="clear-search" id="clearSearchBtn" title="Clear search" data-i18n-title="clear_search">&times;</button>
         </div>
+        <button class="semantic-toggle" id="semanticToggle" title="Semantic Search (AI)" data-i18n-title="semantic_search_toggle" aria-pressed="false" disabled>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.28 1.28L3 12l5.8 1.9a2 2 0 0 1 1.28 1.28L12 21l1.9-5.8a2 2 0 0 1 1.28-1.28L21 12l-5.8-1.9a2 2 0 0 1-1.28-1.28L12 3z"/><path d="M5 3v4"/><path d="M3 5h4"/><path d="M19 17v4"/><path d="M17 19h4"/></svg>
+        </button>
       </div>
 
       <div class="top-bar-right">
@@ -78,13 +81,6 @@
 
         <!-- Language Selector -->
         <div class="lang-selector" title="Language" data-i18n-title="language_select">
-          <label for="langSelect" class="lang-label" style="display: flex; align-items: center; cursor: pointer; margin: 0;">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" class="lang-icon">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="2" y1="12" x2="22" y2="12"></line>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-            </svg>
-          </label>
           <select id="langSelect" class="lang-select" aria-label="Select Language" data-i18n-aria-label="language_select">
             <option value="en">English</option>
             <option value="es">Español</option>
@@ -724,6 +720,10 @@
 
             <!-- Actions Section -->
             <div class="inspector-section" style="display: flex; flex-direction: column; gap: 6px;">
+              <button class="btn btn-sm btn-secondary" id="inspectorFindSimilarBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Find visually similar photos" data-i18n-title="find_similar_title">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <span data-i18n="find_similar">Find Similar</span>
+              </button>
               <button class="btn btn-sm btn-secondary" id="inspectorAutoEventBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" data-i18n-title="auto_event_title" title="Suggest events for selected photos">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="17" rx="2"/><path d="m9 15 2 2 4-5"/></svg>
                 <span data-i18n="auto_event">Auto Event</span>
@@ -968,6 +968,11 @@
               <label for="settingsApiTokenInput" data-i18n="settings_api_token_label">API token</label>
               <input type="password" id="settingsApiTokenInput" class="form-control" autocomplete="off" spellcheck="false" data-i18n-placeholder="settings_api_token_placeholder" placeholder="Enter IMAGINE_API_TOKEN">
               <span class="settings-hint" data-i18n="settings_api_token_hint">The token is stored only in this browser and sent with API requests. It does not change the server environment.</span>
+            </div>
+            <div class="form-group" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+              <label data-i18n="semantic_search_title">Semantic Search</label>
+              <div id="settingsSemanticStatus" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">Status: Checking...</div>
+              <button type="button" class="btn btn-secondary btn-sm" id="settingsRebuildIndexBtn" data-i18n="rebuild_semantic_index">Rebuild Search Index</button>
             </div>
           </div>
           <div class="modal-footer">
@@ -1687,9 +1692,46 @@
       </div>
     </div>
 
+    <!-- Semantic Index Modal -->
+    <div class="modal face-job-modal" id="semanticIndexModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="semanticIndexTitle">
+      <div class="modal-backdrop" id="semanticIndexBackdrop"></div>
+      <div class="modal-dialog face-job-dialog">
+        <div class="modal-header">
+          <h3 id="semanticIndexTitle" data-i18n="semantic_index_title">Build Search Index</h3>
+          <button type="button" class="btn-icon-sm" id="closeSemanticIndexModalBtn" title="Close" data-i18n-title="close_panel" aria-label="Close semantic index" data-i18n-aria-label="close">&times;</button>
+        </div>
+        <div class="modal-body face-job-body">
+          <div class="face-setup-notice" id="semanticJobNotice" role="status" hidden></div>
+          <div class="face-job-state" id="semanticJobState" role="status" aria-live="polite"></div>
+          <div class="face-scan-scope-wrap" id="semanticScanScopeWrap">
+            <label for="semanticScanScope" data-i18n="face_scan_scope_label">Analyze</label>
+            <select id="semanticScanScope" aria-label="Photos to index" data-i18n-aria-label="face_scan_scope_label">
+              <option value="selected" id="semanticSelectedScopeOption" data-i18n="face_scope_selected">Selected photos</option>
+              <option value="catalog" id="semanticCatalogScopeOption" data-i18n="face_scope_catalog">Entire catalog</option>
+            </select>
+          </div>
+          <div class="face-job-progress-wrap" id="semanticJobProgressWrap" hidden>
+            <progress id="semanticJobProgress" max="100" value="0" aria-label="Semantic index progress" data-i18n-aria-label="face_progress_label"></progress>
+            <div class="face-job-counts" id="semanticJobCounts"></div>
+          </div>
+          <label class="face-force-option" id="semanticForceOption">
+            <input type="checkbox" id="semanticForceReindex">
+            <span data-i18n="semantic_force_reindex">Reindex all photos (overwrite existing embeddings)</span>
+          </label>
+          <div class="face-job-error" id="semanticJobError" role="alert" hidden></div>
+        </div>
+        <div class="modal-footer face-job-footer">
+          <button type="button" class="btn btn-primary" id="semanticJobStartBtn" data-i18n="face_start_scan">Start scan</button>
+          <button type="button" class="btn btn-danger-outline" id="semanticJobStopBtn" data-i18n="face_cancel_scan" hidden>Cancel scan</button>
+          <button type="button" class="btn btn-secondary" id="cancelSemanticJobBtn" data-i18n="close">Close</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <script src="vendor/leaflet/leaflet.js"></script>
-  <script type="module" src="app.js?v=20"></script>
+  <script type="module" src="semantic-search.js?v=23"></script>
+  <script type="module" src="app.js?v=23"></script>
 </body>
 </html>

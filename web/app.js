@@ -180,6 +180,20 @@ import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
 import { setupAutoEventListeners } from './auto-events.js';
 import { renderCategoryView, initCategoryView, navigateBackToCategory } from './category-view.js';
 import { initFaceAnalysis } from './face-analysis.js';
+import {
+  checkSemanticStatus,
+  performSemanticSearch,
+  updateSemanticToggleVisibility,
+  runSemanticIndexing,
+  cancelCurrentSemanticJob,
+  openSemanticIndexModal,
+  closeSemanticIndexModal,
+  findSimilarMedia,
+  startSemanticScan,
+  cancelSemanticScan,
+  renderSemanticJobState,
+  onSemanticScopeChange
+} from './semantic-search.js';
 
 async function removeSelectedFromActiveAlbum() {
   const albumId = state.activeAlbumId;
@@ -263,12 +277,12 @@ export function setupEventListeners() {
   }
 
   // Search with debounce
-  let searchTimer = null;
   if (dom.searchInput) {
     dom.searchInput.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         if (dom.searchInput.value) {
-          clearTimeout(searchTimer);
+          clearTimeout(state.searchDebounceTimer);
+          state.searchDebounceTimer = null;
           dom.searchInput.value = '';
           state.searchText = '';
           saveSearchPreference('');
@@ -276,18 +290,28 @@ export function setupEventListeners() {
         }
         dom.searchInput.blur();
         e.stopPropagation();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        clearTimeout(state.searchDebounceTimer);
+        state.searchDebounceTimer = null;
+        const val = dom.searchInput.value.trim();
+        state.searchText = val;
+        saveSearchPreference(val);
+        loadMedia();
       }
     });
     dom.searchInput.addEventListener('input', (e) => {
-      clearTimeout(searchTimer);
+      clearTimeout(state.searchDebounceTimer);
+      state.searchDebounceTimer = null;
       const val = e.target.value.trim();
       if (state.activeFolder) {
         state.activeFolder = null;
         saveActiveFoldersPreference(state.activeFolders);
         updateSidebarActive();
       }
-      const debounceDelay = window.__TEST_MODE__ ? 50 : 300;
-      searchTimer = setTimeout(() => {
+      const debounceDelay = window.__TEST_MODE__ ? 50 : 500;
+      state.searchDebounceTimer = setTimeout(() => {
+        state.searchDebounceTimer = null;
         state.searchText = val;
         saveSearchPreference(val);
         loadMedia();
@@ -297,11 +321,99 @@ export function setupEventListeners() {
 
   if (dom.clearSearchBtn) {
     dom.clearSearchBtn.addEventListener('click', () => {
-      clearTimeout(searchTimer);
+      clearTimeout(state.searchDebounceTimer);
+      state.searchDebounceTimer = null;
       if (dom.searchInput) dom.searchInput.value = '';
       state.searchText = '';
       saveSearchPreference('');
       loadMedia();
+    });
+  }
+
+  if (dom.semanticToggle) {
+    dom.semanticToggle.addEventListener('click', () => {
+      if (!state.semanticSearchAvailable) {
+        return;
+      }
+      state.semanticSearchEnabled = !state.semanticSearchEnabled;
+      updateSemanticToggleVisibility();
+      if (state.searchText) loadMedia();
+    });
+  }
+
+  if (dom.cancelSemanticJobBtn) {
+    dom.cancelSemanticJobBtn.addEventListener('click', () => {
+      closeSemanticIndexModal();
+    });
+  }
+
+  if (dom.closeSemanticIndexModalBtn) {
+    dom.closeSemanticIndexModalBtn.addEventListener('click', () => {
+      closeSemanticIndexModal();
+    });
+  }
+
+  if (dom.semanticIndexBackdrop) {
+    dom.semanticIndexBackdrop.addEventListener('click', () => {
+      closeSemanticIndexModal();
+    });
+  }
+
+  if (dom.semanticJobStartBtn) {
+    dom.semanticJobStartBtn.addEventListener('click', () => {
+      startSemanticScan();
+    });
+  }
+
+  if (dom.semanticJobStopBtn) {
+    dom.semanticJobStopBtn.addEventListener('click', () => {
+      cancelSemanticScan();
+    });
+  }
+
+  if (dom.semanticScanScope) {
+    dom.semanticScanScope.addEventListener('change', () => {
+      onSemanticScopeChange();
+    });
+  }
+
+  if (dom.settingsRebuildIndexBtn) {
+    dom.settingsRebuildIndexBtn.addEventListener('click', () => {
+      if (!state.semanticSearchAvailable) {
+        showToast(t('semantic_models_missing_title') || 'Semantic AI search (models not found)', 'warning');
+        return;
+      }
+      closeSettingsModal();
+      openSemanticIndexModal();
+    });
+  }
+
+  if (dom.inspectorFindSimilarBtn) {
+    dom.inspectorFindSimilarBtn.addEventListener('click', async () => {
+      if (state.selectedIds.size === 0) return;
+      const id = Array.from(state.selectedIds)[0];
+      const simRes = await findSimilarMedia(id);
+      if (simRes && Array.isArray(simRes.media_items)) {
+        if (state.searchDebounceTimer) {
+          clearTimeout(state.searchDebounceTimer);
+          state.searchDebounceTimer = null;
+        }
+        state.searchText = '';
+        if (dom.searchInput) dom.searchInput.value = '';
+        state.mediaItems = simRes.media_items;
+        state.totalCount = simRes.media_items.length;
+        state.mediaOffset = simRes.media_items.length;
+        if (dom.filterLabel) {
+          dom.filterLabel.innerHTML = `<strong>Similar to photo #${id}</strong> (${state.totalCount} items)`;
+        }
+        if (dom.clearFiltersBtn) {
+          dom.clearFiltersBtn.style.display = 'inline-block';
+        }
+        renderGrid();
+        showToast(`Found ${simRes.media_items.length} visually similar photos`, 'info');
+      } else {
+        showToast('No visually similar photos found', 'info');
+      }
     });
   }
 
@@ -1715,6 +1827,7 @@ export async function init() {
   restoreNavigationPreferences();
   setupEventListeners();
   initFaceAnalysis();
+  checkSemanticStatus();
   updateFullscreenBtnState();
 
   const savedMode = getSavedViewMode();
@@ -1813,5 +1926,18 @@ window._imagineApp = {
   showModal,
   hideModal,
   initModalSemantics,
-  updateRovingTabindex
+  updateRovingTabindex,
+  checkSemanticStatus,
+  performSemanticSearch,
+  state,
+  updateSemanticToggleVisibility,
+  findSimilarMedia,
+  runSemanticIndexing,
+  cancelCurrentSemanticJob,
+  openSemanticIndexModal,
+  closeSemanticIndexModal,
+  startSemanticScan,
+  cancelSemanticScan,
+  renderSemanticJobState,
+  onSemanticScopeChange
 };

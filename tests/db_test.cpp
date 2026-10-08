@@ -118,7 +118,7 @@ TEST(CatalogDbMigrationTest, PersistedV5CatalogUpgradesToV6JobMembership) {
         // A v5 catalog predates the membership table. Recreate that persisted
         // state while leaving all other schema and catalog data intact.
         ASSERT_TRUE(initial.connection().execute("DROP TABLE face_analysis_job_media;").isOk());
-        ASSERT_TRUE(initial.connection().execute("DELETE FROM schema_version WHERE version=6;").isOk());
+        ASSERT_TRUE(initial.connection().execute("DELETE FROM schema_version WHERE version>=6;").isOk());
         initial.close();
     }
 
@@ -129,7 +129,7 @@ TEST(CatalogDbMigrationTest, PersistedV5CatalogUpgradesToV6JobMembership) {
         ASSERT_TRUE(versionRes.isOk());
         auto version = std::move(versionRes.value());
         ASSERT_EQ(version.step(), StepResult::Row);
-        EXPECT_EQ(version.getInt(0), 6);
+        EXPECT_EQ(version.getInt(0), 7);
         EXPECT_TRUE(upgraded.getMediaById(mediaId).isOk());
         auto existingJobRes = upgraded.connection().prepare("SELECT state FROM face_analysis_jobs WHERE id=?;");
         ASSERT_TRUE(existingJobRes.isOk());

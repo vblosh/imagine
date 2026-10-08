@@ -60,6 +60,7 @@ import {
 } from './quick-edit.js';
 import { navigateBackToCategory } from './category-view.js';
 import { isAutoEventOpen, cancelAutoEventReview } from './auto-events.js';
+import { closeSemanticIndexModal } from './semantic-search.js';
 
 export function handleEscapeKey() {
   // 1. Modals (highest priority)
@@ -110,6 +111,11 @@ export function handleEscapeKey() {
   if (dom.settingsModal && dom.settingsModal.style.display === 'flex') {
     if (document.activeElement?.blur) document.activeElement.blur();
     closeSettingsModal();
+    return true;
+  }
+  if (dom.semanticIndexModal && dom.semanticIndexModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeSemanticIndexModal();
     return true;
   }
   if (dom.iosInstallModal && dom.iosInstallModal.style.display === 'flex') {
