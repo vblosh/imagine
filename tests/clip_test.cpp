@@ -724,6 +724,9 @@ TEST(ClipEngineTest, EncodeImageValidatesBuffer) {
 }
 
 TEST(ClipServiceTest, RemoveMediaAndFindSimilarExcludesDeleted) {
+#if !IMAGINE_FACE_ANALYSIS_BUILT
+    GTEST_SKIP() << "Semantic search requires ONNX Runtime (IMAGINE_FACE_ANALYSIS_BUILT)";
+#endif
     std::error_code ec;
     auto testDb = fs::temp_directory_path() / ("test_clip_del_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
     auto tempCache = fs::temp_directory_path() / ("test_clip_del_cache_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
