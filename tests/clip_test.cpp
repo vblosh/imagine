@@ -628,3 +628,175 @@ TEST(ClipServiceTest, IndexingSkipsAlreadyIndexedUnlessForce) {
     fs::remove_all(tempMedia, ec);
 }
 
+TEST(ClipTokenizerTest, MultiByteUtf8AndCrlf) {
+    std::error_code ec;
+    auto tempDir = fs::temp_directory_path() / ("test_clip_tok_utf8_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempDir, ec);
+
+    auto vocabPath = tempDir / "vocab.json";
+    auto mergesPath = tempDir / "merges.txt";
+
+    nlohmann::json mockVocab = {
+        {"<|startoftext|>", 49406},
+        {"<|endoftext|>", 49407},
+        {"cafÃ©</w>", 200},
+        {"photo</w>", 201},
+        {"!</w>", 202}
+    };
+    std::ofstream vf(vocabPath);
+    vf << mockVocab.dump();
+    vf.close();
+
+    std::ofstream mf(mergesPath, std::ios::binary);
+    mf << "#version: 0.2\r\n";
+    mf << "c a\r\n";
+    mf << "ca f\r\n";
+    mf << "Ã ©</w>\r\n";
+    mf << "caf Ã©</w>\r\n";
+    mf << "p h\r\n";
+    mf << "ph o\r\n";
+    mf << "pho t\r\n";
+    mf << "phot o</w>\r\n";
+    mf.close();
+
+    imagine::clip::Tokenizer tok;
+    auto loadStatus = tok.load(vocabPath.string(), mergesPath.string());
+    ASSERT_TRUE(loadStatus.isOk()) << loadStatus.message();
+    EXPECT_TRUE(tok.isLoaded());
+
+    auto encoded = tok.encode("Café photo!", 77);
+    EXPECT_EQ(encoded.input_ids.size(), 77u);
+    EXPECT_EQ(encoded.input_ids[0], 49406); // SOT
+    EXPECT_EQ(encoded.input_ids[1], 200);   // café</w>
+    EXPECT_EQ(encoded.input_ids[2], 201);   // photo</w>
+    EXPECT_EQ(encoded.input_ids[3], 202);   // !</w>
+    EXPECT_EQ(encoded.input_ids[4], 49407); // EOT
+
+    fs::remove_all(tempDir, ec);
+}
+
+TEST(ClipTokenizerTest, ReloadClearsState) {
+    std::error_code ec;
+    auto tempDir = fs::temp_directory_path() / ("test_clip_tok_reload_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempDir, ec);
+
+    auto vocabPath = tempDir / "vocab.json";
+    auto mergesPath = tempDir / "merges.txt";
+
+    nlohmann::json mockVocab1 = {{"<|startoftext|>", 1}, {"<|endoftext|>", 2}, {"a</w>", 10}};
+    std::ofstream vf(vocabPath); vf << mockVocab1.dump(); vf.close();
+    std::ofstream mf(mergesPath); mf << "#version: 0.2\n"; mf.close();
+
+    imagine::clip::Tokenizer tok;
+    ASSERT_TRUE(tok.load(vocabPath.string(), mergesPath.string()).isOk());
+    EXPECT_EQ(tok.encode("a", 10).input_ids[1], 10);
+
+    nlohmann::json mockVocab2 = {{"<|startoftext|>", 1}, {"<|endoftext|>", 2}, {"b</w>", 20}};
+    std::ofstream vf2(vocabPath); vf2 << mockVocab2.dump(); vf2.close();
+    ASSERT_TRUE(tok.load(vocabPath.string(), mergesPath.string()).isOk());
+    auto enc = tok.encode("a", 10);
+    EXPECT_NE(enc.input_ids[1], 10);
+    EXPECT_EQ(tok.encode("b", 10).input_ids[1], 20);
+
+    fs::remove_all(tempDir, ec);
+}
+
+TEST(ClipEngineTest, EncodeImageValidatesBuffer) {
+    imagine::clip::ClipConfig config;
+    config.modelDirectory = "nonexistent";
+    imagine::clip::Engine engine(config);
+
+    imagine::thumbnail::ImageBuffer emptyBuf;
+    EXPECT_FALSE(engine.encodeImage(emptyBuf).isOk());
+
+    imagine::thumbnail::ImageBuffer zeroW;
+    zeroW.width = 0; zeroW.height = 10; zeroW.channels = 3;
+    EXPECT_FALSE(engine.encodeImage(zeroW).isOk());
+
+    imagine::thumbnail::ImageBuffer negH;
+    negH.width = 10; negH.height = -5; negH.channels = 3;
+    EXPECT_FALSE(engine.encodeImage(negH).isOk());
+
+    imagine::thumbnail::ImageBuffer trunc;
+    trunc.width = 10; trunc.height = 10; trunc.channels = 3;
+    trunc.data.resize(5);
+    EXPECT_FALSE(engine.encodeImage(trunc).isOk());
+}
+
+TEST(ClipServiceTest, RemoveMediaAndFindSimilarExcludesDeleted) {
+    std::error_code ec;
+    auto testDb = fs::temp_directory_path() / ("test_clip_del_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+    auto tempCache = fs::temp_directory_path() / ("test_clip_del_cache_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    auto tempModels = fs::temp_directory_path() / ("test_clip_del_models_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempCache, ec);
+    fs::create_directories(tempModels, ec);
+
+    nlohmann::json mockVocab = {{"<|startoftext|>", 49406}, {"<|endoftext|>", 49407}};
+    std::ofstream vf(tempModels / "vocab.json"); vf << mockVocab.dump(); vf.close();
+    std::ofstream mf(tempModels / "merges.txt"); mf << "#version: 0.2\n"; mf.close();
+    nlohmann::json manifest = {{"model_id", "clip-del-test"}, {"revision", "v1"}, {"vector_dim", 4}};
+    std::ofstream mnf(tempModels / "model_manifest.json"); mnf << manifest.dump(); mnf.close();
+    std::ofstream(tempModels / "image_encoder.onnx") << "dummy";
+    std::ofstream(tempModels / "text_encoder.onnx") << "dummy";
+
+    const char* prevEnv = std::getenv("IMAGINE_CLIP_MODEL_DIR");
+    std::string prevModelDir = prevEnv ? prevEnv : "";
+    setTestEnv("IMAGINE_CLIP_MODEL_DIR", tempModels.string());
+    struct EnvGuard {
+        std::string prev;
+        ~EnvGuard() { setTestEnv("IMAGINE_CLIP_MODEL_DIR", prev); }
+    } guard{prevModelDir};
+
+    {
+        imagine::db::CatalogDb db;
+        ASSERT_TRUE(db.open(testDb.string()).isOk());
+
+        imagine::MediaItem m1; m1.file_path = "p1.jpg"; m1.file_name = "p1.jpg"; m1.content_hash = "h1"; m1.media_type = "photo";
+        imagine::MediaItem m2; m2.file_path = "p2.jpg"; m2.file_name = "p2.jpg"; m2.content_hash = "h2"; m2.media_type = "photo";
+        imagine::MediaId id1 = db.insertMedia(m1).value();
+        imagine::MediaId id2 = db.insertMedia(m2).value();
+
+        std::vector<float> v1 = {1.0f, 0.0f, 0.0f, 0.0f};
+        std::vector<float> v2 = {0.9f, 0.1f, 0.0f, 0.0f};
+        auto insertState = [&](imagine::MediaId mid, const std::string& h, const std::vector<float>& vec) {
+            auto stmtRes = db.connection().prepare(
+                "INSERT INTO semantic_index_state (media_id, model_id, model_revision, preprocess_id, vector_dim, embedding, content_hash, indexed_at) "
+                "VALUES (?, 'clip-del-test', 'v1', '', 4, ?, ?, 100);"
+            );
+            ASSERT_TRUE(stmtRes.isOk());
+            auto stmt = std::move(stmtRes.value());
+            stmt.bind(1, mid);
+            sqlite3_bind_blob(stmt.raw(), 2, vec.data(), static_cast<int>(vec.size() * sizeof(float)), SQLITE_TRANSIENT);
+            stmt.bind(3, h);
+            stmt.step();
+        };
+        insertState(id1, "h1", v1);
+        insertState(id2, "h2", v2);
+
+        imagine::clip::Service svc(db, tempCache.string(), [](const std::string& p) { return p; });
+        EXPECT_EQ(svc.status()["indexSize"].get<int>(), 2);
+
+        auto sim1 = svc.findSimilar(id1, 10);
+        ASSERT_TRUE(sim1.isOk());
+        EXPECT_EQ(sim1.value().items.size(), 1u);
+        EXPECT_EQ(sim1.value().items[0].mediaId, id2);
+
+        ASSERT_TRUE(db.deleteMedia(id2).isOk());
+        svc.removeMedia(id2);
+        EXPECT_EQ(svc.status()["indexSize"].get<int>(), 1);
+
+        auto sim2 = svc.findSimilar(id1, 10);
+        ASSERT_TRUE(sim2.isOk());
+        EXPECT_EQ(sim2.value().items.size(), 0u);
+
+        db.close();
+    }
+
+    fs::remove(testDb, ec);
+    fs::remove(testDb.string() + "-wal", ec);
+    fs::remove(testDb.string() + "-shm", ec);
+    fs::remove_all(tempCache, ec);
+    fs::remove_all(tempModels, ec);
+}
+
+

@@ -1367,6 +1367,10 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             return;
         }
 
+        if (clipService_) {
+            clipService_->removeMedia(id);
+        }
+
         sendJson(res, {{"status", "ok"}, {"id", id}, {"deleted_from_disk", deleteFromDisk}});
     });
 
@@ -1405,6 +1409,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                     }
                 }
                 if (s.isOk()) {
+                    if (clipService_) {
+                        clipService_->removeMedia(id);
+                    }
                     deletedCount++;
                 } else {
                     failedIds.push_back(id);
@@ -3178,7 +3185,14 @@ void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
 
 void ApiRouter::registerFaceRoutes(httplib::Server& server) {
     server.Get("/api/faces/status", [this](const httplib::Request&, httplib::Response& res) {
-        sendJson(res, faceService_->status());
+        if (faceService_) {
+            sendJson(res, faceService_->status());
+        } else {
+            nlohmann::json j;
+            j["built"] = false;
+            j["ready"] = false;
+            sendJson(res, j);
+        }
     });
 
     server.Post("/api/faces/jobs", [this](const httplib::Request& req, httplib::Response& res) {

@@ -65,6 +65,7 @@ public:
 
     Result<SearchResult> search(const SearchRequest& request);
     Result<SearchResult> findSimilar(MediaId mediaId, int limit = 20);
+    void removeMedia(MediaId mediaId);
 
     Status startJob(const std::string& scope, const std::vector<MediaId>& mediaIds,
                     bool force, int64_t& jobId);

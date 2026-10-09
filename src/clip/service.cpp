@@ -8,10 +8,12 @@
 #include <filesystem>
 #include <shared_mutex>
 #include <thread>
+#include <unordered_set>
 
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/common/logger.hpp"
 #include "imagine/thumbnail/generator.hpp"
+#include "imagine/thumbnail/cache.hpp"
 #include "imagine/metadata/hasher.hpp"
 
 #if defined(_MSC_VER)
@@ -86,7 +88,7 @@ inline float dotProductAvx2(const float* a, const float* b, int dim) {
     }
     __m256d sum = _mm256_add_pd(_mm256_add_pd(sum0, sum1), _mm256_add_pd(sum2, sum3));
     alignas(32) double vals[4];
-    _mm256_store_pd(vals, sum);
+    _mm256_storeu_pd(vals, sum);
     double dot = vals[0] + vals[1] + vals[2] + vals[3];
     for (; i < dim; ++i) {
         dot += static_cast<double>(a[i]) * b[i];
@@ -202,6 +204,13 @@ struct Service::Impl {
             ids.clear();
             vectors.clear();
         }
+
+        void loadBulk(std::vector<MediaId> newIds, std::vector<float> newVectors, int d) {
+            std::unique_lock lock(mutex);
+            dim = d;
+            ids = std::move(newIds);
+            vectors = std::move(newVectors);
+        }
         
         std::vector<SearchHit> search(const float* query, int k, int d) const {
             std::shared_lock lock(mutex);
@@ -251,8 +260,14 @@ struct Service::Impl {
                 auto now = std::chrono::steady_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - lastActivityTime).count();
                 if (elapsed >= idleUnloadSec) {
+                    bool shouldUnload = false;
                     if (!jobRunning && activeSearchCount == 0) {
+                        shouldUnload = true;
+                    }
+                    if (shouldUnload) {
+                        lock.unlock();
                         engine.unload();
+                        lock.lock();
                     }
                 } else {
                     auto waitTime = std::chrono::seconds(idleUnloadSec - elapsed);
@@ -317,26 +332,40 @@ void Service::loadIndex() {
     auto t0 = std::chrono::steady_clock::now();
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
     
-    auto stmtRes = impl_->db.conn_.prepare("SELECT media_id, embedding, vector_dim FROM semantic_index_state WHERE embedding IS NOT NULL AND error_text = '' AND model_id = ? AND model_revision = ?;");
+    auto stmtRes = impl_->db.conn_.prepare(
+        "SELECT media_id, embedding, vector_dim FROM semantic_index_state "
+        "WHERE embedding IS NOT NULL AND (error_text IS NULL OR error_text = '') AND model_id = ? AND model_revision = ? "
+        "ORDER BY media_id;"
+    );
     if (!stmtRes.isOk()) return;
     auto stmt = std::move(stmtRes.value());
     stmt.bind(1, impl_->engine.info().modelId);
     stmt.bind(2, impl_->engine.info().modelRevision);
     
-    impl_->index.clear();
-    int count = 0;
+    int targetDim = impl_->engine.info().vectorDim;
+    std::vector<MediaId> loadedIds;
+    std::vector<float> loadedVectors;
+
     while (stmt.step() == StepResult::Row) {
         MediaId id = stmt.getInt64(0);
         int dim = stmt.getInt(2);
+        if (targetDim > 0 && dim != targetDim) continue;
         std::vector<float> vec = readVector(stmt, 1, dim);
         if (vec.size() == static_cast<size_t>(dim)) {
-            impl_->index.add(id, vec.data(), dim);
-            count++;
+            loadedIds.push_back(id);
+            loadedVectors.insert(loadedVectors.end(), vec.begin(), vec.end());
         }
     }
+    int count = static_cast<int>(loadedIds.size());
+    impl_->index.loadBulk(std::move(loadedIds), std::move(loadedVectors), targetDim);
+
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     IMAGINE_LOG_INFO("Loaded " + std::to_string(count) + " semantic vectors in " + std::to_string(ms) + " ms");
+}
+
+void Service::removeMedia(MediaId mediaId) {
+    impl_->index.remove(mediaId);
 }
 
 nlohmann::json Service::status() const {
@@ -395,7 +424,9 @@ Result<SearchResult> Service::search(const SearchRequest& request) {
     if (!encodeRes.isOk()) return encodeRes.status();
     const auto& queryVec = encodeRes.value();
     
-    int vectorSearchLimit = request.limit * 5;
+    bool hasFilters = request.ratingMin.has_value() || request.dateFrom > 0 ||
+                      request.dateTo > 0 || request.mediaType.has_value();
+    int vectorSearchLimit = hasFilters ? std::max(request.limit * 10, 1000) : request.limit;
     auto hits = impl_->index.search(queryVec.data(), vectorSearchLimit, impl_->engine.info().vectorDim);
     
     if (hits.empty()) {
@@ -407,36 +438,37 @@ Result<SearchResult> Service::search(const SearchRequest& request) {
         };
     }
     
-    std::string inClause = "(";
-    for (size_t i = 0; i < hits.size(); ++i) {
-        inClause += std::to_string(hits[i].mediaId);
-        if (i < hits.size() - 1) inClause += ",";
-    }
-    inClause += ")";
-    
-    std::string sql = "SELECT id FROM media_items WHERE id IN " + inClause;
-    if (request.ratingMin.has_value()) {
-        sql += " AND rating >= " + std::to_string(*request.ratingMin);
-    }
-    if (request.dateFrom > 0) {
-        sql += " AND date_taken >= " + std::to_string(request.dateFrom);
-    }
-    if (request.dateTo > 0) {
-        sql += " AND date_taken <= " + std::to_string(request.dateTo);
-    }
-    if (request.mediaType.has_value()) {
-        sql += " AND media_type = ?";
-    }
-    
-    std::vector<MediaId> filteredIds;
-    {
+    std::unordered_set<MediaId> filteredIds;
+    for (size_t offset = 0; offset < hits.size(); offset += 500) {
+        size_t chunkEnd = std::min(offset + 500, hits.size());
+        std::string inClause = "(";
+        for (size_t i = offset; i < chunkEnd; ++i) {
+            inClause += std::to_string(hits[i].mediaId);
+            if (i < chunkEnd - 1) inClause += ",";
+        }
+        inClause += ")";
+        
+        std::string sql = "SELECT id FROM media_items WHERE id IN " + inClause;
+        if (request.ratingMin.has_value()) {
+            sql += " AND rating >= " + std::to_string(*request.ratingMin);
+        }
+        if (request.dateFrom > 0) {
+            sql += " AND date_taken >= " + std::to_string(request.dateFrom);
+        }
+        if (request.dateTo > 0) {
+            sql += " AND date_taken <= " + std::to_string(request.dateTo);
+        }
+        if (request.mediaType.has_value()) {
+            sql += " AND media_type = ?";
+        }
+        
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
         auto stmtRes = impl_->db.conn_.prepare(sql);
         if (stmtRes.isOk()) {
             auto stmt = std::move(stmtRes.value());
             if (request.mediaType.has_value()) stmt.bind(1, *request.mediaType);
             while (stmt.step() == StepResult::Row) {
-                filteredIds.push_back(stmt.getInt64(0));
+                filteredIds.insert(stmt.getInt64(0));
             }
         }
     }
@@ -444,7 +476,7 @@ Result<SearchResult> Service::search(const SearchRequest& request) {
     std::vector<SearchHit> finalHits;
     finalHits.reserve(request.limit);
     for (const auto& hit : hits) {
-        if (std::find(filteredIds.begin(), filteredIds.end(), hit.mediaId) != filteredIds.end()) {
+        if (filteredIds.find(hit.mediaId) != filteredIds.end()) {
             finalHits.push_back(hit);
             if (finalHits.size() >= static_cast<size_t>(request.limit)) break;
         }
@@ -482,11 +514,38 @@ Result<SearchResult> Service::findSimilar(MediaId mediaId, int limit) {
     if (queryVec.empty()) return Status::notFound("Media embedding not found");
     
     auto hits = impl_->index.search(queryVec.data(), limit + 1, dim);
+    if (hits.empty()) {
+        auto t1 = std::chrono::steady_clock::now();
+        return SearchResult{
+            impl_->engine.info().modelId,
+            std::chrono::duration<double, std::milli>(t1 - t0).count(),
+            {}
+        };
+    }
+
+    std::unordered_set<MediaId> existingIds;
+    std::string inClause = "(";
+    for (size_t i = 0; i < hits.size(); ++i) {
+        inClause += std::to_string(hits[i].mediaId);
+        if (i < hits.size() - 1) inClause += ",";
+    }
+    inClause += ")";
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        auto stmtRes = impl_->db.conn_.prepare("SELECT id FROM media_items WHERE id IN " + inClause + ";");
+        if (stmtRes.isOk()) {
+            auto stmt = std::move(stmtRes.value());
+            while (stmt.step() == StepResult::Row) {
+                existingIds.insert(stmt.getInt64(0));
+            }
+        }
+    }
     
     std::vector<SearchHit> finalHits;
     finalHits.reserve(limit);
     for (const auto& hit : hits) {
-        if (hit.mediaId != mediaId) {
+        if (hit.mediaId != mediaId && existingIds.find(hit.mediaId) != existingIds.end()) {
             finalHits.push_back(hit);
             if (finalHits.size() >= static_cast<size_t>(limit)) break;
         }
@@ -503,67 +562,70 @@ Result<SearchResult> Service::findSimilar(MediaId mediaId, int limit) {
 Status Service::startJob(const std::string& scope, const std::vector<MediaId>& mediaIds, bool force, int64_t& jobId) {
     if (!impl_->engine.info().ready) return Status::internal("CLIP engine is not ready");
     
-    std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
-    Connection& conn = impl_->db.conn_;
-    
-    auto countRes = conn.prepare("SELECT COUNT(*) FROM semantic_jobs WHERE state IN ('running','cancelling');");
-    if (!countRes.isOk()) return countRes.status();
-    auto countStmt = std::move(countRes.value());
-    if (countStmt.step() == StepResult::Row && countStmt.getInt64(0) > 0) {
-        return Status::alreadyExists("A semantic index job is already running");
-    }
-    
-    std::vector<MediaId> toIndex;
-    const auto info = impl_->engine.info();
-    if (scope == "selected") {
-        toIndex = mediaIds;
-    } else {
-        auto stmtRes = conn.prepare(R"SQL(
-            SELECT m.id FROM media_items m
-            LEFT JOIN semantic_index_state s
-              ON m.id = s.media_id
-              AND s.model_id = ?
-              AND s.model_revision = ?
-              AND s.vector_dim = ?
-              AND s.content_hash = m.content_hash
-              AND s.embedding IS NOT NULL
-              AND (s.error_text IS NULL OR s.error_text = '')
-            WHERE m.media_type = 'photo'
-              AND (? = 1 OR s.media_id IS NULL)
-            ORDER BY m.id;
-        )SQL");
-        if (!stmtRes.isOk()) return stmtRes.status();
-        auto stmt = std::move(stmtRes.value());
-        stmt.bind(1, info.modelId);
-        stmt.bind(2, info.modelRevision);
-        stmt.bind(3, info.vectorDim);
-        stmt.bind(4, force ? 1 : 0);
-        while (stmt.step() == StepResult::Row) {
-            toIndex.push_back(stmt.getInt64(0));
-        }
-    }
-    
-    auto insRes = conn.prepare(
-        "INSERT INTO semantic_jobs (scope, state, model_id, total, processed, skipped, failed, remaining, created_at, updated_at) "
-        "VALUES (?, 'running', ?, ?, 0, 0, 0, ?, ?, ?);"
-    );
-    if (!insRes.isOk()) return insRes.status();
-    auto ins = std::move(insRes.value());
-    ins.bind(1, scope);
-    ins.bind(2, info.modelId);
-    ins.bind(3, static_cast<int64_t>(toIndex.size()));
-    ins.bind(4, static_cast<int64_t>(toIndex.size()));
-    int64_t now = nowSeconds();
-    ins.bind(5, now);
-    ins.bind(6, now);
-    ins.step();
-    jobId = conn.lastInsertRowId();
-    
     if (impl_->worker.joinable()) {
         impl_->cancelRequested.store(true);
         impl_->worker.join();
     }
     impl_->cancelRequested.store(false);
+
+    std::vector<MediaId> toIndex;
+    const auto info = impl_->engine.info();
+    {
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        Connection& conn = impl_->db.conn_;
+        
+        auto countRes = conn.prepare("SELECT COUNT(*) FROM semantic_jobs WHERE state IN ('running','cancelling');");
+        if (!countRes.isOk()) return countRes.status();
+        auto countStmt = std::move(countRes.value());
+        if (countStmt.step() == StepResult::Row && countStmt.getInt64(0) > 0) {
+            return Status::alreadyExists("A semantic index job is already running");
+        }
+        
+        if (scope == "selected") {
+            toIndex = mediaIds;
+        } else {
+            auto stmtRes = conn.prepare(R"SQL(
+                SELECT m.id FROM media_items m
+                LEFT JOIN semantic_index_state s
+                  ON m.id = s.media_id
+                  AND s.model_id = ?
+                  AND s.model_revision = ?
+                  AND s.vector_dim = ?
+                  AND s.content_hash = m.content_hash
+                  AND s.embedding IS NOT NULL
+                  AND (s.error_text IS NULL OR s.error_text = '')
+                WHERE m.media_type = 'photo'
+                  AND (? = 1 OR s.media_id IS NULL)
+                ORDER BY m.id;
+            )SQL");
+            if (!stmtRes.isOk()) return stmtRes.status();
+            auto stmt = std::move(stmtRes.value());
+            stmt.bind(1, info.modelId);
+            stmt.bind(2, info.modelRevision);
+            stmt.bind(3, info.vectorDim);
+            stmt.bind(4, force ? 1 : 0);
+            while (stmt.step() == StepResult::Row) {
+                toIndex.push_back(stmt.getInt64(0));
+            }
+        }
+        
+        auto insRes = conn.prepare(
+            "INSERT INTO semantic_jobs (scope, state, model_id, total, processed, skipped, failed, remaining, created_at, updated_at) "
+            "VALUES (?, 'running', ?, ?, 0, 0, 0, ?, ?, ?);"
+        );
+        if (!insRes.isOk()) return insRes.status();
+        auto ins = std::move(insRes.value());
+        ins.bind(1, scope);
+        ins.bind(2, info.modelId);
+        ins.bind(3, static_cast<int64_t>(toIndex.size()));
+        ins.bind(4, static_cast<int64_t>(toIndex.size()));
+        int64_t now = nowSeconds();
+        ins.bind(5, now);
+        ins.bind(6, now);
+        ins.step();
+        jobId = conn.lastInsertRowId();
+    }
+    
     impl_->worker = std::jthread([this, jobId, toIndex = std::move(toIndex), force] {
         runJob(jobId, std::move(toIndex), force);
     });
@@ -755,21 +817,53 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             runtimeInfo = impl_->engine.info();
         }
 
-        std::string photoPath = impl_->resolver ? impl_->resolver(media.file_path) : media.file_path;
-        auto bytes = thumbnail::Generator::loadImageBytes(photoPath);
-        if (!bytes.isOk()) {
-            recordFailure(mediaId, media.content_hash, "Failed to load image");
-            continue;
-        }
+        thumbnail::Cache thumbCache(impl_->cacheDirectory);
+        std::string smallThumb = thumbCache.getThumbnailPath(media.content_hash, thumbnail::Cache::SmallSize);
+        std::string largeThumb = thumbCache.getThumbnailPath(media.content_hash, thumbnail::Cache::LargeSize);
 
-        auto loaded = thumbnail::Generator::loadImageFromMemory(bytes.value().data(), bytes.value().size());
-        if (!loaded.isOk()) {
-            recordFailure(mediaId, media.content_hash, "Failed to decode image");
-            continue;
-        }
+        thumbnail::ImageBuffer orientedImage;
+        bool loadedImage = false;
 
-        thumbnail::ImageBuffer rotated = (media.exif.orientation <= 1) ? thumbnail::ImageBuffer{} : thumbnail::Generator::rotate(loaded.value(), media.exif.orientation);
-        const auto& orientedImage = (media.exif.orientation <= 1) ? loaded.value() : rotated;
+        if (std::filesystem::exists(smallThumb)) {
+            auto b = thumbnail::Generator::loadImageBytes(smallThumb);
+            if (b.isOk()) {
+                auto dec = thumbnail::Generator::loadImageFromMemory(b.value().data(), b.value().size());
+                if (dec.isOk()) {
+                    orientedImage = std::move(dec.value());
+                    loadedImage = true;
+                }
+            }
+        }
+        if (!loadedImage && std::filesystem::exists(largeThumb)) {
+            auto b = thumbnail::Generator::loadImageBytes(largeThumb);
+            if (b.isOk()) {
+                auto dec = thumbnail::Generator::loadImageFromMemory(b.value().data(), b.value().size());
+                if (dec.isOk()) {
+                    orientedImage = std::move(dec.value());
+                    loadedImage = true;
+                }
+            }
+        }
+        if (!loadedImage) {
+            std::string photoPath = impl_->resolver ? impl_->resolver(media.file_path) : media.file_path;
+            auto bytes = thumbnail::Generator::loadImageBytes(photoPath);
+            if (!bytes.isOk()) {
+                recordFailure(mediaId, media.content_hash, "Failed to load image");
+                continue;
+            }
+
+            auto loaded = thumbnail::Generator::loadImageFromMemory(bytes.value().data(), bytes.value().size());
+            if (!loaded.isOk()) {
+                recordFailure(mediaId, media.content_hash, "Failed to decode image");
+                continue;
+            }
+
+            if (media.exif.orientation > 1) {
+                orientedImage = thumbnail::Generator::rotate(loaded.value(), media.exif.orientation);
+            } else {
+                orientedImage = std::move(loaded.value());
+            }
+        }
 
         auto encodeRes = impl_->engine.encodeImage(orientedImage);
         if (!encodeRes.isOk()) {

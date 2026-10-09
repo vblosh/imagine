@@ -102,13 +102,19 @@ Status Engine::Impl::loadLocked() {
             if (name.find("input_ids") != std::string::npos) textInputIdsName = name;
             else if (name.find("attention_mask") != std::string::npos) textAttentionMaskName = name;
         }
+        if (textInputIdsName.empty() && textInputs > 0) {
+            textInputIdsName = textSession->GetInputNameAllocated(0, allocator).get();
+        }
+        if (textAttentionMaskName.empty() && textInputs > 1) {
+            textAttentionMaskName = textSession->GetInputNameAllocated(1, allocator).get();
+        }
         textOutputName = textSession->GetOutputNameAllocated(0, allocator).get();
 
         auto typeInfo = textSession->GetOutputTypeInfo(0);
         auto shape = typeInfo.GetTensorTypeAndShapeInfo().GetShape();
-        if (shape.size() > 1) {
+        if (shape.size() > 1 && shape.back() > 0) {
             info.vectorDim = static_cast<int>(shape.back());
-        } else if (info.vectorDim == 0) {
+        } else if (info.vectorDim <= 0) {
             info.vectorDim = 512;
         }
 
@@ -120,11 +126,17 @@ Status Engine::Impl::loadLocked() {
             std::vector<int64_t> inputShape = {1, static_cast<int64_t>(tok.input_ids.size())};
             auto memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
             auto inputTensor = Ort::Value::CreateTensor<int64_t>(memoryInfo, tok.input_ids.data(), tok.input_ids.size(), inputShape.data(), inputShape.size());
-            auto maskTensor = Ort::Value::CreateTensor<int64_t>(memoryInfo, tok.attention_mask.data(), tok.attention_mask.size(), inputShape.data(), inputShape.size());
-            const char* inputNames[] = {textInputIdsName.c_str(), textAttentionMaskName.c_str()};
-            Ort::Value inputValues[] = {std::move(inputTensor), std::move(maskTensor)};
             const char* outputNames[] = {textOutputName.c_str()};
-            textSession->Run(Ort::RunOptions{nullptr}, inputNames, inputValues, 2, outputNames, 1);
+
+            if (!textAttentionMaskName.empty()) {
+                auto maskTensor = Ort::Value::CreateTensor<int64_t>(memoryInfo, tok.attention_mask.data(), tok.attention_mask.size(), inputShape.data(), inputShape.size());
+                const char* inputNames[] = {textInputIdsName.c_str(), textAttentionMaskName.c_str()};
+                Ort::Value inputValues[] = {std::move(inputTensor), std::move(maskTensor)};
+                textSession->Run(Ort::RunOptions{nullptr}, inputNames, inputValues, 2, outputNames, 1);
+            } else {
+                const char* inputNames[] = {textInputIdsName.c_str()};
+                textSession->Run(Ort::RunOptions{nullptr}, inputNames, &inputTensor, 1, outputNames, 1);
+            }
         }
 
         // Warmup image
@@ -315,6 +327,32 @@ Result<std::vector<float>> Engine::encodeImage(const thumbnail::ImageBuffer& ima
     if (!impl_->info.ready || !impl_->info.loaded || !impl_->imageSession) {
         return Status::internal(impl_->info.error.empty() ? "Engine not ready" : impl_->info.error);
     }
+    if (image.width <= 0 || image.height <= 0 || image.channels <= 0 ||
+        image.data.size() < static_cast<size_t>(image.width * image.height * image.channels)) {
+        return Status::invalidArgument("Invalid or empty image buffer");
+    }
+
+    const uint8_t* rgbData = image.data.data();
+    std::vector<uint8_t> rgbConverted;
+    if (image.channels == 4) {
+        rgbConverted.resize(static_cast<size_t>(image.width * image.height * 3));
+        for (int i = 0; i < image.width * image.height; ++i) {
+            rgbConverted[i * 3 + 0] = image.data[i * 4 + 0];
+            rgbConverted[i * 3 + 1] = image.data[i * 4 + 1];
+            rgbConverted[i * 3 + 2] = image.data[i * 4 + 2];
+        }
+        rgbData = rgbConverted.data();
+    } else if (image.channels == 1) {
+        rgbConverted.resize(static_cast<size_t>(image.width * image.height * 3));
+        for (int i = 0; i < image.width * image.height; ++i) {
+            uint8_t v = image.data[i];
+            rgbConverted[i * 3 + 0] = v;
+            rgbConverted[i * 3 + 1] = v;
+            rgbConverted[i * 3 + 2] = v;
+        }
+        rgbData = rgbConverted.data();
+    }
+
     auto startPre = std::chrono::steady_clock::now();
 
     int shortEdge = std::min(image.width, image.height);
@@ -323,7 +361,7 @@ Result<std::vector<float>> Engine::encodeImage(const thumbnail::ImageBuffer& ima
     int rh = std::max(224, static_cast<int>(image.height * scale));
 
     std::vector<uint8_t> resized(rw * rh * 3);
-    stbir_resize_uint8_linear(image.data.data(), image.width, image.height, 0,
+    stbir_resize_uint8_linear(rgbData, image.width, image.height, 0,
                               resized.data(), rw, rh, 0, STBIR_RGB);
 
     int cropX = (rw - 224) / 2;
@@ -415,13 +453,18 @@ Result<std::vector<float>> Engine::encodeText(std::string_view query) {
     std::vector<int64_t> inputShape = {1, static_cast<int64_t>(tokOut.input_ids.size())};
     auto memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     auto inputIdsTensor = Ort::Value::CreateTensor<int64_t>(memoryInfo, tokOut.input_ids.data(), tokOut.input_ids.size(), inputShape.data(), inputShape.size());
-    auto maskTensor = Ort::Value::CreateTensor<int64_t>(memoryInfo, tokOut.attention_mask.data(), tokOut.attention_mask.size(), inputShape.data(), inputShape.size());
-
-    const char* inputNames[] = {impl_->textInputIdsName.c_str(), impl_->textAttentionMaskName.c_str()};
-    Ort::Value inputValues[] = {std::move(inputIdsTensor), std::move(maskTensor)};
     const char* outputNames[] = {impl_->textOutputName.c_str()};
-    
-    auto outputTensors = impl_->textSession->Run(Ort::RunOptions{nullptr}, inputNames, inputValues, 2, outputNames, 1);
+    std::vector<Ort::Value> outputTensors;
+
+    if (!impl_->textAttentionMaskName.empty()) {
+        auto maskTensor = Ort::Value::CreateTensor<int64_t>(memoryInfo, tokOut.attention_mask.data(), tokOut.attention_mask.size(), inputShape.data(), inputShape.size());
+        const char* inputNames[] = {impl_->textInputIdsName.c_str(), impl_->textAttentionMaskName.c_str()};
+        Ort::Value inputValues[] = {std::move(inputIdsTensor), std::move(maskTensor)};
+        outputTensors = impl_->textSession->Run(Ort::RunOptions{nullptr}, inputNames, inputValues, 2, outputNames, 1);
+    } else {
+        const char* inputNames[] = {impl_->textInputIdsName.c_str()};
+        outputTensors = impl_->textSession->Run(Ort::RunOptions{nullptr}, inputNames, &inputIdsTensor, 1, outputNames, 1);
+    }
 
     auto endInf = std::chrono::steady_clock::now();
     double infMs = std::chrono::duration<double, std::milli>(endInf - startInf).count();
