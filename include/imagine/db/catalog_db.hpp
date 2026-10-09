@@ -90,6 +90,7 @@ public:
     Status runInTransaction(std::function<Status()> fn);
 
     Connection& connection() { return conn_; }
+    std::recursive_mutex& mutex() const { return mutex_; }
 
 private:
     friend class ::imagine::faces::Service;
