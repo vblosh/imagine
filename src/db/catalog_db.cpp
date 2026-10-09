@@ -10,6 +10,15 @@ namespace imagine::db {
 static Status invalidateFaceAnalysis(Connection& conn, MediaId mediaId);
 static Result<bool> mediaFaceGeometryChanged(Connection& conn, const MediaItem& item);
 
+static constexpr const char* kMediaColumnsProjection =
+    "id, file_path, file_name, file_size, file_modified_time, content_hash, "
+    "width, height, date_taken, date_taken_str, rating, flag, "
+    "camera_make, camera_model, lens, exposure_time, f_number, iso, "
+    "focal_length, orientation, has_gps, latitude, longitude, altitude, "
+    "thumb_small, thumb_large, created_at, updated_at, caption, "
+    "media_type, duration, audio_artist, audio_title, audio_album, audio_genre, "
+    "codec, bitrate, channels, sample_rate";
+
 static int64_t currentUnixTime() {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()
@@ -266,7 +275,7 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
     Transaction tx(conn_);
     const char* sql = R"SQL(
         UPDATE media_items SET
-            file_name = ?, file_size = ?, file_modified_time = ?, content_hash = ?,
+            file_path = ?, file_name = ?, file_size = ?, file_modified_time = ?, content_hash = ?,
             width = ?, height = ?, date_taken = ?, date_taken_str = ?,
             rating = ?, flag = ?, camera_make = ?, camera_model = ?, lens = ?,
             exposure_time = ?, f_number = ?, iso = ?, focal_length = ?,
@@ -282,46 +291,50 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
     auto stmt = std::move(stmtRes.value());
 
     int64_t now = currentUnixTime();
-    stmt.bind(1, item.file_name);
-    stmt.bind(2, item.file_size);
-    stmt.bind(3, item.file_modified_time);
-    stmt.bind(4, item.content_hash);
-    stmt.bind(5, item.width);
-    stmt.bind(6, item.height);
-    stmt.bind(7, item.date_taken);
-    stmt.bind(8, item.exif.date_taken_str);
-    stmt.bind(9, item.rating);
-    stmt.bind(10, static_cast<int32_t>(item.flag));
-    stmt.bind(11, item.exif.camera_make);
-    stmt.bind(12, item.exif.camera_model);
-    stmt.bind(13, item.exif.lens);
-    stmt.bind(14, item.exif.exposure_time);
-    stmt.bind(15, item.exif.f_number);
-    stmt.bind(16, item.exif.iso);
-    stmt.bind(17, item.exif.focal_length);
-    stmt.bind(18, item.exif.orientation);
-    stmt.bind(19, item.exif.has_gps ? 1 : 0);
-    stmt.bind(20, item.exif.latitude);
-    stmt.bind(21, item.exif.longitude);
-    stmt.bind(22, item.exif.altitude);
-    stmt.bind(23, item.thumb_small);
-    stmt.bind(24, item.thumb_large);
-    stmt.bind(25, now);
-    stmt.bind(26, item.caption);
-    stmt.bind(27, item.media_type);
-    stmt.bind(28, item.duration);
-    stmt.bind(29, item.audio_artist);
-    stmt.bind(30, item.audio_title);
-    stmt.bind(31, item.audio_album);
-    stmt.bind(32, item.audio_genre);
-    stmt.bind(33, item.codec);
-    stmt.bind(34, item.bitrate);
-    stmt.bind(35, item.channels);
-    stmt.bind(36, item.sample_rate);
-    stmt.bind(37, item.id);
+    stmt.bind(1, item.file_path);
+    stmt.bind(2, item.file_name);
+    stmt.bind(3, item.file_size);
+    stmt.bind(4, item.file_modified_time);
+    stmt.bind(5, item.content_hash);
+    stmt.bind(6, item.width);
+    stmt.bind(7, item.height);
+    stmt.bind(8, item.date_taken);
+    stmt.bind(9, item.exif.date_taken_str);
+    stmt.bind(10, item.rating);
+    stmt.bind(11, static_cast<int32_t>(item.flag));
+    stmt.bind(12, item.exif.camera_make);
+    stmt.bind(13, item.exif.camera_model);
+    stmt.bind(14, item.exif.lens);
+    stmt.bind(15, item.exif.exposure_time);
+    stmt.bind(16, item.exif.f_number);
+    stmt.bind(17, item.exif.iso);
+    stmt.bind(18, item.exif.focal_length);
+    stmt.bind(19, item.exif.orientation);
+    stmt.bind(20, item.exif.has_gps ? 1 : 0);
+    stmt.bind(21, item.exif.latitude);
+    stmt.bind(22, item.exif.longitude);
+    stmt.bind(23, item.exif.altitude);
+    stmt.bind(24, item.thumb_small);
+    stmt.bind(25, item.thumb_large);
+    stmt.bind(26, now);
+    stmt.bind(27, item.caption);
+    stmt.bind(28, item.media_type);
+    stmt.bind(29, item.duration);
+    stmt.bind(30, item.audio_artist);
+    stmt.bind(31, item.audio_title);
+    stmt.bind(32, item.audio_album);
+    stmt.bind(33, item.audio_genre);
+    stmt.bind(34, item.codec);
+    stmt.bind(35, item.bitrate);
+    stmt.bind(36, item.channels);
+    stmt.bind(37, item.sample_rate);
+    stmt.bind(38, item.id);
 
     if (stmt.step() != StepResult::Done) {
         return Status::databaseError("Failed to update media item: " + conn_.lastErrorMessage());
+    }
+    if (conn_.changes() == 0) {
+        return Status::notFound("Media item not found: " + std::to_string(item.id));
     }
     if (geometryChangedRes.value()) {
         Status invalidated = invalidateFaceAnalysis(conn_, item.id);
@@ -338,7 +351,7 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
 
     const char* sql = R"SQL(
         UPDATE media_items SET
-            file_name = ?, file_size = ?, file_modified_time = ?, content_hash = ?,
+            file_path = ?, file_name = ?, file_size = ?, file_modified_time = ?, content_hash = ?,
             width = ?, height = ?, date_taken = ?, date_taken_str = ?,
             rating = ?, flag = ?, camera_make = ?, camera_model = ?, lens = ?,
             exposure_time = ?, f_number = ?, iso = ?, focal_length = ?,
@@ -351,6 +364,10 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
 
     Transaction tx(conn_);
 
+    auto geomStmtRes = conn_.prepare("SELECT content_hash,width,height,orientation,media_type FROM media_items WHERE id=?;");
+    if (!geomStmtRes.isOk()) return geomStmtRes.status();
+    auto geomStmt = std::move(geomStmtRes.value());
+
     auto stmtRes = conn_.prepare(sql);
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -359,52 +376,64 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
     size_t updatedCount = 0;
 
     for (const auto& item : items) {
-        auto geometryChangedRes = mediaFaceGeometryChanged(conn_, item);
-        if (!geometryChangedRes.isOk()) return geometryChangedRes.status();
-        stmt.bind(1, item.file_name);
-        stmt.bind(2, item.file_size);
-        stmt.bind(3, item.file_modified_time);
-        stmt.bind(4, item.content_hash);
-        stmt.bind(5, item.width);
-        stmt.bind(6, item.height);
-        stmt.bind(7, item.date_taken);
-        stmt.bind(8, item.exif.date_taken_str);
-        stmt.bind(9, item.rating);
-        stmt.bind(10, static_cast<int32_t>(item.flag));
-        stmt.bind(11, item.exif.camera_make);
-        stmt.bind(12, item.exif.camera_model);
-        stmt.bind(13, item.exif.lens);
-        stmt.bind(14, item.exif.exposure_time);
-        stmt.bind(15, item.exif.f_number);
-        stmt.bind(16, item.exif.iso);
-        stmt.bind(17, item.exif.focal_length);
-        stmt.bind(18, item.exif.orientation);
-        stmt.bind(19, item.exif.has_gps ? 1 : 0);
-        stmt.bind(20, item.exif.latitude);
-        stmt.bind(21, item.exif.longitude);
-        stmt.bind(22, item.exif.altitude);
-        stmt.bind(23, item.thumb_small);
-        stmt.bind(24, item.thumb_large);
-        stmt.bind(25, now);
-        stmt.bind(26, item.caption);
-        stmt.bind(27, item.media_type);
-        stmt.bind(28, item.duration);
-        stmt.bind(29, item.audio_artist);
-        stmt.bind(30, item.audio_title);
-        stmt.bind(31, item.audio_album);
-        stmt.bind(32, item.audio_genre);
-        stmt.bind(33, item.codec);
-        stmt.bind(34, item.bitrate);
-        stmt.bind(35, item.channels);
-        stmt.bind(36, item.sample_rate);
-        stmt.bind(37, item.id);
+        geomStmt.reset();
+        geomStmt.bind(1, item.id);
+        bool geometryChanged = false;
+        if (geomStmt.step() == StepResult::Row) {
+            geometryChanged = (geomStmt.getString(0) != item.content_hash ||
+                               geomStmt.getInt(1) != item.width ||
+                               geomStmt.getInt(2) != item.height ||
+                               geomStmt.getInt(3) != item.exif.orientation ||
+                               geomStmt.getString(4) != item.media_type);
+        }
+
+        stmt.bind(1, item.file_path);
+        stmt.bind(2, item.file_name);
+        stmt.bind(3, item.file_size);
+        stmt.bind(4, item.file_modified_time);
+        stmt.bind(5, item.content_hash);
+        stmt.bind(6, item.width);
+        stmt.bind(7, item.height);
+        stmt.bind(8, item.date_taken);
+        stmt.bind(9, item.exif.date_taken_str);
+        stmt.bind(10, item.rating);
+        stmt.bind(11, static_cast<int32_t>(item.flag));
+        stmt.bind(12, item.exif.camera_make);
+        stmt.bind(13, item.exif.camera_model);
+        stmt.bind(14, item.exif.lens);
+        stmt.bind(15, item.exif.exposure_time);
+        stmt.bind(16, item.exif.f_number);
+        stmt.bind(17, item.exif.iso);
+        stmt.bind(18, item.exif.focal_length);
+        stmt.bind(19, item.exif.orientation);
+        stmt.bind(20, item.exif.has_gps ? 1 : 0);
+        stmt.bind(21, item.exif.latitude);
+        stmt.bind(22, item.exif.longitude);
+        stmt.bind(23, item.exif.altitude);
+        stmt.bind(24, item.thumb_small);
+        stmt.bind(25, item.thumb_large);
+        stmt.bind(26, now);
+        stmt.bind(27, item.caption);
+        stmt.bind(28, item.media_type);
+        stmt.bind(29, item.duration);
+        stmt.bind(30, item.audio_artist);
+        stmt.bind(31, item.audio_title);
+        stmt.bind(32, item.audio_album);
+        stmt.bind(33, item.audio_genre);
+        stmt.bind(34, item.codec);
+        stmt.bind(35, item.bitrate);
+        stmt.bind(36, item.channels);
+        stmt.bind(37, item.sample_rate);
+        stmt.bind(38, item.id);
 
         if (stmt.step() != StepResult::Done) {
             return Status::databaseError("Failed to update media item in batch: " + conn_.lastErrorMessage());
         }
-        updatedCount++;
+        if (conn_.changes() > 0) {
+            updatedCount++;
+        }
         stmt.reset();
-        if (geometryChangedRes.value()) {
+        if (geometryChanged) {
             Status invalidated = invalidateFaceAnalysis(conn_, item.id);
             if (!invalidated.isOk()) return invalidated;
         }
@@ -477,7 +506,8 @@ Status CatalogDb::updateDateTaken(MediaId id, int64_t dateTaken, const std::stri
 
 Result<MediaItem> CatalogDb::getMediaById(MediaId id) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    auto stmtRes = conn_.prepare("SELECT * FROM media_items WHERE id = ?;");
+    std::string sql = std::string("SELECT ") + kMediaColumnsProjection + " FROM media_items WHERE id = ?;";
+    auto stmtRes = conn_.prepare(sql);
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
     stmt.bind(1, id);
@@ -496,26 +526,38 @@ Result<MediaItem> CatalogDb::getMediaById(MediaId id) {
 
 Result<MediaItem> CatalogDb::getMediaByPath(const std::string& path) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    auto stmtRes = conn_.prepare("SELECT * FROM media_items WHERE file_path = ?;");
+    std::string sql = std::string("SELECT ") + kMediaColumnsProjection + " FROM media_items WHERE file_path = ?;";
+    auto stmtRes = conn_.prepare(sql);
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
     stmt.bind(1, path);
 
     if (stmt.step() == StepResult::Row) {
-        return extractMediaItem(stmt);
+        auto m = extractMediaItem(stmt);
+        auto tagsRes = getTagsForMedia(m.id);
+        if (tagsRes.isOk()) {
+            m.tags = tagsRes.value();
+        }
+        return m;
     }
     return Status::notFound("Media item not found with path: " + path);
 }
 
 Result<MediaItem> CatalogDb::getMediaByHash(const std::string& hash) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    auto stmtRes = conn_.prepare("SELECT * FROM media_items WHERE content_hash = ? LIMIT 1;");
+    std::string sql = std::string("SELECT ") + kMediaColumnsProjection + " FROM media_items WHERE content_hash = ? LIMIT 1;";
+    auto stmtRes = conn_.prepare(sql);
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
     stmt.bind(1, hash);
 
     if (stmt.step() == StepResult::Row) {
-        return extractMediaItem(stmt);
+        auto m = extractMediaItem(stmt);
+        auto tagsRes = getTagsForMedia(m.id);
+        if (tagsRes.isOk()) {
+            m.tags = tagsRes.value();
+        }
+        return m;
     }
     return Status::notFound("Media item not found with hash: " + hash);
 }
@@ -642,12 +684,25 @@ Result<TagId> CatalogDb::createOrGetTag(const std::string& name, const std::stri
 Result<std::vector<Tag>> CatalogDb::getAllTags() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
+        WITH tag_covers AS (
+            SELECT t.id AS tag_id,
+                   (SELECT mt2.media_id
+                    FROM media_tags mt2
+                    JOIN media_items m2 ON mt2.media_id = m2.id
+                    WHERE mt2.tag_id = t.id
+                    ORDER BY (CASE WHEN m2.media_type IN ('video', 'audio') THEN 1 ELSE 0 END) ASC,
+                             m2.date_taken DESC, m2.id DESC
+                    LIMIT 1) AS cover_media_id
+            FROM tags t
+        )
         SELECT t.id, t.name, t.category, t.parent_id, COUNT(mt.media_id) AS media_count,
-               (SELECT mt2.media_id FROM media_tags mt2 JOIN media_items m2 ON mt2.media_id = m2.id WHERE mt2.tag_id = t.id ORDER BY (CASE WHEN m2.media_type IN ('video', 'audio') THEN 1 ELSE 0 END) ASC, m2.date_taken DESC, m2.id DESC LIMIT 1) AS cover_media_id,
-               (SELECT m2.content_hash FROM media_tags mt2 JOIN media_items m2 ON mt2.media_id = m2.id WHERE mt2.tag_id = t.id ORDER BY (CASE WHEN m2.media_type IN ('video', 'audio') THEN 1 ELSE 0 END) ASC, m2.date_taken DESC, m2.id DESC LIMIT 1) AS cover_hash,
+               tc.cover_media_id,
+               cov.content_hash AS cover_hash,
                MIN(CASE WHEN m.date_taken > 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS first_date,
                MAX(CASE WHEN m.date_taken > 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS last_date
         FROM tags t
+        LEFT JOIN tag_covers tc ON t.id = tc.tag_id
+        LEFT JOIN media_items cov ON tc.cover_media_id = cov.id
         LEFT JOIN media_tags mt ON t.id = mt.tag_id
         LEFT JOIN media_items m ON mt.media_id = m.id
         GROUP BY t.id
@@ -721,37 +776,43 @@ Result<std::unordered_map<MediaId, std::vector<Tag>>> CatalogDb::getTagsForMedia
         return result;
     }
 
-    std::string sql = R"SQL(
-        SELECT mt.media_id, t.id, t.name, t.category, t.parent_id
-        FROM tags t
-        JOIN media_tags mt ON t.id = mt.tag_id
-        WHERE mt.media_id IN (
-    )SQL";
+    constexpr size_t kBatchChunkSize = 500;
+    for (size_t chunkStart = 0; chunkStart < mediaIds.size(); chunkStart += kBatchChunkSize) {
+        size_t chunkEnd = std::min(chunkStart + kBatchChunkSize, mediaIds.size());
+        size_t count = chunkEnd - chunkStart;
 
-    for (size_t i = 0; i < mediaIds.size(); ++i) {
-        if (i > 0) sql += ",";
-        sql += "?";
-    }
-    sql += ") ORDER BY t.name ASC;";
+        std::string sql = R"SQL(
+            SELECT mt.media_id, t.id, t.name, t.category, t.parent_id
+            FROM tags t
+            JOIN media_tags mt ON t.id = mt.tag_id
+            WHERE mt.media_id IN (
+        )SQL";
 
-    auto stmtRes = conn_.prepare(sql);
-    if (!stmtRes.isOk()) return stmtRes.status();
-    auto stmt = std::move(stmtRes.value());
-
-    for (size_t i = 0; i < mediaIds.size(); ++i) {
-        stmt.bind(static_cast<int>(i + 1), mediaIds[i]);
-    }
-
-    while (stmt.step() == StepResult::Row) {
-        MediaId mid = stmt.getInt64(0);
-        Tag t;
-        t.id = stmt.getInt64(1);
-        t.name = stmt.getString(2);
-        t.category = stmt.getString(3);
-        if (!stmt.isNull(4)) {
-            t.parent_id = stmt.getInt64(4);
+        for (size_t i = 0; i < count; ++i) {
+            if (i > 0) sql += ",";
+            sql += "?";
         }
-        result[mid].push_back(std::move(t));
+        sql += ") ORDER BY t.name ASC;";
+
+        auto stmtRes = conn_.prepare(sql);
+        if (!stmtRes.isOk()) return stmtRes.status();
+        auto stmt = std::move(stmtRes.value());
+
+        for (size_t i = 0; i < count; ++i) {
+            stmt.bind(static_cast<int>(i + 1), mediaIds[chunkStart + i]);
+        }
+
+        while (stmt.step() == StepResult::Row) {
+            MediaId mid = stmt.getInt64(0);
+            Tag t;
+            t.id = stmt.getInt64(1);
+            t.name = stmt.getString(2);
+            t.category = stmt.getString(3);
+            if (!stmt.isNull(4)) {
+                t.parent_id = stmt.getInt64(4);
+            }
+            result[mid].push_back(std::move(t));
+        }
     }
     return result;
 }
@@ -818,13 +879,6 @@ Status CatalogDb::removeTagFromMedia(MediaId mediaId, TagId tagId) {
 }
 
 static Status invalidateFaceAnalysis(Connection& conn, MediaId mediaId) {
-    auto tagsRes = conn.prepare("SELECT tag_id FROM media_tag_provenance WHERE media_id=? AND manual=0;");
-    if (!tagsRes.isOk()) return tagsRes.status();
-    auto tagsStmt = std::move(tagsRes.value());
-    tagsStmt.bind(1, mediaId);
-    std::vector<TagId> derivedTags;
-    while (tagsStmt.step() == StepResult::Row) derivedTags.push_back(tagsStmt.getInt64(0));
-
     auto facesRes = conn.prepare("DELETE FROM faces WHERE media_id=?;");
     if (!facesRes.isOk()) return facesRes.status();
     auto faces = std::move(facesRes.value()); faces.bind(1, mediaId);
@@ -835,16 +889,23 @@ static Status invalidateFaceAnalysis(Connection& conn, MediaId mediaId) {
     auto analysis = std::move(analysisRes.value()); analysis.bind(1, mediaId);
     if (analysis.step() != StepResult::Done) return Status::databaseError("Failed to invalidate face analysis: " + conn.lastErrorMessage());
 
-    for (TagId tagId : derivedTags) {
-        auto linkRes = conn.prepare("DELETE FROM media_tags WHERE media_id=? AND tag_id=?;");
-        if (!linkRes.isOk()) return linkRes.status();
-        auto link = std::move(linkRes.value()); link.bind(1, mediaId); link.bind(2, tagId);
-        if (link.step() != StepResult::Done) return Status::databaseError("Failed to remove stale face people tag: " + conn.lastErrorMessage());
-        auto provenanceRes = conn.prepare("DELETE FROM media_tag_provenance WHERE media_id=? AND tag_id=? AND manual=0;");
-        if (!provenanceRes.isOk()) return provenanceRes.status();
-        auto provenance = std::move(provenanceRes.value()); provenance.bind(1, mediaId); provenance.bind(2, tagId);
-        if (provenance.step() != StepResult::Done) return Status::databaseError("Failed to remove stale face tag ownership: " + conn.lastErrorMessage());
-    }
+    auto linkRes = conn.prepare(R"SQL(
+        DELETE FROM media_tags
+        WHERE media_id = ? AND tag_id IN (
+            SELECT tag_id FROM media_tag_provenance WHERE media_id = ? AND manual = 0
+        );
+    )SQL");
+    if (!linkRes.isOk()) return linkRes.status();
+    auto link = std::move(linkRes.value());
+    link.bind(1, mediaId); link.bind(2, mediaId);
+    if (link.step() != StepResult::Done) return Status::databaseError("Failed to remove stale face people tag: " + conn.lastErrorMessage());
+
+    auto provenanceRes = conn.prepare("DELETE FROM media_tag_provenance WHERE media_id = ? AND manual = 0;");
+    if (!provenanceRes.isOk()) return provenanceRes.status();
+    auto provenance = std::move(provenanceRes.value());
+    provenance.bind(1, mediaId);
+    if (provenance.step() != StepResult::Done) return Status::databaseError("Failed to remove stale face tag ownership: " + conn.lastErrorMessage());
+
     return Status::ok();
 }
 
@@ -870,6 +931,30 @@ Result<TagId> CatalogDb::replaceTagAssignments(
     if (!tagRes.isOk()) return tagRes.status();
     TagId tagId = tagRes.value();
 
+    if (category == "people") {
+        auto rejectRes = conn_.prepare(R"SQL(
+            INSERT OR IGNORE INTO face_rejections(face_id,tag_id,rejected_at)
+            SELECT id,?,? FROM faces WHERE person_tag_id=?;
+        )SQL");
+        if (!rejectRes.isOk()) return rejectRes.status();
+        auto reject = std::move(rejectRes.value());
+        reject.bind(1, tagId);
+        reject.bind(2, currentUnixTime());
+        reject.bind(3, tagId);
+        if (reject.step() != StepResult::Done) {
+            return Status::databaseError("Failed to record removed people identities: " + conn_.lastErrorMessage());
+        }
+
+        auto clearRes = conn_.prepare("UPDATE faces SET person_tag_id=NULL,revision=revision+1,updated_at=? WHERE person_tag_id=?;");
+        if (!clearRes.isOk()) return clearRes.status();
+        auto clear = std::move(clearRes.value());
+        clear.bind(1, currentUnixTime());
+        clear.bind(2, tagId);
+        if (clear.step() != StepResult::Done) {
+            return Status::databaseError("Failed to clear removed people identities: " + conn_.lastErrorMessage());
+        }
+    }
+
     auto deleteRes = conn_.prepare("DELETE FROM media_tags WHERE tag_id = ?;");
     if (!deleteRes.isOk()) return deleteRes.status();
     auto deleteStmt = std::move(deleteRes.value());
@@ -883,20 +968,30 @@ Result<TagId> CatalogDb::replaceTagAssignments(
     auto clearProvenance = std::move(clearProvenanceRes.value()); clearProvenance.bind(1, tagId);
     if (clearProvenance.step() != StepResult::Done) return Status::databaseError("Failed to clear tag assignment provenance: " + conn_.lastErrorMessage());
 
+    std::unordered_set<MediaId> uniqueMediaIds(mediaIds.begin(), mediaIds.end());
+
     auto insertRes = conn_.prepare("INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?);");
     if (!insertRes.isOk()) return insertRes.status();
     auto insertStmt = std::move(insertRes.value());
-    for (MediaId mediaId : mediaIds) {
+
+    auto provenanceRes = conn_.prepare("INSERT INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,1);");
+    if (!provenanceRes.isOk()) return provenanceRes.status();
+    auto provenance = std::move(provenanceRes.value());
+
+    for (MediaId mediaId : uniqueMediaIds) {
+        insertStmt.reset();
         insertStmt.bind(1, mediaId);
         insertStmt.bind(2, tagId);
         if (insertStmt.step() != StepResult::Done) {
             return Status::databaseError("Failed to replace tag assignments: " + conn_.lastErrorMessage());
         }
-        insertStmt.reset();
-        auto provenanceRes = conn_.prepare("INSERT INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,1);");
-        if (!provenanceRes.isOk()) return provenanceRes.status();
-        auto provenance = std::move(provenanceRes.value()); provenance.bind(1, mediaId); provenance.bind(2, tagId);
-        if (provenance.step() != StepResult::Done) return Status::databaseError("Failed to save tag assignment provenance: " + conn_.lastErrorMessage());
+
+        provenance.reset();
+        provenance.bind(1, mediaId);
+        provenance.bind(2, tagId);
+        if (provenance.step() != StepResult::Done) {
+            return Status::databaseError("Failed to save tag assignment provenance: " + conn_.lastErrorMessage());
+        }
     }
 
     Status commitStatus = tx.commit();
@@ -1013,11 +1108,13 @@ Result<Album> CatalogDb::getAlbumById(AlbumId id) {
 
 Status CatalogDb::deleteAlbum(AlbumId id) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Transaction tx(conn_);
     auto s1 = conn_.prepare("DELETE FROM album_media WHERE album_id = ?;");
-    if (s1.isOk()) {
-        auto stmt1 = std::move(s1.value());
-        stmt1.bind(1, id);
-        stmt1.step();
+    if (!s1.isOk()) return s1.status();
+    auto stmt1 = std::move(s1.value());
+    stmt1.bind(1, id);
+    if (stmt1.step() != StepResult::Done) {
+        return Status::databaseError("Failed to delete album media: " + conn_.lastErrorMessage());
     }
 
     auto stmtRes = conn_.prepare("DELETE FROM albums WHERE id = ?;");
@@ -1031,7 +1128,7 @@ Status CatalogDb::deleteAlbum(AlbumId id) {
     if (conn_.changes() == 0) {
         return Status::notFound("Album not found: " + std::to_string(id));
     }
-    return Status::ok();
+    return tx.commit();
 }
 
 Status CatalogDb::addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position) {
@@ -1158,13 +1255,8 @@ Status CatalogDb::removeMediaFromAlbum(AlbumId albumId, MediaId mediaId) {
 
 Result<std::vector<MediaItem>> CatalogDb::getMediaInAlbum(AlbumId albumId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    const char* sql = R"SQL(
-        SELECT m.*
-        FROM media_items m
-        JOIN album_media am ON m.id = am.media_id
-        WHERE am.album_id = ?
-        ORDER BY am.position ASC, m.date_taken DESC;
-    )SQL";
+    std::string sql = std::string("SELECT ") + kMediaColumnsProjection +
+                      " FROM media_items m JOIN album_media am ON m.id = am.media_id WHERE am.album_id = ? ORDER BY am.position ASC, m.date_taken DESC;";
 
     auto stmtRes = conn_.prepare(sql);
     if (!stmtRes.isOk()) return stmtRes.status();
@@ -1212,81 +1304,57 @@ Result<CatalogStats> CatalogDb::getStats() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     CatalogStats s;
 
-    // media items aggregate
-    {
-        auto stmtRes = conn_.prepare("SELECT COUNT(*), COALESCE(SUM(file_size), 0), COALESCE(MIN(date_taken), 0), COALESCE(MAX(date_taken), 0) FROM media_items;");
-        if (stmtRes.isOk()) {
-            auto stmt = std::move(stmtRes.value());
-            if (stmt.step() == StepResult::Row) {
-                s.total_media = stmt.getInt64(0);
-                s.total_size_bytes = stmt.getInt64(1);
-                s.earliest_date = stmt.getInt64(2);
-                s.latest_date = stmt.getInt64(3);
-            }
-        }
+    const char* mediaSql = R"SQL(
+        SELECT
+            COUNT(*),
+            COALESCE(SUM(file_size), 0),
+            COALESCE(MIN(CASE WHEN date_taken > 0 THEN date_taken END), 0),
+            COALESCE(MAX(date_taken), 0),
+            COUNT(CASE WHEN media_type = 'video' THEN 1 END),
+            COUNT(CASE WHEN media_type = 'audio' THEN 1 END),
+            COUNT(CASE WHEN media_type NOT IN ('video', 'audio') THEN 1 END),
+            COALESCE(SUM(CASE WHEN media_type IN ('video', 'audio') THEN duration ELSE 0 END), 0.0),
+            COUNT(CASE WHEN flag = 1 THEN 1 END),
+            COUNT(CASE WHEN flag = -1 THEN 1 END),
+            COUNT(CASE WHEN rating = 0 THEN 1 END)
+        FROM media_items;
+    )SQL";
 
-        auto brkRes = conn_.prepare("SELECT media_type, COUNT(*), COALESCE(SUM(duration), 0.0) FROM media_items GROUP BY media_type;");
-        if (brkRes.isOk()) {
-            auto bStmt = std::move(brkRes.value());
-            while (bStmt.step() == StepResult::Row) {
-                std::string mt = bStmt.getString(0);
-                int64_t cnt = bStmt.getInt64(1);
-                double dur = bStmt.getDouble(2);
-                if (mt == "video") {
-                    s.total_videos += cnt;
-                    s.total_duration += dur;
-                } else if (mt == "audio") {
-                    s.total_audio += cnt;
-                    s.total_duration += dur;
-                } else {
-                    s.total_photos += cnt;
-                }
-            }
-        }
-
-        auto flagRes = conn_.prepare("SELECT flag, COUNT(*) FROM media_items GROUP BY flag;");
-        if (flagRes.isOk()) {
-            auto fStmt = std::move(flagRes.value());
-            while (fStmt.step() == StepResult::Row) {
-                int64_t flagVal = fStmt.getInt64(0);
-                int64_t cnt = fStmt.getInt64(1);
-                if (flagVal == 1) {
-                    s.total_picks += cnt;
-                } else if (flagVal == -1) {
-                    s.total_rejects += cnt;
-                }
-            }
-        }
+    auto stmtRes = conn_.prepare(mediaSql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+    if (stmt.step() == StepResult::Row) {
+        s.total_media = stmt.getInt64(0);
+        s.total_size_bytes = stmt.getInt64(1);
+        s.earliest_date = stmt.getInt64(2);
+        s.latest_date = stmt.getInt64(3);
+        s.total_videos = stmt.getInt64(4);
+        s.total_audio = stmt.getInt64(5);
+        s.total_photos = stmt.getInt64(6);
+        s.total_duration = stmt.getDouble(7);
+        s.total_picks = stmt.getInt64(8);
+        s.total_rejects = stmt.getInt64(9);
         s.total_not_rejects = s.total_media - s.total_rejects;
-
-        auto unratedRes = conn_.prepare("SELECT COUNT(*) FROM media_items WHERE rating = 0;");
-        if (unratedRes.isOk()) {
-            auto uStmt = std::move(unratedRes.value());
-            if (uStmt.step() == StepResult::Row) {
-                s.total_unrated = uStmt.getInt64(0);
-            }
-        }
+        s.total_unrated = stmt.getInt64(10);
     }
 
     // tags count
     {
-        auto stmtRes = conn_.prepare("SELECT COUNT(*) FROM tags;");
-        if (stmtRes.isOk()) {
-            auto stmt = std::move(stmtRes.value());
-            if (stmt.step() == StepResult::Row) {
-                s.total_tags = stmt.getInt64(0);
-            }
+        auto tagStmtRes = conn_.prepare("SELECT COUNT(*) FROM tags;");
+        if (!tagStmtRes.isOk()) return tagStmtRes.status();
+        auto tagStmt = std::move(tagStmtRes.value());
+        if (tagStmt.step() == StepResult::Row) {
+            s.total_tags = tagStmt.getInt64(0);
         }
     }
 
     // albums count
     {
-        auto stmtRes = conn_.prepare("SELECT COUNT(*) FROM albums;");
-        if (stmtRes.isOk()) {
-            auto stmt = std::move(stmtRes.value());
-            if (stmt.step() == StepResult::Row) {
-                s.total_albums = stmt.getInt64(0);
-            }
+        auto albStmtRes = conn_.prepare("SELECT COUNT(*) FROM albums;");
+        if (!albStmtRes.isOk()) return albStmtRes.status();
+        auto albStmt = std::move(albStmtRes.value());
+        if (albStmt.step() == StepResult::Row) {
+            s.total_albums = albStmt.getInt64(0);
         }
     }
 
@@ -1319,7 +1387,7 @@ Result<std::vector<MediaItem>> CatalogDb::queryMedia(
     int offset
 ) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    std::string sql = "SELECT * FROM media_items";
+    std::string sql = std::string("SELECT ") + kMediaColumnsProjection + " FROM media_items";
     if (!whereClause.empty()) {
         sql += " WHERE " + whereClause;
     }
@@ -1405,81 +1473,47 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
     };
     std::vector<RowUpdate> updates;
 
+    auto makeRelativePath = [&](const std::string& origPath, const std::filesystem::path& normBase) -> std::pair<std::string, bool> {
+        if (origPath.empty()) {
+            return {"", false};
+        }
+        std::filesystem::path p(origPath);
+        std::string pathStr = origPath;
+        bool changed = false;
+
+        if (!normBase.empty()) {
+            auto normalP = p.lexically_normal();
+            auto rel = std::filesystem::relative(normalP, normBase, ec);
+            if (!ec && !rel.empty()) {
+                std::string relStr = rel.generic_string();
+                if (relStr != ".." && relStr.rfind("../", 0) != 0 && relStr != ".") {
+                    if (relStr != pathStr) {
+                        pathStr = relStr;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        std::string genericPath = std::filesystem::path(pathStr).generic_string();
+        if (genericPath != pathStr) {
+            pathStr = genericPath;
+            changed = true;
+        }
+        return {pathStr, changed};
+    };
+
     while (stmt.step() == StepResult::Row) {
         int64_t id = stmt.getInt64(0);
         std::string filePath = stmt.getString(1);
         std::string thumbSmall = stmt.getString(2);
         std::string thumbLarge = stmt.getString(3);
-        bool changed = false;
 
-        // Process file_path
-        if (!normPhotos.empty() && !filePath.empty()) {
-            std::filesystem::path p(filePath);
-            auto canP = std::filesystem::weakly_canonical(p, ec);
-            if (ec) canP = p.lexically_normal();
-            auto rel = std::filesystem::relative(canP, normPhotos, ec);
-            if (!ec && !rel.empty()) {
-                std::string relStr = rel.generic_string();
-                if (relStr != ".." && relStr.rfind("../", 0) != 0 && relStr != ".") {
-                    if (relStr != filePath) {
-                        filePath = relStr;
-                        changed = true;
-                    }
-                }
-            }
-        }
-        std::string genericFilePath = std::filesystem::path(filePath).generic_string();
-        if (genericFilePath != filePath) {
-            filePath = genericFilePath;
-            changed = true;
-        }
+        auto [newFilePath, fpChanged] = makeRelativePath(filePath, normPhotos);
+        auto [newThumbSmall, tsChanged] = makeRelativePath(thumbSmall, normThumbs);
+        auto [newThumbLarge, tlChanged] = makeRelativePath(thumbLarge, normThumbs);
 
-        // Process thumb_small
-        if (!normThumbs.empty() && !thumbSmall.empty()) {
-            std::filesystem::path p(thumbSmall);
-            auto canP = std::filesystem::weakly_canonical(p, ec);
-            if (ec) canP = p.lexically_normal();
-            auto rel = std::filesystem::relative(canP, normThumbs, ec);
-            if (!ec && !rel.empty()) {
-                std::string relStr = rel.generic_string();
-                if (relStr != ".." && relStr.rfind("../", 0) != 0 && relStr != ".") {
-                    if (relStr != thumbSmall) {
-                        thumbSmall = relStr;
-                        changed = true;
-                    }
-                }
-            }
-        }
-        std::string genericThumbSmall = std::filesystem::path(thumbSmall).generic_string();
-        if (genericThumbSmall != thumbSmall) {
-            thumbSmall = genericThumbSmall;
-            changed = true;
-        }
-
-        // Process thumb_large
-        if (!normThumbs.empty() && !thumbLarge.empty()) {
-            std::filesystem::path p(thumbLarge);
-            auto canP = std::filesystem::weakly_canonical(p, ec);
-            if (ec) canP = p.lexically_normal();
-            auto rel = std::filesystem::relative(canP, normThumbs, ec);
-            if (!ec && !rel.empty()) {
-                std::string relStr = rel.generic_string();
-                if (relStr != ".." && relStr.rfind("../", 0) != 0 && relStr != ".") {
-                    if (relStr != thumbLarge) {
-                        thumbLarge = relStr;
-                        changed = true;
-                    }
-                }
-            }
-        }
-        std::string genericThumbLarge = std::filesystem::path(thumbLarge).generic_string();
-        if (genericThumbLarge != thumbLarge) {
-            thumbLarge = genericThumbLarge;
-            changed = true;
-        }
-
-        if (changed) {
-            updates.push_back({id, filePath, thumbSmall, thumbLarge});
+        if (fpChanged || tsChanged || tlChanged) {
+            updates.push_back({id, newFilePath, newThumbSmall, newThumbLarge});
         }
     }
 
@@ -1500,7 +1534,7 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
         updateStmt.bind(3, u.thumb_large);
         updateStmt.bind(4, now);
         updateStmt.bind(5, u.id);
-        if (updateStmt.step() == StepResult::Error) {
+        if (updateStmt.step() != StepResult::Done) {
             tx.rollback();
             return Status::internal("Failed to update media item path during relative migration: " + conn_.lastErrorMessage());
         }

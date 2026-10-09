@@ -237,3 +237,58 @@ TEST(ThreadPoolTest, MoveOnlyCallableAndArguments) {
     EXPECT_EQ(fut.get(), 246);
 }
 
+TEST(ThreadPoolTest, EnqueueDetachedExecutionAndExceptions) {
+    ThreadPool pool(2);
+    std::atomic<int> counter{0};
+
+    for (int i = 0; i < 20; ++i) {
+        pool.enqueueDetached([&counter]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            ++counter;
+        });
+    }
+
+    // Also verify detached task that throws does not crash or break subsequent tasks
+    pool.enqueueDetached([]() {
+        throw std::runtime_error("Detached exception should be caught and logged");
+    });
+
+    pool.enqueueDetached([&counter]() {
+        ++counter;
+    });
+
+    pool.waitAll();
+    EXPECT_EQ(counter.load(), 21);
+    EXPECT_EQ(pool.queueSize(), 0u);
+    EXPECT_EQ(pool.activeTasks(), 0u);
+}
+
+TEST(ThreadPoolTest, TaskResourceCleanupBeforeWaitAll) {
+    ThreadPool pool(2);
+    auto resource = std::make_shared<int>(42);
+    std::weak_ptr<int> weak = resource;
+
+    pool.enqueueDetached([res = std::move(resource)]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        EXPECT_EQ(*res, 42);
+    });
+
+    pool.waitAll();
+
+    // The captured resource must be completely destroyed when waitAll returns
+    EXPECT_TRUE(weak.expired());
+}
+
+TEST(ThreadPoolTest, NestedPoolWorkerDistinction) {
+    ThreadPool poolA(2);
+    ThreadPool poolB(2);
+
+    // Worker of poolA calling poolB.waitAll() should succeed
+    auto fut = poolA.enqueue([&poolB]() {
+        poolB.waitAll();
+        return true;
+    });
+
+    EXPECT_TRUE(fut.get());
+}
+

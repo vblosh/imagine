@@ -252,6 +252,7 @@ TEST_F(ServerTest, MediaItemCrudAndRatings) {
     httplib::Client client("127.0.0.1", port_);
 
     // Insert media directly via DB to test API retrieval & update
+    std::ofstream(testDir_ / "photo1.jpg") << "test photo content";
     MediaItem item;
     item.file_path = (testDir_ / "photo1.jpg").string();
     item.file_name = "photo1.jpg";

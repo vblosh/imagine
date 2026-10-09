@@ -3,6 +3,7 @@
 #include "imagine/thumbnail/cache.hpp"
 #include <filesystem>
 #include <fstream>
+#include <thread>
 
 using namespace imagine;
 using namespace imagine::thumbnail;
@@ -430,4 +431,106 @@ TEST_F(ThumbnailTest, RelativeThumbnailPathAndCustomCacheDir) {
     Cache cache(customCacheDir);
     std::string fullPath = cache.getThumbnailPath(hash, 256);
     EXPECT_EQ(fullPath, (std::filesystem::path(customCacheDir) / "a1" / "b2" / "a1b2c3d4e5f6071829_256.jpg").string());
+}
+
+TEST_F(ThumbnailTest, EmptyCorruptThumbnailIgnoredAndRegenerated) {
+    std::string cacheDir = (testDir / "corrupt_cache").string();
+    Cache cache(cacheDir);
+    std::string hash = "corrupthash1234567890abcdef";
+
+    std::string targetPath = cache.getThumbnailPath(hash, 256);
+    std::filesystem::create_directories(std::filesystem::path(targetPath).parent_path());
+    // Create a 0-byte corrupt thumbnail file
+    {
+        std::ofstream ofs(targetPath, std::ios::binary);
+    }
+    ASSERT_TRUE(std::filesystem::exists(targetPath));
+    ASSERT_EQ(std::filesystem::file_size(targetPath), 0u);
+
+    // hasThumbnail must ignore 0-byte file
+    EXPECT_FALSE(cache.hasThumbnail(hash, 256));
+
+    // ensureThumbnail should regenerate the valid thumbnail
+    auto res = cache.ensureThumbnail(testImgPath, hash, 256, 1);
+    ASSERT_TRUE(res.isOk());
+    EXPECT_TRUE(cache.hasThumbnail(hash, 256));
+    EXPECT_GT(std::filesystem::file_size(targetPath), 0u);
+}
+
+TEST_F(ThumbnailTest, SingleDimensionQueryCacheHit) {
+    std::string cacheDir = (testDir / "single_dim_cache").string();
+    Cache cache(cacheDir);
+
+    std::ifstream ifs(testImgPath, std::ios::binary);
+    std::vector<uint8_t> buffer((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+    std::string hash = "dimqueryhash1234567890abcdef";
+
+    // 1. Initial generation with only outWidth
+    int wOnly = 0;
+    auto res1 = cache.ensureDualThumbnailsFromMemory(
+        buffer.data(), buffer.size(), hash, 1, &wOnly, nullptr
+    );
+    ASSERT_TRUE(res1.isOk());
+    EXPECT_EQ(wOnly, 400);
+
+    // 2. Cache hit with only outHeight
+    int hOnly = 0;
+    auto res2 = cache.ensureDualThumbnailsFromMemory(
+        buffer.data(), buffer.size(), hash, 1, nullptr, &hOnly
+    );
+    ASSERT_TRUE(res2.isOk());
+    EXPECT_EQ(hOnly, 200);
+
+    // 3. Cache hit with only outWidth
+    int wOnly2 = 0;
+    auto res3 = cache.ensureDualThumbnailsFromMemory(
+        buffer.data(), buffer.size(), hash, 1, &wOnly2, nullptr
+    );
+    ASSERT_TRUE(res3.isOk());
+    EXPECT_EQ(wOnly2, 400);
+}
+
+TEST_F(ThumbnailTest, GeneratorResizeInvalidArgs) {
+    auto loadRes = Generator::loadImage(testImgPath);
+    ASSERT_TRUE(loadRes.isOk());
+
+    auto invalidZero = Generator::resize(loadRes.value(), 0);
+    EXPECT_FALSE(invalidZero.isOk());
+    EXPECT_EQ(invalidZero.status().code(), StatusCode::InvalidArgument);
+
+    auto invalidNeg = Generator::resize(loadRes.value(), -50);
+    EXPECT_FALSE(invalidNeg.isOk());
+    EXPECT_EQ(invalidNeg.status().code(), StatusCode::InvalidArgument);
+}
+
+TEST_F(ThumbnailTest, CacheConcurrentAccessAndMutation) {
+    std::string cacheDir = (testDir / "concurrent_cache").string();
+    Cache cache(cacheDir);
+
+    std::vector<std::thread> threads;
+    std::atomic<bool> stop{false};
+
+    // Readers
+    for (int i = 0; i < 4; ++i) {
+        threads.emplace_back([&cache, &stop, i]() {
+            while (!stop.load()) {
+                std::string dir = cache.cacheDir();
+                EXPECT_FALSE(dir.empty());
+                std::string p = cache.getThumbnailPath("hash" + std::to_string(i), 256);
+                EXPECT_FALSE(p.empty());
+            }
+        });
+    }
+
+    // Mutator
+    threads.emplace_back([&cache, &stop, cacheDir]() {
+        for (int i = 0; i < 50; ++i) {
+            cache.setCacheDir(cacheDir + "_" + std::to_string(i));
+        }
+        stop.store(true);
+    });
+
+    for (auto& t : threads) {
+        t.join();
+    }
 }

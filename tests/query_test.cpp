@@ -507,4 +507,87 @@ TEST_F(QueryTest, QueryByTagsAndFoldersOrMode) {
     EXPECT_TRUE(foundIds.count(id4));
 }
 
+TEST_F(QueryTest, MultipleFoldersInNormalModeOrTogether) {
+    MediaItem item4;
+    item4.file_path = "/photos/family/img4.jpg";
+    item4.file_name = "img4.jpg";
+    item4.file_size = 4000;
+    item4.file_modified_time = 4000;
+    item4.content_hash = "h_family4";
+    item4.date_taken = 4000;
+    item4.rating = 4;
+    item4.flag = FlagState::Pick;
+    db.insertMedia(item4);
 
+    QueryCriteria crit;
+    crit.folders = {"/photos/2026", "/photos/family"};
+    crit.tag_folder_or_mode = false;
+    auto res = QueryBuilder::execute(db, crit);
+    ASSERT_TRUE(res.isOk());
+    EXPECT_EQ(res.value().total_count, 4);
+}
+
+TEST_F(QueryTest, SqlLikeWildcardsEscapedInSearchAndFolder) {
+    MediaItem mUnderscore;
+    mUnderscore.file_path = "/photos/trip_2026/img_100.jpg";
+    mUnderscore.file_name = "img_100.jpg";
+    mUnderscore.file_size = 5000;
+    mUnderscore.file_modified_time = 5000;
+    mUnderscore.content_hash = "h_underscore";
+    mUnderscore.date_taken = 5000;
+    mUnderscore.exif.camera_make = "Camera_X";
+    db.insertMedia(mUnderscore);
+
+    MediaItem mDash;
+    mDash.file_path = "/photos/trip-2026/img-100.jpg";
+    mDash.file_name = "img-100.jpg";
+    mDash.file_size = 5001;
+    mDash.file_modified_time = 5001;
+    mDash.content_hash = "h_dash";
+    mDash.date_taken = 5001;
+    mDash.exif.camera_make = "Camera-X";
+    db.insertMedia(mDash);
+
+    // 1. Literal search text with underscore
+    QueryCriteria cSearch;
+    cSearch.search_text = "img_100";
+    auto resSearch = QueryBuilder::execute(db, cSearch);
+    ASSERT_TRUE(resSearch.isOk());
+    EXPECT_EQ(resSearch.value().total_count, 1);
+    EXPECT_EQ(resSearch.value().items[0].file_name, "img_100.jpg");
+
+    // 2. Literal folder with underscore
+    QueryCriteria cFolder;
+    cFolder.folder = "/photos/trip_2026";
+    auto resFolder = QueryBuilder::execute(db, cFolder);
+    ASSERT_TRUE(resFolder.isOk());
+    EXPECT_EQ(resFolder.value().total_count, 1);
+    EXPECT_EQ(resFolder.value().items[0].file_path, "/photos/trip_2026/img_100.jpg");
+
+    // 3. Literal camera make with underscore
+    QueryCriteria cCam;
+    cCam.camera_make = "Camera_X";
+    auto resCam = QueryBuilder::execute(db, cCam);
+    ASSERT_TRUE(resCam.isOk());
+    EXPECT_EQ(resCam.value().total_count, 1);
+    EXPECT_EQ(resCam.value().items[0].exif.camera_make, "Camera_X");
+}
+
+TEST_F(QueryTest, Pre1970TimestampsQueryable) {
+    MediaItem mHistorical;
+    mHistorical.file_path = "/photos/archive/vintage_1935.jpg";
+    mHistorical.file_name = "vintage_1935.jpg";
+    mHistorical.file_size = 2000;
+    mHistorical.file_modified_time = 2000;
+    mHistorical.content_hash = "h_hist1935";
+    mHistorical.date_taken = -1104537600; // 1935-01-01
+    db.insertMedia(mHistorical);
+
+    // Query for photos taken before 1950
+    QueryCriteria cHist;
+    cHist.date_to = -631152000; // 1950-01-01
+    auto resHist = QueryBuilder::execute(db, cHist);
+    ASSERT_TRUE(resHist.isOk());
+    EXPECT_EQ(resHist.value().total_count, 1);
+    EXPECT_EQ(resHist.value().items[0].file_name, "vintage_1935.jpg");
+}

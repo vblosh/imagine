@@ -426,12 +426,17 @@ export function setupEventListeners() {
 
   // Grid scroll pagination
   if (dom.gridScrollContainer) {
+    let scrollRafId = null;
     dom.gridScrollContainer.addEventListener('scroll', () => {
-      const { scrollTop, scrollHeight, clientHeight } = dom.gridScrollContainer;
-      if (scrollTop + clientHeight >= scrollHeight - 250 && !state.isLoadingMore && !state.isLoadingMedia && state.mediaItems.length < state.totalCount) {
-        loadMoreMedia();
-      }
-    });
+      if (scrollRafId !== null) return;
+      scrollRafId = requestAnimationFrame(() => {
+        scrollRafId = null;
+        const { scrollTop, scrollHeight, clientHeight } = dom.gridScrollContainer;
+        if (scrollTop + clientHeight >= scrollHeight - 250 && !state.isLoadingMore && !state.isLoadingMedia && state.mediaItems.length < state.totalCount) {
+          loadMoreMedia();
+        }
+      });
+    }, { passive: true });
   }
 
   // Refresh button
@@ -1152,27 +1157,9 @@ export function setupEventListeners() {
     });
   }
 
-  if (dom.batchPickBtn) {
-    dom.batchPickBtn.addEventListener('click', async () => {
-      await toggleFlagsForIds(Array.from(state.selectedIds), 1);
-    });
-  }
-
-  if (dom.batchRejectBtn) {
-    dom.batchRejectBtn.addEventListener('click', async () => {
-      await toggleFlagsForIds(Array.from(state.selectedIds), -1);
-    });
-  }
-
   if (dom.batchDeleteBtn) {
     dom.batchDeleteBtn.addEventListener('click', () => {
       openDeleteMediaModal(Array.from(state.selectedIds));
-    });
-  }
-
-  if (dom.batchRating) {
-    renderStarWidget(dom.batchRating, 0, async (newRating) => {
-      await batchUpdateRatings(Array.from(state.selectedIds), newRating);
     });
   }
 

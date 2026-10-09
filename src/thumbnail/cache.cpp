@@ -9,12 +9,24 @@ namespace imagine::thumbnail {
 std::string Cache::defaultCacheDir() {
     const char* xdgCache = std::getenv("XDG_CACHE_HOME");
     if (xdgCache && *xdgCache) {
-        return pathToUtf8(std::filesystem::path(xdgCache) / "imagine" / "thumbs");
+        return pathToUtf8(pathFromUtf8(xdgCache) / "imagine" / "thumbs");
     }
+#if defined(_WIN32)
+    const char* localAppData = std::getenv("LOCALAPPDATA");
+    if (localAppData && *localAppData) {
+        return pathToUtf8(pathFromUtf8(localAppData) / "imagine" / "thumbs");
+    }
+#endif
     const char* home = std::getenv("HOME");
     if (home && *home) {
-        return pathToUtf8(std::filesystem::path(home) / ".cache" / "imagine" / "thumbs");
+        return pathToUtf8(pathFromUtf8(home) / ".cache" / "imagine" / "thumbs");
     }
+#if defined(_WIN32)
+    const char* userProfile = std::getenv("USERPROFILE");
+    if (userProfile && *userProfile) {
+        return pathToUtf8(pathFromUtf8(userProfile) / ".cache" / "imagine" / "thumbs");
+    }
+#endif
     return "./.imagine/thumbs";
 }
 
@@ -24,6 +36,11 @@ Cache::Cache(std::string cacheDir) {
     } else {
         cacheDir_ = std::move(cacheDir);
     }
+}
+
+std::string Cache::cacheDir() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return cacheDir_;
 }
 
 void Cache::setCacheDir(const std::string& cacheDir) {
@@ -43,13 +60,20 @@ std::string Cache::getRelativeThumbnailPath(const std::string& hash, int size) {
 }
 
 std::string Cache::getThumbnailPath(const std::string& hash, int size) const {
-    return pathToUtf8((pathFromUtf8(cacheDir_) / pathFromUtf8(getRelativeThumbnailPath(hash, size))).make_preferred());
+    std::string baseDir;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        baseDir = cacheDir_;
+    }
+    return pathToUtf8((pathFromUtf8(baseDir) / pathFromUtf8(getRelativeThumbnailPath(hash, size))).make_preferred());
 }
 
 bool Cache::hasThumbnail(const std::string& hash, int size) const {
     std::string p = getThumbnailPath(hash, size);
     std::error_code ec;
-    return std::filesystem::exists(pathFromUtf8(p), ec);
+    auto fsPath = pathFromUtf8(p);
+    return std::filesystem::is_regular_file(fsPath, ec) && !ec &&
+           std::filesystem::file_size(fsPath, ec) > 0 && !ec;
 }
 
 Result<std::string> Cache::ensureThumbnail(
@@ -69,16 +93,17 @@ Result<std::string> Cache::ensureThumbnail(
     }
 
     auto img = std::move(loadRes.value());
-    if (orientation > 1) {
-        img = Generator::rotate(img, orientation);
-    }
-
     auto resizeRes = Generator::resize(img, size);
     if (!resizeRes.isOk()) {
         return resizeRes.status();
     }
+    img = std::move(resizeRes.value());
 
-    Status saveStatus = Generator::saveJpegFast(resizeRes.value(), targetPath);
+    if (orientation > 1) {
+        img = Generator::rotate(img, orientation);
+    }
+
+    Status saveStatus = Generator::saveJpegFast(img, targetPath);
     if (!saveStatus.isOk()) {
         return saveStatus;
     }
@@ -101,37 +126,30 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnails(
         return std::make_pair(smallPath, largePath);
     }
 
-    auto loadRes = Generator::loadImage(sourceImagePath);
-    if (!loadRes.isOk()) {
-        return loadRes.status();
+    if (hasLarge && !hasSmall) {
+        auto largeRes = Generator::loadImage(largePath);
+        if (largeRes.isOk()) {
+            auto resSmall = Generator::resize(largeRes.value(), SmallSize);
+            if (resSmall.isOk()) {
+                Status saveSmall = Generator::saveJpegFast(resSmall.value(), smallPath);
+                if (saveSmall.isOk()) {
+                    return std::make_pair(smallPath, largePath);
+                }
+            }
+        }
     }
 
-    auto img = std::move(loadRes.value());
-    if (orientation > 1) {
-        img = Generator::rotate(img, orientation);
+    auto loadBytesRes = Generator::loadImageBytes(sourceImagePath);
+    if (!loadBytesRes.isOk()) {
+        return loadBytesRes.status();
     }
 
-    // Generate large thumbnail first
-    ImageBuffer largeImg;
-    if (img.width > LargeSize || img.height > LargeSize) {
-        auto resLarge = Generator::resize(img, LargeSize);
-        if (!resLarge.isOk()) return resLarge.status();
-        largeImg = std::move(resLarge.value());
-    } else {
-        largeImg = img;
-    }
-
-    Status saveLarge = Generator::saveJpegFast(largeImg, largePath);
-    if (!saveLarge.isOk()) return saveLarge;
-
-    // Fast downscale from largeImg to small thumbnail
-    auto resSmall = Generator::resize(largeImg, SmallSize);
-    if (!resSmall.isOk()) return resSmall.status();
-
-    Status saveSmall = Generator::saveJpegFast(resSmall.value(), smallPath);
-    if (!saveSmall.isOk()) return saveSmall;
-
-    return std::make_pair(smallPath, largePath);
+    return ensureDualThumbnailsFromMemory(
+        loadBytesRes.value().data(),
+        loadBytesRes.value().size(),
+        hash,
+        orientation
+    );
 }
 
 Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemory(
@@ -149,14 +167,34 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemor
     bool hasLarge = hasThumbnail(hash, LargeSize);
 
     if (hasSmall && hasLarge) {
-        if (outWidth && outHeight) {
+        if (outWidth || outHeight) {
             auto dimRes = Generator::getImageDimensionsFromMemory(data, size);
             if (dimRes.isOk()) {
-                *outWidth = dimRes.value().first;
-                *outHeight = dimRes.value().second;
+                if (outWidth) *outWidth = dimRes.value().first;
+                if (outHeight) *outHeight = dimRes.value().second;
             }
         }
         return std::make_pair(smallPath, largePath);
+    }
+
+    if (hasLarge && !hasSmall) {
+        auto largeRes = Generator::loadImage(largePath);
+        if (largeRes.isOk()) {
+            auto resSmall = Generator::resize(largeRes.value(), SmallSize);
+            if (resSmall.isOk()) {
+                Status saveSmall = Generator::saveJpegFast(resSmall.value(), smallPath);
+                if (saveSmall.isOk()) {
+                    if (outWidth || outHeight) {
+                        auto dimRes = Generator::getImageDimensionsFromMemory(data, size);
+                        if (dimRes.isOk()) {
+                            if (outWidth) *outWidth = dimRes.value().first;
+                            if (outHeight) *outHeight = dimRes.value().second;
+                        }
+                    }
+                    return std::make_pair(smallPath, largePath);
+                }
+            }
+        }
     }
 
     ImageBuffer img;
@@ -185,18 +223,18 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemor
         if (outHeight) *outHeight = img.height;
     }
 
-    if (orientation > 1) {
-        img = Generator::rotate(img, orientation);
-    }
-
-    // Generate large thumbnail first
+    // Generate large thumbnail first: resize before rotate
     ImageBuffer largeImg;
     if (img.width > LargeSize || img.height > LargeSize) {
         auto resLarge = Generator::resize(img, LargeSize);
         if (!resLarge.isOk()) return resLarge.status();
         largeImg = std::move(resLarge.value());
     } else {
-        largeImg = img;
+        largeImg = std::move(img);
+    }
+
+    if (orientation > 1) {
+        largeImg = Generator::rotate(largeImg, orientation);
     }
 
     Status saveLarge = Generator::saveJpegFast(largeImg, largePath);
@@ -224,6 +262,19 @@ Result<std::pair<std::string, std::string>> Cache::ensureProceduralThumbnails(
     bool hasLarge = hasThumbnail(hash, LargeSize);
     if (hasSmall && hasLarge) {
         return std::make_pair(smallPath, largePath);
+    }
+
+    if (hasLarge && !hasSmall) {
+        auto largeRes = Generator::loadImage(largePath);
+        if (largeRes.isOk()) {
+            auto resSmall = Generator::resize(largeRes.value(), SmallSize);
+            if (resSmall.isOk()) {
+                Status saveSmall = Generator::saveJpegFast(resSmall.value(), smallPath);
+                if (saveSmall.isOk()) {
+                    return std::make_pair(smallPath, largePath);
+                }
+            }
+        }
     }
 
     auto genRes = Generator::generateProceduralThumbnail(mediaType, label, LargeSize);

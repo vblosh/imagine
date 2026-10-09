@@ -293,6 +293,11 @@ TEST_F(CatalogDbTest, UpdateAndDeleteMedia) {
     // deleteMedia
     EXPECT_TRUE(db.deleteMedia(id).isOk());
     EXPECT_EQ(db.getMediaById(id).status().code(), StatusCode::NotFound);
+
+    // updateMedia on non-existent media returns NotFound
+    MediaItem nonExistent = withThumbs;
+    nonExistent.id = 999999;
+    EXPECT_EQ(db.updateMedia(nonExistent).code(), StatusCode::NotFound);
 }
 
 TEST_F(CatalogDbTest, TagManagementAndBatch) {
@@ -563,6 +568,17 @@ TEST(ConnectionAndStatementTest, LowLevelOperationsAndErrors) {
     EXPECT_FALSE(nullStmt.bindNull(1).isOk());
     EXPECT_FALSE(nullStmt.reset().isOk());
     EXPECT_EQ(nullStmt.step(), StepResult::Error);
+    EXPECT_TRUE(nullStmt.isNull(0));
+    EXPECT_EQ(nullStmt.getInt(0), 0);
+    EXPECT_EQ(nullStmt.getInt64(0), 0);
+    EXPECT_DOUBLE_EQ(nullStmt.getDouble(0), 0.0);
+    EXPECT_EQ(nullStmt.getString(0), "");
+    EXPECT_EQ(nullStmt.getBlob(0), nullptr);
+    EXPECT_EQ(nullStmt.getBlobBytes(0), 0u);
+    EXPECT_FALSE(nullStmt.getOptionalString(0).has_value());
+    EXPECT_FALSE(nullStmt.getOptionalInt(0).has_value());
+    EXPECT_FALSE(nullStmt.getOptionalInt64(0).has_value());
+    EXPECT_FALSE(nullStmt.getOptionalDouble(0).has_value());
 }
 
 TEST(TransactionTest, CommitRollbackAndAutoRollback) {
@@ -573,8 +589,10 @@ TEST(TransactionTest, CommitRollbackAndAutoRollback) {
     // 1. Explicit commit
     {
         Transaction tx(conn);
+        EXPECT_TRUE(tx.isActive());
         EXPECT_TRUE(conn.execute("INSERT INTO kv VALUES ('key1', 'val1');").isOk());
         EXPECT_TRUE(tx.commit().isOk());
+        EXPECT_FALSE(tx.isActive());
         // Double commit should error
         EXPECT_FALSE(tx.commit().isOk());
     }

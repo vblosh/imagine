@@ -65,7 +65,8 @@ bool Importer::isInsideRootDir(const std::filesystem::path& target, const std::f
 
     auto rel = std::filesystem::relative(canTarget, canRoot, ec);
     if (!ec && !rel.empty()) {
-        std::string relStr = rel.generic_string();
+        std::string relStr = pathToUtf8(rel);
+        std::replace(relStr.begin(), relStr.end(), '\\', '/');
         if (!relStr.empty() && relStr != "." && relStr != ".." && relStr.rfind("../", 0) != 0) {
             return true;
         }
@@ -78,15 +79,18 @@ bool Importer::isInsideRootDir(const std::filesystem::path& target, const std::f
 
     rel = std::filesystem::relative(canTarget, canRoot, ec);
     if (!ec && !rel.empty()) {
-        std::string relStr = rel.generic_string();
+        std::string relStr = pathToUtf8(rel);
+        std::replace(relStr.begin(), relStr.end(), '\\', '/');
         if (!relStr.empty() && relStr != "." && relStr != ".." && relStr.rfind("../", 0) != 0) {
             return true;
         }
     }
 
 #if defined(_WIN32)
-    std::string sTarget = canTarget.generic_string();
-    std::string sRoot = canRoot.generic_string();
+    std::string sTarget = pathToUtf8(canTarget);
+    std::replace(sTarget.begin(), sTarget.end(), '\\', '/');
+    std::string sRoot = pathToUtf8(canRoot);
+    std::replace(sRoot.begin(), sRoot.end(), '\\', '/');
     while (sTarget.size() > 1 && sTarget.back() == '/') sTarget.pop_back();
     while (sRoot.size() > 1 && sRoot.back() == '/') sRoot.pop_back();
     auto toLower = [](std::string s) {
@@ -118,7 +122,8 @@ std::string Importer::toRelativePath(const std::filesystem::path& fullPath, cons
 
     auto rel = std::filesystem::relative(canTarget, canRoot, ec);
     if (!ec && !rel.empty()) {
-        std::string relStr = rel.generic_string();
+        std::string relStr = pathToUtf8(rel);
+        std::replace(relStr.begin(), relStr.end(), '\\', '/');
         if (relStr != ".." && relStr.rfind("../", 0) != 0) {
             return relStr;
         }
@@ -131,15 +136,18 @@ std::string Importer::toRelativePath(const std::filesystem::path& fullPath, cons
 
     rel = std::filesystem::relative(canTarget, canRoot, ec);
     if (!ec && !rel.empty()) {
-        std::string relStr = rel.generic_string();
+        std::string relStr = pathToUtf8(rel);
+        std::replace(relStr.begin(), relStr.end(), '\\', '/');
         if (relStr.rfind("../", 0) != 0 && relStr != "..") {
             return relStr;
         }
     }
 
 #if defined(_WIN32)
-    std::string sTarget = canTarget.generic_string();
-    std::string sRoot = canRoot.generic_string();
+    std::string sTarget = pathToUtf8(canTarget);
+    std::replace(sTarget.begin(), sTarget.end(), '\\', '/');
+    std::string sRoot = pathToUtf8(canRoot);
+    std::replace(sRoot.begin(), sRoot.end(), '\\', '/');
     while (sRoot.size() > 1 && sRoot.back() == '/') sRoot.pop_back();
     auto toLower = [](std::string s) {
         for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -216,14 +224,15 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     std::string normalizedPath = normalizePath(filePath);
 
     // Root containment check: if photosDir_ is set, file must be inside photosDir_
-    if (!photosDir_.empty()) {
-        if (!isInsideRootDir(normalizedPath, photosDir_)) {
-            IMAGINE_LOG_ERROR("File rejected: must be located inside photos root directory (" + photosDir_ + "): " + filePath);
+    std::string curPhotosDir = photosDir();
+    if (!curPhotosDir.empty()) {
+        if (!isInsideRootDir(normalizedPath, curPhotosDir)) {
+            IMAGINE_LOG_ERROR("File rejected: must be located inside photos root directory (" + curPhotosDir + "): " + filePath);
             return ProcessStatus::Failed;
         }
     }
 
-    std::string storedPath = !photosDir_.empty() ? toRelativePath(normalizedPath, photosDir_) : normalizedPath;
+    std::string storedPath = !curPhotosDir.empty() ? toRelativePath(normalizedPath, curPhotosDir) : normalizedPath;
 
     auto fsize = std::filesystem::file_size(fPath, ec);
     if (ec) {
@@ -529,10 +538,14 @@ Result<MediaItem> Importer::importFile(const std::string& filePath) {
         return Status::invalidArgument("Unsupported media extension: " + filePath);
     }
     std::string normPath = normalizePath(filePath);
-    if (photosDir_.empty()) {
-        photosDir_ = std::filesystem::path(normPath).parent_path().string();
-    } else if (!isInsideRootDir(normPath, photosDir_)) {
-        return Status::invalidArgument("File is outside photos root directory (" + photosDir_ + "): " + filePath);
+    std::string currentPhotosDir = photosDir();
+    if (currentPhotosDir.empty()) {
+        setPhotosDir(pathToUtf8(pathFromUtf8(normPath).parent_path()));
+        currentPhotosDir = photosDir();
+    }
+    if (!isInsideRootDir(normPath, currentPhotosDir)) {
+
+        return Status::invalidArgument("File is outside photos root directory (" + currentPhotosDir + "): " + filePath);
     }
     MediaItem item;
     ProcessStatus st = processFileInternal(filePath, &item, true);
@@ -584,12 +597,13 @@ Result<ImportProgress> Importer::importDirectory(
     }
 
     std::string normDir = normalizePath(directoryPath);
-    if (photosDir_.empty()) {
-        photosDir_ = normDir;
+    std::string currentPhotosDir = photosDir();
+    if (currentPhotosDir.empty()) {
+        setPhotosDir(normDir);
     } else {
-        std::string normRoot = normalizePath(photosDir_);
+        std::string normRoot = normalizePath(currentPhotosDir);
         if (normDir != normRoot && !isInsideRootDir(normDir, normRoot)) {
-            return Status::invalidArgument("Directory is outside photos root directory (" + photosDir_ + "): " + directoryPath);
+            return Status::invalidArgument("Directory is outside photos root directory (" + currentPhotosDir + "): " + directoryPath);
         }
     }
 
@@ -624,7 +638,10 @@ Result<ImportProgress> Importer::importDirectory(
             std::error_code entryEc;
             if (entry.is_directory(entryEc)) {
                 std::string fname = pathToUtf8(entry.path().filename());
-                if (!fname.empty() && (fname[0] == '.' || fname == "$RECYCLE.BIN" || fname == "System Volume Information")) {
+                std::string fnameLower;
+                fnameLower.reserve(fname.size());
+                for (char c : fname) fnameLower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                if (!fname.empty() && (fname[0] == '.' || fnameLower == "$recycle.bin" || fnameLower == "system volume information")) {
                     it.disable_recursion_pending();
                 } else if (!cacheDirPath.empty()) {
                     std::string entryNorm = normalizePath(pathToUtf8(entry.path()));
@@ -699,11 +716,6 @@ Result<ImportProgress> Importer::importDirectory(
     auto emitProgress = [&](bool force = false) {
         if (!progressCb) return;
 
-        auto now = std::chrono::steady_clock::now();
-        if (!force && (now - lastCallbackTime < kProgressThrottleInterval)) {
-            return;
-        }
-
         std::unique_lock<std::mutex> cbLock(callbackMutex, std::defer_lock);
         if (force) {
             cbLock.lock();
@@ -711,6 +723,7 @@ Result<ImportProgress> Importer::importDirectory(
             if (!cbLock.try_lock()) {
                 return;
             }
+            auto now = std::chrono::steady_clock::now();
             if (now - lastCallbackTime < kProgressThrottleInterval) {
                 return;
             }
@@ -935,7 +948,19 @@ Result<ImportProgress> Importer::importDirectory(
                         }
                     } tGuard{remainingTasks, taskMutex, taskCv};
 
-                    processOne(file);
+                    try {
+                        processOne(file);
+                    } catch (const std::exception& ex) {
+                        IMAGINE_LOG_ERROR("Exception while processing file " + file + ": " + ex.what());
+                        std::lock_guard<std::mutex> lock(progress_mutex_);
+                        ++current_progress_.failed_files;
+                        ++current_progress_.processed_files;
+                    } catch (...) {
+                        IMAGINE_LOG_ERROR("Unknown exception while processing file " + file);
+                        std::lock_guard<std::mutex> lock(progress_mutex_);
+                        ++current_progress_.failed_files;
+                        ++current_progress_.processed_files;
+                    }
                 });
             } catch (const std::exception& ex) {
                 --remainingTasks;
@@ -962,7 +987,19 @@ Result<ImportProgress> Importer::importDirectory(
                 current_progress_.processed_files += static_cast<int64_t>(remaining);
                 break;
             }
-            processOne(files[i]);
+            try {
+                processOne(files[i]);
+            } catch (const std::exception& ex) {
+                IMAGINE_LOG_ERROR("Exception while processing file " + files[i] + ": " + ex.what());
+                std::lock_guard<std::mutex> lock(progress_mutex_);
+                ++current_progress_.failed_files;
+                ++current_progress_.processed_files;
+            } catch (...) {
+                IMAGINE_LOG_ERROR("Unknown exception while processing file " + files[i]);
+                std::lock_guard<std::mutex> lock(progress_mutex_);
+                ++current_progress_.failed_files;
+                ++current_progress_.processed_files;
+            }
         }
     }
 

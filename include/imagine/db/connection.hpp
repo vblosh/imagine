@@ -34,7 +34,9 @@ public:
     Status bind(int index, int32_t val);
     Status bind(int index, int64_t val);
     Status bind(int index, double val);
-    Status bind(int index, const std::string& val);
+    Status bind(int index, std::string_view val);
+    Status bind(int index, const char* val);
+    Status bindBlob(int index, const void* data, size_t size);
     Status bindNull(int index);
 
     template <typename T>
@@ -55,7 +57,12 @@ public:
     int64_t getInt64(int col) const;
     double getDouble(int col) const;
     std::string getString(int col) const;
+    const void* getBlob(int col) const;
+    size_t getBlobBytes(int col) const;
     std::optional<std::string> getOptionalString(int col) const;
+    std::optional<int32_t> getOptionalInt(int col) const;
+    std::optional<int64_t> getOptionalInt64(int col) const;
+    std::optional<double> getOptionalDouble(int col) const;
 
     sqlite3_stmt* raw() const { return stmt_; }
 
@@ -104,6 +111,7 @@ public:
 
     Status commit();
     Status rollback();
+    bool isActive() const noexcept { return active_; }
 
 private:
     Connection& conn_;

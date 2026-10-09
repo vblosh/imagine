@@ -15,7 +15,7 @@ public:
     explicit Cache(std::string cacheDir = "");
 
     void setCacheDir(const std::string& cacheDir);
-    const std::string& cacheDir() const { return cacheDir_; }
+    std::string cacheDir() const;
 
     std::string getThumbnailPath(const std::string& hash, int size) const;
     static std::string getRelativeThumbnailPath(const std::string& hash, int size);

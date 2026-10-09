@@ -1,4 +1,4 @@
-﻿/**
+/**
  * IMAGINE Photo Organizer - Inspector Panel & Resizing
  * Pure Vanilla JavaScript (Offline-ready, no dependencies)
  */
@@ -196,7 +196,7 @@ export function renderInspectorContent(item) {
         const lat = latNum.toFixed(5);
         const lon = lonNum.toFixed(5);
         dom.infoGps.innerHTML = `
-          <a href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}" target="_blank" rel="noopener" class="btn-link">
+          <a href="https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=16/${lat}/${lon}" target="_blank" rel="noopener noreferrer" class="btn-link">
             ${lat}, ${lon} ↗
           </a>
         `;
@@ -285,7 +285,7 @@ export function renderInspectorTags(item) {
   const tags = Array.isArray(item && item.tags) ? item.tags : [];
 
   if (tags.length === 0) {
-    dom.inspectorTags.innerHTML = '<span style="color:var(--text-dim);font-size:11px;">No tags</span>';
+    dom.inspectorTags.innerHTML = `<span style="color:var(--text-dim);font-size:11px;">${escapeHtml(t('no_tags'))}</span>`;
     return;
   }
 
@@ -295,9 +295,10 @@ export function renderInspectorTags(item) {
     const cat = (tag.category || 'keyword').toLowerCase();
     badge.dataset.category = cat;
     badge.title = `Category: ${tag.category || 'keyword'}`;
+    const removeLabel = t('remove_tag') || 'Remove tag';
     badge.innerHTML = `
       <span>${escapeHtml(tag.name)}</span>
-      <button class="remove-tag" title="Remove tag">&times;</button>
+      <button class="remove-tag" title="${escapeHtml(removeLabel)}" aria-label="${escapeHtml(removeLabel)}"><span aria-hidden="true">&times;</span></button>
     `;
     badge.querySelector('.remove-tag').addEventListener('click', async () => {
       try {

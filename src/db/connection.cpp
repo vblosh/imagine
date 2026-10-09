@@ -33,7 +33,7 @@ Status Statement::bind(int index, int32_t val) {
     if (!stmt_) return Status::databaseError("Invalid statement handle");
     int rc = sqlite3_bind_int(stmt_, index, val);
     if (rc != SQLITE_OK) {
-        return Status::databaseError("Failed to bind int: " + std::to_string(rc));
+        return Status::databaseError("Failed to bind int: " + std::string(sqlite3_errstr(rc)));
     }
     return Status::ok();
 }
@@ -42,7 +42,7 @@ Status Statement::bind(int index, int64_t val) {
     if (!stmt_) return Status::databaseError("Invalid statement handle");
     int rc = sqlite3_bind_int64(stmt_, index, val);
     if (rc != SQLITE_OK) {
-        return Status::databaseError("Failed to bind int64: " + std::to_string(rc));
+        return Status::databaseError("Failed to bind int64: " + std::string(sqlite3_errstr(rc)));
     }
     return Status::ok();
 }
@@ -51,16 +51,30 @@ Status Statement::bind(int index, double val) {
     if (!stmt_) return Status::databaseError("Invalid statement handle");
     int rc = sqlite3_bind_double(stmt_, index, val);
     if (rc != SQLITE_OK) {
-        return Status::databaseError("Failed to bind double: " + std::to_string(rc));
+        return Status::databaseError("Failed to bind double: " + std::string(sqlite3_errstr(rc)));
     }
     return Status::ok();
 }
 
-Status Statement::bind(int index, const std::string& val) {
+Status Statement::bind(int index, std::string_view val) {
     if (!stmt_) return Status::databaseError("Invalid statement handle");
     int rc = sqlite3_bind_text(stmt_, index, val.data(), static_cast<int>(val.size()), SQLITE_TRANSIENT);
     if (rc != SQLITE_OK) {
-        return Status::databaseError("Failed to bind text: " + std::to_string(rc));
+        return Status::databaseError("Failed to bind text: " + std::string(sqlite3_errstr(rc)));
+    }
+    return Status::ok();
+}
+
+Status Statement::bind(int index, const char* val) {
+    if (!val) return bindNull(index);
+    return bind(index, std::string_view(val));
+}
+
+Status Statement::bindBlob(int index, const void* data, size_t size) {
+    if (!stmt_) return Status::databaseError("Invalid statement handle");
+    int rc = sqlite3_bind_blob(stmt_, index, data, static_cast<int>(size), SQLITE_TRANSIENT);
+    if (rc != SQLITE_OK) {
+        return Status::databaseError("Failed to bind blob: " + std::string(sqlite3_errstr(rc)));
     }
     return Status::ok();
 }
@@ -69,7 +83,7 @@ Status Statement::bindNull(int index) {
     if (!stmt_) return Status::databaseError("Invalid statement handle");
     int rc = sqlite3_bind_null(stmt_, index);
     if (rc != SQLITE_OK) {
-        return Status::databaseError("Failed to bind null: " + std::to_string(rc));
+        return Status::databaseError("Failed to bind null: " + std::string(sqlite3_errstr(rc)));
     }
     return Status::ok();
 }
@@ -90,6 +104,7 @@ Status Statement::reset() {
 }
 
 bool Statement::isNull(int col) const {
+    if (!stmt_) return true;
     return sqlite3_column_type(stmt_, col) == SQLITE_NULL;
 }
 
@@ -99,27 +114,56 @@ int Statement::columnCount() const {
 }
 
 int32_t Statement::getInt(int col) const {
+    if (!stmt_) return 0;
     return sqlite3_column_int(stmt_, col);
 }
 
 int64_t Statement::getInt64(int col) const {
+    if (!stmt_) return 0;
     return sqlite3_column_int64(stmt_, col);
 }
 
 double Statement::getDouble(int col) const {
+    if (!stmt_) return 0.0;
     return sqlite3_column_double(stmt_, col);
 }
 
 std::string Statement::getString(int col) const {
+    if (!stmt_) return "";
     const unsigned char* text = sqlite3_column_text(stmt_, col);
     if (!text) return "";
     int bytes = sqlite3_column_bytes(stmt_, col);
     return std::string(reinterpret_cast<const char*>(text), bytes);
 }
 
+const void* Statement::getBlob(int col) const {
+    if (!stmt_) return nullptr;
+    return sqlite3_column_blob(stmt_, col);
+}
+
+size_t Statement::getBlobBytes(int col) const {
+    if (!stmt_) return 0;
+    return static_cast<size_t>(sqlite3_column_bytes(stmt_, col));
+}
+
 std::optional<std::string> Statement::getOptionalString(int col) const {
-    if (isNull(col)) return std::nullopt;
+    if (!stmt_ || isNull(col)) return std::nullopt;
     return getString(col);
+}
+
+std::optional<int32_t> Statement::getOptionalInt(int col) const {
+    if (!stmt_ || isNull(col)) return std::nullopt;
+    return getInt(col);
+}
+
+std::optional<int64_t> Statement::getOptionalInt64(int col) const {
+    if (!stmt_ || isNull(col)) return std::nullopt;
+    return getInt64(col);
+}
+
+std::optional<double> Statement::getOptionalDouble(int col) const {
+    if (!stmt_ || isNull(col)) return std::nullopt;
+    return getDouble(col);
 }
 
 // --- Connection ---
@@ -166,6 +210,7 @@ Status Connection::open(const std::string& dbPath) {
     execute("PRAGMA foreign_keys = ON;");
     execute("PRAGMA temp_store = MEMORY;");
     execute("PRAGMA cache_size = -64000;"); // 64MB cache
+    execute("PRAGMA busy_timeout = 5000;"); // 5s timeout on lock contention
 
     return Status::ok();
 }
@@ -218,6 +263,9 @@ int Connection::lastErrorCode() const {
 // --- Transaction ---
 
 Transaction::Transaction(Connection& conn) : conn_(conn) {
+    if (!conn_.isOpen()) {
+        return;
+    }
     savepointName_ = "sp_" + std::to_string(conn_.nextSavepointId());
     if (conn_.execute("SAVEPOINT " + savepointName_ + ";").isOk()) {
         active_ = true;
