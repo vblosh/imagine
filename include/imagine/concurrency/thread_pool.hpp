@@ -64,6 +64,7 @@ public:
      * @return std::future holding the return value or exception of the task.
      */
     template <typename F, typename... Args>
+        requires std::invocable<std::decay_t<F>, std::decay_t<Args>...>
     auto enqueue(F&& f, Args&&... args)
         -> std::future<std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>> {
         using ReturnType = std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>;
@@ -86,6 +87,32 @@ public:
 
         cv_.notify_one();
         return future;
+    }
+
+    /**
+     * @brief Enqueues a callable task and its arguments for fire-and-forget execution.
+     *
+     * Avoids the overhead of std::packaged_task and std::future allocation.
+     * Unhandled exceptions thrown by the callable are caught and logged.
+     *
+     * @throws std::runtime_error if the ThreadPool has been stopped.
+     */
+    template <typename F, typename... Args>
+        requires std::invocable<std::decay_t<F>, std::decay_t<Args>...>
+    void enqueueDetached(F&& f, Args&&... args) {
+        auto task = [func = std::forward<F>(f), ...capturedArgs = std::forward<Args>(args)]() mutable {
+            std::invoke(std::move(func), std::move(capturedArgs)...);
+        };
+
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (stop_.load(std::memory_order_relaxed)) {
+                throw std::runtime_error("Cannot enqueue task to stopped ThreadPool");
+            }
+            tasks_.emplace(std::move(task));
+        }
+
+        cv_.notify_one();
     }
 
     /**
@@ -137,8 +164,7 @@ private:
     bool isWorkerThread() const noexcept;
 
     const size_t worker_count_;
-    std::vector<std::thread> workers_;
-    std::vector<std::thread::id> worker_ids_;
+    std::vector<std::jthread> workers_;
     std::queue<std::function<void()>> tasks_;
 
     mutable std::mutex queue_mutex_;
