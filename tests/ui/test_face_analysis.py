@@ -112,7 +112,7 @@ class FaceApi:
         path, method = parsed.path, route.request.method
         body = json.loads(route.request.post_data or "{}")
         if path == "/api/faces/status":
-            route.fulfill(json=dict(built=True, ready=self.ready, error="" if self.ready else "Models not configured", config={}, runtime={}, job=self.initial_job))
+            route.fulfill(json=dict(built=True, ready=self.ready, error="" if self.ready else "Models not configured", config={}, runtime={}, job=self.initial_job, indexSize=len(self.faces), model="buffalo_l"))
         elif path == "/api/faces/jobs" and method == "POST":
             self.posts.append((body, route.request.headers.get("authorization")))
             if self.start_failures:
@@ -307,9 +307,15 @@ class FaceApi:
             route.continue_()
 
 
-def _open_existing_grid(page):
-    page.locator("#faceToolbarBtn").click()
+def _open_face_dialog(page):
+    page.locator("#settingsBtn").click()
+    expect(page.locator("#settingsModal")).to_be_visible()
+    page.locator("#settingsFaceBtn").click()
     expect(page.locator("#faceJobModal")).to_be_visible()
+
+
+def _open_existing_grid(page):
+    _open_face_dialog(page)
     page.locator("#faceViewFacesBtn").click()
     expect(page.locator("#faceGridModal")).to_be_visible()
     expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
@@ -370,7 +376,7 @@ def test_scan_submission_failures_are_visible(server, page: Page, failure):
     api = FaceApi(page)
     api.start_failures = [failure]
     page.goto(server["url"])
-    page.locator("#faceToolbarBtn").click()
+    _open_face_dialog(page)
     page.locator("#faceJobStartBtn").click()
     error = page.locator("#faceJobError")
     expect(error).to_be_visible()
@@ -384,7 +390,7 @@ def test_scan_submission_error_survives_language_rerender_and_clears_on_retry(se
     api = FaceApi(page)
     api.start_failures = [{"status": 409, "error": "A face scan is already running"}]
     page.goto(server["url"])
-    page.locator("#faceToolbarBtn").click()
+    _open_face_dialog(page)
     page.locator("#faceJobStartBtn").click()
     error = page.locator("#faceJobError")
     expect(error).to_be_visible()
@@ -404,7 +410,7 @@ def test_completed_scan_with_photo_failures_keeps_retry_entry_in_face_grid(serve
     api = FaceApi(page)
     api.job_overrides = [dict(processed=3, failed=2, remaining=1, error="2 photos failed")]
     page.goto(server["url"])
-    page.locator("#faceToolbarBtn").click()
+    _open_face_dialog(page)
     page.locator("#faceJobStartBtn").click()
     expect(page.locator("#faceGridModal")).to_be_visible()
     expect(page.locator("#faceGridJobIssue")).to_be_visible()
@@ -419,7 +425,7 @@ def test_completed_scan_with_photo_failures_keeps_retry_entry_in_face_grid(serve
     expect(page.locator("#faceViewFacesBtn")).to_be_visible()
     expect(page.locator("#faceJobDoneBtn")).to_be_visible()
     page.locator("#faceJobCloseBtn").click()
-    page.locator("#faceToolbarBtn").click()
+    _open_face_dialog(page)
     expect(page.locator("#faceJobModal")).to_be_visible()
     expect(page.locator("#faceViewFacesBtn")).to_be_visible()
     expect(page.locator("#faceJobStartBtn")).to_be_visible()
@@ -440,7 +446,7 @@ def test_toolbar_scan_warning_cancel_retry_and_automatic_grid(server, page: Page
     api.faces[81] = _face(81, media_id)
     photo.click()
     expect(page.locator("#inspectorAnalyzeFacesBtn")).to_have_count(0)
-    page.locator("#faceToolbarBtn").click()
+    _open_face_dialog(page)
     expect(page.locator("#faceScanScope")).to_have_value("selected")
     expect(page.locator("#faceViewFacesBtn")).to_be_visible()
     expect(page.locator("#faceJobStartBtn")).to_be_visible()
@@ -477,7 +483,7 @@ def test_toolbar_scan_warning_cancel_retry_and_automatic_grid(server, page: Page
     expect(page.locator("#faceGridModal")).to_be_hidden()
     page.locator("#faceJobDoneBtn").click()
     expect(page.locator("#faceJobModal")).to_be_hidden()
-    page.locator("#faceToolbarBtn").click()
+    _open_face_dialog(page)
     expect(page.locator("#faceJobModal")).to_be_visible()
     page.locator("#faceJobStopBtn").click()
     expect(page.locator("#faceJobRetryBtn")).to_have_count(0)
@@ -1069,7 +1075,7 @@ def test_faces_toolbar_can_review_without_models_and_localizes_grid(server, page
     api = FaceApi(page)
     api.ready = False
     page.goto(server["url"])
-    page.locator("#faceToolbarBtn").click()
+    _open_face_dialog(page)
     expect(page.locator("#faceScanScope")).to_have_value("catalog")
     expect(page.locator("#faceJobStartBtn")).to_be_disabled()
     expect(page.locator("#faceJobNotice")).to_contain_text("Models not configured")
@@ -1112,7 +1118,7 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     assert birthday_id in page.evaluate("Array.from(window._imagineState.selectedIds)")
 
     media_queries.clear()
-    page.locator("#faceToolbarBtn").click()
+    _open_face_dialog(page)
     page.locator("#faceViewFacesBtn").click()
     expect(page.locator(f'.face-grid-card[data-face-id="{face_id}"]')).to_be_visible()
     page.locator(f'.face-grid-card[data-face-id="{face_id}"] .face-grid-select').check()

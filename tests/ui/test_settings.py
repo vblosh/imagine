@@ -223,3 +223,47 @@ def test_semantic_index_modal_scope_and_running_state(server, page: Page):
     expect(index_modal).to_be_hidden()
 
 
+def test_desktop_sidebar_hides_mobile_utilities(server, page: Page):
+    """Desktop layout removes Import Folder, Settings, Language, Refresh Media from left panel, and Faces button from Media grid."""
+    page.set_viewport_size({"width": 1280, "height": 800})
+    page.goto(server["url"])
+
+    # Mobile sidebar utilities container is hidden on desktop
+    mobile_actions = page.locator("#sidebarMobileActions")
+    expect(mobile_actions).to_be_hidden()
+    expect(page.locator("#mobileImportBtn")).to_be_hidden()
+    expect(page.locator("#mobileSettingsBtn")).to_be_hidden()
+    expect(page.locator("#mobileRefreshBtn")).to_be_hidden()
+    expect(page.locator("#mobileLangSelect")).to_be_hidden()
+
+    # Faces button is removed from Media grid toolbar
+    expect(page.locator("#faceToolbarBtn")).to_have_count(0)
+    expect(page.locator("#contentToolbar .face-media-actions")).to_have_count(0)
+
+
+def test_face_recognition_settings_status_and_button(server, page: Page):
+    """Settings dialog includes Face Recognition section with status, index count, model, and Faces button."""
+    page.goto(server["url"])
+
+    page.locator("#settingsBtn").click()
+    settings_modal = page.locator("#settingsModal")
+    expect(settings_modal).to_be_visible()
+
+    # Face Recognition status and button exist in settings dialog
+    face_status = page.locator("#settingsFaceStatus")
+    expect(face_status).to_be_visible()
+    status_text = face_status.text_content()
+    assert "Status:" in status_text
+    assert ("indexed" in status_text or "not built" in status_text or "unavailable" in status_text)
+
+    face_btn = page.locator("#settingsFaceBtn")
+    expect(face_btn).to_be_visible()
+    expect(face_btn).to_have_text("Rebuild faces recognition index")
+
+    # Clicking Faces button closes Settings dialog and opens Face analysis modal
+    face_btn.click()
+    expect(settings_modal).to_be_hidden()
+    expect(page.locator("#faceJobModal")).to_be_visible()
+
+
+

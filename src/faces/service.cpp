@@ -1982,6 +1982,18 @@ json Service::status() const {
         {"job", nullptr}
     };
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+    int64_t indexSize = 0;
+    auto countRes = impl_->db.conn_.prepare(
+        "SELECT COUNT(*) FROM faces WHERE embedding IS NOT NULL;");
+    if (countRes.isOk()) {
+        auto countStmt = std::move(countRes.value());
+        if (countStmt.step() == StepResult::Row) {
+            indexSize = countStmt.getInt64(0);
+        }
+    }
+    result["indexSize"] = indexSize;
+    result["model"] = "buffalo_l";
+    result["modelId"] = "buffalo_l";
     auto jobRes = impl_->db.conn_.prepare(
         "SELECT id,state,failed FROM face_analysis_jobs ORDER BY id DESC LIMIT 1;");
     if (jobRes.isOk()) {

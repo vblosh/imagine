@@ -112,15 +112,47 @@ function updateAnalyzeAvailability() {
   showSetupNotice(byId('faceJobNotice'), message);
   if (byId('faceJobStartBtn')) byId('faceJobStartBtn').disabled = !isFaceReady();
 }
+export function updateSettingsFaceStatus() {
+  const el = dom.settingsFaceStatus || byId('settingsFaceStatus');
+  if (!el) return;
+  if (!faceStatus || !faceStatus.built) {
+    el.textContent = 'Status: Face recognition engine not built in this binary';
+  } else if (!faceStatus.ready) {
+    const indexSize = faceStatus.indexSize != null ? faceStatus.indexSize : (faceStatus.index_size != null ? faceStatus.index_size : 0);
+    el.textContent = `Status: Model unavailable or offline (${indexSize} faces indexed)`;
+  } else {
+    const indexSize = faceStatus.indexSize != null ? faceStatus.indexSize : (faceStatus.index_size != null ? faceStatus.index_size : 0);
+    const model = faceStatus.model || faceStatus.modelId || (faceStatus.runtime && faceStatus.runtime.pipeline_version) || 'buffalo_l';
+    el.textContent = `Status: Ready (${indexSize} faces indexed, model: ${model})`;
+  }
+}
 
-async function refreshFaceStatus() {
+export async function refreshFaceStatus() {
   try {
     faceStatus = await api.get('/api/faces/status');
   } catch (_) {
     faceStatus = { built: false, ready: false, error: t('face_status_unavailable') };
   }
+  if (faceStatus && faceStatus.built) {
+    if (faceStatus.indexSize == null && faceStatus.index_size == null) {
+      try {
+        const gridRes = await api.get('/api/faces/grid', { limit: 1, includeDismissed: true });
+        if (gridRes && typeof gridRes.total === 'number') {
+          faceStatus.indexSize = gridRes.total;
+        }
+      } catch (_) {
+        faceStatus.indexSize = 0;
+      }
+    }
+  }
+  state.faceAnalysisAvailable = Boolean(faceStatus && faceStatus.built && faceStatus.ready);
+  state.faceAnalysisBuilt = Boolean(faceStatus && faceStatus.built);
+  state.faceIndexSize = (faceStatus && (faceStatus.indexSize != null ? faceStatus.indexSize : faceStatus.index_size)) || 0;
+  state.faceModelId = (faceStatus && (faceStatus.model || faceStatus.modelId)) || 'buffalo_l';
+
   updateAnalyzeAvailability();
   updatePeopleReviewCount();
+  updateSettingsFaceStatus();
   const job = faceStatus && faceStatus.job;
   if (job && job.id) {
     currentJob = job;
@@ -256,7 +288,7 @@ function selectedPhotoIds() {
     });
 }
 
-function openFaceAnalysisDialog() {
+export function openFaceAnalysisDialog() {
   if (currentJob && !TERMINAL_JOB_STATES.has(currentJob.state)) {
     openJobModal();
     return;
@@ -1973,7 +2005,17 @@ function setupLoupeOverlay() {
 }
 
 function bindFaceActions() {
-  for (const id of ['faceToolbarBtn', 'faceCategoryToolbarBtn']) byId(id)?.addEventListener('click', openFaceAnalysisDialog);
+  for (const id of ['faceToolbarBtn', 'faceCategoryToolbarBtn', 'settingsFaceBtn']) {
+    byId(id)?.addEventListener('click', () => {
+      if (id === 'settingsFaceBtn') {
+        const settingsModal = byId('settingsModal');
+        if (settingsModal && settingsModal.style.display !== 'none') {
+          settingsModal.style.display = 'none';
+        }
+      }
+      openFaceAnalysisDialog();
+    });
+  }
   byId('faceReviewBtn')?.addEventListener('click', openPeopleFaceReview);
   byId('faceViewFacesBtn')?.addEventListener('click', openFaceGridFromScanDialog);
   byId('faceScanScope')?.addEventListener('change', renderJobState);

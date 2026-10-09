@@ -22,6 +22,7 @@ import { updateInspector } from './inspector.js';
 import { closeLoupe } from './loupe.js';
 import { t } from './i18n.js';
 import { checkSemanticStatus } from './semantic-search.js';
+import { refreshFaceStatus } from './face-analysis.js';
 
 // Internal pending state
 let pendingAddToAlbumIds = [];
@@ -210,6 +211,7 @@ export function openSettingsModal() {
     dom.settingsApiTokenInput.value = getApiToken();
   }
   checkSemanticStatus();
+  refreshFaceStatus();
   showModal(dom.settingsModal, dom.settingsApiTokenInput);
 }
 

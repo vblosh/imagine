@@ -179,7 +179,7 @@ import {
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
 import { setupAutoEventListeners } from './auto-events.js';
 import { renderCategoryView, initCategoryView, navigateBackToCategory } from './category-view.js';
-import { initFaceAnalysis } from './face-analysis.js';
+import { initFaceAnalysis, openFaceAnalysisDialog, refreshFaceStatus, updateSettingsFaceStatus } from './face-analysis.js';
 import {
   checkSemanticStatus,
   performSemanticSearch,
@@ -385,6 +385,13 @@ export function setupEventListeners() {
       }
       closeSettingsModal();
       openSemanticIndexModal();
+    });
+  }
+
+  if (dom.settingsFaceBtn) {
+    dom.settingsFaceBtn.addEventListener('click', () => {
+      closeSettingsModal();
+      openFaceAnalysisDialog();
     });
   }
 
@@ -1939,5 +1946,8 @@ window._imagineApp = {
   startSemanticScan,
   cancelSemanticScan,
   renderSemanticJobState,
-  onSemanticScopeChange
+  onSemanticScopeChange,
+  openFaceAnalysisDialog,
+  refreshFaceStatus,
+  updateSettingsFaceStatus
 };

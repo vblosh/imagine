@@ -108,7 +108,11 @@ export const state = {
   semanticSearchEnabled: false,
   semanticBuilt: false,
   semanticIndexSize: 0,
-  semanticModelId: ''
+  semanticModelId: '',
+  faceAnalysisAvailable: false,
+  faceAnalysisBuilt: false,
+  faceIndexSize: 0,
+  faceModelId: ''
 };
 
 export function getGpsMediaItems() {

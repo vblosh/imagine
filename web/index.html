@@ -299,9 +299,6 @@
             </button>
             <span id="filterLabel" data-i18n="all_photos">All Photos</span>
             <button class="btn-link" id="clearFiltersBtn" style="display: none;" data-i18n="clear_filter">Clear Filter</button>
-            <div class="face-media-actions">
-              <button type="button" class="btn btn-secondary btn-sm" id="faceToolbarBtn" data-i18n="face_open_scan_dialog">Faces</button>
-            </div>
           </div>
 
           <!-- View Mode Switcher: Grid vs Map -->
@@ -973,6 +970,11 @@
               <label data-i18n="semantic_search_title">Semantic Search</label>
               <div id="settingsSemanticStatus" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">Status: Checking...</div>
               <button type="button" class="btn btn-secondary btn-sm" id="settingsRebuildIndexBtn" data-i18n="rebuild_semantic_index">Rebuild Search Index</button>
+            </div>
+            <div class="form-group" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+              <label data-i18n="face_settings_title">Face Recognition</label>
+              <div id="settingsFaceStatus" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">Status: Checking...</div>
+              <button type="button" class="btn btn-secondary btn-sm" id="settingsFaceBtn" data-i18n="rebuild_faces_index">Rebuild faces recognition index</button>
             </div>
           </div>
           <div class="modal-footer">

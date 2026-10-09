@@ -275,6 +275,8 @@ export const dom = {
   settingsApiTokenInput: document.getElementById('settingsApiTokenInput'),
   settingsSemanticStatus: document.getElementById('settingsSemanticStatus'),
   settingsRebuildIndexBtn: document.getElementById('settingsRebuildIndexBtn'),
+  settingsFaceStatus: document.getElementById('settingsFaceStatus'),
+  settingsFaceBtn: document.getElementById('settingsFaceBtn'),
   semanticIndexModal: document.getElementById('semanticIndexModal'),
   semanticIndexBackdrop: document.getElementById('semanticIndexBackdrop'),
   closeSemanticIndexModalBtn: document.getElementById('closeSemanticIndexModalBtn'),

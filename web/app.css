@@ -4557,6 +4557,11 @@ body.resizing-horizontal * {
   vertical-align: middle;
 }
 
+/* Sidebar Mobile Utility Actions (hidden on desktop) */
+.sidebar-mobile-actions {
+  display: none;
+}
+
 /* Responsive Media Queries for Mobile Screens */
 @media (max-width: 768px) {
   /* Show Hamburger button */
