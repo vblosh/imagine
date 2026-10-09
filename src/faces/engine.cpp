@@ -1,5 +1,6 @@
 #include "imagine/faces/engine.hpp"
 
+#include "imagine/concurrency/thread_pool.hpp"
 #include "imagine/metadata/hasher.hpp"
 #include "imagine/common/logger.hpp"
 
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <limits>
 #include <mutex>
@@ -26,6 +28,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__linux__)
+#include <malloc.h>
 #endif
 
 #ifndef IMAGINE_FACE_ANALYSIS_BUILT
@@ -298,10 +302,46 @@ LoadedModel openModel(const std::filesystem::path& path,
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     options.SetLogSeverityLevel(3);
 
+    struct ProfileGuard {
+        Ort::Session* session{nullptr};
+        std::filesystem::path profilePrefix;
+        std::filesystem::path generatedProfile;
+        bool dismissed{false};
+
+        ~ProfileGuard() {
+            if (dismissed) return;
+            std::error_code ec;
+            if (session) {
+                try {
+                    auto path = endProfile(*session);
+                    if (!path.empty()) {
+                        std::filesystem::remove(path, ec);
+                    }
+                } catch (...) {}
+            }
+            if (!generatedProfile.empty()) {
+                std::filesystem::remove(generatedProfile, ec);
+            }
+            if (!profilePrefix.empty()) {
+                try {
+                    auto parent = profilePrefix.parent_path();
+                    auto prefixName = profilePrefix.filename().string();
+                    for (const auto& entry : std::filesystem::directory_iterator(parent, ec)) {
+                        if (entry.is_regular_file(ec) && entry.path().filename().string().rfind(prefixName, 0) == 0) {
+                            std::filesystem::remove(entry.path(), ec);
+                        }
+                    }
+                } catch (...) {}
+            }
+        }
+    };
+
+    ProfileGuard profileGuard;
     std::filesystem::path profilePrefix;
     if (requestCuda) {
         profilePrefix = std::filesystem::temp_directory_path() /
             ("imagine-face-ort-" + std::to_string(gProfileCounter.fetch_add(1)));
+        profileGuard.profilePrefix = profilePrefix;
         options.EnableProfiling(profilePrefix.native().c_str());
         OrtCUDAProviderOptions cudaOptions{};
         cudaOptions.device_id = 0;
@@ -310,7 +350,13 @@ LoadedModel openModel(const std::filesystem::path& path,
 
     const auto nativePath = path.native();
     auto session = std::make_unique<Ort::Session>(ortEnvironment(), nativePath.c_str(), options);
+    if (requestCuda) {
+        profileGuard.session = session.get();
+    }
     auto model = inspectSession(std::move(session), label);
+    if (requestCuda) {
+        profileGuard.session = model.session.get();
+    }
     validateOutputContract(model, label);
     if (std::string(label) == "SCRFD detector") {
         inputShape(*model.session, kDetectorSide, label, &model.dynamicBatch);
@@ -346,9 +392,12 @@ LoadedModel openModel(const std::filesystem::path& path,
 
     if (requestCuda) {
         const auto profile = endProfile(*model.session);
+        profileGuard.session = nullptr;
+        profileGuard.generatedProfile = profile;
         const bool didCudaWork = profileHasCudaKernel(profile);
         std::error_code removeError;
         if (!profile.empty()) std::filesystem::remove(profile, removeError);
+        profileGuard.dismissed = true;
         if (!didCudaWork) {
             throw std::runtime_error(std::string(label) + " initialized but profiling found no CUDA model kernels");
         }
@@ -619,6 +668,12 @@ struct Engine::Impl {
     explicit Impl(Config value) : config(std::move(value)) {
         info.built = IMAGINE_FACE_ANALYSIS_BUILT != 0;
         info.pipelineVersion = kPipelineVersion;
+        const int hardwareThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+        const int targetThreads = config.cpuThreads > 0 ? config.cpuThreads : hardwareThreads;
+        const int numThreads = std::clamp(targetThreads, 1, std::min(4, hardwareThreads));
+        if (numThreads > 1) {
+            pool = std::make_unique<concurrency::ThreadPool>(static_cast<size_t>(numThreads - 1));
+        }
     }
 
     Config config;
@@ -627,6 +682,7 @@ struct Engine::Impl {
     mutable std::mutex timingsMutex;
     AnalysisTimings timings;
     bool initialized{false};
+    std::unique_ptr<concurrency::ThreadPool> pool;
 #if IMAGINE_FACE_ANALYSIS_BUILT
     std::filesystem::path detectorPath;
     std::filesystem::path recognizerPath;
@@ -805,6 +861,8 @@ void Engine::unload() {
     impl_->info.loaded = false;
 #if defined(_WIN32)
     SetProcessWorkingSetSize(GetCurrentProcess(), static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1));
+#elif defined(__linux__)
+    malloc_trim(0);
 #endif
     IMAGINE_LOG_INFO("Face analysis engine models unloaded; working set memory reclaimed");
 #endif
@@ -969,20 +1027,25 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
             }
         };
 
-        if (numThreads <= 1 || resizedHeight <= 16) {
+        if (numThreads <= 1 || resizedHeight <= 16 || !impl_->pool) {
             processRows(0, resizedHeight);
         } else {
-            std::vector<std::jthread> threads;
-            threads.reserve(numThreads - 1);
+            std::vector<std::future<void>> futures;
+            futures.reserve(numThreads - 1);
             const int chunkSize = (resizedHeight + numThreads - 1) / numThreads;
             for (int t = 1; t < numThreads; ++t) {
                 const int start = t * chunkSize;
                 const int end = std::min(start + chunkSize, resizedHeight);
                 if (start < end) {
-                    threads.emplace_back(processRows, start, end);
+                    futures.push_back(impl_->pool->enqueue([&processRows, start, end] {
+                        processRows(start, end);
+                    }));
                 }
             }
             processRows(0, std::min(chunkSize, resizedHeight));
+            for (auto& f : futures) {
+                f.get();
+            }
         }
         const auto detectorStart = std::chrono::steady_clock::now();
         timings.detectorPreprocessMs = std::chrono::duration<double, std::milli>(detectorStart - preprocessStart).count();

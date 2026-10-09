@@ -1,5 +1,6 @@
 #include "imagine/faces/service.hpp"
 
+#include "imagine/concurrency/thread_pool.hpp"
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/faces/engine.hpp"
 #include "imagine/thumbnail/generator.hpp"
@@ -1326,7 +1327,7 @@ Result<GroupReviewBuild> buildGroupReviewIndex(
 }
 
 std::unordered_map<std::string, std::unordered_map<int64_t, ExemplarDescriptor>>
-describeExemplars(const ExemplarCache& exemplars) {
+describeExemplars(const ExemplarCache& exemplars, concurrency::ThreadPool* pool = nullptr) {
     std::unordered_map<std::string, std::unordered_map<int64_t, ExemplarDescriptor>> described;
     for (const auto& [key, rows] : exemplars) {
         auto& output = described[key];
@@ -1338,28 +1339,51 @@ describeExemplars(const ExemplarCache& exemplars) {
             }
         } else {
             std::vector<std::array<unsigned char, SHA256_DIGEST_LENGTH>> digests(rows.size());
-            unsigned int hw = std::thread::hardware_concurrency();
+            unsigned int hw = pool ? static_cast<unsigned int>(pool->size()) : std::thread::hardware_concurrency();
             if (hw == 0) hw = 4;
             const size_t numThreads = std::min<size_t>(hw, (rows.size() + 127) / 128);
             const size_t chunkSize = (rows.size() + numThreads - 1) / numThreads;
-            std::vector<std::jthread> threads;
-            threads.reserve(numThreads - 1);
-            for (size_t t = 1; t < numThreads; ++t) {
-                const size_t start = t * chunkSize;
-                const size_t end = std::min(start + chunkSize, rows.size());
-                if (start < end) {
-                    threads.emplace_back([&rows, &digests, start, end]() {
-                        for (size_t i = start; i < end; ++i) {
-                            digests[i] = embeddingDigest(rows[i].embedding);
-                        }
-                    });
+            if (pool && numThreads > 1) {
+                std::vector<std::future<void>> futures;
+                futures.reserve(numThreads - 1);
+                for (size_t t = 1; t < numThreads; ++t) {
+                    const size_t start = t * chunkSize;
+                    const size_t end = std::min(start + chunkSize, rows.size());
+                    if (start < end) {
+                        futures.push_back(pool->enqueue([&rows, &digests, start, end]() {
+                            for (size_t i = start; i < end; ++i) {
+                                digests[i] = embeddingDigest(rows[i].embedding);
+                            }
+                        }));
+                    }
                 }
+                const size_t chunk0End = std::min(chunkSize, rows.size());
+                for (size_t i = 0; i < chunk0End; ++i) {
+                    digests[i] = embeddingDigest(rows[i].embedding);
+                }
+                for (auto& f : futures) {
+                    f.get();
+                }
+            } else {
+                std::vector<std::jthread> threads;
+                threads.reserve(numThreads - 1);
+                for (size_t t = 1; t < numThreads; ++t) {
+                    const size_t start = t * chunkSize;
+                    const size_t end = std::min(start + chunkSize, rows.size());
+                    if (start < end) {
+                        threads.emplace_back([&rows, &digests, start, end]() {
+                            for (size_t i = start; i < end; ++i) {
+                                digests[i] = embeddingDigest(rows[i].embedding);
+                            }
+                        });
+                    }
+                }
+                const size_t chunk0End = std::min(chunkSize, rows.size());
+                for (size_t i = 0; i < chunk0End; ++i) {
+                    digests[i] = embeddingDigest(rows[i].embedding);
+                }
+                threads.clear();
             }
-            const size_t chunk0End = std::min(chunkSize, rows.size());
-            for (size_t i = 0; i < chunk0End; ++i) {
-                digests[i] = embeddingDigest(rows[i].embedding);
-            }
-            threads.clear();
             for (size_t i = 0; i < rows.size(); ++i) {
                 output.emplace(rows[i].faceId, ExemplarDescriptor{
                     rows[i].tagId, rows[i].name, digests[i]});
@@ -1634,9 +1658,10 @@ bool incrementallyUpdateFace(GroupReviewFace& face, const ExemplarChanges& chang
 }
 
 void finishGroupReviewBuild(GroupReviewBuild& built, float matchThreshold,
-                            const GroupReviewIndex* previous = nullptr) {
+                            const GroupReviewIndex* previous = nullptr,
+                            concurrency::ThreadPool* pool = nullptr) {
     auto& index = *built.index;
-    index.exemplarDescriptors = describeExemplars(built.exemplars);
+    index.exemplarDescriptors = describeExemplars(built.exemplars, pool);
 
     std::unordered_map<std::string, ExemplarChanges> changesByKey;
     if (previous) {
@@ -1677,7 +1702,7 @@ void finishGroupReviewBuild(GroupReviewBuild& built, float matchThreshold,
     }
 
     const size_t totalFaces = index.faces.size();
-    unsigned int hardwareThreads = std::thread::hardware_concurrency();
+    unsigned int hardwareThreads = pool ? static_cast<unsigned int>(pool->size()) : std::thread::hardware_concurrency();
     if (hardwareThreads == 0) hardwareThreads = 4;
     const size_t numThreads = (totalFaces < 32) ? 1 : std::min<size_t>(hardwareThreads, (totalFaces + 31) / 32);
 
@@ -1730,6 +1755,24 @@ void finishGroupReviewBuild(GroupReviewBuild& built, float matchThreshold,
 
     if (numThreads <= 1) {
         processFaceRange(0, totalFaces);
+    } else if (pool) {
+        std::vector<std::future<void>> futures;
+        futures.reserve(numThreads - 1);
+        const size_t chunkSize = (totalFaces + numThreads - 1) / numThreads;
+        for (size_t t = 1; t < numThreads; ++t) {
+            const size_t start = t * chunkSize;
+            const size_t end = std::min(start + chunkSize, totalFaces);
+            if (start < end) {
+                futures.push_back(pool->enqueue([&processFaceRange, start, end]() {
+                    processFaceRange(start, end);
+                }));
+            }
+        }
+        const size_t chunk0End = std::min(chunkSize, totalFaces);
+        processFaceRange(0, chunk0End);
+        for (auto& f : futures) {
+            f.get();
+        }
     } else {
         std::vector<std::jthread> threads;
         threads.reserve(numThreads - 1);
@@ -1869,6 +1912,7 @@ struct Service::Impl {
     // mutation token cannot discard the exact-match baseline used for deltas.
     mutable std::shared_ptr<GroupReviewIndex> matcherIndex;
     mutable std::vector<std::shared_ptr<GroupReviewSnapshot>> reviewSnapshots;
+    std::unique_ptr<concurrency::ThreadPool> pool;
 
     int idleUnloadSec{0};
     mutable std::mutex idleMutex;
@@ -1931,6 +1975,9 @@ struct Service::Impl {
         if (idleUnloadSec > 0 && !analyzer) {
             idleWorker = std::jthread([this](std::stop_token stopToken) { idleLoop(stopToken); });
         }
+        unsigned int hardwareThreads = std::thread::hardware_concurrency();
+        if (hardwareThreads == 0) hardwareThreads = 4;
+        pool = std::make_unique<concurrency::ThreadPool>(hardwareThreads);
     }
 };
 
@@ -2400,7 +2447,7 @@ Result<json> Service::getGroups(std::optional<int64_t> jobId, bool showNamed,
         // Exact cosine ranking is CPU-bound, so run it after releasing the
         // catalog mutex and read transaction. Only the final publication check
         // reacquires the DB lock.
-        finishGroupReviewBuild(pendingBuild, impl_->config.matchThreshold, previousIndex);
+        finishGroupReviewBuild(pendingBuild, impl_->config.matchThreshold, previousIndex, impl_->pool.get());
         pendingBuild.index->stamp = buildStamp;
         {
             std::lock_guard<std::recursive_mutex> dbLock(impl_->db.mutex_);
@@ -3018,13 +3065,14 @@ Result<std::string> Service::cropPath(int64_t faceId, int64_t revision) {
         sourceHash=stmt.getString(6); path=stmt.getString(8); orientation=stmt.getInt(9);
     }
     std::string photoPath = impl_->resolver ? impl_->resolver(path) : path;
-    auto currentHash = metadata::Hasher::computeFileSha256(photoPath);
-    if (!currentHash.isOk()) return currentHash.status();
-    if (currentHash.value() != sourceHash) return Status::notFound("Face geometry is stale because the photo file changed");
     std::filesystem::path cropRoot = pathFromUtf8(impl_->cacheDirectory) / "faces";
     std::filesystem::path cropFile = cropRoot / (sourceHash + "-" + std::to_string(mediaId) + "-" + std::to_string(faceId) + "-" + std::to_string(revision) + ".jpg");
     std::error_code ec;
     if (std::filesystem::is_regular_file(cropFile, ec)) return pathToUtf8(cropFile);
+
+    auto currentHash = metadata::Hasher::computeFileSha256(photoPath);
+    if (!currentHash.isOk()) return currentHash.status();
+    if (currentHash.value() != sourceHash) return Status::notFound("Face geometry is stale because the photo file changed");
     auto loaded = thumbnail::Generator::loadImage(photoPath);
     if (!loaded.isOk()) {
         IMAGINE_LOG_ERROR("Face crop unable to open/load image file: " + photoPath + " (" + loaded.status().message() + ")");
