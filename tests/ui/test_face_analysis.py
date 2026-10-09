@@ -772,6 +772,17 @@ def test_interrupted_scan_without_saved_request_can_retry_catalog(server, page: 
     page.locator("#faceJobDoneBtn").click()
     expect(page.locator("#faceJobModal")).to_be_hidden()
 
+    # Opening Settings opens settingsModal and NOT faceJobModal
+    page.locator("#settingsBtn").click()
+    expect(page.locator("#settingsModal")).to_be_visible()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
+    page.locator("#closeSettingsModalBtn").click()
+    expect(page.locator("#settingsModal")).to_be_hidden()
+
+    # Reloading/reopening browser does NOT reopen faceJobModal
+    page.reload()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
+
 
 def test_named_unnamed_filters_selection_pagination_and_dismissed(server, page: Page):
     api = FaceApi(page)
@@ -1394,3 +1405,102 @@ def test_show_checkboxes_independent_named_unnamed_or_dismissed(server, page: Pa
     expect(page.locator('.face-grid-card[data-face-id="2"]')).to_have_count(0)
 
 
+def test_dismissed_running_job_does_not_open_face_grid_on_completion(server, page: Page):
+    """Dismissing a running job shows toast on completion but does not auto-open face grid."""
+    api = FaceApi(page)
+    api.hold_first_job = True
+    page.goto(server["url"])
+    _open_face_dialog(page)
+    page.locator("#faceJobStartBtn").click()
+    expect(page.locator("#faceJobState")).to_contain_text("running")
+
+    # Dismiss the running job modal
+    page.locator("#faceJobDoneBtn").click()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
+
+    # Complete the job while user is elsewhere
+    api.jobs[1]["state"] = "completed"
+    api.jobs[1]["remaining"] = 0
+    api.jobs[1]["processed"] = api.jobs[1]["total"]
+
+    # Non-modal toast appears
+    expect(page.locator(".toast-success")).to_be_visible()
+
+    # faceGridModal MUST NOT be auto-opened
+    expect(page.locator("#faceGridModal")).to_be_hidden()
+
+
+def test_closing_general_review_grid_does_not_dismiss_current_job(server, page: Page):
+    """Closing the general review grid (jobId: null) does not dismiss currentJob."""
+    api = FaceApi(page)
+    # Set an initial job
+    api.initial_job = dict(id=42, state="interrupted", total=5, processed=2, skipped=0, failed=1, remaining=2, error="server restarted")
+    page.goto(server["url"])
+    expect(page.locator("#faceJobModal")).to_be_visible()
+    page.locator("#faceJobDoneBtn").click()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
+
+    # Clear dismissed storage to simulate an undismissed job in memory
+    page.evaluate("() => localStorage.removeItem('imagine_face_job_dismissed')")
+
+    # Open general review grid from people tab
+    page.locator('.tab-btn[data-tab="people"]').click()
+    expect(page.locator("#facePeopleActions")).to_be_visible()
+    page.locator("#faceReviewBtn").click()
+    expect(page.locator("#faceGridModal")).to_be_visible()
+
+    # Close the general review grid
+    page.locator("#faceGridCloseBtn").click()
+    expect(page.locator("#faceGridModal")).to_be_hidden()
+
+    # The current job (id=42) must NOT have been dismissed by closing general grid
+    dismissed = page.evaluate("() => localStorage.getItem('imagine_face_job_dismissed')")
+    assert dismissed is None or "42" not in dismissed
+
+
+def test_explicitly_reopening_dismissed_running_job_transitions_to_grid_on_completion(server, page: Page):
+    """Reopening a dismissed running job clears dismissal and transitions to grid when finished."""
+    api = FaceApi(page)
+    api.hold_first_job = True
+    page.goto(server["url"])
+    _open_face_dialog(page)
+    page.locator("#faceJobStartBtn").click()
+    expect(page.locator("#faceJobState")).to_contain_text("running")
+
+    # Dismiss the running job modal
+    page.locator("#faceJobDoneBtn").click()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
+
+    # User explicitly reopens the job modal to check on it
+    _open_face_dialog(page)
+    expect(page.locator("#faceJobModal")).to_be_visible()
+
+    # Complete the job while visible
+    api.jobs[1]["state"] = "completed"
+    api.jobs[1]["remaining"] = 0
+    api.jobs[1]["processed"] = api.jobs[1]["total"]
+
+    # Dialog transitions automatically to faceGridModal
+    expect(page.locator("#faceJobModal")).to_be_hidden()
+    expect(page.locator("#faceGridModal")).to_be_visible()
+
+
+def test_automatic_completion_with_failures_does_not_persist_dismissal(server, page: Page):
+    """Automatic transition to grid on completion does not mark the job dismissed."""
+    api = FaceApi(page)
+    api.job_overrides = [dict(processed=3, failed=2, remaining=1, error="2 photos failed")]
+    page.goto(server["url"])
+    _open_face_dialog(page)
+    page.locator("#faceJobStartBtn").click()
+
+    # Automatically transitions to grid
+    expect(page.locator("#faceGridModal")).to_be_visible()
+
+    # The job must NOT be marked dismissed in localStorage
+    dismissed = page.evaluate("() => localStorage.getItem('imagine_face_job_dismissed')")
+    assert dismissed is None or "1" not in dismissed
+
+    # Reloading browser still prompts for the unfinished job
+    api.initial_job = api.jobs[1]
+    page.reload()
+    expect(page.locator("#faceJobModal")).to_be_visible()

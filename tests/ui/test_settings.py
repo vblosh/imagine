@@ -265,5 +265,25 @@ def test_face_recognition_settings_status_and_button(server, page: Page):
     expect(settings_modal).to_be_hidden()
     expect(page.locator("#faceJobModal")).to_be_visible()
 
+    # Closing face dialog with close button hides the face dialog
+    page.locator("#faceJobCloseBtn").click()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
 
+    # Opening Settings opens Settings modal and NOT Face analysis modal
+    page.locator("#settingsBtn").click()
+    expect(settings_modal).to_be_visible()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
 
+    # Closing Settings
+    page.locator("#closeSettingsModalBtn").click()
+    expect(settings_modal).to_be_hidden()
+
+    # Reloading/reopening browser does NOT open Face analysis modal
+    page.reload()
+    expect(page.locator("#faceJobModal")).to_be_hidden()
+    expect(settings_modal).to_be_hidden()
+
+    # Opening Settings after browser reload still opens Settings and NOT Face analysis modal
+    page.locator("#settingsBtn").click()
+    expect(settings_modal).to_be_visible()
+    expect(page.locator("#faceJobModal")).to_be_hidden()

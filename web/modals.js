@@ -211,7 +211,7 @@ export function openSettingsModal() {
     dom.settingsApiTokenInput.value = getApiToken();
   }
   checkSemanticStatus();
-  refreshFaceStatus();
+  refreshFaceStatus({ autoOpen: false });
   showModal(dom.settingsModal, dom.settingsApiTokenInput);
 }
 

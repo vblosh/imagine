@@ -10,6 +10,7 @@ const GRID_GROUP_PAGE_SIZE = 48;
 const GRID_GROUP_DOM_LIMIT = GRID_GROUP_PAGE_SIZE * 2;
 const FACE_BATCH_SIZE = 1000;
 const JOB_REQUEST_KEY = 'imagine_face_job_request';
+const JOB_DISMISSED_KEY = 'imagine_face_job_dismissed';
 const TERMINAL_JOB_STATES = new Set(['cancelled', 'completed', 'interrupted', 'failed']);
 const inspectorFaceById = new Map();
 const faceOverlayContexts = new WeakMap();
@@ -127,7 +128,8 @@ export function updateSettingsFaceStatus() {
   }
 }
 
-export async function refreshFaceStatus() {
+export async function refreshFaceStatus(options = {}) {
+  const { autoOpen = true } = options;
   try {
     faceStatus = await api.get('/api/faces/status');
   } catch (_) {
@@ -165,13 +167,55 @@ export async function refreshFaceStatus() {
       ? (needsRetry ? { scope: 'catalog', media_ids: [] } : null)
       : { scope: 'catalog', media_ids: [] });
     renderJobState();
+    const isDismissed = isJobDismissed(job.id);
     if (!TERMINAL_JOB_STATES.has(job.state)) {
-      openJobModal();
+      if (autoOpen && !isDismissed) {
+        openJobModal();
+      }
       scheduleJobPoll(0);
-    } else if ((Number(job.remaining) || 0) > 0 || (Number(job.failed) || 0) > 0) {
-      openJobModal();
+    } else if (needsRetry) {
+      if (autoOpen && !isDismissed) {
+        openJobModal();
+      }
     }
   }
+}
+
+function getDismissedJobIds() {
+  try {
+    const raw = localStorage.getItem(JOB_DISMISSED_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : [String(parsed)]);
+  } catch (_) {
+    return new Set();
+  }
+}
+
+function isJobDismissed(jobId) {
+  if (!jobId) return false;
+  return getDismissedJobIds().has(String(jobId));
+}
+
+function dismissJob(jobId) {
+  if (!jobId) return;
+  try {
+    const set = getDismissedJobIds();
+    set.add(String(jobId));
+    localStorage.setItem(JOB_DISMISSED_KEY, JSON.stringify(Array.from(set)));
+  } catch (_) {}
+}
+
+function clearDismissedJob(jobId) {
+  try {
+    if (!jobId) {
+      localStorage.removeItem(JOB_DISMISSED_KEY);
+    } else {
+      const set = getDismissedJobIds();
+      set.delete(String(jobId));
+      localStorage.setItem(JOB_DISMISSED_KEY, JSON.stringify(Array.from(set)));
+    }
+  } catch (_) {}
 }
 
 function readSavedJobRequest(jobId) {
@@ -208,11 +252,26 @@ function openJobModal() {
   focusTarget?.focus();
 }
 
-function closeJobModal(restoreFocus = true) {
+function closeJobModal(restoreFocus = true, markDismissed = true) {
   const modal = byId('faceJobModal');
   if (modal) modal.style.display = 'none';
-  if (restoreFocus && scanModalReturnFocus && typeof scanModalReturnFocus.focus === 'function' && document.contains(scanModalReturnFocus)) {
-    scanModalReturnFocus.focus();
+  if (markDismissed === true) {
+    const jobId = (currentJob && currentJob.id) || (faceStatus && faceStatus.job && faceStatus.job.id);
+    if (jobId) {
+      dismissJob(jobId);
+    }
+  }
+  const shouldRestoreFocus = restoreFocus === true || (typeof restoreFocus === 'object' && restoreFocus !== null);
+  if (shouldRestoreFocus) {
+    let returnTarget = scanModalReturnFocus;
+    if (returnTarget && returnTarget.closest && returnTarget.closest('#settingsModal')) {
+      returnTarget = byId('settingsBtn') || returnTarget;
+    }
+    if (returnTarget && typeof returnTarget.focus === 'function' && document.contains(returnTarget)) {
+      try {
+        returnTarget.focus();
+      } catch (_) {}
+    }
   }
   scanModalReturnFocus = null;
 }
@@ -289,6 +348,10 @@ function selectedPhotoIds() {
 }
 
 export function openFaceAnalysisDialog() {
+  const activeJobId = (currentJob && currentJob.id) || (faceStatus && faceStatus.job && faceStatus.job.id);
+  if (activeJobId) {
+    clearDismissedJob(activeJobId);
+  }
   if (currentJob && !TERMINAL_JOB_STATES.has(currentJob.state)) {
     openJobModal();
     return;
@@ -336,6 +399,7 @@ async function submitFaceJob(request) {
     currentJob = result && result.job ? result.job : result;
     if (!currentJob || !currentJob.id) throw new Error(t('face_status_unavailable'));
     saveJobRequest(currentJob.id, request);
+    clearDismissedJob(currentJob.id);
     renderJobState();
     if (TERMINAL_JOB_STATES.has(currentJob.state)) {
       if (currentJob.state === 'completed') handleCompletedJob(currentJob);
@@ -1447,6 +1511,9 @@ function openFaceGrid({ jobId = null, includeDismissed = false, showNamed = fals
 function closeFaceGrid(restoreFocus = true) {
   const modal = byId('faceGridModal');
   if (modal) modal.style.display = 'none';
+  if (gridJobId) {
+    dismissJob(gridJobId);
+  }
   gridLoadController?.abort();
   gridLoadController = null;
   gridLoadToken += 1;
@@ -1502,6 +1569,7 @@ function renderGridJobIssue(jobId) {
 
 function openFailedJobFromGrid() {
   if (!currentJob || !faceJobNeedsRetry(currentJob)) return;
+  clearDismissedJob(currentJob.id);
   const returnFocus = gridModalReturnFocus;
   closeFaceGrid(false);
   openJobModal();
@@ -1533,7 +1601,7 @@ async function openFaceGridFromScanDialog() {
     return;
   }
   const returnFocus = scanModalReturnFocus;
-  closeJobModal(false);
+  closeJobModal(false, false);
   openFaceGrid({ jobId: null, includeDismissed: false });
   if (returnFocus && byId('faceGridModal')) gridModalReturnFocus = returnFocus;
 }
@@ -1938,9 +2006,13 @@ async function handleCompletedJob(job) {
     showToast(t('face_job_finished'), 'success');
     clearSavedJobRequest(job.id);
   }
-  const returnFocus = scanModalReturnFocus;
   closeScanBusyModal();
-  closeJobModal(false);
+  const isDialogVisible = byId('faceJobModal')?.style.display === 'flex';
+  if (!isDialogVisible && isJobDismissed(job.id)) {
+    return;
+  }
+  const returnFocus = scanModalReturnFocus;
+  closeJobModal(false, false);
   openFaceGrid({ jobId: job.id, includeDismissed: false });
   renderGridJobIssue(job.id);
   if (returnFocus && byId('faceGridModal')) gridModalReturnFocus = returnFocus;
@@ -2005,16 +2077,8 @@ function setupLoupeOverlay() {
 }
 
 function bindFaceActions() {
-  for (const id of ['faceToolbarBtn', 'faceCategoryToolbarBtn', 'settingsFaceBtn']) {
-    byId(id)?.addEventListener('click', () => {
-      if (id === 'settingsFaceBtn') {
-        const settingsModal = byId('settingsModal');
-        if (settingsModal && settingsModal.style.display !== 'none') {
-          settingsModal.style.display = 'none';
-        }
-      }
-      openFaceAnalysisDialog();
-    });
+  for (const id of ['faceToolbarBtn', 'faceCategoryToolbarBtn']) {
+    byId(id)?.addEventListener('click', openFaceAnalysisDialog);
   }
   byId('faceReviewBtn')?.addEventListener('click', openPeopleFaceReview);
   byId('faceViewFacesBtn')?.addEventListener('click', openFaceGridFromScanDialog);
