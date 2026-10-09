@@ -804,7 +804,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
             criteria.date_to = dt;
         }
-        if (criteria.date_from > 0 && criteria.date_to > 0 && criteria.date_from > criteria.date_to) {
+        if (criteria.date_from.has_value() && criteria.date_to.has_value() && *criteria.date_from > *criteria.date_to) {
             sendError(res, "'date_from' cannot be greater than 'date_to'", 400);
             return;
         }

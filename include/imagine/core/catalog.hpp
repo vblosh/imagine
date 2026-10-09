@@ -92,6 +92,9 @@ public:
     Status runInTransaction(std::function<Status()> fn);
 
     // Component accessors
+    // Note: Component accessors return direct references to underlying subsystem instances
+    // whose lifetimes are bound to the open Catalog. Callers must ensure Catalog remains open
+    // while holding or using these references and synchronize with close() calls.
     db::CatalogDb& db();
     const db::CatalogDb& db() const;
     thumbnail::Cache& cache();
@@ -103,6 +106,7 @@ private:
     void closeInternal();
     void syncPhotosDirFromImporter();
     void setPhotosDirInternal(std::string photosDir);
+    std::string resolvePhotoPathInternal(const std::string& recordedPath) const;
 
     size_t threadCount_{1};
     std::unique_ptr<db::CatalogDb> db_;
