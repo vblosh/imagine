@@ -380,7 +380,8 @@ export function renderCategoryView(category) {
 
     const safeName = escapeHtml(item.name || 'Unnamed');
     const count = isAlbum ? (item.item_count || 0) : (item.media_count || 0);
-    const countText = `${count} ${count === 1 ? 'photo' : 'photos'}`;
+    const photoNoun = count === 1 ? t('photo_singular') : t('photo_plural');
+    const countText = `${count} ${photoNoun}`;
     card.setAttribute('aria-label', `${item.name} (${countText})`);
 
     const coverUrl = isAlbum ? getAlbumCoverUrl(item) : getTagCoverUrl(item);

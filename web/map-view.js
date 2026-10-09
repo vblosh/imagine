@@ -260,10 +260,9 @@ export function renderMapMarkers(force = false) {
   }
 
   const currentZoom = state.mapInstance.getZoom();
-  const itemsSig = gpsItems.map(i => `${i.id}:${i.exif ? (i.exif.latitude + ',' + i.exif.longitude) : ''}`).join(';');
 
   // Avoid expensive map marker rebuild if zoom and items haven't changed
-  if (!force && state._lastMapZoom === currentZoom && state._lastMapItemsSig === itemsSig) {
+  if (!force && state._lastMapZoom === currentZoom && state._lastMapItemsSig !== null) {
     updateMapMarkerSelections();
     if (openMediaId) {
       const targetMarker = state.mapMarkers.find(m => m.clusterItems && m.clusterItems.some(i => i.id === openMediaId));
@@ -277,7 +276,7 @@ export function renderMapMarkers(force = false) {
   }
 
   state._lastMapZoom = currentZoom;
-  state._lastMapItemsSig = itemsSig;
+  state._lastMapItemsSig = gpsItems.length;
 
   if (state.markerLayerGroup) {
     state.markerLayerGroup.clearLayers();
@@ -782,7 +781,7 @@ export function renderUnmappedTray() {
     moreChip.className = 'unmapped-chip unmapped-load-more';
     moreChip.id = 'unmappedLoadMoreChip';
     moreChip.title = 'Load more photos into catalog';
-    moreChip.innerHTML = `<div class="chip-name">+ Load More (${state.mediaItems.length}/${state.totalCount})</div>`;
+    moreChip.innerHTML = `<div class="chip-name">+ ${escapeHtml(t('load_more'))} (${state.mediaItems.length}/${state.totalCount})</div>`;
     moreChip.onclick = (e) => {
       e.stopPropagation();
       loadMoreMedia();
@@ -1193,7 +1192,7 @@ export function renderMapSearchResults(results) {
   dom.mapSearchResults.innerHTML = '';
 
   if (results.length === 0) {
-    dom.mapSearchResults.innerHTML = '<div class="map-search-empty">No matching places or coordinates found</div>';
+    dom.mapSearchResults.innerHTML = `<div class="map-search-empty">${escapeHtml(t('map_search_no_results'))}</div>`;
     dom.mapSearchResults.style.display = 'block';
     return;
   }

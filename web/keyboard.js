@@ -123,6 +123,30 @@ export function handleEscapeKey() {
     dom.iosInstallModal.style.display = 'none';
     return true;
   }
+  const faceForceModal = document.getElementById('faceForceWarningModal');
+  if (faceForceModal && faceForceModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    document.getElementById('faceForceCancelBtn')?.click();
+    return true;
+  }
+  const faceScanModal = document.getElementById('faceScanBusyModal');
+  if (faceScanModal && faceScanModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    document.getElementById('faceScanBusyCloseBtn')?.click();
+    return true;
+  }
+  const faceJobModal = document.getElementById('faceJobModal');
+  if (faceJobModal && faceJobModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    document.getElementById('faceJobCloseBtn')?.click();
+    return true;
+  }
+  const faceGridModal = document.getElementById('faceGridModal');
+  if (faceGridModal && faceGridModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    document.getElementById('faceGridCloseBtn')?.click();
+    return true;
+  }
   if (dom.leftSidebar && dom.leftSidebar.classList.contains('open')) {
     dom.leftSidebar.classList.remove('open');
     if (dom.sidebarBackdrop) dom.sidebarBackdrop.classList.remove('active');
