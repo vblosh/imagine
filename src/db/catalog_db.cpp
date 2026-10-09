@@ -1371,8 +1371,7 @@ Result<std::vector<std::string>> CatalogDb::getAllFolders() {
     std::set<std::string> folders;
     while (stmt.step() == StepResult::Row) {
         std::string path = stmt.getString(0);
-        std::replace(path.begin(), path.end(), '\\', '/');
-        size_t lastSlash = path.find_last_of('/');
+        size_t lastSlash = path.find_last_of("/\\");
         if (lastSlash != std::string::npos && lastSlash > 0) {
             folders.insert(path.substr(0, lastSlash));
         }
