@@ -29,8 +29,7 @@ export async function checkSemanticStatus() {
 
 export function updateSemanticToggleVisibility() {
     if (dom.semanticToggle) {
-        const isSupported = Boolean(state.semanticSearchAvailable || state.semanticBuilt);
-        dom.semanticToggle.style.display = isSupported ? 'inline-flex' : 'none';
+        dom.semanticToggle.style.display = 'inline-flex';
         if (!state.semanticSearchAvailable) {
             state.semanticSearchEnabled = false;
             dom.semanticToggle.disabled = true;
