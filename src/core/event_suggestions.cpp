@@ -65,8 +65,9 @@ std::vector<Tag> commonTags(const std::vector<MediaItem>& photos, std::string_vi
         }
     }
 
+    std::unordered_set<TagId> ids;
     for (size_t i = 1; i < photos.size() && !common.empty(); ++i) {
-        std::unordered_set<TagId> ids;
+        ids.clear();
         for (const auto& tag : photos[i].tags) {
             if (categoryEquals(tag, category)) ids.insert(tag.id);
         }
@@ -121,9 +122,26 @@ bool isGenericFolder(std::string_view folder) {
     };
     const std::string trimmed = trimWhitespace(folder);
     if (trimmed.empty() || generic.contains(lowerAscii(trimmed))) return true;
-    return std::all_of(trimmed.begin(), trimmed.end(), [](char ch) {
+    if (std::all_of(trimmed.begin(), trimmed.end(), [](char ch) {
         return std::isdigit(static_cast<unsigned char>(ch)) != 0;
-    });
+    })) {
+        return true;
+    }
+    if (trimmed.size() >= 4 && trimmed.size() <= 12 &&
+        std::isdigit(static_cast<unsigned char>(trimmed[0])) &&
+        std::isdigit(static_cast<unsigned char>(trimmed[1])) &&
+        std::isdigit(static_cast<unsigned char>(trimmed[2]))) {
+        bool restAlnum = true;
+        for (size_t i = 3; i < trimmed.size(); ++i) {
+            char c = trimmed[i];
+            if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
+                restAlnum = false;
+                break;
+            }
+        }
+        if (restAlnum) return true;
+    }
+    return false;
 }
 
 std::optional<std::string> commonParentFolder(const std::vector<MediaItem>& photos) {
@@ -182,7 +200,7 @@ EventSuggestionResult EventSuggestionEngine::suggest(const std::vector<MediaItem
     for (const auto& item : media) {
         if (item.media_type != "photo") {
             result.skipped.push_back({item.id, "not_photo"});
-        } else if (item.date_taken <= 0) {
+        } else if (item.date_taken == 0) {
             result.skipped.push_back({item.id, "invalid_date"});
         } else {
             eligible.push_back(item);

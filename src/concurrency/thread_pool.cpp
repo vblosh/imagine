@@ -3,15 +3,43 @@
 
 namespace imagine::concurrency {
 
+namespace {
+thread_local const ThreadPool* t_active_worker_pool{nullptr};
+
+struct WorkerScopeGuard {
+    explicit WorkerScopeGuard(const ThreadPool* pool) noexcept {
+        t_active_worker_pool = pool;
+    }
+    ~WorkerScopeGuard() noexcept {
+        t_active_worker_pool = nullptr;
+    }
+    WorkerScopeGuard(const WorkerScopeGuard&) = delete;
+    WorkerScopeGuard& operator=(const WorkerScopeGuard&) = delete;
+};
+} // namespace
+
 ThreadPool::ThreadPool(size_t threads)
     : worker_count_(threads == 0 ? 1 : threads) {
     workers_.reserve(worker_count_);
-    worker_ids_.reserve(worker_count_);
-    for (size_t i = 0; i < worker_count_; ++i) {
-        workers_.emplace_back([this]() {
-            workerLoop();
-        });
-        worker_ids_.push_back(workers_.back().get_id());
+    try {
+        for (size_t i = 0; i < worker_count_; ++i) {
+            workers_.emplace_back([this]() {
+                workerLoop();
+            });
+        }
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            stop_.store(true, std::memory_order_release);
+        }
+        cv_.notify_all();
+        for (auto& worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+        workers_.clear();
+        throw;
     }
 }
 
@@ -23,13 +51,7 @@ ThreadPool::~ThreadPool() {
 }
 
 bool ThreadPool::isWorkerThread() const noexcept {
-    const auto current_id = std::this_thread::get_id();
-    for (const auto& id : worker_ids_) {
-        if (id == current_id) {
-            return true;
-        }
-    }
-    return false;
+    return t_active_worker_pool == this;
 }
 
 void ThreadPool::stop() {
@@ -40,17 +62,18 @@ void ThreadPool::stop() {
     std::call_once(stop_flag_, [this]() {
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
-            stop_.exchange(true);
+            stop_.store(true, std::memory_order_release);
         }
         cv_.notify_all();
-        wait_cv_.notify_all();
 
-        for (std::thread& worker : workers_) {
+        for (auto& worker : workers_) {
             if (worker.joinable()) {
                 worker.join();
             }
         }
         workers_.clear();
+
+        wait_cv_.notify_all();
     });
 }
 
@@ -80,10 +103,11 @@ size_t ThreadPool::queueSize() const {
 }
 
 bool ThreadPool::isStopped() const noexcept {
-    return stop_.load(std::memory_order_relaxed);
+    return stop_.load(std::memory_order_acquire);
 }
 
 void ThreadPool::workerLoop() {
+    WorkerScopeGuard scopeGuard(this);
     while (true) {
         std::function<void()> task;
         {
@@ -108,6 +132,8 @@ void ThreadPool::workerLoop() {
         } catch (...) {
             IMAGINE_LOG_ERROR("Unknown exception in ThreadPool task");
         }
+
+        task = nullptr; // Explicitly release task callable and captured resources before decrementing active_tasks_
 
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);

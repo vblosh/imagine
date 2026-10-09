@@ -2021,11 +2021,9 @@ function bindFaceActions() {
   byId('faceScanScope')?.addEventListener('change', renderJobState);
   byId('faceForceReanalysis')?.addEventListener('change', renderJobState);
   byId('faceJobCloseBtn')?.addEventListener('click', closeJobModal);
-  byId('faceJobCancelBtn')?.addEventListener('click', closeJobModal);
   byId('faceJobBackdrop')?.addEventListener('click', closeJobModal);
   byId('faceJobStartBtn')?.addEventListener('click', () => startFaceJob(false));
   byId('faceJobStopBtn')?.addEventListener('click', cancelFaceJob);
-  byId('faceJobRetryBtn')?.addEventListener('click', retryFaceJob);
   byId('faceJobDoneBtn')?.addEventListener('click', closeJobModal);
   byId('faceForceCancelBtn')?.addEventListener('click', closeForceWarningModal);
   byId('faceForceWarningBackdrop')?.addEventListener('click', closeForceWarningModal);

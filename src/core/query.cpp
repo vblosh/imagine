@@ -4,12 +4,26 @@
 
 namespace imagine::core {
 
+namespace {
+
+std::string escapeLike(std::string_view s) {
+    std::string escaped;
+    escaped.reserve(s.size() + 8);
+    for (char c : s) {
+        if (c == '%' || c == '_' || c == '!') {
+            escaped.push_back('!');
+        }
+        escaped.push_back(c);
+    }
+    return escaped;
+}
+
+} // namespace
+
 void to_json(nlohmann::json& j, const QueryCriteria& c) {
     j = nlohmann::json{
         {"camera_make", c.camera_make},
         {"camera_model", c.camera_model},
-        {"date_from", c.date_from},
-        {"date_to", c.date_to},
         {"search_text", c.search_text},
         {"folder", c.folder},
         {"tag_category", c.tag_category},
@@ -19,6 +33,12 @@ void to_json(nlohmann::json& j, const QueryCriteria& c) {
         {"offset", c.offset},
         {"tag_ids", c.tag_ids}
     };
+    if (c.date_from.has_value()) {
+        j["date_from"] = *c.date_from;
+    }
+    if (c.date_to.has_value()) {
+        j["date_to"] = *c.date_to;
+    }
     if (!c.folders.empty()) {
         j["folders"] = c.folders;
     }
@@ -339,9 +359,9 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
             while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\')) {
                 folder.pop_back();
             }
-            orClauses.push_back("(file_path LIKE ? OR file_path LIKE ?)");
-            orParams.push_back(folder + "/%");
-            orParams.push_back(folder + "\\%");
+            orClauses.push_back("(file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!')");
+            orParams.push_back(escapeLike(folder) + "/%");
+            orParams.push_back(escapeLike(folder) + "\\%");
         }
 
         if (!orClauses.empty()) {
@@ -364,15 +384,26 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
             allFolders.push_back(criteria_.folder);
         }
 
+        std::vector<std::string> folderOrClauses;
+        std::vector<std::string> folderOrParams;
         for (const auto& f : allFolders) {
             if (f.empty()) continue;
             std::string folder = f;
             while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\')) {
                 folder.pop_back();
             }
-            clauses.push_back("(file_path LIKE ? OR file_path LIKE ?)");
-            params.push_back(folder + "/%");
-            params.push_back(folder + "\\%");
+            folderOrClauses.push_back("(file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!')");
+            folderOrParams.push_back(escapeLike(folder) + "/%");
+            folderOrParams.push_back(escapeLike(folder) + "\\%");
+        }
+        if (!folderOrClauses.empty()) {
+            std::string combinedFolders;
+            for (size_t i = 0; i < folderOrClauses.size(); ++i) {
+                if (i > 0) combinedFolders += " OR ";
+                combinedFolders += "(" + folderOrClauses[i] + ")";
+            }
+            clauses.push_back(combinedFolders);
+            params.insert(params.end(), folderOrParams.begin(), folderOrParams.end());
         }
     }
 
@@ -382,23 +413,23 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
     }
 
     if (!criteria_.camera_make.empty()) {
-        clauses.push_back("camera_make LIKE ?");
-        params.push_back("%" + criteria_.camera_make + "%");
+        clauses.push_back("camera_make LIKE ? ESCAPE '!'");
+        params.push_back("%" + escapeLike(criteria_.camera_make) + "%");
     }
 
     if (!criteria_.camera_model.empty()) {
-        clauses.push_back("camera_model LIKE ?");
-        params.push_back("%" + criteria_.camera_model + "%");
+        clauses.push_back("camera_model LIKE ? ESCAPE '!'");
+        params.push_back("%" + escapeLike(criteria_.camera_model) + "%");
     }
 
-    if (criteria_.date_from > 0) {
+    if (criteria_.date_from.has_value()) {
         clauses.push_back("date_taken >= ?");
-        params.push_back(std::to_string(criteria_.date_from));
+        params.push_back(std::to_string(*criteria_.date_from));
     }
 
-    if (criteria_.date_to > 0) {
+    if (criteria_.date_to.has_value()) {
         clauses.push_back("date_taken <= ?");
-        params.push_back(std::to_string(criteria_.date_to));
+        params.push_back(std::to_string(*criteria_.date_to));
     }
 
     if (criteria_.has_gps.has_value()) {
@@ -410,27 +441,36 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
         clauses.push_back("latitude >= ? AND latitude <= ?");
         params.push_back(std::to_string(*criteria_.min_lat));
         params.push_back(std::to_string(*criteria_.max_lat));
+    } else if (criteria_.min_lat.has_value()) {
+        clauses.push_back("latitude >= ?");
+        params.push_back(std::to_string(*criteria_.min_lat));
+    } else if (criteria_.max_lat.has_value()) {
+        clauses.push_back("latitude <= ?");
+        params.push_back(std::to_string(*criteria_.max_lat));
     }
 
     if (criteria_.min_lon.has_value() && criteria_.max_lon.has_value()) {
-        clauses.push_back("longitude >= ? AND longitude <= ?");
+        if (*criteria_.min_lon <= *criteria_.max_lon) {
+            clauses.push_back("longitude >= ? AND longitude <= ?");
+        } else {
+            clauses.push_back("(longitude >= ? OR longitude <= ?)");
+        }
         params.push_back(std::to_string(*criteria_.min_lon));
+        params.push_back(std::to_string(*criteria_.max_lon));
+    } else if (criteria_.min_lon.has_value()) {
+        clauses.push_back("longitude >= ?");
+        params.push_back(std::to_string(*criteria_.min_lon));
+    } else if (criteria_.max_lon.has_value()) {
+        clauses.push_back("longitude <= ?");
         params.push_back(std::to_string(*criteria_.max_lon));
     }
 
     if (!criteria_.search_text.empty()) {
-        clauses.push_back("(file_name LIKE ? OR file_path LIKE ? OR camera_make LIKE ? OR camera_model LIKE ? OR lens LIKE ? OR caption LIKE ? OR audio_artist LIKE ? OR audio_title LIKE ? OR audio_album LIKE ? OR id IN (SELECT media_id FROM media_tags JOIN tags ON media_tags.tag_id = tags.id WHERE tags.name LIKE ?))");
-        std::string pattern = "%" + criteria_.search_text + "%";
-        params.push_back(pattern);
-        params.push_back(pattern);
-        params.push_back(pattern);
-        params.push_back(pattern);
-        params.push_back(pattern);
-        params.push_back(pattern);
-        params.push_back(pattern);
-        params.push_back(pattern);
-        params.push_back(pattern);
-        params.push_back(pattern);
+        clauses.push_back("(file_name LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!' OR camera_make LIKE ? ESCAPE '!' OR camera_model LIKE ? ESCAPE '!' OR lens LIKE ? ESCAPE '!' OR caption LIKE ? ESCAPE '!' OR audio_artist LIKE ? ESCAPE '!' OR audio_title LIKE ? ESCAPE '!' OR audio_album LIKE ? ESCAPE '!' OR id IN (SELECT media_id FROM media_tags JOIN tags ON media_tags.tag_id = tags.id WHERE tags.name LIKE ? ESCAPE '!'))");
+        std::string pattern = "%" + escapeLike(criteria_.search_text) + "%";
+        for (int i = 0; i < 10; ++i) {
+            params.push_back(pattern);
+        }
     }
 
     if (!criteria_.tag_category.empty()) {

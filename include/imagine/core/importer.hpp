@@ -110,8 +110,14 @@ public:
     Importer(const Importer&) = delete;
     Importer& operator=(const Importer&) = delete;
 
-    void setPhotosDir(std::string dir) { photosDir_ = std::move(dir); }
-    const std::string& photosDir() const noexcept { return photosDir_; }
+    void setPhotosDir(std::string dir) {
+        std::lock_guard<std::mutex> lock(photos_dir_mutex_);
+        photosDir_ = std::move(dir);
+    }
+    std::string photosDir() const {
+        std::lock_guard<std::mutex> lock(photos_dir_mutex_);
+        return photosDir_;
+    }
 
     static bool isInsideRootDir(const std::filesystem::path& target, const std::filesystem::path& rootDir);
     static std::string toRelativePath(const std::filesystem::path& fullPath, const std::filesystem::path& baseDir);
@@ -144,6 +150,7 @@ private:
     db::CatalogDb& db_;
     thumbnail::Cache& cache_;
     concurrency::ThreadPool* pool_{nullptr};
+    mutable std::mutex photos_dir_mutex_;
     std::string photosDir_;
 
     std::atomic<bool> cancelled_{false};

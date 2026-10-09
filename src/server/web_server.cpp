@@ -201,6 +201,14 @@ Status WebServer::start(const std::string& host, int port, const std::string& we
         cv_.notify_all();
     });
 
+    auto readyStart = std::chrono::steady_clock::now();
+    while (!server_->is_running() && isRunning_) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if (std::chrono::steady_clock::now() - readyStart > std::chrono::seconds(5)) {
+            break;
+        }
+    }
+
     return Status::ok();
 }
 
@@ -228,7 +236,16 @@ void WebServer::stop() {
         r->stopImport();
     }
     if (s) {
-        s->stop();
+        auto startWait = std::chrono::steady_clock::now();
+        while (!s->is_running() && t && t->joinable() &&
+               std::chrono::steady_clock::now() - startWait < std::chrono::milliseconds(500)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (s->is_running()) {
+            s->stop();
+        } else {
+            s->decommission();
+        }
     }
     if (t && t->joinable()) {
         try {

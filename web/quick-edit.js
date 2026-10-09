@@ -15,6 +15,7 @@ import { normalizeMediaItem, getOriginalMediaUrl, getAuthHeaders } from "./api.j
 import { state } from "./state.js";
 import { dom, showToast } from "./dom.js";
 import { renderGrid } from "./media-grid.js";
+import { t } from "./i18n.js";
 
 export const quickEditState = {
   isOpen: false,
@@ -25,6 +26,7 @@ export const quickEditState = {
   workingCanvas: null,
   workingCtx: null,
   hasCropped: false,
+  normalizedCrop: null,
   imageLoadedPromise: null,
   imageLoadedReject: null,
   rotation: 0,
@@ -166,6 +168,7 @@ export function openQuickEdit() {
   quickEditState.rotation = 0;
   quickEditState.cropActive = false;
   quickEditState.hasCropped = false;
+  quickEditState.normalizedCrop = null;
   quickEditState.smartFixActive = false;
   quickEditState.smartFixIntensity = 100;
   quickEditState.isComparing = false;
@@ -226,6 +229,39 @@ export function openQuickEdit() {
     quickEditState.originalImage = loadedImg;
     if (!quickEditState.hasCropped) {
       initWorkingCanvas(loadedImg);
+    } else if (quickEditState.normalizedCrop) {
+      const { rx, ry, rw, rh, rotation } = quickEditState.normalizedCrop;
+      const fullImgW = loadedImg.naturalWidth || loadedImg.width;
+      const fullImgH = loadedImg.naturalHeight || loadedImg.height;
+      const is90or270 = rotation === 90 || rotation === 270;
+      const rotW = is90or270 ? fullImgH : fullImgW;
+      const rotH = is90or270 ? fullImgW : fullImgH;
+
+      const fullRotCanvas = document.createElement("canvas");
+      fullRotCanvas.width = rotW;
+      fullRotCanvas.height = rotH;
+      const fullRotCtx = fullRotCanvas.getContext("2d");
+      fullRotCtx.save();
+      fullRotCtx.translate(rotW / 2, rotH / 2);
+      fullRotCtx.rotate((rotation * Math.PI) / 180);
+      fullRotCtx.drawImage(loadedImg, -fullImgW / 2, -fullImgH / 2);
+      fullRotCtx.restore();
+
+      const cropX = Math.round(rx * rotW);
+      const cropY = Math.round(ry * rotH);
+      const cropW = Math.round(rw * rotW);
+      const cropH = Math.round(rh * rotH);
+
+      const croppedCanvas = document.createElement("canvas");
+      croppedCanvas.width = cropW;
+      croppedCanvas.height = cropH;
+      const croppedCtx = croppedCanvas.getContext("2d");
+      croppedCtx.drawImage(fullRotCanvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+      quickEditState.workingCanvas = croppedCanvas;
+      quickEditState.workingCtx = croppedCtx;
+      quickEditState.smartFixLUT = null;
+      quickEditState.previewCanvas = null;
     }
     renderQuickEditCanvas();
     quickEditState.imageLoadedReject = null;
@@ -283,6 +319,7 @@ export function closeQuickEdit(promptIfDirty = true) {
   quickEditState.isOriginalLoaded = false;
   quickEditState.cropActive = false;
   quickEditState.hasCropped = false;
+  quickEditState.normalizedCrop = null;
   quickEditState.imageLoadedPromise = null;
 
   if (dom.loupeModal) dom.loupeModal.classList.remove("is-quick-editing");
@@ -504,6 +541,13 @@ export function applyCrop() {
   quickEditState.rotation = 0;
   quickEditState.cropActive = false;
   quickEditState.hasCropped = true;
+  quickEditState.normalizedCrop = {
+    rx: srcX / canvas.width,
+    ry: srcY / canvas.height,
+    rw: srcW / canvas.width,
+    rh: srcH / canvas.height,
+    rotation: rot,
+  };
   quickEditState.isDirty = true;
   quickEditState.smartFixLUT = null;
   quickEditState.previewCanvas = null;
@@ -557,6 +601,7 @@ export function resetAllEdits() {
   quickEditState.rotation = 0;
   quickEditState.cropActive = false;
   quickEditState.hasCropped = false;
+  quickEditState.normalizedCrop = null;
   quickEditState.smartFixActive = false;
   quickEditState.smartFixIntensity = 100;
   quickEditState.isDirty = false;
@@ -810,7 +855,7 @@ export async function saveEdits(mode = "overwrite") {
       if (dom.inspectorImg && state.selectedIds.has(id)) {
         dom.inspectorImg.src = newOriginalUrl;
       }
-      showToast("Photo edited and saved successfully");
+      showToast(t("quick_edit_saved"));
     } else {
       state.mediaItems.unshift(updatedItem);
       state.totalCount++;
@@ -834,7 +879,7 @@ export async function saveEdits(mode = "overwrite") {
       if (window._imagineApp?.renderCurrentView) {
         window._imagineApp.renderCurrentView();
       }
-      showToast(`Saved as new copy: ${updatedItem.file_name}`);
+      showToast(t("quick_edit_saved_copy", { name: updatedItem.file_name }));
     }
 
     quickEditState.isDirty = false;
@@ -875,32 +920,7 @@ export function updateQuickEditToolbarUI() {
 }
 
 export function setupCropMouseListeners() {
-  window.addEventListener("pointerdown", (e) => {
-    if (!quickEditState.isOpen || !quickEditState.cropActive) return;
-
-    const handle = e.target.closest(".crop-handle");
-    const box = e.target.closest("#cropBox");
-
-    if (handle) {
-      quickEditState.cropDragMode = handle.dataset.handle;
-    } else if (box) {
-      quickEditState.cropDragMode = "move";
-    } else {
-      return;
-    }
-
-    quickEditState.cropDragStart = {
-      x: e.clientX,
-      y: e.clientY,
-      boxX: quickEditState.cropBox.x,
-      boxY: quickEditState.cropBox.y,
-      boxW: quickEditState.cropBox.w,
-      boxH: quickEditState.cropBox.h,
-    };
-    e.preventDefault();
-  });
-
-  window.addEventListener("pointermove", (e) => {
+  const onPointerMove = (e) => {
     if (!quickEditState.isOpen || !quickEditState.cropActive || !quickEditState.cropDragMode) return;
 
     const dx = e.clientX - quickEditState.cropDragStart.x;
@@ -968,9 +988,38 @@ export function setupCropMouseListeners() {
 
     updateCropOverlayDOM();
     e.preventDefault();
-  });
+  };
 
-  window.addEventListener("pointerup", () => {
+  const onPointerUp = () => {
     quickEditState.cropDragMode = null;
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+  };
+
+  window.addEventListener("pointerdown", (e) => {
+    if (!quickEditState.isOpen || !quickEditState.cropActive) return;
+
+    const handle = e.target.closest(".crop-handle");
+    const box = e.target.closest("#cropBox");
+
+    if (handle) {
+      quickEditState.cropDragMode = handle.dataset.handle;
+    } else if (box) {
+      quickEditState.cropDragMode = "move";
+    } else {
+      return;
+    }
+
+    quickEditState.cropDragStart = {
+      x: e.clientX,
+      y: e.clientY,
+      boxX: quickEditState.cropBox.x,
+      boxY: quickEditState.cropBox.y,
+      boxW: quickEditState.cropBox.w,
+      boxH: quickEditState.cropBox.h,
+    };
+    e.preventDefault();
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
   });
 }

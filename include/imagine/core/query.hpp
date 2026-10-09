@@ -21,8 +21,8 @@ struct QueryCriteria {
     std::optional<AlbumId> album_id{std::nullopt};
     std::string camera_make;
     std::string camera_model;
-    int64_t date_from{0};
-    int64_t date_to{0};
+    std::optional<int64_t> date_from{std::nullopt};
+    std::optional<int64_t> date_to{std::nullopt};
     std::string search_text;
     std::string folder;
     std::vector<std::string> folders;

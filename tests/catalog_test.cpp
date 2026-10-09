@@ -308,6 +308,8 @@ TEST_F(CatalogClassTest, MoveMediaToNewPath) {
     // Moving when source file does not exist on disk fails and does NOT corrupt DB
     std::filesystem::remove(testDir / "photo.jpg");
     EXPECT_FALSE(cat.moveMedia(mid, "somewhere").isOk());
+    // Renaming when source file does not exist on disk also fails consistently
+    EXPECT_FALSE(cat.renameMedia(mid, "somewhere_else").isOk());
     auto mediaAfterMissing = cat.getMedia(mid);
     ASSERT_TRUE(mediaAfterMissing.isOk());
     EXPECT_EQ(mediaAfterMissing.value().file_path, "photo.jpg"); // untouched

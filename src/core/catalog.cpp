@@ -97,28 +97,33 @@ const std::string& Catalog::photosDir() const {
 }
 
 std::string Catalog::resolvePhotoPath(const std::string& recordedPath) const {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    return resolvePhotoPathInternal(recordedPath);
+}
+
+std::string Catalog::resolvePhotoPathInternal(const std::string& recordedPath) const {
     if (recordedPath.empty()) {
         return "";
     }
-    std::filesystem::path recPath(recordedPath);
+    std::filesystem::path recPath = pathFromUtf8(recordedPath);
     std::error_code ec;
 
     // 1. If recordedPath is a relative path
     if (recPath.is_relative()) {
-        std::shared_lock<std::shared_mutex> lock(rwMutex_);
+
         if (!photosDir_.empty()) {
-            return (std::filesystem::path(photosDir_) / recPath).string();
+            return pathToUtf8(pathFromUtf8(photosDir_) / recPath);
         }
         if (!dbPath_.empty()) {
-            std::filesystem::path dbDir = std::filesystem::path(dbPath_).parent_path();
+            std::filesystem::path dbDir = pathFromUtf8(dbPath_).parent_path();
             if (std::filesystem::exists(dbDir / "photos" / recPath, ec) && std::filesystem::is_regular_file(dbDir / "photos" / recPath, ec)) {
-                return (dbDir / "photos" / recPath).string();
+                return pathToUtf8(dbDir / "photos" / recPath);
             }
             if (std::filesystem::exists(dbDir / recPath, ec) && std::filesystem::is_regular_file(dbDir / recPath, ec)) {
-                return (dbDir / recPath).string();
+                return pathToUtf8(dbDir / recPath);
             }
             if (!dbDir.parent_path().empty() && std::filesystem::exists(dbDir.parent_path() / recPath, ec) && std::filesystem::is_regular_file(dbDir.parent_path() / recPath, ec)) {
-                return (dbDir.parent_path() / recPath).string();
+                return pathToUtf8(dbDir.parent_path() / recPath);
             }
         }
         return recordedPath;
@@ -126,23 +131,23 @@ std::string Catalog::resolvePhotoPath(const std::string& recordedPath) const {
 
     // 2. If recordedPath is an absolute path and exists directly on disk
     if (std::filesystem::exists(recPath, ec) && std::filesystem::is_regular_file(recPath, ec)) {
-        return recPath.string();
+        return pathToUtf8(recPath);
     }
 
     // 3. Absolute path not found on disk, but photosDir_ is configured:
     // Try resolving under photosDir_ by relative suffix or filename (backward compatibility for moved libraries)
-    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+
     if (!photosDir_.empty()) {
-        std::filesystem::path pDir(photosDir_);
+        std::filesystem::path pDir = pathFromUtf8(photosDir_);
         std::filesystem::path fname = recPath.filename();
         std::filesystem::path directCandidate = pDir / fname;
         if (std::filesystem::exists(directCandidate, ec) && std::filesystem::is_regular_file(directCandidate, ec)) {
-            return directCandidate.string();
+            return pathToUtf8(directCandidate);
         }
 
         std::vector<std::string> parts;
         for (const auto& part : recPath) {
-            std::string s = part.string();
+            std::string s = pathToUtf8(part);
             if (!s.empty() && s != "/" && s != "\\" && s.back() != ':') {
                 parts.push_back(s);
             }
@@ -150,15 +155,15 @@ std::string Catalog::resolvePhotoPath(const std::string& recordedPath) const {
         for (size_t i = 1; i < parts.size(); ++i) {
             std::filesystem::path sub;
             for (size_t j = i; j < parts.size(); ++j) {
-                sub /= parts[j];
+                sub /= pathFromUtf8(parts[j]);
             }
             std::filesystem::path candidate = pDir / sub;
             if (std::filesystem::exists(candidate, ec) && std::filesystem::is_regular_file(candidate, ec)) {
-                return candidate.string();
+                return pathToUtf8(candidate);
             }
         }
 
-        return (pDir / fname).string();
+        return pathToUtf8(pDir / fname);
     }
 
     return recordedPath;
@@ -259,7 +264,8 @@ Result<MediaItem> Catalog::getMediaByPath(const std::string& path) {
         }
     }
 
-    std::string genericP = std::filesystem::path(path).generic_string();
+    std::string genericP = pathToUtf8(pathFromUtf8(path));
+    std::replace(genericP.begin(), genericP.end(), '\\', '/');
     if (genericP != path) {
         auto gRes = db_->getMediaByPath(genericP);
         if (gRes.isOk()) {
@@ -295,7 +301,7 @@ Status Catalog::setCaption(MediaId id, const std::string& caption) {
 }
 
 Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::string* outNewFilePath, std::string* outNewFileName) {
-    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -317,10 +323,10 @@ Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::str
     const auto& item = itemRes.value();
 
     std::string actualNewFileName = newFileName;
-    std::filesystem::path curFileP(item.file_name);
-    std::filesystem::path newFileP(actualNewFileName);
+    std::filesystem::path curFileP = pathFromUtf8(item.file_name);
+    std::filesystem::path newFileP = pathFromUtf8(actualNewFileName);
     if (!newFileP.has_extension() && curFileP.has_extension()) {
-        actualNewFileName += curFileP.extension().string();
+        actualNewFileName += pathToUtf8(curFileP.extension());
     }
 
     if (item.file_name == actualNewFileName) {
@@ -329,36 +335,36 @@ Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::str
         return Status::ok();
     }
 
-    std::filesystem::path currentPath(item.file_path);
+    std::filesystem::path currentPath = pathFromUtf8(item.file_path);
     std::filesystem::path parent = currentPath.parent_path();
-    std::filesystem::path newPath = parent.empty() ? std::filesystem::path(actualNewFileName) : (parent / actualNewFileName);
-    std::string newPathStr = newPath.generic_string();
+    std::filesystem::path newPath = parent.empty() ? pathFromUtf8(actualNewFileName) : (parent / pathFromUtf8(actualNewFileName));
+    std::string newPathStr = pathToUtf8(newPath);
+    std::replace(newPathStr.begin(), newPathStr.end(), '\\', '/');
 
     auto existingRes = db_->getMediaByPath(newPathStr);
     if (existingRes.isOk() && existingRes.value().id != id) {
         return Status::alreadyExists("A media item with path already exists in the catalog: " + newPathStr);
     }
 
-    std::string oldDiskPath = resolvePhotoPath(item.file_path);
+    std::string oldDiskPath = resolvePhotoPathInternal(item.file_path);
     std::error_code ec;
-    bool diskRenamed = false;
     std::filesystem::path oldDiskFs;
-    std::filesystem::path newDiskFs;
-
     if (!oldDiskPath.empty()) {
         oldDiskFs = pathFromUtf8(oldDiskPath);
-        if (std::filesystem::exists(oldDiskFs, ec) && std::filesystem::is_regular_file(oldDiskFs, ec)) {
-            newDiskFs = oldDiskFs.parent_path() / pathFromUtf8(actualNewFileName);
-            if (std::filesystem::exists(newDiskFs, ec) && newDiskFs != oldDiskFs) {
-                return Status::alreadyExists("A file with this name already exists on disk: " + pathToUtf8(newDiskFs));
-            }
-            std::filesystem::rename(oldDiskFs, newDiskFs, ec);
-            if (ec) {
-                return Status::ioError("Failed to rename file on disk: " + ec.message());
-            }
-            diskRenamed = true;
-        }
     }
+    if (oldDiskPath.empty() || !std::filesystem::exists(oldDiskFs, ec) || !std::filesystem::is_regular_file(oldDiskFs, ec)) {
+        return Status::notFound("Source file does not exist on disk: " + (oldDiskPath.empty() ? item.file_path : oldDiskPath));
+    }
+
+    std::filesystem::path newDiskFs = oldDiskFs.parent_path() / pathFromUtf8(actualNewFileName);
+    if (std::filesystem::exists(newDiskFs, ec) && newDiskFs != oldDiskFs) {
+        return Status::alreadyExists("A file with this name already exists on disk: " + pathToUtf8(newDiskFs));
+    }
+    std::filesystem::rename(oldDiskFs, newDiskFs, ec);
+    if (ec) {
+        return Status::ioError("Failed to rename file on disk: " + ec.message());
+    }
+    bool diskRenamed = true;
 
     Status dbStatus = db_->updateFileNameAndPath(id, actualNewFileName, newPathStr);
     if (!dbStatus.isOk()) {
@@ -379,7 +385,7 @@ Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::str
 }
 
 Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::string* outNewFilePath) {
-    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -400,7 +406,7 @@ Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::s
     }
     const auto& item = itemRes.value();
 
-    std::string oldDiskPath = resolvePhotoPath(item.file_path);
+    std::string oldDiskPath = resolvePhotoPathInternal(item.file_path);
     std::error_code ec;
     std::filesystem::path oldDiskFs;
     if (!oldDiskPath.empty()) {
@@ -545,8 +551,9 @@ Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::s
     if (!effPhotosDir.empty()) {
         newStoredPath = Importer::toRelativePath(newDiskFs, effPhotosDir);
     } else {
-        if (isAbs || std::filesystem::path(item.file_path).is_absolute()) {
-            newStoredPath = newDiskFs.generic_string();
+        if (isAbs || pathFromUtf8(item.file_path).is_absolute()) {
+            newStoredPath = pathToUtf8(newDiskFs);
+            std::replace(newStoredPath.begin(), newStoredPath.end(), '\\', '/');
         } else {
             newStoredPath = Importer::toRelativePath(newDiskFs, photosDirFs);
         }
@@ -588,7 +595,13 @@ Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::s
                     std::filesystem::copy_file(oldDiskFs, newDiskFs, std::filesystem::copy_options::overwrite_existing, ec);
                     if (!ec) {
                         std::filesystem::remove(oldDiskFs, ec);
-                        diskMoved = true;
+                        if (!ec) {
+                            diskMoved = true;
+                        } else {
+                            std::error_code ecClean;
+                            std::filesystem::remove(newDiskFs, ecClean);
+                            return Status::ioError("Failed to remove source file after copy during move: " + ec.message());
+                        }
                     } else {
                         return Status::ioError("Failed to move file on disk: " + ec.message());
                     }
@@ -604,6 +617,13 @@ Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::s
         if (diskMoved) {
             std::error_code ecRollback;
             std::filesystem::rename(newDiskFs, oldDiskFs, ecRollback);
+            if (ecRollback) {
+                ecRollback.clear();
+                std::filesystem::copy_file(newDiskFs, oldDiskFs, std::filesystem::copy_options::overwrite_existing, ecRollback);
+                if (!ecRollback) {
+                    std::filesystem::remove(newDiskFs, ecRollback);
+                }
+            }
         }
         return dbStatus;
     }
@@ -667,7 +687,17 @@ Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
         if (!itemRes.isOk()) {
             return itemRes.status();
         }
-        filePath = resolvePhotoPath(itemRes.value().file_path);
+        filePath = resolvePhotoPathInternal(itemRes.value().file_path);
+        if (!filePath.empty()) {
+            std::string effPhotosDir = photosDir_;
+            if (effPhotosDir.empty() && importer_) {
+                effPhotosDir = importer_->photosDir();
+            }
+            if (!effPhotosDir.empty() && !Importer::isInsideRootDir(filePath, effPhotosDir)) {
+                IMAGINE_LOG_WARN("Refusing to delete file outside photos directory: " + filePath);
+                return Status::invalidArgument("Cannot delete file outside photos directory: " + filePath);
+            }
+        }
     }
 
     Status s = db_->deleteMedia(id);
@@ -677,7 +707,7 @@ Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
 
     if (deleteFromDisk && !filePath.empty()) {
         std::error_code ec;
-        if (!std::filesystem::remove(std::filesystem::u8path(filePath), ec)) {
+        if (!std::filesystem::remove(pathFromUtf8(filePath), ec)) {
             if (ec) {
                 IMAGINE_LOG_WARN("Failed to delete file from disk: " + filePath + " (" + ec.message() + ")");
             }

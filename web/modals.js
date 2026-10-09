@@ -717,14 +717,14 @@ export function renderModalSearchHelp() {
       dom.tagSearchHelpTitle.textContent = `${getCategoryDisplayName(currentCat)} Tags (${categoryTags.length})`;
     }
     if (dom.tagSearchHelpSub) {
-      dom.tagSearchHelpSub.textContent = 'Click to select tag';
+      dom.tagSearchHelpSub.textContent = t('search_help_sub');
     }
     if (dom.tagDetectedBadge) {
       dom.tagDetectedBadge.style.display = 'none';
     }
 
     if (categoryTags.length === 0) {
-      dom.tagSearchHelpChips.innerHTML = `<div class="tag-help-empty">No tags in ${getCategoryDisplayName(currentCat)} yet. Type above to create one.</div>`;
+      dom.tagSearchHelpChips.innerHTML = `<div class="tag-help-empty">${escapeHtml(t('tag_help_empty_cat', { category: getCategoryDisplayName(currentCat) }))}</div>`;
     } else {
       dom.tagSearchHelpChips.innerHTML = categoryTags
         .map(t => `
@@ -742,7 +742,7 @@ export function renderModalSearchHelp() {
     if (exactMatch) {
       if (dom.tagDetectedBadge) {
         dom.tagDetectedBadge.style.display = 'inline-block';
-        dom.tagDetectedBadge.textContent = `Existing in ${getCategoryDisplayName(exactMatch.category)}`;
+        dom.tagDetectedBadge.textContent = t('tag_help_existing_in', { category: getCategoryDisplayName(exactMatch.category) });
         dom.tagDetectedBadge.style.borderLeft = `2px solid ${getCategoryColor(exactMatch.category)}`;
       }
       if (dom.tagCategorySelect && dom.tagCategorySelect.value !== exactMatch.category.toLowerCase()) {
@@ -751,18 +751,18 @@ export function renderModalSearchHelp() {
     } else {
       if (dom.tagDetectedBadge) {
         dom.tagDetectedBadge.style.display = 'inline-block';
-        dom.tagDetectedBadge.textContent = `New tag in ${getCategoryDisplayName(currentCat)}`;
+        dom.tagDetectedBadge.textContent = t('tag_help_new_in', { category: getCategoryDisplayName(currentCat) });
         dom.tagDetectedBadge.style.borderLeft = `2px solid ${getCategoryColor(currentCat)}`;
       }
     }
 
     if (dom.tagSearchHelpTitle) {
       dom.tagSearchHelpTitle.textContent = matchingTags.length > 0
-        ? `Matching Tags (${matchingTags.length})`
-        : 'No Matching Existing Tags';
+        ? t('tag_help_matching_tags', { count: matchingTags.length })
+        : t('tag_help_no_matches');
     }
     if (dom.tagSearchHelpSub) {
-      dom.tagSearchHelpSub.textContent = matchingTags.length > 0 ? 'Click to select' : 'Will create new tag';
+      dom.tagSearchHelpSub.textContent = matchingTags.length > 0 ? t('search_help_sub') : t('tag_help_will_create');
     }
 
     let html = '';
@@ -1069,12 +1069,12 @@ export function updateBatchDatePreview() {
         shift: formattedShift,
         count
       });
-      dom.batchDatePreview.innerHTML = `${previewPrefix}${text}`;
+      dom.batchDatePreview.innerHTML = `${previewPrefix}${escapeHtml(text)}`;
     }
   } else {
     const targetDateStr = inputTs ? formatDateTime(inputTs) : t('unknown_date');
     const text = t('preview_exact', { count, date: targetDateStr });
-    dom.batchDatePreview.innerHTML = `${previewPrefix}${text}`;
+    dom.batchDatePreview.innerHTML = `${previewPrefix}${escapeHtml(text)}`;
   }
 }
 

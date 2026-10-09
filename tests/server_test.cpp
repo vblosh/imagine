@@ -252,6 +252,7 @@ TEST_F(ServerTest, MediaItemCrudAndRatings) {
     httplib::Client client("127.0.0.1", port_);
 
     // Insert media directly via DB to test API retrieval & update
+    std::ofstream(testDir_ / "photo1.jpg") << "test photo content";
     MediaItem item;
     item.file_path = (testDir_ / "photo1.jpg").string();
     item.file_name = "photo1.jpg";
@@ -4354,6 +4355,9 @@ TEST_F(ServerTest, WebServerConcurrentStopAndWait) {
 
     // Calling run on a background thread and stopping concurrently
     int p2 = 19800 + (std::rand() % 4000);
+    while (p2 == p) {
+        p2 = 19800 + (std::rand() % 4000);
+    }
     std::atomic<bool> runFinished{false};
     std::thread runThread([&ws, p2, &runFinished, this]() {
         auto status = ws.run("127.0.0.1", p2, webDir_.string());
@@ -4393,6 +4397,10 @@ TEST_F(ServerTest, ImportRootRestrictionsWindowsPaths) {
     auto res1 = client.Post("/api/import", body1.dump(), "application/json");
     ASSERT_TRUE(res1);
     EXPECT_EQ(res1->status, 200);
+
+    for (int i = 0; i < 200 && catalog_->importer().isRunning(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 
     // 2. Importing allowed root 2 itself should succeed
     nlohmann::json body2 = {{"path", allowedDir2.string()}};

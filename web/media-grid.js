@@ -694,7 +694,7 @@ export function appendMediaToGrid(newItems) {
       return;
     }
 
-    let groupKey = 'Undated';
+    let groupKey = t('undated');
     if (item.date_taken && item.date_taken > 0) {
       const d = new Date(item.date_taken * 1000);
       groupKey = `${getMonthName(d.getUTCMonth() + 1)} ${d.getUTCFullYear()}`;
@@ -811,9 +811,13 @@ export function createPhotoCard(item) {
   }
 
   // Thumbnail URL with fallback
+  const originalMediaUrl = getOriginalMediaUrl(item);
   const thumbUrl = item.content_hash
     ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
-    : getOriginalMediaUrl(item);
+    : originalMediaUrl;
+  const fallbackAttr = (item.content_hash && thumbUrl !== originalMediaUrl)
+    ? `onerror="this.onerror=null;this.src='${escapeHtml(originalMediaUrl)}';"`
+    : `onerror="this.onerror=null;"`;
 
   const flagBadge = item.flag === 1
     ? '<span class="flag-badge pick" title="Pick">✔</span>'
@@ -840,7 +844,7 @@ export function createPhotoCard(item) {
   const safeFileName = escapeHtml(item.file_name);
   card.innerHTML = `
     <div class="photo-thumb-wrap">
-      <img src="${thumbUrl}" alt="${safeFileName}" loading="lazy" draggable="false" onerror="this.onerror=null;this.src='/api/photos/${item.id}/original';">
+      <img src="${escapeHtml(thumbUrl)}" alt="${safeFileName}" loading="lazy" draggable="false" ${fallbackAttr}>
       <div class="card-badges">
         ${flagBadge}
         ${mediaBadge}
@@ -1365,7 +1369,7 @@ export function renderSidebarAlbums() {
   dom.albumsList.innerHTML = '';
 
   if (state.albums.length === 0) {
-    dom.albumsList.innerHTML = '<li class="menu-item" style="color:var(--text-dim);font-style:italic;">No albums</li>';
+    dom.albumsList.innerHTML = `<li class="menu-item" style="color:var(--text-dim);font-style:italic;">${escapeHtml(t('no_albums'))}</li>`;
     updateSidebarSearchStatus();
     return;
   }
@@ -1442,7 +1446,7 @@ export function renderSidebarFolders() {
   }
 
   if (state.allFolders.size === 0) {
-    dom.foldersTree.innerHTML = '<div style="color:var(--text-dim);font-style:italic;">No folders</div>';
+    dom.foldersTree.innerHTML = `<div style="color:var(--text-dim);font-style:italic;">${escapeHtml(t('no_folders'))}</div>`;
     updateSidebarSearchStatus();
     return;
   }
