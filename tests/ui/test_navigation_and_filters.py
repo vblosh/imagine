@@ -904,7 +904,8 @@ def test_scroll_resets_on_folder_and_filter_selection(server, page: Page):
 
     # 3. Select another folder -> scrollbar resets to start
     nature_folder.click()
-    expect(page.locator(".photo-card")).to_have_count(2)
+    expect(nature_folder).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator(".photo-card")).to_have_count(4)
     assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
 
     # 4. Scroll down again and select another filter (Picks)
