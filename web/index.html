@@ -292,6 +292,19 @@
       <main class="center-content">
         <!-- Filter Bar / Breadcrumb & Batch Actions -->
         <div class="content-toolbar" id="contentToolbar">
+          <!-- Semantic Search Toolbar (Active during semantic AI search) -->
+          <div class="semantic-search-toolbar" id="semanticSearchToolbar" style="display: none;">
+            <div class="semantic-search-info">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="semantic-search-sparkle-icon"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.28 1.28L3 12l5.8 1.9a2 2 0 0 1 1.28 1.28L12 21l1.9-5.8a2 2 0 0 1 1.28-1.28L21 12l-5.8-1.9a2 2 0 0 1-1.28-1.28L12 3z"/><path d="M5 3v4"/><path d="M3 5h4"/><path d="M19 17v4"/><path d="M17 19h4"/></svg>
+              <span class="semantic-search-title" id="semanticSearchTitle">AI Search</span>
+              <span class="semantic-search-count badge" id="semanticSearchCount">0 matches</span>
+              <span class="semantic-search-hint" id="semanticSearchHint" data-i18n="semantic_search_rank_hint">(sorted by probability rank)</span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm btn-close-search" id="closeSemanticSearchBtn" title="Close search results and return to normal view" data-i18n-title="close_search_title" data-i18n="close_search">
+              &times; Close Search
+            </button>
+          </div>
+
           <div class="filter-indicator" id="filterIndicator">
             <button class="btn btn-sm btn-secondary btn-back" id="categoryBackBtn" style="display: none;" title="Back to overview" data-i18n-title="back_to_overview">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>

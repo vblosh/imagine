@@ -53,7 +53,9 @@ import {
   collapseTagCategory,
   expandFolders,
   collapseFolders,
-  updateRovingTabindex
+  updateRovingTabindex,
+  syncSemanticSearchUI,
+  closeSemanticSearch
 } from './media-grid.js';
 import {
   saveFoldersCollapsedState,
@@ -337,12 +339,22 @@ export function setupEventListeners() {
 
   if (dom.clearSearchBtn) {
     dom.clearSearchBtn.addEventListener('click', () => {
-      clearTimeout(state.searchDebounceTimer);
-      state.searchDebounceTimer = null;
-      if (dom.searchInput) dom.searchInput.value = '';
-      state.searchText = '';
-      saveSearchPreference('');
-      loadMedia();
+      if (state.semanticSearchActive) {
+        closeSemanticSearch();
+      } else {
+        clearTimeout(state.searchDebounceTimer);
+        state.searchDebounceTimer = null;
+        if (dom.searchInput) dom.searchInput.value = '';
+        state.searchText = '';
+        saveSearchPreference('');
+        loadMedia();
+      }
+    });
+  }
+
+  if (dom.closeSemanticSearchBtn) {
+    dom.closeSemanticSearchBtn.addEventListener('click', () => {
+      closeSemanticSearch();
     });
   }
 
@@ -430,17 +442,51 @@ export function setupEventListeners() {
         }
         state.searchText = '';
         if (dom.searchInput) dom.searchInput.value = '';
-        state.mediaItems = simRes.media_items;
-        state.totalCount = simRes.media_items.length;
-        state.mediaOffset = simRes.media_items.length;
-        if (dom.filterLabel) {
-          dom.filterLabel.innerHTML = `<strong>Similar to photo #${id}</strong> (${state.totalCount} items)`;
+
+        if (!state.semanticSearchActive) {
+          state.semanticSearchSnapshot = {
+            activeTab: state.activeTab,
+            activeAlbumId: state.activeAlbumId,
+            activeTagId: state.activeTagId,
+            activeTagIds: new Set(state.activeTagIds),
+            activeFolders: new Set(state.activeFolders),
+            activeMediaType: state.activeMediaType,
+            activeStatusFilter: state.activeStatusFilter,
+            activeTimelinePeriod: state.activeTimelinePeriod ? { ...state.activeTimelinePeriod } : null,
+            sortBy: state.sortBy,
+            sortDesc: state.sortDesc
+          };
         }
-        if (dom.clearFiltersBtn) {
-          dom.clearFiltersBtn.style.display = 'inline-block';
+        state.semanticSearchActive = true;
+        state.semanticSearchQuery = `Similar to photo #${id}`;
+
+        const scoreMap = new Map();
+        if (Array.isArray(simRes.items)) {
+          simRes.items.forEach(it => {
+            if (it && it.mediaId != null) scoreMap.set(it.mediaId, it.score);
+          });
         }
+
+        const seenIds = new Set();
+        const items = [];
+        for (const raw of simRes.media_items) {
+          const item = normalizeMediaItem(raw);
+          if (item && !seenIds.has(item.id)) {
+            seenIds.add(item.id);
+            item.rank = items.length + 1;
+            const score = scoreMap.has(item.id) ? scoreMap.get(item.id) : (raw.score ?? raw.similarity_score);
+            if (score !== undefined) item.similarity_score = score;
+            items.push(item);
+          }
+        }
+
+        state.mediaItems = items;
+        state.totalCount = items.length;
+        state.mediaOffset = items.length;
+
+        syncSemanticSearchUI();
         renderGrid();
-        showToast(`Found ${simRes.media_items.length} visually similar photos`, 'info');
+        showToast(`Found ${items.length} visually similar photos`, 'info');
       } else {
         showToast('No visually similar photos found', 'info');
       }
@@ -1825,6 +1871,7 @@ export async function init() {
     updateFilterLabel();
     updateBatchBar();
     renderTimeline();
+    syncSemanticSearchUI();
     updateFullscreenBtnState();
     if (state.activeTab && state.activeTab !== 'media') {
       renderCategoryView(state.activeTab);
@@ -1946,6 +1993,8 @@ window._imagineApp = {
   updateRovingTabindex,
   checkSemanticStatus,
   performSemanticSearch,
+  syncSemanticSearchUI,
+  closeSemanticSearch,
   state,
   updateSemanticToggleVisibility,
   findSimilarMedia,

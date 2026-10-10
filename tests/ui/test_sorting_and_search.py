@@ -259,3 +259,238 @@ def test_semantic_search_sentence_typing_proceeds_after_debouncing_pause(server,
     assert len(semantic_calls) == 1
     assert semantic_calls[0] == "sunset over mountains"
 
+
+def test_semantic_search_probability_rank_grid_and_ui(server, page: Page):
+    """Semantic search renders a dedicated grid sorted by probability rank with badges and hidden filters."""
+    page.route("**/api/semantic/status*", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"ready": True, "built": True, "indexSize": 6, "modelId": "clip-vit-base"})
+    ))
+
+    def handle_semantic_search(route):
+        media_items = [
+            {"id": 4, "file_name": "sunset.bmp", "date_taken": 1770000000, "similarity_score": 0.94},
+            {"id": 1, "file_name": "beach.bmp", "date_taken": 1768000000, "similarity_score": 0.88},
+            {"id": 5, "file_name": "forest.bmp", "date_taken": 1765000000, "similarity_score": 0.72},
+        ]
+        items = [
+            {"mediaId": 4, "score": 0.94},
+            {"mediaId": 1, "score": 0.88},
+            {"mediaId": 5, "score": 0.72},
+        ]
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"items": items, "media_items": media_items, "total": 3})
+        )
+
+    page.route("**/api/semantic/search*", handle_semantic_search)
+    page.goto(server["url"])
+
+    # Normal grid has date groups and 6 cards
+    expect(page.locator(".photo-card")).to_have_count(6)
+    expect(page.locator(".date-group")).to_have_count(3)
+    expect(page.locator("#sortSelect")).to_be_visible()
+    expect(page.locator(".bottom-scrub-bar")).to_be_visible()
+
+    # Turn on semantic search
+    page.locator("#semanticToggle").click()
+    page.locator("#searchInput").fill("golden beach sunset")
+    page.locator("#searchInput").press("Enter")
+
+    # Semantic search toolbar is visible
+    toolbar = page.locator("#semanticSearchToolbar")
+    expect(toolbar).to_be_visible()
+    expect(page.locator("#semanticSearchTitle")).to_have_text('AI Search: "golden beach sunset"')
+    expect(page.locator("#semanticSearchCount")).to_contain_text("3 items")
+    expect(page.locator("#semanticSearchHint")).to_have_text("(sorted by probability rank)")
+
+    # Secondary controls & filters are hidden
+    expect(page.locator(".sort-selector")).to_be_hidden()
+    expect(page.locator(".bottom-scrub-bar")).to_be_hidden()
+    expect(page.locator("#filterIndicator")).to_be_hidden()
+    expect(page.locator("#viewModeToggle")).to_be_hidden()
+
+    # Flat grid: NO date groups
+    expect(page.locator(".date-group")).to_have_count(0)
+    expect(page.locator(".semantic-search-grid")).to_be_visible()
+
+    # 3 cards ordered by probability rank
+    search_cards = page.locator(".photo-card")
+    expect(search_cards).to_have_count(3)
+    expect(search_cards.nth(0).locator(".card-filename")).to_have_text("sunset.bmp")
+    expect(search_cards.nth(0).locator(".similarity-rank-badge")).to_have_text("#1")
+    expect(search_cards.nth(1).locator(".card-filename")).to_have_text("beach.bmp")
+    expect(search_cards.nth(1).locator(".similarity-rank-badge")).to_have_text("#2")
+    expect(search_cards.nth(2).locator(".card-filename")).to_have_text("forest.bmp")
+    expect(search_cards.nth(2).locator(".similarity-rank-badge")).to_have_text("#3")
+
+    # Clicking/selecting a card should never unhide the sort selector
+    search_cards.nth(0).click()
+    expect(page.locator(".sort-selector")).to_be_hidden()
+
+
+def test_loupe_navigation_in_semantic_search_probability_rank_order(server, page: Page):
+    """Loupe viewer navigates sequentially through semantic search results in probability rank order."""
+    page.route("**/api/semantic/status*", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"ready": True, "built": True, "indexSize": 6, "modelId": "clip-vit-base"})
+    ))
+
+    def handle_semantic_search(route):
+        media_items = [
+            {"id": 4, "file_name": "sunset.bmp", "date_taken": 1770000000, "similarity_score": 0.94},
+            {"id": 1, "file_name": "beach.bmp", "date_taken": 1768000000, "similarity_score": 0.88},
+            {"id": 5, "file_name": "forest.bmp", "date_taken": 1765000000, "similarity_score": 0.72},
+        ]
+        items = [
+            {"mediaId": 4, "score": 0.94},
+            {"mediaId": 1, "score": 0.88},
+            {"mediaId": 5, "score": 0.72},
+        ]
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"items": items, "media_items": media_items, "total": 3})
+        )
+
+    page.route("**/api/semantic/search*", handle_semantic_search)
+    page.goto(server["url"])
+
+    page.locator("#semanticToggle").click()
+    page.locator("#searchInput").fill("golden beach sunset")
+    page.locator("#searchInput").press("Enter")
+
+    search_cards = page.locator(".photo-card")
+    expect(search_cards).to_have_count(3)
+
+    # Double click the rank #1 card to open Loupe
+    search_cards.nth(0).dblclick()
+    loupe_modal = page.locator("#loupeModal")
+    expect(loupe_modal).to_be_visible()
+
+    # Loupe index indicates Rank #1 of 3
+    expect(page.locator("#loupeFileName")).to_have_text("sunset.bmp")
+    expect(page.locator("#loupeIndex")).to_contain_text("Rank #1 of 3")
+    expect(page.locator("#loupeIndex")).to_contain_text("golden beach sunset")
+
+    # Press ArrowRight to move to Rank #2
+    page.keyboard.press("ArrowRight")
+    expect(page.locator("#loupeFileName")).to_have_text("beach.bmp")
+    expect(page.locator("#loupeIndex")).to_contain_text("Rank #2 of 3")
+
+    # Press ArrowRight to move to Rank #3
+    page.keyboard.press("ArrowRight")
+    expect(page.locator("#loupeFileName")).to_have_text("forest.bmp")
+    expect(page.locator("#loupeIndex")).to_contain_text("Rank #3 of 3")
+
+    # Press ArrowLeft to go back to Rank #2
+    page.keyboard.press("ArrowLeft")
+    expect(page.locator("#loupeFileName")).to_have_text("beach.bmp")
+    expect(page.locator("#loupeIndex")).to_contain_text("Rank #2 of 3")
+
+    # Press Escape closes Loupe, preserving the search grid
+    page.keyboard.press("Escape")
+    expect(loupe_modal).to_be_hidden()
+    expect(page.locator(".semantic-search-grid")).to_be_visible()
+    expect(page.locator(".photo-card")).to_have_count(3)
+
+
+def test_close_semantic_search_restores_normal_grid(server, page: Page):
+    """Clicking close search button restores normal grid view, sort selector, timeline, and date headers."""
+    page.route("**/api/semantic/status*", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"ready": True, "built": True, "indexSize": 6, "modelId": "clip-vit-base"})
+    ))
+
+    def handle_semantic_search(route):
+        media_items = [
+            {"id": 4, "file_name": "sunset.bmp", "date_taken": 1770000000, "similarity_score": 0.94},
+            {"id": 1, "file_name": "beach.bmp", "date_taken": 1768000000, "similarity_score": 0.88},
+        ]
+        items = [
+            {"mediaId": 4, "score": 0.94},
+            {"mediaId": 1, "score": 0.88},
+        ]
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"items": items, "media_items": media_items, "total": 2})
+        )
+
+    page.route("**/api/semantic/search*", handle_semantic_search)
+    page.goto(server["url"])
+
+    page.locator("#semanticToggle").click()
+    page.locator("#searchInput").fill("sunset")
+    page.locator("#searchInput").press("Enter")
+
+    expect(page.locator(".photo-card")).to_have_count(2)
+    expect(page.locator("#semanticSearchToolbar")).to_be_visible()
+    expect(page.locator(".sort-selector")).to_be_hidden()
+    expect(page.locator(".bottom-scrub-bar")).to_be_hidden()
+
+    # Click Close Search button
+    page.locator("#closeSemanticSearchBtn").click()
+
+    # Toolbar hidden, controls restored
+    expect(page.locator("#semanticSearchToolbar")).to_be_hidden()
+    expect(page.locator(".sort-selector")).to_be_visible()
+    expect(page.locator(".bottom-scrub-bar")).to_be_visible()
+    expect(page.locator("#filterIndicator")).to_be_visible()
+    expect(page.locator("#searchInput")).to_have_value("")
+
+    # Normal grid restored with date groups and 6 photos
+    expect(page.locator(".photo-card")).to_have_count(6)
+    expect(page.locator(".date-group")).to_have_count(3)
+    expect(page.locator(".similarity-rank-badge")).to_have_count(0)
+
+
+def test_escape_key_closes_semantic_search_grid(server, page: Page):
+    """Pressing Escape when Loupe is closed exits semantic search and restores normal grid."""
+    page.route("**/api/semantic/status*", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"ready": True, "built": True, "indexSize": 6, "modelId": "clip-vit-base"})
+    ))
+
+    def handle_semantic_search(route):
+        media_items = [
+            {"id": 4, "file_name": "sunset.bmp", "date_taken": 1770000000, "similarity_score": 0.94},
+        ]
+        items = [
+            {"mediaId": 4, "score": 0.94},
+        ]
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"items": items, "media_items": media_items, "total": 1})
+        )
+
+    page.route("**/api/semantic/search*", handle_semantic_search)
+    page.goto(server["url"])
+
+    page.locator("#semanticToggle").click()
+    page.locator("#searchInput").fill("sunset")
+    page.locator("#searchInput").press("Enter")
+
+    expect(page.locator(".photo-card")).to_have_count(1)
+    expect(page.locator("#semanticSearchToolbar")).to_be_visible()
+
+    # Unfocus search input to simulate pressing Escape anywhere in grid
+    page.locator(".photo-card").first.click()
+
+    # First Escape clears card selection
+    page.keyboard.press("Escape")
+
+    # Second Escape closes search
+    page.keyboard.press("Escape")
+
+    expect(page.locator("#semanticSearchToolbar")).to_be_hidden()
+    expect(page.locator(".photo-card")).to_have_count(6)
+    expect(page.locator(".date-group")).to_have_count(3)
+
+

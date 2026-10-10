@@ -66,18 +66,9 @@ export function updateSettingsSemanticStatus() {
 export async function performSemanticSearch(query, limit = 100, options = {}) {
     if (!query || !state.semanticSearchAvailable) return null;
     
-    const filters = {};
-    if (state.activeMediaType && state.activeMediaType !== 'all') {
-        filters.mediaType = state.activeMediaType;
-    }
-    if (state.activeTimelinePeriod) {
-        const bounds = getTimelinePeriodBounds(state.activeTimelinePeriod);
-        if (bounds && bounds.from) filters.dateFrom = bounds.from;
-        if (bounds && bounds.to) filters.dateTo = bounds.to;
-    }
-    if (state.ratingFilter && state.ratingFilter > 0) {
-        filters.ratingMin = state.ratingFilter;
-    }
+    // Semantic search results are ranked strictly by probability across the catalog;
+    // secondary filters are only sent if explicitly provided in options.filters
+    const filters = options.filters || {};
     
     try {
         const result = await api.post('/api/semantic/search', {

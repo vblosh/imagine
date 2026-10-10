@@ -9,6 +9,7 @@ import { getOriginalMediaUrl } from './api.js';
 import { updateItemRating, loadMoreMedia } from './media-grid.js';
 import { renderStarWidget } from './inspector.js';
 import { closeQuickEdit, quickEditState } from './quick-edit.js';
+import { t } from './i18n.js';
 
 export const LOUPE_MIN_ZOOM = 1.0;
 export const LOUPE_MAX_ZOOM = 5.0;
@@ -169,7 +170,12 @@ export function updateLoupeView() {
 
   if (dom.loupeFileName) dom.loupeFileName.textContent = item.file_name;
   if (dom.loupeIndex) {
-    if (state.totalCount > state.mediaItems.length) {
+    if (state.semanticSearchActive) {
+      const rank = item.rank || (state.loupeIndex + 1);
+      const queryStr = state.semanticSearchQuery ? ` • "${state.semanticSearchQuery}"` : '';
+      const formatted = t('rank_loupe_format', { rank, total: state.mediaItems.length });
+      dom.loupeIndex.textContent = `${formatted}${queryStr}`;
+    } else if (state.totalCount > state.mediaItems.length) {
       dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length} (${state.totalCount} total)`;
     } else {
       dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length}`;

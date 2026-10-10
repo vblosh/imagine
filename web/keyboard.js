@@ -13,7 +13,8 @@ import {
   toggleFlagsForIds,
   batchUpdateRatings,
   batchUpdateFlags,
-  updateBatchBar
+  updateBatchBar,
+  closeSemanticSearch
 } from './media-grid.js';
 import { updateInspector } from './inspector.js';
 import { saveInspectorCollapsedState } from './persistence.js';
@@ -203,6 +204,16 @@ export function handleEscapeKey() {
       clearCardSelections();
     }
     navigateBackToCategory();
+    return true;
+  }
+
+  // 6c. Semantic AI Search Grid
+  if (state.semanticSearchActive) {
+    if (state.selectedIds && state.selectedIds.size > 0) {
+      clearCardSelections();
+      return true;
+    }
+    closeSemanticSearch();
     return true;
   }
 

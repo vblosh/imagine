@@ -283,8 +283,47 @@ export async function loadMedia(append = false, { preserveScroll = false } = {})
 
     let res;
     if (isSemantic) {
+      if (!state.semanticSearchActive) {
+        state.semanticSearchSnapshot = {
+          activeTab: state.activeTab,
+          activeAlbumId: state.activeAlbumId,
+          activeTagId: state.activeTagId,
+          activeTagIds: new Set(state.activeTagIds),
+          activeFolders: new Set(state.activeFolders),
+          activeMediaType: state.activeMediaType,
+          activeStatusFilter: state.activeStatusFilter,
+          activeTimelinePeriod: state.activeTimelinePeriod ? { ...state.activeTimelinePeriod } : null,
+          sortBy: state.sortBy,
+          sortDesc: state.sortDesc
+        };
+      }
+      state.semanticSearchActive = true;
+      state.semanticSearchQuery = state.searchText;
       res = await performSemanticSearch(state.searchText, pageLimit, { signal: abortController.signal });
     } else {
+      if (state.semanticSearchActive) {
+        state.semanticSearchActive = false;
+        state.semanticSearchQuery = '';
+        if (state.semanticSearchSnapshot) {
+          const snap = state.semanticSearchSnapshot;
+          state.activeTab = snap.activeTab || 'media';
+          state.activeAlbumId = snap.activeAlbumId || null;
+          state.activeTagId = snap.activeTagId || null;
+          state.activeTagIds = new Set(snap.activeTagIds || []);
+          state.activeFolders = new Set(snap.activeFolders || []);
+          state.activeMediaType = snap.activeMediaType || 'all';
+          state.activeStatusFilter = snap.activeStatusFilter || null;
+          state.activeTimelinePeriod = snap.activeTimelinePeriod ? { ...snap.activeTimelinePeriod } : null;
+          state.sortBy = snap.sortBy || 'date_taken';
+          state.sortDesc = snap.sortDesc !== undefined ? snap.sortDesc : true;
+          if (dom.sortSelect) {
+            dom.sortSelect.value = `${state.sortBy}-${state.sortDesc ? 'desc' : 'asc'}`;
+          }
+          state.semanticSearchSnapshot = null;
+          updateSidebarActive();
+          renderTimeline();
+        }
+      }
       res = await api.get('/api/media', params, { signal: abortController.signal });
     }
     if (fetchId !== currentLoadMediaId) return;
@@ -310,6 +349,15 @@ export async function loadMedia(append = false, { preserveScroll = false } = {})
       rawList.push(...nextItems);
     }
 
+    const scoreMap = new Map();
+    if (isSemantic && res && Array.isArray(res.items)) {
+      res.items.forEach(it => {
+        if (it && it.mediaId != null) {
+          scoreMap.set(it.mediaId, it.score);
+        }
+      });
+    }
+
     // Deduplicate initial items by ID and normalize schema
     const seenIds = new Set();
     const items = [];
@@ -317,6 +365,13 @@ export async function loadMedia(append = false, { preserveScroll = false } = {})
       const item = normalizeMediaItem(raw);
       if (item && !seenIds.has(item.id)) {
         seenIds.add(item.id);
+        if (isSemantic) {
+          item.rank = items.length + 1;
+          const score = scoreMap.has(item.id) ? scoreMap.get(item.id) : (raw.score ?? raw.similarity_score);
+          if (score !== undefined) {
+            item.similarity_score = score;
+          }
+        }
         items.push(item);
       }
     }
@@ -364,6 +419,7 @@ export async function loadMedia(append = false, { preserveScroll = false } = {})
     updateFilterLabel();
     updateBatchBar();
     updateInspector();
+    syncSemanticSearchUI();
   } catch (err) {
     if (err.name === 'AbortError') return;
     if (fetchId === currentLoadMediaId) {
@@ -382,7 +438,7 @@ export async function loadMedia(append = false, { preserveScroll = false } = {})
 
 export async function loadMoreMedia() {
   // Avoid concurrent non-append and append requests, or multiple append requests
-  if (state.isLoadingMore || state.isLoadingMedia || state.mediaItems.length >= state.totalCount || (state.semanticSearchEnabled && state.searchText && state.semanticSearchAvailable)) {
+  if (state.isLoadingMore || state.isLoadingMedia || state.mediaItems.length >= state.totalCount || state.semanticSearchActive || (state.semanticSearchEnabled && state.searchText && state.semanticSearchAvailable)) {
     return;
   }
 
@@ -578,6 +634,22 @@ export function renderGrid() {
   }
   if (dom.emptyState) dom.emptyState.style.display = 'none';
 
+  if (state.semanticSearchActive) {
+    const cardsWrap = document.createElement('div');
+    cardsWrap.className = 'group-cards semantic-search-grid';
+    state.mediaItems.forEach(item => {
+      const card = createPhotoCard(item);
+      cardMap.set(item.id, card);
+      cardsWrap.appendChild(card);
+    });
+    dom.mediaGrid.innerHTML = '';
+    dom.mediaGrid.appendChild(cardsWrap);
+    previousSelectedIds = new Set(state.selectedIds);
+    initGridAccessibility();
+    updateRovingTabindex();
+    return;
+  }
+
   if (isAlbumOrderMode()) {
     const cardsWrap = document.createElement('div');
     cardsWrap.className = 'group-cards album-order-grid';
@@ -656,7 +728,7 @@ export function renderGrid() {
 export function appendMediaToGrid(newItems) {
   if (!dom.mediaGrid) return;
 
-  if (isAlbumOrderMode()) {
+  if (state.semanticSearchActive || isAlbumOrderMode()) {
     renderGrid();
     return;
   }
@@ -799,6 +871,10 @@ export function createPhotoCard(item) {
   const dateStr = item.date_taken ? `, ${formatDate(item.date_taken)}` : '';
   card.setAttribute('aria-label', `${item.file_name || 'Photo'}${dateStr}`);
 
+  if (state.semanticSearchActive && item.rank) {
+    card.dataset.rank = String(item.rank);
+  }
+
   if (isAlbumOrderMode()) {
     card.classList.add('album-order-card');
     card.draggable = !albumOrderSaveInFlight;
@@ -818,6 +894,10 @@ export function createPhotoCard(item) {
   const fallbackAttr = (item.content_hash && thumbUrl !== originalMediaUrl)
     ? `onerror="this.onerror=null;this.src='${escapeHtml(originalMediaUrl)}';"`
     : `onerror="this.onerror=null;"`;
+
+  const rankBadge = (state.semanticSearchActive && item.rank)
+    ? `<span class="similarity-rank-badge" title="Rank #${item.rank}${item.similarity_score != null ? ` (${Math.round(item.similarity_score * 100)}%)` : ''}">#${item.rank}</span>`
+    : '';
 
   const flagBadge = item.flag === 1
     ? '<span class="flag-badge pick" title="Pick">✔</span>'
@@ -846,6 +926,7 @@ export function createPhotoCard(item) {
     <div class="photo-thumb-wrap">
       <img src="${escapeHtml(thumbUrl)}" alt="${safeFileName}" loading="lazy" draggable="false" ${fallbackAttr}>
       <div class="card-badges">
+        ${rankBadge}
         ${flagBadge}
         ${mediaBadge}
       </div>
@@ -1017,7 +1098,7 @@ export function updateBatchBar() {
     if (sortSelector) sortSelector.style.display = 'none';
   } else {
     dom.batchActionBar.style.display = 'none';
-    if (sortSelector) sortSelector.style.display = '';
+    if (sortSelector) sortSelector.style.display = state.semanticSearchActive ? 'none' : '';
   }
 }
 
@@ -1783,7 +1864,93 @@ export function updateFilterLabel() {
   }
 }
 
+export function syncSemanticSearchUI() {
+  const isSearchActive = Boolean(state.semanticSearchActive);
+  if (dom.contentToolbar) {
+    dom.contentToolbar.classList.toggle('semantic-search-active', isSearchActive);
+  }
+  if (dom.semanticSearchToolbar) {
+    dom.semanticSearchToolbar.style.display = isSearchActive ? 'flex' : 'none';
+    if (isSearchActive) {
+      const query = state.semanticSearchQuery || state.searchText || '';
+      if (dom.semanticSearchTitle) {
+        dom.semanticSearchTitle.textContent = query
+          ? t('semantic_search_results_title', { query })
+          : (t('semantic_search_results_title_generic') || 'AI Search');
+      }
+      if (dom.semanticSearchCount) {
+        const count = state.mediaItems.length;
+        const noun = count === 1 ? t('item_singular') : t('item_plural');
+        dom.semanticSearchCount.textContent = `${count} ${noun}`;
+      }
+      if (dom.semanticSearchHint) {
+        dom.semanticSearchHint.textContent = t('semantic_search_rank_hint') || '(sorted by probability rank)';
+      }
+    }
+  }
+
+  if (dom.filterIndicator) {
+    dom.filterIndicator.style.display = isSearchActive ? 'none' : '';
+  }
+  if (dom.viewModeToggle) {
+    dom.viewModeToggle.style.display = isSearchActive ? 'none' : '';
+  }
+  const sortSelector = dom.sortSelect ? dom.sortSelect.closest('.sort-selector') : document.querySelector('.sort-selector');
+  if (sortSelector) {
+    sortSelector.style.display = isSearchActive ? 'none' : '';
+  }
+  if (dom.bottomScrubBar) {
+    dom.bottomScrubBar.style.display = isSearchActive ? 'none' : '';
+  }
+}
+
+export async function closeSemanticSearch() {
+  if (!state.semanticSearchActive && !state.searchText) return;
+
+  state.semanticSearchActive = false;
+  state.semanticSearchQuery = '';
+
+  if (state.searchDebounceTimer) {
+    clearTimeout(state.searchDebounceTimer);
+    state.searchDebounceTimer = null;
+  }
+  state.searchText = '';
+  if (dom.searchInput) {
+    dom.searchInput.value = '';
+  }
+  if (dom.clearSearchBtn) {
+    dom.clearSearchBtn.style.display = 'none';
+  }
+
+  if (state.semanticSearchSnapshot) {
+    const snap = state.semanticSearchSnapshot;
+    state.activeTab = snap.activeTab || 'media';
+    state.activeAlbumId = snap.activeAlbumId || null;
+    state.activeTagId = snap.activeTagId || null;
+    state.activeTagIds = new Set(snap.activeTagIds || []);
+    state.activeFolders = new Set(snap.activeFolders || []);
+    state.activeMediaType = snap.activeMediaType || 'all';
+    state.activeStatusFilter = snap.activeStatusFilter || null;
+    state.activeTimelinePeriod = snap.activeTimelinePeriod ? { ...snap.activeTimelinePeriod } : null;
+    state.sortBy = snap.sortBy || 'date_taken';
+    state.sortDesc = snap.sortDesc !== undefined ? snap.sortDesc : true;
+    if (dom.sortSelect) {
+      dom.sortSelect.value = `${state.sortBy}-${state.sortDesc ? 'desc' : 'asc'}`;
+    }
+    state.semanticSearchSnapshot = null;
+  }
+
+  syncSemanticSearchUI();
+  updateSidebarActive();
+  renderTimeline();
+  await loadMedia();
+}
+
 export function clearAllFilters() {
+  state.semanticSearchActive = false;
+  state.semanticSearchQuery = '';
+  state.semanticSearchSnapshot = null;
+  syncSemanticSearchUI();
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
   state.activeLastImported = false;
