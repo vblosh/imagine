@@ -141,6 +141,13 @@ CLIP models understand descriptive visual concepts, actions, styles, lighting, a
   - `friends laughing around a campfire`
   - `bride and groom wedding portrait`
 
+### Executing Queries & Typing Debounce
+
+When Semantic AI search is enabled:
+- **Immediate Search on Enter**: Press **Enter** at any time to execute the search immediately without waiting.
+- **2-Second Debounce for Sentence Queries**: Natural language queries often involve composing multi-word sentences and descriptions. To avoid executing heavy neural network text embeddings repeatedly on natural typing pauses between words, Imagine applies a **2-second debounce** timer (`SEMANTIC_SEARCH_DEBOUNCE_MS = 2000`). If you pause typing for 2 seconds, the search proceeds automatically.
+- **Fast Standard Keyword Search**: When Semantic AI search is toggled off, the search box switches back to standard metadata filtering with a snappy 500ms debounce.
+
 ### Search Results
 
 Results are displayed in the media grid sorted by semantic similarity score, with the most relevant visual matches appearing first.

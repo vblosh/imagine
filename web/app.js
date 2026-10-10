@@ -192,7 +192,8 @@ import {
   startSemanticScan,
   cancelSemanticScan,
   renderSemanticJobState,
-  onSemanticScopeChange
+  onSemanticScopeChange,
+  SEMANTIC_SEARCH_DEBOUNCE_MS
 } from './semantic-search.js';
 
 async function removeSelectedFromActiveAlbum() {
@@ -215,6 +216,21 @@ async function removeSelectedFromActiveAlbum() {
     updateBatchBar();
     updateInspectorAlbumActions();
   }
+}
+
+export const STANDARD_SEARCH_DEBOUNCE_MS = 500;
+export { SEMANTIC_SEARCH_DEBOUNCE_MS };
+
+export function getSearchDebounceDelay(ignoreTestMode = false) {
+  if (!ignoreTestMode) {
+    if (typeof window !== 'undefined' && window.__TEST_SEARCH_DEBOUNCE_DELAY__ !== undefined) {
+      return window.__TEST_SEARCH_DEBOUNCE_DELAY__;
+    }
+    if (typeof window !== 'undefined' && window.__TEST_MODE__) {
+      return 50;
+    }
+  }
+  return state.semanticSearchEnabled ? SEMANTIC_SEARCH_DEBOUNCE_MS : STANDARD_SEARCH_DEBOUNCE_MS;
 }
 
 export function setupEventListeners() {
@@ -309,7 +325,7 @@ export function setupEventListeners() {
         saveActiveFoldersPreference(state.activeFolders);
         updateSidebarActive();
       }
-      const debounceDelay = window.__TEST_MODE__ ? 50 : 500;
+      const debounceDelay = getSearchDebounceDelay();
       state.searchDebounceTimer = setTimeout(() => {
         state.searchDebounceTimer = null;
         state.searchText = val;
@@ -337,6 +353,13 @@ export function setupEventListeners() {
       }
       state.semanticSearchEnabled = !state.semanticSearchEnabled;
       updateSemanticToggleVisibility();
+      if (state.searchDebounceTimer) {
+        clearTimeout(state.searchDebounceTimer);
+        state.searchDebounceTimer = null;
+        const val = dom.searchInput ? dom.searchInput.value.trim() : '';
+        state.searchText = val;
+        saveSearchPreference(val);
+      }
       if (state.searchText) loadMedia();
     });
   }
@@ -1936,5 +1959,8 @@ window._imagineApp = {
   onSemanticScopeChange,
   openFaceAnalysisDialog,
   refreshFaceStatus,
-  updateSettingsFaceStatus
+  updateSettingsFaceStatus,
+  STANDARD_SEARCH_DEBOUNCE_MS,
+  SEMANTIC_SEARCH_DEBOUNCE_MS,
+  getSearchDebounceDelay
 };

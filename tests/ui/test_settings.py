@@ -154,6 +154,7 @@ def test_semantic_index_modal_dialog_styling_and_behavior(server, page: Page):
 def test_semantic_toggle_disabled_when_clip_inactive(server, page: Page):
     """The Sparkle / AI toggle button is disabled when CLIP is inactive."""
     page.goto(server["url"])
+    page.wait_for_load_state("networkidle")
 
     toggle = page.locator("#semanticToggle")
     expect(toggle).to_be_visible()

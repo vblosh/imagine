@@ -143,7 +143,7 @@ Helper utilities for programmatically creating:
     - Rating High to Low (`rating-desc`)
     - File Name A-Z (`file_name-asc`)
     - File Size Largest (`file_size-desc`)
-  - Real-time search `#searchInput` with 300ms debounce: searches filename, camera, lens, and tags.
+  - Real-time search `#searchInput` with debouncing (500ms for standard keyword search, 2000ms for semantic AI search; immediate on Enter): searches filename, camera, lens, tags, or semantic visual descriptions.
   - Clear search button `#clearSearchBtn` clears input and resets grid.
 
 #### [NEW] `tests/ui/test_navigation_and_filters.py`

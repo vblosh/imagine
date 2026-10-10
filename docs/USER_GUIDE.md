@@ -645,7 +645,7 @@ Traditional keyword search matches only filenames, folders, EXIF data, and tags.
 
 ### How to Search
 - Click the **Sparkle / AI toggle button** (`✨` / `☀️`) inside the search bar in the top navigation bar to enable Semantic AI mode.
-- Type any natural English description and press **Enter**.
+- Type any natural English description and press **Enter** to search immediately, or pause typing for 2 seconds (debounced). The 2-second debounce lets you compose descriptive sentences without triggering multiple intermediate searches on natural typing pauses between words.
 - Results are ranked by visual relevance. Combine with star ratings, pick/reject flags, or timeline date filters for fine-grained discovery.
 - Click **✕** in the search bar to clear the search.
 

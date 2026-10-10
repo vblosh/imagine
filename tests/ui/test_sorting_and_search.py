@@ -2,6 +2,8 @@
 Deterministic UI tests for Sorting and Search functionality.
 """
 
+import json
+import time
 from playwright.sync_api import Page, expect
 
 
@@ -137,4 +139,123 @@ def test_search_input_debounce_and_enter_key(server, page: Page):
     page.locator("#clearSearchBtn").click()
     expect(cards).to_have_count(6)
     expect(search_input).to_have_value("")
+
+
+def test_semantic_search_debounce_delay_constants_and_logic(server, page: Page):
+    """Semantic search uses 2000ms debounce while standard search uses 500ms debounce."""
+    page.goto(server["url"])
+
+    delays = page.evaluate("""() => {
+        const app = window._imagineApp;
+        const stdConst = app.STANDARD_SEARCH_DEBOUNCE_MS;
+        const semConst = app.SEMANTIC_SEARCH_DEBOUNCE_MS;
+
+        // With semantic search OFF
+        app.state.semanticSearchEnabled = false;
+        const delayOff = app.getSearchDebounceDelay(true);
+
+        // With semantic search ON
+        app.state.semanticSearchEnabled = true;
+        const delayOn = app.getSearchDebounceDelay(true);
+
+        return { stdConst, semConst, delayOff, delayOn };
+    }""")
+
+    assert delays["stdConst"] == 500
+    assert delays["semConst"] == 2000
+    assert delays["delayOff"] == 500
+    assert delays["delayOn"] == 2000
+
+
+def test_semantic_search_sentence_typing_debounced_and_proceeds_on_enter(server, page: Page):
+    """When semantic search is on and user enters a sentence with pauses, search does not
+    fire repeatedly on pauses below debounce time, and proceeds immediately on Enter."""
+    page.route("**/api/semantic/status*", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"ready": True, "built": True, "indexSize": 10, "modelId": "clip-test"})
+    ))
+
+    semantic_calls = []
+
+    def handle_semantic_search(route):
+        post_data = route.request.post_data_json or {}
+        semantic_calls.append(post_data.get("query", ""))
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"media_items": [], "total": 0})
+        )
+
+    page.route("**/api/semantic/search*", handle_semantic_search)
+    page.goto(server["url"])
+
+    # Toggle semantic search ON
+    page.locator("#semanticToggle").click()
+    page.evaluate("() => { window.__TEST_SEARCH_DEBOUNCE_DELAY__ = 250; }")
+
+    search_input = page.locator("#searchInput")
+    search_input.click()
+
+    # User enters words with short pauses between them (< 250ms debounce)
+    # word 1
+    search_input.press_sequentially("golden", delay=15)
+    time.sleep(0.08)  # 80ms pause
+    assert len(semantic_calls) == 0, "Search should not run during pause shorter than debounce"
+
+    # word 2
+    search_input.press_sequentially(" retriever", delay=15)
+    time.sleep(0.08)  # 80ms pause
+    assert len(semantic_calls) == 0, "Search should not run during second pause"
+
+    # word 3
+    search_input.press_sequentially(" in snow", delay=15)
+    time.sleep(0.05)  # 50ms pause
+    assert len(semantic_calls) == 0, "Search should not run during third pause"
+
+    # Press Enter: triggers search immediately
+    search_input.press("Enter")
+    assert len(semantic_calls) == 1, "Enter should proceed search immediately"
+    assert semantic_calls[0] == "golden retriever in snow"
+
+
+def test_semantic_search_sentence_typing_proceeds_after_debouncing_pause(server, page: Page):
+    """When semantic search is on, search automatically proceeds after debouncing time."""
+    page.route("**/api/semantic/status*", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"ready": True, "built": True, "indexSize": 10, "modelId": "clip-test"})
+    ))
+
+    semantic_calls = []
+
+    def handle_semantic_search(route):
+        post_data = route.request.post_data_json or {}
+        semantic_calls.append(post_data.get("query", ""))
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"media_items": [], "total": 0})
+        )
+
+    page.route("**/api/semantic/search*", handle_semantic_search)
+    page.goto(server["url"])
+
+    # Toggle semantic search ON
+    page.locator("#semanticToggle").click()
+    page.evaluate("() => { window.__TEST_SEARCH_DEBOUNCE_DELAY__ = 150; }")
+
+    search_input = page.locator("#searchInput")
+    search_input.click()
+    search_input.press_sequentially("sunset over mountains", delay=10)
+
+    # Immediately after typing, debounce hasn't elapsed yet
+    assert len(semantic_calls) == 0
+
+    # Wait for debounce time to elapse (150ms delay + buffer)
+    page.wait_for_timeout(400)
+
+    # Now debounce timer fired and search proceeded
+    assert len(semantic_calls) == 1
+    assert semantic_calls[0] == "sunset over mountains"
 

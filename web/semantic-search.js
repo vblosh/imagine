@@ -5,6 +5,8 @@ import { t } from './i18n.js';
 import { getTimelinePeriodBounds } from './timeline-range.js';
 import { showModal, hideModal } from './modals.js';
 
+export const SEMANTIC_SEARCH_DEBOUNCE_MS = 2000;
+
 let activeJobId = null;
 let activeJobPollTimer = null;
 
