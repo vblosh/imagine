@@ -17,6 +17,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#elif defined(__linux__)
+#include <malloc.h>
 #endif
 
 #ifndef IMAGINE_FACE_ANALYSIS_BUILT
@@ -274,6 +276,8 @@ void Engine::unload() {
     impl_->info.loaded = false;
 #if defined(_WIN32)
     SetProcessWorkingSetSize(GetCurrentProcess(), static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1));
+#elif defined(__linux__)
+    malloc_trim(0);
 #endif
     IMAGINE_LOG_INFO("CLIP engine models unloaded; working set memory reclaimed");
 #endif
