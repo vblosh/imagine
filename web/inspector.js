@@ -23,6 +23,7 @@ import { loadMetadata, renderGrid, loadMedia } from './grid.js';
 import { t } from './i18n.js';
 import { saveInspectorCollapsedState } from './persistence.js';
 import { timelinePeriodContainsTimestamp } from './timeline-range.js';
+import { ensureLeafletLoaded } from './leaflet-loader.js';
 
 let currentInspectorFetchId = 0;
 let inspectorAbortController = null;
@@ -316,14 +317,17 @@ export function renderInspectorTags(item) {
 
 export { renderStarWidget };
 
-export function updateInspectorMiniMap(item) {
+export async function updateInspectorMiniMap(item) {
   if (!dom.inspectorMiniMap) return;
-  if (!item || !window.L) {
+  if (!item || !hasValidGps(item)) {
     if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'none';
     if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'none';
     dom.inspectorMiniMap.style.display = 'none';
     return;
   }
+
+  await ensureLeafletLoaded();
+  if (!window.L) return;
 
   const exif = item.exif || {};
   if (hasValidGps(item)) {

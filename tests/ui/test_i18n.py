@@ -191,6 +191,7 @@ def test_i18n_language_persistence_across_page_reload(server, page: Page):
     # Change to Chinese
     page.locator("#langSelect").select_option("zh")
     expect(page.locator("#langSelect")).to_have_value("zh")
+    expect(page.locator("html")).to_have_attribute("lang", "zh")
 
     # Reload page
     page.reload()
@@ -204,6 +205,7 @@ def test_i18n_language_persistence_across_page_reload(server, page: Page):
     # Change to German
     page.locator("#langSelect").select_option("de")
     expect(page.locator("#langSelect")).to_have_value("de")
+    expect(page.locator("html")).to_have_attribute("lang", "de")
 
     # Reload page
     page.reload()
@@ -414,6 +416,7 @@ def test_i18n_tag_modal_single_line_for_multiple_photos(server, page: Page):
 
     # Switch to German
     page.locator("#langSelect").select_option("de")
+    expect(page.locator("html")).to_have_attribute("lang", "de")
     page.locator("#batchAddTagBtn").click()
     expect(tag_modal).to_be_visible()
     expect(page.locator("#tagModalHeading")).to_have_text("Schlagwort zu 2 Fotos hinzufügen")
@@ -425,6 +428,7 @@ def test_i18n_tag_modal_single_line_for_multiple_photos(server, page: Page):
 
     # Switch to Spanish
     page.locator("#langSelect").select_option("es")
+    expect(page.locator("html")).to_have_attribute("lang", "es")
     page.locator("#batchAddTagBtn").click()
     expect(tag_modal).to_be_visible()
     expect(page.locator("#tagModalHeading")).to_have_text("Agregar etiqueta a 2 fotos")
@@ -436,6 +440,7 @@ def test_i18n_tag_modal_single_line_for_multiple_photos(server, page: Page):
 
     # Switch to Russian
     page.locator("#langSelect").select_option("ru")
+    expect(page.locator("html")).to_have_attribute("lang", "ru")
     page.locator("#batchAddTagBtn").click()
     expect(tag_modal).to_be_visible()
     expect(page.locator("#tagModalHeading")).to_have_text("Добавить тег к 2 фото")
@@ -447,6 +452,7 @@ def test_i18n_tag_modal_single_line_for_multiple_photos(server, page: Page):
 
     # Switch to Chinese
     page.locator("#langSelect").select_option("zh")
+    expect(page.locator("html")).to_have_attribute("lang", "zh")
     page.locator("#batchAddTagBtn").click()
     expect(tag_modal).to_be_visible()
     expect(page.locator("#tagModalHeading")).to_have_text("向 2 张照片添加标签")

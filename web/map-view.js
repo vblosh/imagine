@@ -23,13 +23,14 @@ import { openLoupeForMedia } from './loupe.js';
 import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { saveViewModePreference } from './persistence.js';
+import { ensureLeafletLoaded } from './leaflet-loader.js';
 
 let mapSearchAbortController = null;
 const geocodeCache = new Map();
 let currentMapSearchId = 0;
 let lastNominatimRequestTime = 0;
 
-export function switchViewMode(mode) {
+export async function switchViewMode(mode) {
   hideUnmappedTooltip();
   state.viewMode = mode;
   saveViewModePreference(mode);
@@ -40,8 +41,8 @@ export function switchViewMode(mode) {
     if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
     if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
     if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
+    await initMap();
     if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
-    initMap();
     if (state.mapInstance) {
       state.mapInstance.invalidateSize();
       setTimeout(() => {
@@ -83,8 +84,10 @@ export function switchViewMode(mode) {
   }
 }
 
-export function initMap() {
-  if (!window.L || state.mapInstance || !dom.leafletMap) return;
+export async function initMap() {
+  if (state.mapInstance || !dom.leafletMap) return;
+  await ensureLeafletLoaded();
+  if (state.mapInstance || !dom.leafletMap || !window.L) return;
   try {
     state.mapInstance = L.map(dom.leafletMap, {
       center: [30, 0],

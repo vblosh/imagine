@@ -4,20 +4,26 @@
  * IMAGINE - i18n locale key parity and duplicate check
  */
 
-import { translations, SUPPORTED_LANGUAGES } from '../web/i18n.js';
 import fs from 'node:fs';
+import { SUPPORTED_LANGUAGES } from '../web/i18n.js';
+import en from '../web/locales/en.js';
+import es from '../web/locales/es.js';
+import de from '../web/locales/de.js';
+import ru from '../web/locales/ru.js';
+import zh from '../web/locales/zh.js';
 
+const locales = { en, es, de, ru, zh };
 const langs = Object.keys(SUPPORTED_LANGUAGES);
 const keysByLang = {};
 let hasError = false;
 
 langs.forEach(l => {
-  if (!translations[l]) {
+  if (!locales[l]) {
     console.error(`Missing translation dictionary for locale: ${l}`);
     hasError = true;
     return;
   }
-  keysByLang[l] = new Set(Object.keys(translations[l]));
+  keysByLang[l] = new Set(Object.keys(locales[l]));
 });
 
 if (hasError) process.exit(1);
@@ -33,39 +39,24 @@ langs.forEach(l => {
   }
 });
 
-// Also check source code for duplicate keys
-const content = fs.readFileSync('web/i18n.js', 'utf8');
-const lines = content.split('\n');
-const transStart = lines.findIndex(line => line.includes('export const translations'));
-const langBlocks = {};
-let currentLang = null;
-
-lines.slice(transStart).forEach((line, idx) => {
-  const langMatch = line.match(/^\s*(en|es|de|ru|zh):\s*\{/);
-  if (langMatch) {
-    currentLang = langMatch[1];
-    langBlocks[currentLang] = [];
-    return;
-  }
-  if (currentLang) {
+// Also check each individual locale source file for duplicate keys
+langs.forEach(l => {
+  const content = fs.readFileSync(`web/locales/${l}.js`, 'utf8');
+  const lines = content.split('\n');
+  const seen = new Map();
+  lines.forEach((line, idx) => {
     const keyMatch = line.match(/^\s*([a-zA-Z0-9_]+):/);
     if (keyMatch) {
-      langBlocks[currentLang].push({ key: keyMatch[1], line: transStart + idx + 1 });
-    }
-  }
-});
-
-for (const lang of Object.keys(langBlocks)) {
-  const seen = new Map();
-  langBlocks[lang].forEach(item => {
-    if (seen.has(item.key)) {
-      console.error(`Duplicate key '${item.key}' in locale '${lang}' at line ${item.line} (first seen at line ${seen.get(item.key)})`);
-      hasError = true;
-    } else {
-      seen.set(item.key, item.line);
+      const key = keyMatch[1];
+      if (seen.has(key)) {
+        console.error(`Duplicate key '${key}' in locale '${l}' at line ${idx + 1} (first seen at line ${seen.get(key)})`);
+        hasError = true;
+      } else {
+        seen.set(key, idx + 1);
+      }
     }
   });
-}
+});
 
 if (hasError) {
   process.exit(1);

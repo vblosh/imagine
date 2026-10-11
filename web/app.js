@@ -666,12 +666,12 @@ export function setupEventListeners() {
 
   // Inspector Map Actions
   if (dom.inspectorShowOnMapBtn) {
-    dom.inspectorShowOnMapBtn.addEventListener('click', () => {
+    dom.inspectorShowOnMapBtn.addEventListener('click', async () => {
       if (state.selectedIds.size === 0) return;
       const id = Array.from(state.selectedIds)[0];
       const item = state.mediaItems.find(i => i.id === id);
       if (!item || !item.exif || !item.exif.has_gps) return;
-      switchViewMode('map');
+      await switchViewMode('map');
       if (state.mapInstance) {
         const targetLat = numeric(item.exif.latitude);
         const targetLng = numeric(item.exif.longitude);
@@ -696,10 +696,10 @@ export function setupEventListeners() {
     });
   }
   if (dom.inspectorPlaceOnMapBtn) {
-    dom.inspectorPlaceOnMapBtn.addEventListener('click', () => {
+    dom.inspectorPlaceOnMapBtn.addEventListener('click', async () => {
       if (state.selectedIds.size === 0) return;
       const id = Array.from(state.selectedIds)[0];
-      switchViewMode('map');
+      await switchViewMode('map');
       state.unmappedTrayOpen = true;
       if (dom.unmappedTray) dom.unmappedTray.style.display = 'flex';
       renderUnmappedTray();
@@ -1604,7 +1604,7 @@ let initialized = false;
 export async function init() {
   if (initialized) return;
   initialized = true;
-  initI18n();
+  await initI18n();
   onLanguageChange(() => {
     if (dom.mobileLangSelect && dom.langSelect) {
       dom.mobileLangSelect.value = dom.langSelect.value;
@@ -1638,7 +1638,7 @@ export async function init() {
 
   const savedMode = getSavedViewMode();
   if (savedMode === 'map') {
-    switchViewMode('map');
+    await switchViewMode('map');
   }
 
   await loadMetadata();

@@ -1,0 +1,208 @@
+/* Top Bar */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 16px;
+  background-color: var(--bg-topbar);
+  border-bottom: 1px solid var(--border-color);
+  gap: 16px;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.top-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  color: #ffffff;
+}
+
+.logo-icon {
+  color: var(--accent-color);
+}
+
+.logo-sub {
+  font-weight: 400;
+  color: var(--accent-color);
+  font-size: 13px;
+}
+
+/* View Tabs */
+.view-tabs {
+  display: flex;
+  background-color: #1a1a1a;
+  border-radius: 4px;
+  padding: 2px;
+  border: 1px solid var(--border-color);
+}
+
+.tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  background-color: var(--border-color);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* Top Bar Center - Search */
+.top-bar-center {
+  flex: 1;
+  max-width: 400px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.search-box .search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.search-box input {
+  width: 100%;
+  height: 28px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 0 28px 0 32px;
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.search-box input:focus {
+  border-color: var(--accent-color);
+}
+
+.clear-search {
+  position: absolute;
+  right: 8px;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  display: none;
+}
+
+.search-box input:not(:placeholder-shown) ~ .clear-search {
+  display: block;
+}
+
+/* Top Bar Right */
+.top-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.zoom-control input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 90px;
+  height: 4px;
+  background: var(--border-color);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.zoom-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  cursor: pointer;
+}
+
+/* Language Selector */
+.lang-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.lang-icon {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+
+.lang-select,
+.lang-selector select {
+  background-color: #1a1a1a;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.lang-select:hover,
+.lang-selector select:hover {
+  border-color: var(--text-muted);
+}
+
+.lang-select:focus,
+.lang-selector select:focus {
+  border-color: var(--accent-color);
+}
+
+.lang-select option {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}

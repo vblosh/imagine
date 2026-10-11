@@ -1,0 +1,145 @@
+/* Bottom Timeline Scrub Bar */
+.bottom-scrub-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 4px 16px;
+  background-color: var(--bg-timeline);
+  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.scrub-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.timeline-container {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  height: 40px;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 1px;
+  scrollbar-width: thin;
+  scrollbar-color: #555555 transparent;
+}
+
+.timeline-container::-webkit-scrollbar {
+  height: 6px;
+}
+
+.timeline-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.timeline-container::-webkit-scrollbar-thumb {
+  background-color: #555555;
+  border-radius: 3px;
+}
+
+.timeline-container::-webkit-scrollbar-thumb:hover {
+  background-color: #777777;
+}
+
+.timeline-year-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.timeline-year-bars {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 1px;
+  height: 27px;
+  min-width: 100%;
+}
+
+.timeline-bar-wrap {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 12px;
+  height: 100%;
+  flex: 0 0 12px;
+  cursor: pointer;
+  padding: 0;
+  border: 0;
+  border-radius: 1px;
+  background: transparent;
+  box-sizing: border-box;
+}
+
+.timeline-bar-wrap:hover, .timeline-bar-wrap.active {
+  background-color: #333333;
+}
+
+.timeline-bar-wrap:focus-visible {
+  outline: 1px solid var(--accent-hover);
+  outline-offset: 1px;
+}
+
+.timeline-bar {
+  display: block;
+  width: 12px;
+  background-color: var(--accent-color);
+  border-radius: 1px 1px 0 0;
+  min-height: 3px;
+  max-height: 27px;
+  transition: height 0.2s, background-color 0.15s;
+}
+
+.timeline-bar-wrap:hover .timeline-bar {
+  background-color: var(--accent-hover);
+}
+
+.timeline-bar-wrap.active .timeline-bar {
+  background-color: #ffffff;
+}
+
+.timeline-year-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 10px;
+  margin-top: 3px;
+  white-space: nowrap;
+}
+
+.timeline-empty {
+  align-self: center;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.timeline-year-select {
+  max-width: 104px;
+  background-color: #1a1a1a;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+}
+
+.timeline-year-select:hover,
+.timeline-year-select:focus {
+  border-color: var(--accent-color);
+}
+
+.timeline-year-select:disabled {
+  color: var(--text-dim);
+  cursor: default;
+  opacity: 0.7;
+}

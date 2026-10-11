@@ -396,7 +396,7 @@ def test_scan_submission_error_survives_language_rerender_and_clears_on_retry(se
     expect(error).to_be_visible()
     page.evaluate("""async () => {
       const i18n = await import('/i18n.js');
-      i18n.setLanguage('es');
+      await i18n.setLanguage('es');
     }""")
     expect(error).to_be_visible()
     expect(error).to_contain_text("A face scan is already running")
@@ -1095,7 +1095,7 @@ def test_faces_toolbar_can_review_without_models_and_localizes_grid(server, page
     expect(page.locator("#faceGridList .face-grid-card")).to_have_count(0)
     for language in ("es", "de", "ru", "zh", "en"):
         translated, failure_notice = page.evaluate("""async lang => {
-            const i18n = await import('/i18n.js'); i18n.setLanguage(lang);
+            const i18n = await import('/i18n.js'); await i18n.setLanguage(lang);
             return [i18n.t('face_grid_title'), i18n.t('face_job_finished_with_failures', { failed: 2, remaining: 1 })];
         }""", language)
         expect(page.locator("#faceGridHeading")).to_have_text(translated)
