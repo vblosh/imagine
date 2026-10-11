@@ -12,8 +12,9 @@ import {
   expandTagCategory,
   collapseTagCategory,
   expandFolders,
-  collapseFolders
-} from './media-grid.js';
+  collapseFolders,
+  setSidebarPersistenceHooks
+} from './sidebar.js';
 
 export const STORAGE_KEYS = {
   ALBUMS_COLLAPSED: 'imagine_albums_collapsed',
@@ -140,6 +141,16 @@ export function saveActiveTagIdsPreference(tagIdsSet) {
     safeRemoveItem(STORAGE_KEYS.ACTIVE_TAG_IDS);
   }
 }
+
+setSidebarPersistenceHooks({
+  saveAlbumsCollapsedState,
+  saveFoldersCollapsedState,
+  saveTagCategoryCollapsedState,
+  saveActiveFoldersPreference,
+  saveActiveTagIdsPreference,
+  saveActiveTabPreference,
+  saveNavFilterPreference,
+});
 
 export function saveSearchPreference(text) {
   if (text) {

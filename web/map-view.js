@@ -15,13 +15,9 @@ import {
 } from './api.js';
 import { state, getGpsMediaItems, invalidateGpsCache } from './state.js';
 import { dom, showToast } from './dom.js';
-import {
-  handleCardSelection,
-  updateItemRating,
-  updateItemFlag,
-  loadMoreMedia,
-  renderGrid
-} from './media-grid.js';
+import { handleCardSelection } from './media-selection.js';
+import { updateItemRating, updateItemFlag } from './rating-flag.js';
+import { loadMoreMedia, renderGrid } from './grid.js';
 import { updateInspector, openInspector } from './inspector.js';
 import { openLoupeForMedia } from './loupe.js';
 import { t } from './i18n.js';

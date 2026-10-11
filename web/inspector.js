@@ -16,9 +16,10 @@ import {
   normalizeMediaItem,
   getOriginalMediaUrl
 } from './api.js';
-import { state } from './state.js';
 import { dom, showToast } from './dom.js';
-import { updateItemRating, loadMetadata, renderGrid, loadMedia } from './media-grid.js';
+import { state } from './state.js';
+import { updateItemRating, renderStarWidget } from './rating-flag.js';
+import { loadMetadata, renderGrid, loadMedia } from './grid.js';
 import { t } from './i18n.js';
 import { saveInspectorCollapsedState } from './persistence.js';
 import { timelinePeriodContainsTimestamp } from './timeline-range.js';
@@ -313,20 +314,7 @@ export function renderInspectorTags(item) {
   });
 }
 
-export function renderStarWidget(container, currentRating, onSetRating) {
-  if (!container) return;
-  const stars = container.querySelectorAll('span');
-  stars.forEach(s => {
-    const starVal = parseInt(s.dataset.star, 10);
-    s.classList.toggle('active', starVal <= currentRating);
-
-    s.onclick = (e) => {
-      e.stopPropagation();
-      const newRating = starVal === currentRating ? 0 : starVal;
-      onSetRating(newRating);
-    };
-  });
-}
+export { renderStarWidget };
 
 export function updateInspectorMiniMap(item) {
   if (!dom.inspectorMiniMap) return;

@@ -7,13 +7,9 @@ import { state } from './state.js';
 import { dom } from './dom.js';
 import { escapeHtml, api } from './api.js';
 import { t } from './i18n.js';
-import {
-  enterAlbumOrderMode,
-  clearTimelineSelection,
-  loadMedia,
-  updateSidebarActive,
-  updateFilterLabel
-} from './media-grid.js';
+import { enterAlbumOrderMode, clearTimelineSelection } from './media-params.js';
+import { updateSidebarActive } from './sidebar.js';
+import { loadMedia, updateFilterLabel } from './grid.js';
 import { openTagModal, openAlbumModal } from './modals.js';
 import { saveActiveTagIdsPreference } from './persistence.js';
 

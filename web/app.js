@@ -18,6 +18,10 @@ import {
 } from './api.js';
 import { state } from './state.js';
 import { dom, validateRequiredDom, showToast } from './dom.js';
+import { initViews, renderCurrentView } from './views.js';
+import { bindGridHandlers } from './grid.js';
+import { bindSidebarHandlers } from './sidebar.js';
+import { bindTimelineHandlers } from './timeline.js';
 import { initI18n, setLanguage, onLanguageChange, t, SUPPORTED_LANGUAGES } from './i18n.js';
 import {
   cardMap,
@@ -240,51 +244,9 @@ export function setupEventListeners() {
   initCategoryView();
   setupAutoEventListeners();
 
-  // Deselect on actual background click
-  if (dom.gridScrollContainer) {
-    dom.gridScrollContainer.addEventListener('click', (e) => {
-      if (e.target === dom.gridScrollContainer || e.target === dom.mediaGrid) {
-        clearCardSelections();
-      }
-    });
-  }
-
-  // Delegated click and dblclick handlers on mediaGrid
-  if (dom.mediaGrid) {
-    dom.mediaGrid.addEventListener('click', (e) => {
-      const starTarget = e.target.closest('.card-stars span');
-      if (starTarget) {
-        e.stopPropagation();
-        const star = parseInt(starTarget.dataset.star, 10);
-        const card = e.target.closest('.photo-card');
-        if (card) {
-          const cardId = parseInt(card.dataset.id, 10);
-          const item = state.mediaItems.find(m => m.id === cardId);
-          const currentRating = item ? (item.rating || 0) : 0;
-          const newRating = currentRating === star ? 0 : star;
-          updateItemRating(cardId, newRating);
-        }
-        return;
-      }
-
-      const card = e.target.closest('.photo-card');
-      if (!card) return;
-      const cardId = parseInt(card.dataset.id, 10);
-      if (!isNaN(cardId)) {
-        handleCardSelection(cardId, e);
-      }
-    });
-
-    dom.mediaGrid.addEventListener('dblclick', (e) => {
-      if (e.target.closest('.card-stars')) return;
-      const card = e.target.closest('.photo-card');
-      if (!card) return;
-      const cardId = parseInt(card.dataset.id, 10);
-      if (!isNaN(cardId)) {
-        openLoupeForMedia(cardId);
-      }
-    });
-  }
+  bindGridHandlers();
+  bindSidebarHandlers();
+  bindTimelineHandlers();
 
   // Zoom slider
   if (dom.zoomSlider) {
@@ -537,41 +499,6 @@ export function setupEventListeners() {
   if (dom.clearFiltersBtn) {
     dom.clearFiltersBtn.addEventListener('click', clearAllFilters);
   }
-  if (dom.resetTimelineBtn) {
-    dom.resetTimelineBtn.addEventListener('click', () => {
-      clearTimelineSelection();
-      renderTimeline();
-      updateSidebarActive();
-      loadMedia();
-    });
-  }
-  if (dom.timelineYearSelect) {
-    dom.timelineYearSelect.addEventListener('change', (e) => {
-      if (e.target.value === 'all') {
-        clearTimelineSelection();
-      } else if (e.target.value !== 'custom') {
-        const year = Number(e.target.value);
-        state.activeTimelinePeriod = {
-          startYear: year,
-          startMonth: 1,
-          endYear: year,
-          endMonth: 12
-        };
-        state.timelineAnchor = null;
-      }
-      renderTimeline();
-      updateSidebarActive();
-      loadMedia();
-    });
-  }
-  if (dom.timelineContainer) {
-    dom.timelineContainer.addEventListener('wheel', (e) => {
-      if (e.deltaY !== 0 && e.deltaX === 0) {
-        e.preventDefault();
-        dom.timelineContainer.scrollLeft += e.deltaY;
-      }
-    }, { passive: false });
-  }
 
   // View Mode Toggle (Grid vs Map)
   if (dom.viewGridBtn) {
@@ -812,192 +739,6 @@ export function setupEventListeners() {
           updateFilterLabel();
         }
       });
-    });
-  }
-
-  // Nav sidebar filters (all, media types, flags/status)
-  if (dom.navAllMedia) {
-    dom.navAllMedia.addEventListener('click', () => {
-      clearAllFilters();
-    });
-  }
-  if (dom.navLastImported) {
-    dom.navLastImported.addEventListener('click', () => {
-      state.activeLastImported = !state.activeLastImported;
-      state.activeFolder = null;
-      clearTimelineSelection();
-      saveNavFilterPreference(state.activeNavFilter);
-      saveActiveFoldersPreference(state.activeFolders);
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
-    });
-  }
-  if (dom.navPhotos) {
-    dom.navPhotos.addEventListener('click', () => {
-      state.activeMediaType = (state.activeMediaType === 'photos') ? 'all' : 'photos';
-      state.activeFolder = null;
-      clearTimelineSelection();
-      saveNavFilterPreference(state.activeNavFilter);
-      saveActiveFoldersPreference(state.activeFolders);
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
-    });
-  }
-  if (dom.navVideos) {
-    dom.navVideos.addEventListener('click', () => {
-      state.activeMediaType = (state.activeMediaType === 'videos') ? 'all' : 'videos';
-      state.activeFolder = null;
-      clearTimelineSelection();
-      saveNavFilterPreference(state.activeNavFilter);
-      saveActiveFoldersPreference(state.activeFolders);
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
-    });
-  }
-  if (dom.navAudio) {
-    dom.navAudio.addEventListener('click', () => {
-      state.activeMediaType = (state.activeMediaType === 'audio') ? 'all' : 'audio';
-      state.activeFolder = null;
-      clearTimelineSelection();
-      saveNavFilterPreference(state.activeNavFilter);
-      saveActiveFoldersPreference(state.activeFolders);
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
-    });
-  }
-  if (dom.navPicks) {
-    dom.navPicks.addEventListener('click', () => {
-      state.activeStatusFilter = (state.activeStatusFilter === 'picks') ? null : 'picks';
-      state.activeFolder = null;
-      clearTimelineSelection();
-      saveNavFilterPreference(state.activeNavFilter);
-      saveActiveFoldersPreference(state.activeFolders);
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
-    });
-  }
-  if (dom.navRejects) {
-    dom.navRejects.addEventListener('click', () => {
-      state.activeStatusFilter = (state.activeStatusFilter === 'rejects') ? null : 'rejects';
-      state.activeFolder = null;
-      clearTimelineSelection();
-      saveNavFilterPreference(state.activeNavFilter);
-      saveActiveFoldersPreference(state.activeFolders);
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
-    });
-  }
-  if (dom.navNotRejects) {
-    dom.navNotRejects.addEventListener('click', () => {
-      state.activeStatusFilter = (state.activeStatusFilter === 'not_rejects') ? null : 'not_rejects';
-      state.activeFolder = null;
-      clearTimelineSelection();
-      saveNavFilterPreference(state.activeNavFilter);
-      saveActiveFoldersPreference(state.activeFolders);
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
-    });
-  }
-  if (dom.navUnrated) {
-    dom.navUnrated.addEventListener('click', () => {
-      state.activeStatusFilter = (state.activeStatusFilter === 'unrated') ? null : 'unrated';
-      state.activeFolder = null;
-      clearTimelineSelection();
-      saveNavFilterPreference(state.activeNavFilter);
-      saveActiveFoldersPreference(state.activeFolders);
-      updateSidebarActive();
-      renderTimeline();
-      loadMedia();
-    });
-  }
-
-  const updateSidebarSearchClearVisibility = () => {
-    if (!dom.clearSidebarSearchBtn) return;
-    const hasText = Boolean(dom.sidebarSearchInput?.value || state.sidebarSearchText);
-    dom.clearSidebarSearchBtn.classList.toggle('visible', hasText);
-  };
-  if (dom.sidebarSearchInput) {
-    dom.sidebarSearchInput.addEventListener('input', updateSidebarSearchClearVisibility);
-    dom.sidebarSearchInput.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      applySidebarSearch(dom.sidebarSearchInput.value);
-      updateSidebarSearchClearVisibility();
-    });
-  }
-  if (dom.clearSidebarSearchBtn) {
-    dom.clearSidebarSearchBtn.addEventListener('click', () => {
-      if (dom.sidebarSearchInput) {
-        dom.sidebarSearchInput.value = '';
-        dom.sidebarSearchInput.focus();
-      }
-      clearSidebarSearch();
-      updateSidebarSearchClearVisibility();
-    });
-  }
-  updateSidebarSearchClearVisibility();
-
-  // Albums section collapsible
-  if (dom.albumsHeader) {
-    dom.albumsHeader.addEventListener('click', () => {
-      const isCurrentlyCollapsed = dom.albumsList && dom.albumsList.style.display === 'none';
-      if (isCurrentlyCollapsed) {
-        expandAlbums(true);
-      } else {
-        collapseAlbums(true);
-      }
-    });
-    dom.albumsHeader.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        dom.albumsHeader.click();
-      }
-    });
-  }
-
-  // Tag category headers collapsible
-  document.querySelectorAll('.category-header').forEach(hdr => {
-    hdr.addEventListener('click', () => {
-      const group = hdr.closest('.tag-category-group');
-      const cat = group ? group.dataset.category : null;
-      const items = group ? group.querySelector('.tag-items') : null;
-      const isCurrentlyCollapsed = items && items.style.display === 'none';
-      if (isCurrentlyCollapsed) {
-        expandTagCategory(cat, true);
-      } else {
-        collapseTagCategory(cat, true);
-      }
-    });
-    hdr.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        hdr.click();
-      }
-    });
-  });
-
-  // Folders header collapsible
-  if (dom.foldersHeader) {
-    dom.foldersHeader.addEventListener('click', () => {
-      const isCurrentlyCollapsed = dom.foldersTree && dom.foldersTree.style.display === 'none';
-      if (isCurrentlyCollapsed) {
-        expandFolders(true);
-      } else {
-        collapseFolders(true);
-      }
-    });
-    dom.foldersHeader.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        dom.foldersHeader.click();
-      }
     });
   }
 
@@ -1887,6 +1628,7 @@ export async function init() {
     }
   });
   validateRequiredDom();
+  initViews();
   restoreLayoutPreferences();
   restoreNavigationPreferences();
   setupEventListeners();
@@ -1995,7 +1737,7 @@ window._imagineApp = {
   performSemanticSearch,
   syncSemanticSearchUI,
   closeSemanticSearch,
-  state,
+  renderCurrentView,
   updateSemanticToggleVisibility,
   findSimilarMedia,
   runSemanticIndexing,

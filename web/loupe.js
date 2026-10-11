@@ -6,8 +6,8 @@
 import { state } from './state.js';
 import { dom } from './dom.js';
 import { getOriginalMediaUrl } from './api.js';
-import { updateItemRating, loadMoreMedia } from './media-grid.js';
-import { renderStarWidget } from './inspector.js';
+import { updateItemRating, renderStarWidget } from './rating-flag.js';
+import { loadMoreMedia } from './grid.js';
 import { closeQuickEdit, quickEditState } from './quick-edit.js';
 import { t } from './i18n.js';
 

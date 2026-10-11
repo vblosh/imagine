@@ -14,7 +14,7 @@
 import { normalizeMediaItem, getOriginalMediaUrl, getAuthHeaders } from "./api.js";
 import { state } from "./state.js";
 import { dom, showToast } from "./dom.js";
-import { renderGrid } from "./media-grid.js";
+import { renderGrid } from "./grid.js";
 import { t } from "./i18n.js";
 
 export const quickEditState = {

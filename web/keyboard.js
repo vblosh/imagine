@@ -5,17 +5,16 @@
 
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
+import { clearCardSelections, updateBatchBar } from './media-selection.js';
 import {
-  clearCardSelections,
   updateItemRating,
   updateItemFlag,
   toggleItemFlag,
   toggleFlagsForIds,
   batchUpdateRatings,
   batchUpdateFlags,
-  updateBatchBar,
-  closeSemanticSearch
-} from './media-grid.js';
+} from './rating-flag.js';
+import { closeSemanticSearch } from './grid.js';
 import { updateInspector } from './inspector.js';
 import { saveInspectorCollapsedState } from './persistence.js';
 import {

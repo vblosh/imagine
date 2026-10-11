@@ -4,7 +4,7 @@ import { api, escapeHtml } from './api.js';
 import { dom, showToast } from './dom.js';
 import { state } from './state.js';
 import { t } from './i18n.js';
-import { loadMedia, loadMetadata } from './media-grid.js';
+import { loadMedia, loadMetadata } from './grid.js';
 
 const GRID_GROUP_PAGE_SIZE = 48;
 const GRID_GROUP_DOM_LIMIT = GRID_GROUP_PAGE_SIZE * 2;
