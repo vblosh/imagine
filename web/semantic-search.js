@@ -2,66 +2,20 @@ import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { getTimelinePeriodBounds } from './timeline-range.js';
 import { showModal, hideModal } from './modals.js';
 
 export const SEMANTIC_SEARCH_DEBOUNCE_MS = 2000;
+import {
+    checkSemanticStatus,
+    updateSemanticToggleVisibility,
+    updateSettingsSemanticStatus
+} from './semantic-status.js';
 
-let activeJobId = null;
-let activeJobPollTimer = null;
-
-export async function checkSemanticStatus() {
-    try {
-        const status = await api.get('/api/semantic/status');
-        state.semanticSearchAvailable = Boolean(status.ready);
-        state.semanticIndexSize = status.indexSize || 0;
-        state.semanticModelId = status.modelId || '';
-        state.semanticBuilt = Boolean(status.built);
-        updateSemanticToggleVisibility();
-        updateSettingsSemanticStatus();
-        return status;
-    } catch (e) {
-        state.semanticSearchAvailable = false;
-        state.semanticBuilt = false;
-        updateSemanticToggleVisibility();
-        updateSettingsSemanticStatus();
-        return null;
-    }
-}
-
-export function updateSemanticToggleVisibility() {
-    if (dom.semanticToggle) {
-        dom.semanticToggle.style.display = 'inline-flex';
-        if (!state.semanticSearchAvailable) {
-            state.semanticSearchEnabled = false;
-            dom.semanticToggle.disabled = true;
-            dom.semanticToggle.setAttribute('aria-disabled', 'true');
-            dom.semanticToggle.classList.remove('active');
-            dom.semanticToggle.classList.add('disabled-toggle');
-            dom.semanticToggle.setAttribute('aria-pressed', 'false');
-            dom.semanticToggle.title = t('semantic_models_missing_title') || 'Semantic AI search (models not installed)';
-        } else {
-            dom.semanticToggle.disabled = false;
-            dom.semanticToggle.removeAttribute('aria-disabled');
-            dom.semanticToggle.classList.remove('disabled-toggle');
-            dom.semanticToggle.classList.toggle('active', Boolean(state.semanticSearchEnabled));
-            dom.semanticToggle.setAttribute('aria-pressed', String(Boolean(state.semanticSearchEnabled)));
-            dom.semanticToggle.title = t('semantic_toggle_title') || 'Toggle semantic AI search';
-        }
-    }
-}
-
-export function updateSettingsSemanticStatus() {
-    if (dom.settingsSemanticStatus) {
-        if (!state.semanticBuilt) {
-            dom.settingsSemanticStatus.textContent = 'Status: Semantic search engine not built in this binary';
-        } else if (!state.semanticSearchAvailable) {
-            dom.settingsSemanticStatus.textContent = `Status: Model unavailable or offline (${state.semanticIndexSize} vectors indexed)`;
-        } else {
-            dom.settingsSemanticStatus.textContent = `Status: Ready (${state.semanticIndexSize} vectors indexed, model: ${state.semanticModelId})`;
-        }
-    }
-}
+export {
+    checkSemanticStatus,
+    updateSemanticToggleVisibility,
+    updateSettingsSemanticStatus
+};
 
 export async function performSemanticSearch(query, limit = 100, options = {}) {
     if (!query || !state.semanticSearchAvailable) return null;
@@ -78,7 +32,7 @@ export async function performSemanticSearch(query, limit = 100, options = {}) {
     } catch (e) {
         if (e.name === 'AbortError') throw e;
         console.error('Semantic search failed:', e);
-        showToast('Semantic search failed: ' + (e.message || e), 'error');
+        showToast(t('toast_semantic_search_failed', { error: e.message || e }), 'error');
         return null;
     }
 }
@@ -91,7 +45,7 @@ export async function findSimilarMedia(mediaId, limit = 50, options = {}) {
     } catch (e) {
         if (e.name === 'AbortError') throw e;
         console.error('Find similar failed:', e);
-        showToast('Find similar failed: ' + (e.message || e), 'error');
+        showToast(t('toast_find_similar_failed', { error: e.message || e }), 'error');
         return null;
     }
 }
@@ -345,7 +299,7 @@ export async function startSemanticIndexing(scope = 'catalog', mediaIds = [], fo
         }
         return null;
     } catch (e) {
-        showToast('Failed to start indexing: ' + (e.message || e), 'error');
+        showToast(t('toast_failed_start_indexing', { error: e.message || e }), 'error');
         return null;
     }
 }
@@ -362,6 +316,6 @@ export async function cancelSemanticJob(jobId) {
     try {
         await api.post(`/api/semantic/jobs/${jobId}/cancel`);
     } catch (e) {
-        showToast('Failed to cancel job: ' + (e.message || e), 'error');
+        showToast(t('toast_failed_cancel_job', { error: e.message || e }), 'error');
     }
 }

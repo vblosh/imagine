@@ -239,12 +239,13 @@ Clusters and individual pins generate interactive popup cards via `createMapPopu
 
 | File | Purpose |
 |---|---|
-| [`web/map-view.js`](file:///C:/Users/slava/source/repos/imagine/web/map-view.js) | Leaflet map initialization, clustering, marker popups, unmapped tray, place search. |
-| [`web/inspector.js`](file:///C:/Users/slava/source/repos/imagine/web/inspector.js) | Inspector mini-map preview, Show on Map, Clear GPS, and Place on Map triggers. |
-| [`web/app.css`](file:///C:/Users/slava/source/repos/imagine/web/app.css) | Styles for `.custom-photo-pin`, `.map-popup-card`, `.unmapped-tray`, `.search-location-pin`. |
-| [`src/server/api_router.cpp`](file:///C:/Users/slava/source/repos/imagine/src/server/api_router.cpp) | Handlers for `/api/media/:id/gps`, `/api/media/batch-gps`, and `/api/geocode`. |
-| [`include/imagine/db/catalog_db.hpp`](file:///C:/Users/slava/source/repos/imagine/include/imagine/db/catalog_db.hpp) | SQLite database interface (`updateGps`, `getGpsMedia`). |
-| [`tests/ui/test_map_view.py`](file:///C:/Users/slava/source/repos/imagine/tests/ui/test_map_view.py) | Comprehensive Playwright UI tests covering all map interactions. |
+| [`web/map-view.js`](../../web/map-view.js) | Leaflet map clustering, marker popups, unmapped tray, place search. |
+| [`web/leaflet-loader.js`](../../web/leaflet-loader.js) | Deferred loading for Leaflet library assets on map activation. |
+| [`web/inspector.js`](../../web/inspector.js) | Inspector mini-map preview, Show on Map, Clear GPS, and Place on Map triggers. |
+| [`web/styles/map.css`](../../web/styles/map.css) | Styles for `.custom-photo-pin`, `.map-popup-card`, `.unmapped-tray`, `.search-location-pin`. |
+| [`src/server/api_router.cpp`](../../src/server/api_router.cpp) | Handlers for `/api/media/:id/gps`, `/api/media/batch-gps`, and `/api/geocode`. |
+| [`include/imagine/db/catalog_db.hpp`](../../include/imagine/db/catalog_db.hpp) | SQLite database interface (`updateGps`, `getGpsMedia`). |
+| [`tests/ui/test_map_view.py`](../../tests/ui/test_map_view.py) | Comprehensive Playwright UI tests covering all map interactions. |
 
 ---
 

@@ -16,7 +16,7 @@ def test_validate_required_dom_passes_on_valid_page(server, page: Page):
     # Call validateRequiredDom directly
     result = page.evaluate("""() => {
         try {
-            window._imagineApp.validateRequiredDom();
+            window.imagineUI.validateRequiredDom();
             return { ok: true };
         } catch (err) {
             return { ok: false, error: err.message };
@@ -31,17 +31,17 @@ def test_validate_required_dom_throws_when_required_elements_missing(server, pag
 
     # Simulate missing required element in dom object
     res = page.evaluate("""() => {
-        const originalMediaGrid = window._imagineApp.dom.mediaGrid;
-        const originalNavPicks = window._imagineApp.dom.navPicks;
+        const originalMediaGrid = window.imagineUI.dom.mediaGrid;
+        const originalNavPicks = window.imagineUI.dom.navPicks;
         try {
             // Remove from dom object and DOM
-            window._imagineApp.dom.mediaGrid = null;
-            window._imagineApp.dom.navPicks = null;
+            window.imagineUI.dom.mediaGrid = null;
+            window.imagineUI.dom.navPicks = null;
             document.getElementById('mediaGrid').id = 'mediaGrid_temp';
             document.getElementById('navPicks').id = 'navPicks_temp';
 
             try {
-                window._imagineApp.validateRequiredDom();
+                window.imagineUI.validateRequiredDom();
                 return { threw: false };
             } catch (err) {
                 return { threw: true, message: err.message };
@@ -49,8 +49,8 @@ def test_validate_required_dom_throws_when_required_elements_missing(server, pag
         } finally {
             document.getElementById('mediaGrid_temp').id = 'mediaGrid';
             document.getElementById('navPicks_temp').id = 'navPicks';
-            window._imagineApp.dom.mediaGrid = originalMediaGrid;
-            window._imagineApp.dom.navPicks = originalNavPicks;
+            window.imagineUI.dom.mediaGrid = originalMediaGrid;
+            window.imagineUI.dom.navPicks = originalNavPicks;
         }
     }""")
 
@@ -63,7 +63,7 @@ def test_setup_event_listeners_safe_with_missing_optional_elements(server, page:
     page.goto(server["url"])
 
     res = page.evaluate("""() => {
-        const dom = window._imagineApp.dom;
+        const dom = window.imagineUI.dom;
 
         // Backup original elements
         const backup = Object.assign({}, dom);
@@ -167,7 +167,7 @@ def test_setup_event_listeners_safe_with_missing_optional_elements(server, page:
         }
 
         try {
-            window._imagineApp.setupEventListeners();
+            window.imagineUI.setupEventListeners();
             return { ok: true };
         } catch (err) {
             return { ok: false, error: err.message, stack: err.stack };

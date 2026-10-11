@@ -14,7 +14,7 @@
 import { normalizeMediaItem, getOriginalMediaUrl, getAuthHeaders } from "./api.js";
 import { state } from "./state.js";
 import { dom, showToast } from "./dom.js";
-import { renderGrid } from "./media-grid.js";
+import { renderGrid } from "./grid.js";
 import { t } from "./i18n.js";
 
 export const quickEditState = {
@@ -876,8 +876,8 @@ export async function saveEdits(mode = "overwrite") {
         }
       }
       renderGrid();
-      if (window._imagineApp?.renderCurrentView) {
-        window._imagineApp.renderCurrentView();
+      if (window.imagineUI?.renderCurrentView) {
+        window.imagineUI.renderCurrentView();
       }
       showToast(t("quick_edit_saved_copy", { name: updatedItem.file_name }));
     }

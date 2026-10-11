@@ -148,7 +148,7 @@ def test_sidebar_collection_search_on_enter_and_clear(server, page: Page):
     search.press("Enter")
     expect(page.locator("#albumsList .menu-item", has_text="Vacation")).to_be_visible()
     expect(page.locator("#tagsTree .tag-item")).to_have_count(0)
-    assert page.evaluate("() => window._imagineState.activeTagIds.size") == 1
+    assert page.evaluate("() => window.imagineUI.state.activeTagIds.size") == 1
     page.locator("#refreshBtn").click()
     expect(page.locator("#albumsList .menu-item")).to_have_count(1)
 
@@ -892,6 +892,7 @@ def test_scroll_resets_on_folder_and_filter_selection(server, page: Page):
 
     # 1. Select folder -> scrollbar resets to start
     family_folder.click()
+    expect(page.locator(".photo-card", has_text="birthday.bmp")).to_be_visible()
     expect(page.locator(".photo-card")).to_have_count(2)
     assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
 
@@ -905,6 +906,7 @@ def test_scroll_resets_on_folder_and_filter_selection(server, page: Page):
     # 3. Select another folder -> scrollbar resets to start
     nature_folder.click()
     expect(nature_folder).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator(".photo-card", has_text="sunset.bmp")).to_be_visible()
     expect(page.locator(".photo-card")).to_have_count(4)
     assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
 

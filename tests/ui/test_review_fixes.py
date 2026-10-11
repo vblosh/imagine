@@ -21,7 +21,7 @@ def test_format_bytes_handles_invalid_values(server, page: Page):
     expect(page.locator("#mediaGrid")).to_be_visible()
 
     results = page.evaluate("""() => {
-        const fb = window._imagineApp.formatBytes;
+        const fb = window.imagineUI.formatBytes;
         return {
             negative: fb(-1024),
             zero: fb(0),
@@ -56,7 +56,7 @@ def test_numeric_helper_and_exif_robustness(server, page: Page):
     expect(page.locator("#mediaGrid")).to_be_visible()
 
     results = page.evaluate("""() => {
-        const num = window._imagineApp.numeric;
+        const num = window.imagineUI.numeric;
         const testValues = {
             validInt: num(42),
             validFloat: num(2.8),
@@ -71,7 +71,7 @@ def test_numeric_helper_and_exif_robustness(server, page: Page):
         };
 
         // Test EXIF inspector rendering with malformed strings/nulls
-        const state = window._imagineApp.state;
+        const state = window.imagineUI.state;
         const originalItems = [...state.mediaItems];
         const malformedItem = {
             id: 99999,
@@ -138,8 +138,8 @@ def test_cluster_centers_updated_on_item_join(server, page: Page):
     expect(page.locator("#mapViewContainer")).to_be_visible()
 
     cluster_result = page.evaluate("""() => {
-        const clusterGpsItems = window._imagineApp.clusterGpsItems;
-        const map = window._imagineApp.state.mapInstance;
+        const clusterGpsItems = window.imagineUI.clusterGpsItems;
+        const map = window.imagineUI.state.mapInstance;
 
         // Create two GPS items close to each other
         const item1 = {
@@ -184,7 +184,7 @@ def test_marker_click_respects_active_media_id_in_cluster(server, page: Page):
     expect(page.locator(".custom-photo-pin")).to_have_count(2)
 
     res = page.evaluate("""() => {
-        const state = window._imagineApp.state;
+        const state = window.imagineUI.state;
         if (state.mapMarkers.length === 0) return { ok: false, error: 'No map markers found' };
 
         const marker = state.mapMarkers[0];
@@ -259,7 +259,7 @@ def test_patch_open_map_popup_excludes_search_result_popup(server, page: Page):
         document.body.appendChild(mediaPopup);
 
         // Call patchOpenMapPopup
-        window._imagineApp.patchOpenMapPopup('42');
+        window.imagineUI.patchOpenMapPopup('42');
 
         searchPopup.remove();
         mediaPopup.remove();
@@ -332,7 +332,7 @@ def test_response_schema_validation_and_normalization(server, page: Page):
             normalizeCatalogStats,
             normalizeTimelineEntry,
             normalizeImportProgress
-        } = window._imagineApp;
+        } = window.imagineUI;
 
         // 1. normalizeMediaItem
         const validItem = normalizeMediaItem({
@@ -523,7 +523,7 @@ def test_centralized_escape_hierarchy(server, page: Page):
     expect(page.locator(".photo-card.selected")).to_have_count(0)
 
     # 4. Show a toast - Escape dismisses active toasts
-    page.evaluate("() => window._imagineApp.showToast('Test notification', 'info')")
+    page.evaluate("() => window.imagineUI.showToast('Test notification', 'info')")
     expect(page.locator("#toastContainer .toast")).to_have_count(1)
     page.keyboard.press("Escape")
     expect(page.locator("#toastContainer .toast")).to_have_count(0)
@@ -581,9 +581,9 @@ def test_loupe_pagination_scope_label_and_on_demand_page_loading(server, page: P
 
     # Simulate paginated state in app state: 6 loaded out of 10 total
     page.evaluate("""() => {
-        window._imagineApp.state.totalCount = 10;
-        window._imagineApp.state.loupeIndex = 0;
-        window._imagineApp.updateLoupeView();
+        window.imagineUI.state.totalCount = 10;
+        window.imagineUI.state.loupeIndex = 0;
+        window.imagineUI.updateLoupeView();
     }""")
 
     # Counter should show "(10 total)"
@@ -591,18 +591,18 @@ def test_loupe_pagination_scope_label_and_on_demand_page_loading(server, page: P
 
     # Test on-demand page fetching via loupeNext at boundary
     result = page.evaluate("""async () => {
-        const state = window._imagineApp.state;
+        const state = window.imagineUI.state;
         state.loupeIndex = state.mediaItems.length - 1; // at index 5 (last loaded)
         state.totalCount = 8;
         let loadMoreCalled = false;
-        const origLoadMore = window._imagineApp.loadMoreMedia;
-        window._imagineApp.loadMoreMedia = async () => {
+        const origLoadMore = window.imagineUI.loadMoreMedia;
+        window.imagineUI.loadMoreMedia = async () => {
             loadMoreCalled = true;
             // simulate new item added
             state.mediaItems.push({ id: 9999, file_name: 'new_paginated.jpg', rating: 0, flag: 0 });
         };
-        await window._imagineApp.loupeNext();
-        window._imagineApp.loadMoreMedia = origLoadMore;
+        await window.imagineUI.loupeNext();
+        window.imagineUI.loadMoreMedia = origLoadMore;
         return { loadMoreCalled, newIndex: state.loupeIndex };
     }""")
 
@@ -618,12 +618,12 @@ def test_timeline_defensive_chronological_ordering(server, page: Page):
 
     # Provide shuffled timeline data
     page.evaluate("""() => {
-        window._imagineApp.state.timelineData = [
+        window.imagineUI.state.timelineData = [
             { year: 2025, month: 12, count: 5 },
             { year: 2026, month: 2, count: 12 },
             { year: 2026, month: 1, count: 8 }
         ];
-        window._imagineApp.renderTimeline();
+        window.imagineUI.renderTimeline();
     }""")
 
     bars = page.locator("#timelineContainer .timeline-bar-wrap")
@@ -641,15 +641,15 @@ def test_filter_switching_resets_folder_and_timeline_filters(server, page: Page)
 
     # Set up an active folder and active timeline period
     page.evaluate("""() => {
-        window._imagineApp.state.activeFolder = 'family';
-        window._imagineApp.state.activeTimelinePeriod = {
+        window.imagineUI.state.activeFolder = 'family';
+        window.imagineUI.state.activeTimelinePeriod = {
             startYear: 2026,
             startMonth: 1,
             endYear: 2026,
             endMonth: 1
         };
-        window._imagineApp.state.timelineAnchor = { year: 2026, month: 1 };
-        window._imagineApp.renderTimeline();
+        window.imagineUI.state.timelineAnchor = { year: 2026, month: 1 };
+        window.imagineUI.renderTimeline();
     }""")
 
     expect(page.locator("#timelineContainer .timeline-bar-wrap.active")).to_have_count(1)
@@ -662,10 +662,10 @@ def test_filter_switching_resets_folder_and_timeline_filters(server, page: Page)
 
     # Active folder and active timeline period should be reset
     state = page.evaluate("""() => ({
-        activeTagId: window._imagineApp.state.activeTagId,
-        activeFolder: window._imagineApp.state.activeFolder,
-        activeTimelinePeriod: window._imagineApp.state.activeTimelinePeriod,
-        timelineAnchor: window._imagineApp.state.timelineAnchor
+        activeTagId: window.imagineUI.state.activeTagId,
+        activeFolder: window.imagineUI.state.activeFolder,
+        activeTimelinePeriod: window.imagineUI.state.activeTimelinePeriod,
+        timelineAnchor: window.imagineUI.state.timelineAnchor
     })""")
 
     assert state["activeTagId"] is not None
@@ -686,8 +686,8 @@ def test_unmapped_tray_scope_label(server, page: Page):
 
     # Under pagination (totalCount > mediaItems.length)
     page.evaluate("""() => {
-        window._imagineApp.state.totalCount = 50;
-        window._imagineApp.renderUnmappedTray();
+        window.imagineUI.state.totalCount = 50;
+        window.imagineUI.renderUnmappedTray();
     }""")
 
     unmapped_label = page.locator("#unmappedBtnLabel")
@@ -695,8 +695,8 @@ def test_unmapped_tray_scope_label(server, page: Page):
 
     # When all photos are loaded (totalCount == mediaItems.length)
     page.evaluate("""() => {
-        window._imagineApp.state.totalCount = 6;
-        window._imagineApp.renderUnmappedTray();
+        window.imagineUI.state.totalCount = 6;
+        window.imagineUI.renderUnmappedTray();
     }""")
     expect(unmapped_label).to_have_text("Unmapped (4)")
 
@@ -710,7 +710,7 @@ def test_mutation_error_feedback_and_state_preservation(server, page: Page):
 
     # Test updateItemRating rollback on failure
     result = page.evaluate("""async () => {
-        const item = window._imagineApp.state.mediaItems[0];
+        const item = window.imagineUI.state.mediaItems[0];
         const prevRating = item.rating || 0;
 
         // Inject simulated network failure in updateItemRating while suppressing console.error
@@ -719,7 +719,7 @@ def test_mutation_error_feedback_and_state_preservation(server, page: Page):
         console.error = () => {};
         window.fetch = async () => new Response(JSON.stringify({ error: 'Database locked' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
         try {
-            await window._imagineApp.updateItemRating(item.id, 5);
+            await window.imagineUI.updateItemRating(item.id, 5);
         } finally {
             window.fetch = origFetch;
             console.error = origError;

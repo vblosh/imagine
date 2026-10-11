@@ -58,7 +58,7 @@ def test_fullscreen_button_and_ios_guidance_modal(server, page: Page):
     expect(modal).not_to_be_visible()
 
     # Open via app API
-    page.evaluate("() => window._imagineApp.openIosInstallModal()")
+    page.evaluate("() => window.imagineUI.openIosInstallModal()")
     expect(modal).to_be_visible()
     expect(modal.locator(".modal-header h3")).to_have_text("Fullscreen on iOS")
 
@@ -67,7 +67,7 @@ def test_fullscreen_button_and_ios_guidance_modal(server, page: Page):
     expect(modal).not_to_be_visible()
 
     # Open again and close via Escape
-    page.evaluate("() => window._imagineApp.openIosInstallModal()")
+    page.evaluate("() => window.imagineUI.openIosInstallModal()")
     expect(modal).to_be_visible()
     page.keyboard.press("Escape")
     expect(modal).not_to_be_visible()
@@ -120,11 +120,11 @@ def test_loupe_mobile_touch_pan_and_zoom(server, page: Page):
     expect(loupe_modal).to_be_visible()
 
     # Zoom to 200% (loads original photo and enables panning)
-    page.evaluate("() => window._imagineApp.updateLoupeView && window._imagineApp.dom.loupeZoomResetBtn.click()")
+    page.evaluate("() => window.imagineUI.updateLoupeView && window.imagineUI.dom.loupeZoomResetBtn.click()")
     expect(page.locator("#loupeImageViewport")).to_have_class(re.compile(r"\bis-zoomed\b"))
 
     # Initial pan values are 0
-    pan_initial = page.evaluate("() => ({ x: window._imagineApp.state.loupePanX, y: window._imagineApp.state.loupePanY })")
+    pan_initial = page.evaluate("() => ({ x: window.imagineUI.state.loupePanX, y: window.imagineUI.state.loupePanY })")
     assert pan_initial["x"] == 0
     assert pan_initial["y"] == 0
 
@@ -139,7 +139,7 @@ def test_loupe_mobile_touch_pan_and_zoom(server, page: Page):
     }""")
 
     # Pan offset should now reflect the drag movement
-    pan_after = page.evaluate("() => ({ x: window._imagineApp.state.loupePanX, y: window._imagineApp.state.loupePanY })")
+    pan_after = page.evaluate("() => ({ x: window.imagineUI.state.loupePanX, y: window.imagineUI.state.loupePanY })")
     assert pan_after["x"] != 0 or pan_after["y"] != 0
 
 

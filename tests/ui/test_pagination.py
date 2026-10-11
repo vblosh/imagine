@@ -13,7 +13,7 @@ def test_load_more_media_deduplication(server, page: Page):
     expect(page.locator(".photo-card")).to_have_count(6)
 
     # Initial loaded IDs are 1..6
-    initial_ids = page.evaluate("() => window._imagineState.mediaItems.map(i => i.id)")
+    initial_ids = page.evaluate("() => window.imagineUI.state.mediaItems.map(i => i.id)")
     assert len(initial_ids) == 6
 
     # Mock pagination response returning overlapping item (id: 1) and duplicate new items (id: 100, 100, 101)
@@ -67,12 +67,12 @@ def test_load_more_media_deduplication(server, page: Page):
 
     # Trigger loadMoreMedia
     page.evaluate("""() => {
-        window._imagineState.totalCount = 10;
-        return window._imagineApp.loadMoreMedia();
+        window.imagineUI.state.totalCount = 10;
+        return window.imagineUI.loadMoreMedia();
     }""")
 
     # Only id 100 and 101 should have been added (total 8 items)
-    loaded_ids = page.evaluate("() => window._imagineState.mediaItems.map(i => i.id)")
+    loaded_ids = page.evaluate("() => window.imagineUI.state.mediaItems.map(i => i.id)")
     assert loaded_ids == initial_ids + [100, 101]
     assert len(loaded_ids) == 8
 
@@ -89,7 +89,7 @@ def test_pagination_discards_when_filter_changes(server, page: Page):
     expect(page.locator(".photo-card")).to_have_count(6)
 
     # Set total count high so loadMoreMedia is eligible
-    page.evaluate("() => { window._imagineState.totalCount = 50; }")
+    page.evaluate("() => { window.imagineUI.state.totalCount = 50; }")
 
     # Intercept pagination request with a delayed response
     def handle_route(route):
@@ -123,10 +123,10 @@ def test_pagination_discards_when_filter_changes(server, page: Page):
     # Trigger loadMoreMedia asynchronously, and immediately trigger a non-append loadMedia (e.g. search)
     page.evaluate("""() => {
         // Start pagination in background
-        window._imagineApp.loadMoreMedia();
+        window.imagineUI.loadMoreMedia();
         // Immediately start a search / new filter loadMedia
-        window._imagineState.searchText = 'mountain';
-        window._imagineApp.loadMedia();
+        window.imagineUI.state.searchText = 'mountain';
+        window.imagineUI.loadMedia();
     }""")
 
     # Wait for the search to complete
@@ -134,10 +134,10 @@ def test_pagination_discards_when_filter_changes(server, page: Page):
     expect(page.locator(".photo-card", has_text="mountain.bmp")).to_be_visible()
 
     # Verify stale item 999 was discarded and NOT added to mediaItems or the DOM
-    items = page.evaluate("() => window._imagineState.mediaItems")
+    items = page.evaluate("() => window.imagineUI.state.mediaItems")
     assert all(item["id"] != 999 for item in items)
     expect(page.locator(".photo-card[data-id='999']")).to_have_count(0)
-    assert page.evaluate("() => window._imagineState.isLoadingMore") is False
+    assert page.evaluate("() => window.imagineUI.state.isLoadingMore") is False
 
 
 def test_avoid_concurrent_load_and_load_more(server, page: Page):
@@ -157,25 +157,25 @@ def test_avoid_concurrent_load_and_load_more(server, page: Page):
 
     # When isLoadingMedia is true, loadMoreMedia must be ignored
     res1 = page.evaluate("""() => {
-        window._imagineState.isLoadingMedia = true;
-        window._imagineState.totalCount = 100;
-        return window._imagineApp.loadMoreMedia();
+        window.imagineUI.state.isLoadingMedia = true;
+        window.imagineUI.state.totalCount = 100;
+        return window.imagineUI.loadMoreMedia();
     }""")
     assert res1 is None
     assert request_count == 0
 
     # Reset isLoadingMedia
-    page.evaluate("() => { window._imagineState.isLoadingMedia = false; }")
+    page.evaluate("() => { window.imagineUI.state.isLoadingMedia = false; }")
 
     # When isLoadingMore is true, loadMoreMedia must be ignored
     res2 = page.evaluate("""() => {
-        window._imagineState.isLoadingMore = true;
-        return window._imagineApp.loadMoreMedia();
+        window.imagineUI.state.isLoadingMore = true;
+        return window.imagineUI.loadMoreMedia();
     }""")
     assert res2 is None
     assert request_count == 0
 
-    page.evaluate("() => { window._imagineState.isLoadingMore = false; }")
+    page.evaluate("() => { window.imagineUI.state.isLoadingMore = false; }")
 
 
 def test_loading_state_reset_in_finally_on_error(server, page: Page):
@@ -193,10 +193,10 @@ def test_loading_state_reset_in_finally_on_error(server, page: Page):
     ))
 
     page.evaluate("""async () => {
-        window._imagineState.totalCount = 10;
-        await window._imagineApp.loadMoreMedia();
+        window.imagineUI.state.totalCount = 10;
+        await window.imagineUI.loadMoreMedia();
     }""")
 
     # isLoadingMore must be false
-    is_loading_more = page.evaluate("() => window._imagineState.isLoadingMore")
+    is_loading_more = page.evaluate("() => window.imagineUI.state.isLoadingMore")
     assert is_loading_more is False

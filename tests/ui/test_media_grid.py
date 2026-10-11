@@ -117,8 +117,8 @@ def test_incremental_grid_append_no_flicker(server, page: Page):
             rating: 0,
             flag: 0
         };
-        window._imagineState.mediaItems.push(newItemExisting, newItemNew);
-        window._imagineApp.appendMediaToGrid([newItemExisting, newItemNew]);
+        window.imagineUI.state.mediaItems.push(newItemExisting, newItemNew);
+        window.imagineUI.appendMediaToGrid([newItemExisting, newItemNew]);
     }""")
 
     # Verify total cards increased from 6 to 8

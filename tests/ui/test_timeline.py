@@ -76,8 +76,8 @@ def test_timeline_click_to_filter_and_reset(server, page: Page):
     expect(cards).to_have_count(6)
     expect(page.locator("#timelineYearSelect")).to_have_value("all")
     state = page.evaluate("""() => ({
-        activeTimelinePeriod: window._imagineApp.state.activeTimelinePeriod,
-        timelineAnchor: window._imagineApp.state.timelineAnchor
+        activeTimelinePeriod: window.imagineUI.state.activeTimelinePeriod,
+        timelineAnchor: window.imagineUI.state.timelineAnchor
     })""")
     assert state["activeTimelinePeriod"] is None
     assert state["timelineAnchor"] is None
@@ -101,9 +101,9 @@ def test_timeline_shift_click_filters_an_inclusive_range(server, page: Page):
     expect(page.locator("#timelineYearSelect")).to_have_value("custom")
 
     result = page.evaluate("""() => ({
-        period: window._imagineApp.state.activeTimelinePeriod,
-        anchor: window._imagineApp.state.timelineAnchor,
-        params: window._imagineApp.buildMediaParams()
+        period: window.imagineUI.state.activeTimelinePeriod,
+        anchor: window.imagineUI.state.timelineAnchor,
+        params: window.imagineUI.buildMediaParams()
     })""")
     assert result["period"] == {
         "startYear": 2025,
@@ -134,7 +134,7 @@ def test_timeline_year_selector_filters_and_clears(server, page: Page):
     expect(year_select).to_have_value("2026")
     expect(page.locator(".photo-card")).to_have_count(4)
     expect(page.locator("#timelineContainer .timeline-bar-wrap.active")).to_have_count(2)
-    params = page.evaluate("() => window._imagineApp.buildMediaParams()")
+    params = page.evaluate("() => window.imagineUI.buildMediaParams()")
     assert params["date_from"] == int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp())
     assert params["date_to"] == int(datetime(2027, 1, 1, tzinfo=timezone.utc).timestamp()) - 1
 
@@ -181,8 +181,8 @@ def test_timeline_is_compact_and_year_labels_do_not_overlap(server, page: Page):
 
     page.evaluate(
         """(data) => {
-        window._imagineApp.state.timelineData = data;
-        window._imagineApp.renderTimeline();
+        window.imagineUI.state.timelineData = data;
+        window.imagineUI.renderTimeline();
     }""",
         months_data,
     )
@@ -233,8 +233,8 @@ def test_timeline_wheel_scrolls_horizontally(server, page: Page):
     months_data = [{"year": 2026 - i // 12, "month": 12 - (i % 12), "count": 10} for i in range(60)]
     page.evaluate(
         """(data) => {
-        window._imagineApp.state.timelineData = data;
-        window._imagineApp.renderTimeline();
+        window.imagineUI.state.timelineData = data;
+        window.imagineUI.renderTimeline();
     }""",
         months_data,
     )

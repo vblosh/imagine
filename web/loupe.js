@@ -6,8 +6,8 @@
 import { state } from './state.js';
 import { dom } from './dom.js';
 import { getOriginalMediaUrl } from './api.js';
-import { updateItemRating, loadMoreMedia } from './media-grid.js';
-import { renderStarWidget } from './inspector.js';
+import { updateItemRating, renderStarWidget } from './rating-flag.js';
+import { loadMoreMedia } from './grid.js';
 import { closeQuickEdit, quickEditState } from './quick-edit.js';
 import { t } from './i18n.js';
 
@@ -349,7 +349,7 @@ export async function loupeNext() {
   if (state.mediaItems.length === 0) return;
   if (state.loupeIndex === state.mediaItems.length - 1 && state.mediaItems.length < state.totalCount && !state.isLoadingMore) {
     const prevLen = state.mediaItems.length;
-    await (window._imagineApp?.loadMoreMedia ? window._imagineApp.loadMoreMedia() : loadMoreMedia());
+    await (window.imagineUI?.loadMoreMedia ? window.imagineUI.loadMoreMedia() : loadMoreMedia());
     if (state.mediaItems.length > prevLen) {
       state.loupeIndex = prevLen;
       updateLoupeView();

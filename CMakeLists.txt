@@ -209,7 +209,7 @@ if (BUILD_TESTING)
     find_package(Python3 COMPONENTS Interpreter)
     if (Python3_FOUND)
         add_test(NAME imagine_ui_tests
-            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/run_ui_tests.sh
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/ui/run_ui_tests.py
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         )
     endif()

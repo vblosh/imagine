@@ -146,7 +146,7 @@ def test_semantic_search_debounce_delay_constants_and_logic(server, page: Page):
     page.goto(server["url"])
 
     delays = page.evaluate("""() => {
-        const app = window._imagineApp;
+        const app = window.imagineUI;
         const stdConst = app.STANDARD_SEARCH_DEBOUNCE_MS;
         const semConst = app.SEMANTIC_SEARCH_DEBOUNCE_MS;
 

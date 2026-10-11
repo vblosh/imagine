@@ -471,7 +471,7 @@ def test_smart_fix_high_resolution_scaled_preview_and_deferred_export(server, pa
 
     # Verify that during active editing, previewCanvas was created and scaled to MAX_SMART_FIX_PREVIEW_DIM (1200x675)
     prev_dim = page.evaluate('''() => {
-        const qe = window._imagineQuickEdit;
+        const qe = window.imagineUI.quickEdit;
         const pc = qe.quickEditState.previewCanvas;
         return pc ? { width: pc.width, height: pc.height } : null;
     }''')
@@ -486,7 +486,7 @@ def test_smart_fix_high_resolution_scaled_preview_and_deferred_export(server, pa
 
     # Verify that getFullResolutionExportCanvas processes the full 1920x1080 dimensions
     export_dim = page.evaluate('''() => {
-        const qe = window._imagineQuickEdit;
+        const qe = window.imagineUI.quickEdit;
         const exp = qe.getFullResolutionExportCanvas();
         return { width: exp.width, height: exp.height };
     }''')
@@ -499,7 +499,7 @@ def test_smart_fix_high_resolution_scaled_preview_and_deferred_export(server, pa
     expect(page.locator("#loupeModal")).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
 
     # Verify previewCanvas is cleaned up on close
-    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.previewCanvas") is None
+    assert page.evaluate("() => window.imagineUI.quickEdit.quickEditState.previewCanvas") is None
 
 
 

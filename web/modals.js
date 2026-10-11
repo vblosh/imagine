@@ -21,7 +21,7 @@ import { loadMetadata, loadMedia, updateBatchBar, batchUpdateDates, renderGrid, 
 import { updateInspector } from './inspector.js';
 import { closeLoupe } from './loupe.js';
 import { t } from './i18n.js';
-import { checkSemanticStatus } from './semantic-search.js';
+import { checkSemanticStatus } from './semantic-status.js';
 import { refreshFaceStatus } from './face-analysis.js';
 
 // Internal pending state
@@ -926,7 +926,7 @@ export async function submitDeleteMedia() {
   } catch (e) {
     if (idsToDelete.length > 25) {
       console.error('Batch delete failed:', e);
-      showToast(`Batch delete failed: ${e.message || 'Server error'}`, 'error');
+      showToast(t('toast_batch_delete_failed', { error: e.message || 'Server error' }), 'error');
       return;
     }
     for (const id of idsToDelete) {
@@ -940,9 +940,9 @@ export async function submitDeleteMedia() {
   }
 
   if (failedIds.length > 0) {
-    showToast(`${failedIds.length} photos could not be deleted`, 'error');
+    showToast(t('toast_photos_not_deleted', { count: failedIds.length }), 'error');
   } else if (deleteFromDisk) {
-    showToast(`Deleted ${idsToDelete.length} photo${idsToDelete.length === 1 ? '' : 's'} from catalog and disk`, 'success');
+    showToast(idsToDelete.length === 1 ? t('toast_deleted_photo_disk') : t('toast_deleted_photos_disk', { count: idsToDelete.length }), 'success');
   }
 
   const actuallyDeletedIds = idsToDelete.filter(id => !failedIds.includes(id));
@@ -1007,10 +1007,10 @@ export async function submitDeleteTag() {
     await loadMetadata();
     loadMedia();
     updateInspector();
-    showToast(`Tag "${tag.name}" deleted.`, 'info');
+    showToast(t('toast_tag_deleted_named', { name: tag.name }), 'info');
   } catch (err) {
     console.error('Failed to delete tag:', err);
-    showToast('Failed to delete tag: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_delete_tag', { error: err.message || 'Server error' }), 'error');
   }
 }
 
@@ -1217,7 +1217,7 @@ export async function submitBatchDateChange() {
 
   const inputTs = dom.batchDateInput ? parseDatetimeLocalToUtc(dom.batchDateInput.value) : null;
   if (inputTs === null || inputTs <= 0) {
-    showToast('Please specify a valid date and time', 'error');
+    showToast(t('toast_specify_valid_datetime'), 'error');
     return;
   }
 
@@ -1260,11 +1260,11 @@ export async function submitBatchDateChange() {
     await loadMetadata();
     updateInspector();
 
-    showToast(`Updated date for ${updates.length} photo${updates.length > 1 ? 's' : ''}`, 'success');
+    showToast(updates.length === 1 ? t('toast_updated_date_single') : t('toast_updated_date_count', { count: updates.length }), 'success');
     closeBatchDateModal();
   } catch (err) {
     console.error('Failed to change dates:', err);
-    showToast('Failed to change dates: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_change_dates', { error: err.message || 'Server error' }), 'error');
   } finally {
     if (dom.confirmBatchDateBtn) dom.confirmBatchDateBtn.disabled = false;
   }
@@ -1327,7 +1327,7 @@ export async function submitBatchMove() {
 
   const destPath = dom.batchMovePathInput ? dom.batchMovePathInput.value.trim() : '';
   if (!destPath) {
-    showToast('Destination path is required', 'error');
+    showToast(t('toast_dest_path_required'), 'error');
     if (dom.batchMovePathInput) dom.batchMovePathInput.focus();
     return;
   }
@@ -1346,7 +1346,7 @@ export async function submitBatchMove() {
     if (movedCount === 0 && failedIds.length > 0) {
       // Move failed: keep modal open, do not reload media, do not clear selection
       const errMsg = (res.errors && res.errors.length > 0) ? `: ${res.errors[0]}` : '';
-      showToast(`Failed to move photo${failedIds.length > 1 ? 's' : ''}${errMsg}`, 'error');
+      showToast(failedIds.length > 1 ? t('toast_failed_move_photos_err', { error: errMsg }) : t('toast_failed_move_photo_err', { error: errMsg }), 'error');
       if (dom.batchMovePathInput) {
         dom.batchMovePathInput.focus();
         dom.batchMovePathInput.select();
@@ -1363,16 +1363,16 @@ export async function submitBatchMove() {
     updateInspector();
 
     if (movedCount > 0) {
-      showToast(`Moved ${movedCount} photo${movedCount !== 1 ? 's' : ''} to ${destPath}`, 'success');
+      showToast(movedCount === 1 ? t('toast_moved_photo_to', { path: destPath }) : t('toast_moved_photos_to', { count: movedCount, path: destPath }), 'success');
     }
 
     if (failedIds.length > 0) {
       const errMsg = (res.errors && res.errors.length > 0) ? `: ${res.errors[0]}` : '';
-      showToast(`Failed to move ${failedIds.length} photo${failedIds.length !== 1 ? 's' : ''}${errMsg}`, 'error');
+      showToast(t('toast_failed_move_n_photos', { count: failedIds.length, error: errMsg }), 'error');
     }
   } catch (err) {
     console.error('Failed to move media:', err);
-    showToast('Failed to move photos: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_move_photos', { error: err.message || 'Server error' }), 'error');
   } finally {
     if (dom.confirmBatchMoveBtn) dom.confirmBatchMoveBtn.disabled = false;
   }

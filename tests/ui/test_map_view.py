@@ -330,7 +330,7 @@ def test_map_clustering_zoom_combine_and_decombine(server, page: Page):
     expect(page.locator("#mapPhotoCount")).to_have_text("4")
 
     # 1. Set zoom to 10 centered over Paris (where 3.3km is ~22px < 50px radius)
-    page.evaluate("() => window._imagineState.mapInstance.setView([48.83, 2.316], 10)")
+    page.evaluate("() => window.imagineUI.state.mapInstance.setView([48.83, 2.316], 10)")
 
     # When zoomed out, the 2 Paris photos should COMBINE into 1 cluster pin with badge count '2'
     cluster_badge = page.locator(".photo-pin-count", has_text="2")
@@ -358,7 +358,7 @@ def test_map_clustering_zoom_combine_and_decombine(server, page: Page):
 
     # 2. Zoom in enough (zoom 15, where 3.3km is ~350px > 50px radius)
     # The cluster should DECOMBINE into 2 separate individual pins
-    page.evaluate("() => window._imagineState.mapInstance.setView([48.859, 2.316], 15)")
+    page.evaluate("() => window.imagineUI.state.mapInstance.setView([48.859, 2.316], 15)")
 
     # In Paris, there should now be no badge '2'
     expect(cluster_badge).to_be_hidden()
@@ -376,12 +376,12 @@ def test_map_clustering_zoom_combine_and_decombine(server, page: Page):
     expect(popup.locator(".map-popup-nav")).to_be_hidden()
 
     # 3. Zoom back out to zoom 10: photos should COMBINE back together
-    page.evaluate("() => window._imagineState.mapInstance.setView([48.83, 2.316], 10)")
+    page.evaluate("() => window.imagineUI.state.mapInstance.setView([48.83, 2.316], 10)")
 
     # Close the individual popup before opening the rebuilt cluster popup. The
     # map keeps popup DOM nodes around briefly while Leaflet redraws markers.
     expect(cluster_badge).to_be_visible()
-    page.evaluate("() => window._imagineState.mapInstance.closePopup()")
+    page.evaluate("() => window.imagineUI.state.mapInstance.closePopup()")
     expect(page.locator(".map-popup-card:visible")).to_have_count(0)
     cluster_pin.click()
     active_popup = page.locator(".map-popup-card:visible")
@@ -396,7 +396,7 @@ def test_map_pagination_controls(server, page: Page):
     expect(page.locator(".photo-card")).to_have_count(6)
 
     # Simulate catalog has more photos than loaded page (totalCount = 10, loaded = 6)
-    page.evaluate("() => { window._imagineState.totalCount = 10; }")
+    page.evaluate("() => { window.imagineUI.state.totalCount = 10; }")
 
     # Switch to Map view
     page.locator("#viewMapBtn").click()
@@ -635,13 +635,13 @@ def test_map_bubble_place_here_for_unmapped_photo(server, page: Page):
     expect(page.locator(".unmapped-chip")).to_have_count(1)
 
     # 5. Verify in-memory state and database GPS coordinates match the bubble images
-    sunset_gps = page.evaluate("() => window._imagineState.mediaItems.find(m => m.file_name === 'sunset.bmp')?.exif")
+    sunset_gps = page.evaluate("() => window.imagineUI.state.mediaItems.find(m => m.file_name === 'sunset.bmp')?.exif")
     assert sunset_gps["has_gps"] is True
     assert abs(sunset_gps["latitude"] - 46.5) < 0.001
     assert abs(sunset_gps["longitude"] - 11.35) < 0.001
 
-    birthday_gps = page.evaluate("() => window._imagineState.mediaItems.find(m => m.file_name === 'birthday.bmp')?.exif")
-    portrait_gps = page.evaluate("() => window._imagineState.mediaItems.find(m => m.file_name === 'portrait.bmp')?.exif")
+    birthday_gps = page.evaluate("() => window.imagineUI.state.mediaItems.find(m => m.file_name === 'birthday.bmp')?.exif")
+    portrait_gps = page.evaluate("() => window.imagineUI.state.mediaItems.find(m => m.file_name === 'portrait.bmp')?.exif")
     assert birthday_gps["has_gps"] is True
     assert abs(birthday_gps["latitude"] - 21.30694) < 0.001
     assert abs(birthday_gps["longitude"] - (-157.85833)) < 0.001
@@ -739,7 +739,7 @@ def test_map_place_search_enter_and_clear_cancels_debounce(server, page: Page):
     clear_btn.click()
     expect(search_input).to_have_value("")
     expect(page.locator(".search-location-pin")).to_be_hidden()
-    assert page.evaluate("() => window._imagineState.mapSearchDebounceTimer") is None
+    assert page.evaluate("() => window.imagineUI.state.mapSearchDebounceTimer") is None
 
 
 

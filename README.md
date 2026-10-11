@@ -297,24 +297,39 @@ imagine/
 │   ├── benchmark-face-lazy-grid.py # Face grid virtualization benchmark
 │   └── benchmark-face-review-refresh.py # Face review refresh benchmark
 ├── web/                        # Photoshop Elements-styled modular SPA (Zero external dependencies)
-│   ├── index.html              # HTML5 single-page application entry point
-│   ├── app.css                 # Dark theme stylesheet & CSS custom properties
-│   ├── app.js                  # Application bootstrap, routing & lifecycle wiring
+│   ├── index.html              # HTML5 single-page application entry point & SVG sprite
+│   ├── app.css                 # Modular stylesheet entry importing web/styles/
+│   ├── styles/                 # Decomposed component stylesheets (variables, layout, grid, map, etc.)
+│   ├── app.js                  # Application bootstrap, routing & window.imagineUI debug registry
 │   ├── api.js                  # REST API client & response schema normalization
 │   ├── state.js                # Central reactive application state & cache
 │   ├── dom.js                  # DOM element caching, validation & toast alerts
-│   ├── media-grid.js           # Media grid rendering, card selection & virtual pagination
+│   ├── icons.js                # SVG icon rendering helper with sprite symbols
+│   ├── views.js                # Top-level view orchestrator (Grid, Category, Map, Loupe)
+│   ├── grid.js                 # Media grid rendering, virtual pagination & load more
+│   ├── media-fetch.js          # Media loading, query params & filtering
+│   ├── media-params.js         # Media sort and query parameters
+│   ├── media-selection.js      # Card multi-selection & range selection
+│   ├── media-cards.js          # Photo card DOM generation & overlay badges
+│   ├── sidebar.js              # Sidebar navigation, accordion & folder tree
+│   ├── timeline.js             # Timeline histogram rendering & scrubbing
+│   ├── rating-flag.js          # Rating stars & pick/reject flag handlers
+│   ├── grid-a11y.js            # Media grid accessibility & keyboard navigation
+│   ├── media-grid.js           # Backwards-compatible hub re-exporter
 │   ├── inspector.js            # Metadata inspector & resizable side panels
-│   ├── map-view.js             # Leaflet map, spatial clustering & photo pinning
+│   ├── map-view.js             # Spatial clustering, photo pinning & map view
+│   ├── leaflet-loader.js       # Deferred Leaflet mapping library loader
 │   ├── loupe.js                # Fullscreen viewer with pan/zoom & slideshow
 │   ├── modals.js               # Modal dialogs (Import, Album, Tag, Delete, Settings)
 │   ├── face-analysis.js        # Face scan dialog, cluster review grid, naming & suggestions
 │   ├── semantic-search.js      # Natural language search toggle, UI & vector index builder
+│   ├── semantic-status.js      # Semantic AI indexing status & snapshot management
 │   ├── category-view.js        # People, Places, Events, and Albums view management
 │   ├── quick-edit.js           # In-browser photo editor (crop, rotate, flip, tonal adjustments)
 │   ├── auto-events.js          # Local metadata event suggestions and review dialog
 │   ├── keyboard.js             # Keyboard shortcuts & priority Escape manager
-│   ├── i18n.js                 # 5-language internationalization (EN, ES, DE, RU, ZH)
+│   ├── i18n.js                 # Internationalization entry point & async locale loader
+│   ├── locales/                # Modular translation dictionaries (en, es, de, ru, zh)
 │   ├── persistence.js          # LocalStorage persistence for user preferences
 │   ├── timeline-range.js       # Timeline histogram range slider control
 │   ├── icons/                  # Web application icons and PWA assets

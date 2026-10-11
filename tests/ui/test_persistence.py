@@ -100,7 +100,7 @@ def test_sort_preference_persistence(server, page: Page):
     reloaded_sort = page.locator("#sortSelect").input_value()
     assert reloaded_sort == "rating-desc"
 
-    state_sort = page.evaluate("() => ({ sortBy: window._imagineState.sortBy, sortDesc: window._imagineState.sortDesc })")
+    state_sort = page.evaluate("() => ({ sortBy: window.imagineUI.state.sortBy, sortDesc: window.imagineUI.state.sortDesc })")
     assert state_sort["sortBy"] == "rating"
     assert state_sort["sortDesc"] is True
 

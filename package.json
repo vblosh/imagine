@@ -1,0 +1,21 @@
+{
+  "name": "imagine-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint web/",
+    "lint:fix": "eslint web/ --fix",
+    "format": "prettier --write \"web/**/*.{js,css,html}\"",
+    "format:check": "prettier --check \"web/**/*.{js,css,html}\"",
+    "check:cycles": "node scripts/check-cycles.js",
+    "check:i18n": "node scripts/check-i18n-parity.js",
+    "test": "npm run check:cycles && npm run check:i18n && npm run lint"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "eslint": "^9.20.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.5.0"
+  }
+}

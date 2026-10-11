@@ -12,49 +12,98 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-192.svg">
   <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg">
-  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="app.css?v=22">
 </head>
 <body>
+  <svg xmlns="http://www.w3.org/2000/svg" style="display: none;" id="svgSprite" aria-hidden="true">
+    <symbol id="icon-menu" viewBox="0 0 24 24"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></symbol>
+    <symbol id="icon-logo" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></symbol>
+    <symbol id="icon-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></symbol>
+    <symbol id="icon-map-pin" viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></symbol>
+    <symbol id="icon-calendar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></symbol>
+    <symbol id="icon-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
+    <symbol id="icon-sparkle" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.28 1.28L3 12l5.8 1.9a2 2 0 0 1 1.28 1.28L12 21l1.9-5.8a2 2 0 0 1 1.28-1.28L21 12l-5.8-1.9a2 2 0 0 1-1.28-1.28z"/></symbol>
+    <symbol id="icon-square-small" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6"/></symbol>
+    <symbol id="icon-square" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.4 1.4-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20h-2v-.5a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-1.4-1.4.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H4v-2h.5a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 1.4-1.4.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V4h2v.5a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 1.4 1.4-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1H20v2h-.5a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></symbol>
+    <symbol id="icon-folder-plus" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></symbol>
+    <symbol id="icon-maximize" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="icon-minimize" viewBox="0 0 24 24"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></symbol>
+    <symbol id="icon-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></symbol>
+    <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M5 21h14"/></symbol>
+    <symbol id="icon-video" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></symbol>
+    <symbol id="icon-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></symbol>
+    <symbol id="icon-x" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+    <symbol id="icon-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="16 10 11 15 8 12"/></symbol>
+    <symbol id="icon-minus-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></symbol>
+    <symbol id="icon-settings-alt" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.4 1.4-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-2v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L9 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H7.6v-2h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9A1.7 1.7 0 0 0 9 9l1.4-1.4.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6v-.2h2v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 9l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v2H21a1.7 1.7 0 0 0-1.6 1z"/></symbol>
+    <symbol id="icon-chevron-left" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></symbol>
+    <symbol id="icon-map" viewBox="0 0 24 24"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></symbol>
+    <symbol id="icon-calendar-event" viewBox="0 0 24 24"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="17" rx="2"/></symbol>
+    <symbol id="icon-calendar-check" viewBox="0 0 24 24"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="17" rx="2"/><path d="m9 15 2 2 4-5"/></symbol>
+    <symbol id="icon-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="icon-folder-chevron" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+    <symbol id="icon-trash-lines" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+    <symbol id="icon-expand-arrows" viewBox="0 0 24 24"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 15 21 21 15 21"/><polyline points="3 9 3 3 9 3"/></symbol>
+    <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="12" x2="16" y2="14"/></symbol>
+    <symbol id="icon-clock-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></symbol>
+    <symbol id="icon-maximize-2" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
+    <symbol id="icon-pencil" viewBox="0 0 24 24"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/><path d="M15 5l4 4"/></symbol>
+    <symbol id="icon-tag" viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></symbol>
+    <symbol id="icon-search-dot" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></symbol>
+    <symbol id="icon-brush" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></symbol>
+    <symbol id="icon-rotate-ccw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><polyline points="3 3 3 8 8 8"/></symbol>
+    <symbol id="icon-rotate-cw" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><polyline points="21 3 21 8 16 8"/></symbol>
+    <symbol id="icon-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></symbol>
+    <symbol id="icon-wand" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/></symbol>
+    <symbol id="icon-wand-plus" viewBox="0 0 24 24"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.28 1.28L3 12l5.8 1.9a2 2 0 0 1 1.28 1.28L12 21l1.9-5.8a2 2 0 0 1 1.28-1.28L21 12l-5.8-1.9a2 2 0 0 1-1.28-1.28L12 3z"/><path d="M5 3v4"/><path d="M3 5h4"/><path d="M19 17v4"/><path d="M17 19h4"/></symbol>
+    <symbol id="icon-users-alt" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="icon-clipboard" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></symbol>
+    <symbol id="icon-share" viewBox="0 0 24 24"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></symbol>
+    <symbol id="icon-aspect-ratio" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></symbol>
+    <symbol id="icon-crosshair" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></symbol>
+    <symbol id="icon-map-marker" viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/></symbol>
+    <symbol id="icon-disc-vertical" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3"/><path d="M12 18v3"/></symbol>
+    <symbol id="icon-plus-rect" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></symbol>
+  </svg>
   <div id="app" class="elements-app">
     <!-- Top Bar -->
     <header class="top-bar">
       <div class="top-bar-left">
         <button class="mobile-menu-btn" id="mobileMenuBtn" title="Toggle Navigation Menu" data-i18n-title="toggle_sidebar" aria-label="Toggle Navigation Menu">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="3" y1="12" x2="21" y2="12"></line>
-            <line x1="3" y1="6" x2="21" y2="6"></line>
-            <line x1="3" y1="18" x2="21" y2="18"></line>
-          </svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-menu"></use></svg>
         </button>
         <div class="logo">
-          <svg class="logo-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-            <circle cx="8.5" cy="8.5" r="1.5"/>
-            <polyline points="21 15 16 10 5 21"/>
-          </svg>
+          <svg class="logo-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-logo"></use></svg>
           <span class="logo-text">IMAGINE <span class="logo-sub" data-i18n="logo_sub">Organizer</span></span>
         </div>
 
         <nav class="view-tabs" id="viewTabs">
           <button class="tab-btn active" data-tab="media">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-grid"></use></svg>
             <span data-i18n="tab_media">Media</span>
           </button>
           <button class="tab-btn" data-tab="people">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-users"></use></svg>
             <span data-i18n="tab_people">People</span>
           </button>
           <button class="tab-btn" data-tab="places">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-map-pin"></use></svg>
             <span data-i18n="tab_places">Places</span>
           </button>
           <button class="tab-btn" data-tab="events">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-calendar"></use></svg>
             <span data-i18n="tab_events">Events</span>
           </button>
           <button class="tab-btn" data-tab="albums">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-book"></use></svg>
             <span data-i18n="tab_albums">Albums</span>
           </button>
         </nav>
@@ -62,21 +111,21 @@
 
       <div class="top-bar-center">
         <div class="search-box">
-          <svg class="search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <svg class="search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-search"></use></svg>
           <input type="text" id="searchInput" placeholder="Search photos, camera, tags..." data-i18n-placeholder="search_placeholder" autocomplete="off">
           <button class="clear-search" id="clearSearchBtn" title="Clear search" data-i18n-title="clear_search">&times;</button>
         </div>
         <button class="semantic-toggle disabled-toggle" id="semanticToggle" title="Semantic Search (AI)" data-i18n-title="semantic_search_toggle" aria-pressed="false" aria-disabled="true" disabled>
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.28 1.28L3 12l5.8 1.9a2 2 0 0 1 1.28 1.28L12 21l1.9-5.8a2 2 0 0 1 1.28-1.28L21 12l-5.8-1.9a2 2 0 0 1-1.28-1.28L12 3z"/><path d="M5 3v4"/><path d="M3 5h4"/><path d="M19 17v4"/><path d="M17 19h4"/></svg>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-wand-plus"></use></svg>
         </button>
       </div>
 
       <div class="top-bar-right">
         <!-- Zoom Slider -->
         <div class="zoom-control" title="Thumbnail Size" data-i18n-title="thumb_size">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="6" height="6"/></svg>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-square-small"></use></svg>
           <input type="range" id="zoomSlider" min="120" max="360" value="180" step="10">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-square"></use></svg>
         </div>
 
         <!-- Language Selector -->
@@ -91,32 +140,25 @@
         </div>
 
         <button class="btn btn-icon" id="settingsBtn" title="Settings" data-i18n-title="settings" aria-label="Settings" data-i18n-aria-label="settings">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"></circle>
-            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.4 1.4-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-2v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L9 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H7.6v-2h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9A1.7 1.7 0 0 0 9 9l1.4-1.4.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6v-.2h2v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 9l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v2H21a1.7 1.7 0 0 0-1.6 1z"></path>
-          </svg>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-settings-alt"></use></svg>
         </button>
 
         <button class="btn btn-secondary" id="refreshBtn" title="Refresh media" data-i18n-title="refresh_media">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-refresh"></use></svg>
         </button>
 
         <button class="btn btn-primary" id="importBtn">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-folder-plus"></use></svg>
           <span data-i18n="import_folder">Import Folder</span>
         </button>
 
         <button class="btn btn-icon" id="toggleInspectorBtn" title="Toggle Inspector Panel" data-i18n-title="toggle_inspector">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-info"></use></svg>
         </button>
 
         <button class="btn btn-icon" id="toggleFullscreenBtn" title="Toggle Fullscreen" data-i18n-title="toggle_fullscreen" aria-label="Toggle Fullscreen">
-          <svg class="icon-maximize" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
-          </svg>
-          <svg class="icon-minimize" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
-            <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>
-          </svg>
+          <svg class="icon-maximize" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-maximize"></use></svg>
+          <svg class="icon-minimize" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><use href="#icon-minimize"></use></svg>
         </button>
       </div>
     </header>
@@ -135,47 +177,47 @@
           </div>
           <ul class="sidebar-menu">
             <li class="menu-item active" data-filter="all" id="navAllMedia">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-image"></use></svg>
               <span data-i18n="nav_all_media">All Media</span>
               <span class="count-badge" id="totalMediaCount">0</span>
             </li>
             <li class="menu-item" data-filter="last_imported" id="navLastImported">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M5 21h14"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-download"></use></svg>
               <span data-i18n="nav_last_imported">Last Imported</span>
               <span class="count-badge" id="totalLastImportedCount">0</span>
             </li>
             <li class="menu-item" data-filter="photos" id="navPhotos">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-image"></use></svg>
               <span data-i18n="nav_photos">Photos</span>
               <span class="count-badge" id="totalPhotosCount">0</span>
             </li>
             <li class="menu-item" data-filter="videos" id="navVideos">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-video"></use></svg>
               <span data-i18n="nav_videos">Videos</span>
               <span class="count-badge" id="totalVideosCount">0</span>
             </li>
             <li class="menu-item" data-filter="audio" id="navAudio">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3"/><path d="M12 18v3"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-disc-vertical"></use></svg>
               <span data-i18n="nav_audio">Audio</span>
               <span class="count-badge" id="totalAudioCount">0</span>
             </li>
             <li class="menu-item" data-filter="picks" id="navPicks">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-check"></use></svg>
               <span data-i18n="nav_picks">Picks</span>
               <span class="count-badge" id="totalPicksCount">0</span>
             </li>
             <li class="menu-item" data-filter="rejects" id="navRejects">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-x"></use></svg>
               <span data-i18n="nav_rejects">Rejects</span>
               <span class="count-badge" id="totalRejectsCount">0</span>
             </li>
             <li class="menu-item" data-filter="not_rejects" id="navNotRejects">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="16 10 11 15 8 12"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-check-circle"></use></svg>
               <span data-i18n="nav_not_rejects">Not Rejects</span>
               <span class="count-badge" id="totalNotRejectsCount">0</span>
             </li>
             <li class="menu-item" data-filter="unrated" id="navUnrated">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-minus-circle"></use></svg>
               <span data-i18n="nav_unrated">Unrated</span>
               <span class="count-badge" id="totalUnratedCount">0</span>
             </li>
@@ -185,7 +227,7 @@
         <!-- Sidebar collection search -->
         <div class="sidebar-collection-search">
           <div class="sidebar-search-box">
-            <svg class="sidebar-search-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <svg class="sidebar-search-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#icon-search"></use></svg>
             <input type="text" id="sidebarSearchInput" placeholder="Search Albums, Tags, Folders" data-i18n-placeholder="sidebar_search_placeholder" autocomplete="off" aria-label="Search Albums, Tags, Folders" data-i18n-aria-label="sidebar_search_placeholder">
             <button type="button" class="sidebar-search-clear" id="clearSidebarSearchBtn" title="Clear sidebar search" data-i18n-title="clear_sidebar_search" aria-label="Clear sidebar search" data-i18n-aria-label="clear_sidebar_search">&times;</button>
           </div>
@@ -260,16 +302,16 @@
         <!-- Mobile Sidebar Utilities (Visible only on <= 768px) -->
         <div class="sidebar-mobile-actions" id="sidebarMobileActions">
           <button class="btn btn-primary btn-sm" id="mobileImportBtn">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-folder-plus"></use></svg>
             <span data-i18n="import_folder">Import Folder</span>
           </button>
           <div class="sidebar-action-row" style="display: flex; gap: 8px;">
             <button class="btn btn-secondary btn-sm" id="mobileSettingsBtn" style="flex: 1;">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-1.4 1.4-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-2v-.2a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L9 17l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.6-1H7.6v-2h.2a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9A1.7 1.7 0 0 0 9 9l1.4-1.4.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6v-.2h2v.2a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 9l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v2H21a1.7 1.7 0 0 0-1.6 1z"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-settings-alt"></use></svg>
               <span data-i18n="settings">Settings</span>
             </button>
             <button class="btn btn-secondary btn-sm" id="mobileRefreshBtn" title="Refresh media" data-i18n-title="refresh_media">
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-refresh"></use></svg>
             </button>
           </div>
           <div class="sidebar-lang-row" style="display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-secondary); padding: 4px 2px;">
@@ -295,7 +337,7 @@
           <!-- Semantic Search Toolbar (Active during semantic AI search) -->
           <div class="semantic-search-toolbar" id="semanticSearchToolbar" style="display: none;">
             <div class="semantic-search-info">
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="semantic-search-sparkle-icon"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.28 1.28L3 12l5.8 1.9a2 2 0 0 1 1.28 1.28L12 21l1.9-5.8a2 2 0 0 1 1.28-1.28L21 12l-5.8-1.9a2 2 0 0 1-1.28-1.28L12 3z"/><path d="M5 3v4"/><path d="M3 5h4"/><path d="M19 17v4"/><path d="M17 19h4"/></svg>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="semantic-search-sparkle-icon"><use href="#icon-wand-plus"></use></svg>
               <span class="semantic-search-title" id="semanticSearchTitle">AI Search</span>
               <span class="semantic-search-count badge" id="semanticSearchCount">0 matches</span>
               <span class="semantic-search-hint" id="semanticSearchHint" data-i18n="semantic_search_rank_hint">(sorted by probability rank)</span>
@@ -307,7 +349,7 @@
 
           <div class="filter-indicator" id="filterIndicator">
             <button class="btn btn-sm btn-secondary btn-back" id="categoryBackBtn" style="display: none;" title="Back to overview" data-i18n-title="back_to_overview">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-chevron-left"></use></svg>
               <span id="categoryBackBtnLabel" data-i18n="back_to_people">Back to People</span>
             </button>
             <span id="filterLabel" data-i18n="all_photos">All Photos</span>
@@ -317,11 +359,11 @@
           <!-- View Mode Switcher: Grid vs Map -->
           <div class="view-mode-toggle" id="viewModeToggle" role="group" aria-label="View Mode">
             <button class="btn-toggle active" id="viewGridBtn" data-mode="grid" title="Grid View (G)" data-i18n-title="grid_view">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-grid"></use></svg>
               <span data-i18n="grid">Grid</span>
             </button>
             <button class="btn-toggle" id="viewMapBtn" data-mode="map" title="Map View (M)" data-i18n-title="map_view">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-map"></use></svg>
               <span data-i18n="map">Map</span>
             </button>
           </div>
@@ -360,17 +402,17 @@
             <button class="btn btn-sm" id="batchAddTagBtn" data-i18n="add_tag">Add Tag</button>
             <button class="btn btn-sm btn-danger-outline" id="batchRemoveTagBtn" data-i18n="remove_tag">Remove Tag</button>
             <button class="btn btn-sm" id="batchAutoEventBtn" data-i18n-title="auto_event_title" title="Suggest events for selected photos">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="17" rx="2"/><path d="m9 15 2 2 4-5"/></svg>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-calendar-check"></use></svg>
               <span data-i18n="auto_event">Auto Event</span>
             </button>
             <button class="btn btn-sm" id="batchAddAlbumBtn" data-i18n="add_to_album" title="Add to Album" data-i18n-title="add_to_album">Add to Album</button>
             <button class="btn btn-sm" id="batchDateBtn" data-i18n="date" title="Adjust date & time" data-i18n-title="batch_date_btn_title">Date</button>
             <button class="btn btn-sm" id="batchMoveBtn" title="Move selected photos to another folder" data-i18n-title="move_selected">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg> <span data-i18n="move">Move</span>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-folder-chevron"></use></svg> <span data-i18n="move">Move</span>
             </button>
             <button class="btn btn-sm btn-secondary" id="batchClearBtn" data-i18n="deselect">Deselect</button>
             <button class="btn btn-sm btn-danger" id="batchDeleteBtn" title="Delete selected photos from catalog" data-i18n-title="delete_selected">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> <span data-i18n="delete">Delete</span>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-trash-lines"></use></svg> <span data-i18n="delete">Delete</span>
             </button>
           </div>
         </div>
@@ -401,7 +443,7 @@
               </select>
             </div>
             <button class="btn btn-secondary btn-sm" id="categoryAddBtn">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-plus"></use></svg>
               <span id="categoryAddBtnLabel" data-i18n="add_person">Add Person</span>
             </button>
           </div>
@@ -413,7 +455,7 @@
             <!-- Grouped by date headers with photo cards -->
           </div>
           <div class="empty-state" id="emptyState" style="display: none;">
-            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><use href="#icon-logo"></use></svg>
             <h3 data-i18n="no_photos_found">No Photos Found</h3>
             <p data-i18n="import_prompt">Import photos from a folder on your computer to get started.</p>
             <button class="btn btn-primary" id="emptyImportBtn" data-i18n="import_folder">Import Folder</button>
@@ -426,9 +468,7 @@
             <!-- Dynamic cards for People / Places / Events -->
           </div>
           <div class="empty-state" id="categoryEmptyState" style="display: none;">
-            <svg class="category-empty-icon" id="categoryEmptyIcon" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
-            </svg>
+            <svg class="category-empty-icon" id="categoryEmptyIcon" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><use href="#icon-users"></use></svg>
             <h3 id="categoryEmptyTitle" data-i18n="no_people_found">No People Found</h3>
             <p id="categoryEmptyText" data-i18n="tag_people_prompt">Tag photos with people's names to organize them here.</p>
             <button class="btn btn-primary" id="categoryEmptyActionBtn" data-i18n="add_person">Add Person</button>
@@ -440,7 +480,7 @@
           <!-- Map Place Search Box (Top Left) -->
           <div class="map-search-overlay" id="mapSearchOverlay">
             <div class="map-search-box">
-              <svg class="search-icon" id="mapSearchIcon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <svg class="search-icon" id="mapSearchIcon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-search"></use></svg>
               <input type="text" id="mapSearchInput" placeholder="Search place, city, or coordinates..." autocomplete="off" data-i18n-placeholder="map_search_placeholder">
               <button class="clear-search" id="clearMapSearchBtn" title="Clear place search" data-i18n-title="clear_place_search" style="display: none;">&times;</button>
               <div class="map-search-spinner" id="mapSearchSpinner" style="display: none;"></div>
@@ -453,11 +493,11 @@
               <span id="mapPhotoCount">0</span> <span data-i18n="photos_on_map_suffix">photos on map</span>
             </div>
             <button class="btn btn-sm btn-secondary" id="mapFitBoundsBtn" title="Fit all photos in view" data-i18n-title="fit_all_title">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 15 21 21 15 21"/><polyline points="3 9 3 3 9 3"/></svg>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-expand-arrows"></use></svg>
               <span data-i18n="fit_all">Fit All</span>
             </button>
             <button class="btn btn-sm btn-secondary" id="mapToggleUnmappedBtn" title="Toggle unmapped photos tray" data-i18n-title="toggle_unmapped">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-clock-alert"></use></svg>
               <span id="unmappedBtnLabel">Unmapped (0)</span>
             </button>
             <button class="btn btn-sm btn-secondary" id="mapLoadMoreBtn" style="display: none;" title="Load next page of photos" data-i18n-title="load_next_page" data-i18n="load_more">
@@ -525,7 +565,7 @@
               <img id="inspectorImg" src="" alt="Photo preview">
               <svg id="inspectorFaceOverlay" class="face-image-overlay" aria-hidden="true" hidden></svg>
               <div class="preview-overlay-btn" id="openLoupeFromInspector" title="Open Fullscreen Loupe" data-i18n-title="open_loupe">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-maximize-2"></use></svg>
               </div>
             </div>
 
@@ -541,10 +581,10 @@
                 </div>
                 <div class="flag-toggle" id="inspectorFlag">
                   <button class="flag-btn flag-pick" data-flag="1" title="Pick (P)" data-i18n-title="pick_p">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#icon-check"></use></svg>
                   </button>
                   <button class="flag-btn flag-reject" data-flag="-1" title="Reject (Del)" data-i18n-title="reject_del">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5"><use href="#icon-x"></use></svg>
                   </button>
                 </div>
               </div>
@@ -561,7 +601,7 @@
                   <dd class="prop-editable-row" id="infoFileNameRow">
                     <span id="infoFileName" class="editable-text" title="Click to rename" data-i18n-title="click_to_rename">-</span>
                     <button class="btn-inline-edit" id="renameFileBtn" title="Rename file" aria-label="Rename file" data-i18n-title="rename_file" data-i18n-aria-label="rename_file">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path><path d="M15 5l4 4"></path></svg>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-pencil"></use></svg>
                     </button>
                     <div class="inline-edit-form" id="renameFileForm" style="display: none;">
                       <input type="text" class="inline-edit-input" id="renameFileInput" autocomplete="off" spellcheck="false" />
@@ -581,7 +621,7 @@
                   <dd class="prop-editable-row" id="infoDateTakenRow">
                     <span id="infoDateTaken" class="editable-text" title="Click to change date" data-i18n-title="click_to_change_date">-</span>
                     <button class="btn-inline-edit" id="editDateTakenBtn" title="Change date" aria-label="Change date" data-i18n-title="change_date" data-i18n-aria-label="change_date">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path><path d="M15 5l4 4"></path></svg>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-pencil"></use></svg>
                     </button>
                     <div class="inline-edit-form" id="editDateTakenForm" style="display: none;">
                       <input type="datetime-local" class="inline-edit-input" id="editDateTakenInput" />
@@ -595,7 +635,7 @@
                   <dd class="prop-editable-row" id="infoCaptionRow">
                     <span id="infoCaption" class="break-all editable-text" title="Click to edit caption" data-i18n-title="click_to_edit_caption">-</span>
                     <button class="btn-inline-edit" id="editCaptionBtn" title="Change caption" aria-label="Change caption" data-i18n-title="change_caption" data-i18n-aria-label="change_caption">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path><path d="M15 5l4 4"></path></svg>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-pencil"></use></svg>
                     </button>
                     <div class="inline-edit-form" id="editCaptionForm" style="display: none;">
                       <input type="text" class="inline-edit-input" id="editCaptionInput" placeholder="Add caption..." autocomplete="off" data-i18n-placeholder="add_caption_placeholder" />
@@ -609,7 +649,7 @@
                   <dd class="prop-editable-row" id="infoFilePathRow">
                     <span id="infoFilePath" class="break-all">-</span>
                     <button class="btn-inline-edit" id="inspectorMovePathBtn" title="Move to folder" aria-label="Move file" data-i18n-title="move_to_folder" data-i18n-aria-label="move_to_folder">
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-folder-chevron"></use></svg>
                     </button>
                   </dd>
                 </dl>
@@ -682,13 +722,13 @@
               <h4 class="section-heading" data-i18n="location">Location</h4>
               <div class="inspector-gps-actions" id="inspectorGpsActions" style="display: none;">
                 <button class="btn btn-xs btn-primary" id="inspectorShowOnMapBtn" title="Show this photo on the map" data-i18n-title="show_on_map_title">
-                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-map"></use></svg>
                   <span data-i18n="show_on_map">Show on Map</span>
                 </button>
                 <button class="btn btn-xs btn-secondary" id="inspectorClearGpsBtn" title="Remove GPS coordinates" data-i18n-title="clear_gps_title" data-i18n="clear">Clear</button>
               </div>
               <button class="btn btn-xs btn-secondary" id="inspectorPlaceOnMapBtn" style="display: none; margin-top: 6px; width: 100%;">
-                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-map-pin"></use></svg>
                 <span data-i18n="place_on_map">Place on Map</span>
               </button>
               <div id="inspectorMiniMap" class="inspector-minimap" style="display: none;"></div>
@@ -715,7 +755,7 @@
                 <button class="btn btn-sm" id="addTagBtn" data-i18n="add">Add</button>
               </div>
               <button class="btn btn-xs btn-secondary" id="inspectorOpenTagModalBtn" style="margin-top: 6px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 5px;">
-                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-tag"></use></svg>
                 <span data-i18n="choose_dialog">Choose People / Event / Dialog...</span>
               </button>
             </div>
@@ -731,19 +771,19 @@
             <!-- Actions Section -->
             <div class="inspector-section" style="display: flex; flex-direction: column; gap: 6px;">
               <button class="btn btn-sm btn-secondary" id="inspectorFindSimilarBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Find visually similar photos" data-i18n-title="find_similar_title">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-search-dot"></use></svg>
                 <span data-i18n="find_similar">Find Similar</span>
               </button>
               <button class="btn btn-sm btn-secondary" id="inspectorAutoEventBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" data-i18n-title="auto_event_title" title="Suggest events for selected photos">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="17" rx="2"/><path d="m9 15 2 2 4-5"/></svg>
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-calendar-check"></use></svg>
                 <span data-i18n="auto_event">Auto Event</span>
               </button>
               <button class="btn btn-sm btn-secondary" id="inspectorMoveBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;" title="Move to folder" data-i18n-title="move_to_folder">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="12 11 16 14 12 17"/></svg>
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-folder-chevron"></use></svg>
                 <span data-i18n="move_btn">Move...</span>
               </button>
               <button class="btn btn-sm btn-danger-outline" id="inspectorDeleteBtn" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-trash-lines"></use></svg>
                 <span data-i18n="delete_from_catalog">Delete from Catalog</span>
               </button>
             </div>
@@ -833,14 +873,11 @@
               <span data-i18n="face_overlay_toggle">Show boxes</span>
             </label>
             <button class="btn btn-secondary loupe-quick-edit-btn" id="loupeQuickEditBtn" title="Quick Edit (E)" data-i18n-title="quick_edit_shortcut">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 20h9"/>
-                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-              </svg>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-brush"></use></svg>
               <span data-i18n="quick_edit">Quick Edit</span>
             </button>
             <button class="flag-btn" id="loupeDeleteBtn" title="Delete from Catalog" data-i18n-title="delete_from_catalog" style="margin-left: 6px; color: var(--reject-color);">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-trash-lines"></use></svg>
             </button>
             <div class="loupe-zoom-controls" id="loupeZoomControls">
               <button class="loupe-zoom-btn" id="loupeZoomOutBtn" title="Zoom Out (-)" data-i18n-title="zoom_out">−</button>
@@ -853,17 +890,11 @@
           <div class="quick-edit-toolbar" id="quickEditToolbar" style="display: none;">
             <div class="quick-edit-group" title="Rotate" data-i18n-title="rotate_left">
               <button class="quick-edit-btn" id="quickEditRotateLeftBtn" title="Rotate Left 90° (L)" data-i18n-title="rotate_left_title">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                  <polyline points="3 3 3 8 8 8"/>
-                </svg>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-rotate-ccw"></use></svg>
                 <span data-i18n="rotate_left">Rotate Left</span>
               </button>
               <button class="quick-edit-btn" id="quickEditRotateRightBtn" title="Rotate Right 90° (R)" data-i18n-title="rotate_right_title">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 12a9 9 0 1 1-9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
-                  <polyline points="21 3 21 8 16 8"/>
-                </svg>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-rotate-cw"></use></svg>
                 <span data-i18n="rotate_right">Rotate Right</span>
               </button>
             </div>
@@ -872,10 +903,7 @@
 
             <div class="quick-edit-group" title="Crop" data-i18n-title="crop">
               <button class="quick-edit-btn" id="quickEditCropBtn" title="Crop Tool (C)" data-i18n-title="crop_tool_title">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M6 2v14a2 2 0 0 0 2 2h14"/>
-                  <path d="M18 22V8a2 2 0 0 0-2-2H2"/>
-                </svg>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-crop"></use></svg>
                 <span data-i18n="crop">Crop</span>
               </button>
               <div class="quick-edit-sub-options" id="cropSubOptions" style="display: none;">
@@ -896,9 +924,7 @@
 
             <div class="quick-edit-group" title="Smart Fix" data-i18n-title="smart_fix">
               <button class="quick-edit-btn" id="quickEditSmartFixBtn" title="Auto Smart Fix (S)" data-i18n-title="smart_fix_title">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z"/>
-                </svg>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-wand"></use></svg>
                 <span data-i18n="smart_fix">Smart Fix</span>
               </button>
               <div class="quick-edit-sub-options" id="smartFixSubOptions" style="display: none;">
@@ -1057,10 +1083,7 @@
       <div class="modal-dialog tag-modal-dialog">
         <div class="modal-header">
           <div class="tag-modal-title-wrap">
-            <svg class="tag-modal-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
-              <line x1="7" y1="7" x2="7.01" y2="7"></line>
-            </svg>
+            <svg class="tag-modal-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-tag"></use></svg>
             <h3 id="tagModalHeading" data-i18n="tag_modal_title">Add Tag</h3>
           </div>
           <button class="btn-icon-sm" id="closeNewTagModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
@@ -1100,10 +1123,7 @@
             </div>
             <div class="tag-search-input-wrap">
               <span class="tag-search-input-icon">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                </svg>
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-search"></use></svg>
               </span>
               <input type="text" id="tagNameInput" list="tagModalSuggestions" placeholder="e.g. Mountain, John, Birthday" class="form-control tag-name-search-input" autocomplete="off" data-i18n-placeholder="tag_name_placeholder">
               <datalist id="tagModalSuggestions"></datalist>
@@ -1130,12 +1150,7 @@
               <button type="button" class="category-card" data-cat="people" id="catBtnPeople">
                 <div class="category-card-top">
                   <span class="category-card-icon cat-icon-people">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                      <circle cx="9" cy="7" r="4"></circle>
-                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                    </svg>
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-users-alt"></use></svg>
                   </span>
                   <span class="category-card-dot cat-dot-people"></span>
                 </div>
@@ -1146,12 +1161,7 @@
               <button type="button" class="category-card" data-cat="events" id="catBtnEvents">
                 <div class="category-card-top">
                   <span class="category-card-icon cat-icon-events">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                      <line x1="16" y1="2" x2="16" y2="6"></line>
-                      <line x1="8" y1="2" x2="8" y2="6"></line>
-                      <line x1="3" y1="10" x2="21" y2="10"></line>
-                    </svg>
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-calendar"></use></svg>
                   </span>
                   <span class="category-card-dot cat-dot-events"></span>
                 </div>
@@ -1162,10 +1172,7 @@
               <button type="button" class="category-card" data-cat="places" id="catBtnPlaces">
                 <div class="category-card-top">
                   <span class="category-card-icon cat-icon-places">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                      <circle cx="12" cy="10" r="3"></circle>
-                    </svg>
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-map-pin"></use></svg>
                   </span>
                   <span class="category-card-dot cat-dot-places"></span>
                 </div>
@@ -1176,10 +1183,7 @@
               <button type="button" class="category-card active" data-cat="keyword" id="catBtnKeyword">
                 <div class="category-card-top">
                   <span class="category-card-icon cat-icon-keyword">
-                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
-                      <line x1="7" y1="7" x2="7.01" y2="7"></line>
-                    </svg>
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-tag"></use></svg>
                   </span>
                   <span class="category-card-dot cat-dot-keyword"></span>
                 </div>
@@ -1272,12 +1276,7 @@
       <div class="modal-dialog">
         <div class="modal-header">
           <div style="display: flex; align-items: center; gap: 8px;">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-              <line x1="16" y1="2" x2="16" y2="6"></line>
-              <line x1="8" y1="2" x2="8" y2="6"></line>
-              <line x1="3" y1="10" x2="21" y2="10"></line>
-            </svg>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-calendar"></use></svg>
             <h3 id="batchDateModalTitle" data-i18n="batch_date_title">Change Date</h3>
           </div>
           <button class="btn-icon-sm" id="closeBatchDateModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
@@ -1477,10 +1476,7 @@
       <div class="modal-dialog">
         <div class="modal-header">
           <div style="display: flex; align-items: center; gap: 8px;">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-              <polyline points="12 11 16 14 12 17"></polyline>
-            </svg>
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-folder-chevron"></use></svg>
             <h3 id="batchMoveModalTitle" data-i18n="move_modal_title">Move to Folder</h3>
           </div>
           <button class="btn-icon-sm" id="closeBatchMoveModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
@@ -1512,7 +1508,7 @@
       <div class="modal-dialog auto-event-dialog">
         <div class="modal-header">
           <div class="auto-event-title-wrap">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 2v4M16 2v4M3 10h18"/><rect x="3" y="4" width="18" height="17" rx="2"/><path d="m9 15 2 2 4-5"/></svg>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-calendar-check"></use></svg>
             <h3 id="autoEventModalTitle" data-i18n="auto_event_modal_title">Suggested Events</h3>
           </div>
           <button class="btn-icon-sm" id="closeAutoEventModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
@@ -1538,10 +1534,7 @@
       <div class="modal-dialog ios-install-dialog">
         <div class="modal-header">
           <div style="display: flex; align-items: center; gap: 8px;">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
-              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
-            </svg>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-clipboard"></use></svg>
             <h3 id="iosInstallModalTitle" data-i18n="ios_install_title">Fullscreen on iOS</h3>
           </div>
           <button class="btn-icon-sm" id="closeIosInstallBtn" title="Close" data-i18n-title="close_panel">&times;</button>
@@ -1553,7 +1546,7 @@
               <div class="ios-step-content">
                 <strong data-i18n="ios_install_step1">Tap the Share icon at the bottom of Safari</strong>
                 <span class="ios-step-icon">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-share"></use></svg>
                 </span>
               </div>
             </div>
@@ -1562,7 +1555,7 @@
               <div class="ios-step-content">
                 <strong data-i18n="ios_install_step2">Scroll down and tap "Add to Home Screen"</strong>
                 <span class="ios-step-icon">
-                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-plus-rect"></use></svg>
                 </span>
               </div>
             </div>
@@ -1745,7 +1738,6 @@
 
   </div>
 
-  <script src="vendor/leaflet/leaflet.js"></script>
   <script type="module" src="app.js?v=23"></script>
 </body>
 </html>

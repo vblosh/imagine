@@ -396,7 +396,7 @@ def test_scan_submission_error_survives_language_rerender_and_clears_on_retry(se
     expect(error).to_be_visible()
     page.evaluate("""async () => {
       const i18n = await import('/i18n.js');
-      i18n.setLanguage('es');
+      await i18n.setLanguage('es');
     }""")
     expect(error).to_be_visible()
     expect(error).to_contain_text("A face scan is already running")
@@ -510,7 +510,7 @@ def test_group_acceptance_and_shared_selected_face_controls(server, page: Page):
     photo = page.locator(".photo-card").first
     media_id = int(photo.get_attribute("data-id"))
     photo.click()
-    tags = page.evaluate("window._imagineState.tags.filter(t => t.category === 'people')")
+    tags = page.evaluate("window.imagineUI.state.tags.filter(t => t.category === 'people')")
     alice = next(tag for tag in tags if tag["name"] == "Alice")
     api.names[alice["id"]] = "Alice"
     suggestion = [dict(tag_id=alice["id"], name="Alice", score=.85)]
@@ -615,7 +615,7 @@ def test_accept_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
     })();""")
     page.goto(server["url"])
     media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
-    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    alice = next(tag for tag in page.evaluate("window.imagineUI.state.tags") if tag["name"] == "Alice")
     api.names[alice["id"]] = "Alice"
     suggestion = [dict(tag_id=alice["id"], name="Alice", score=.9)]
     api.faces = {81: _face(81, media_id, suggestion), 82: _face(82, media_id, suggestion)}
@@ -642,7 +642,7 @@ def test_accept_suggestions_in_review_faces_dialog_loads_next_face_grid(server, 
     api = FaceApi(page)
     page.goto(server["url"])
     media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
-    tags = page.evaluate("window._imagineState.tags.filter(t => t.category === 'people')")
+    tags = page.evaluate("window.imagineUI.state.tags.filter(t => t.category === 'people')")
     alice = next(tag for tag in tags if tag["name"] == "Alice")
     bob = next(tag for tag in tags if tag["name"] == "Bob")
     api.names[alice["id"]] = "Alice"
@@ -689,7 +689,7 @@ def test_reject_refreshes_review_grid_while_metadata_is_pending(server, page: Pa
     })();""")
     page.goto(server["url"])
     media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
-    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    alice = next(tag for tag in page.evaluate("window.imagineUI.state.tags") if tag["name"] == "Alice")
     suggestion = [dict(tag_id=alice["id"], name="Alice", score=.9)]
     api.faces = {81: _face(81, media_id, suggestion)}
     _open_existing_grid(page)
@@ -720,7 +720,7 @@ def test_group_accept_all_spans_pages_and_keeps_failed_faces_selected(server, pa
     api = FaceApi(page)
     page.goto(server["url"])
     media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
-    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    alice = next(tag for tag in page.evaluate("window.imagineUI.state.tags") if tag["name"] == "Alice")
     api.names[alice["id"]] = "Alice"
     api.faces = {
         i: _face(i, media_id, [dict(tag_id=alice["id"], name="Alice", score=.85)])
@@ -828,7 +828,7 @@ def test_confirmed_people_filter_is_populated_on_open_and_matches_confirmed_iden
     api = FaceApi(page)
     page.goto(server["url"])
     media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
-    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    alice = next(tag for tag in page.evaluate("window.imagineUI.state.tags") if tag["name"] == "Alice")
     api.names[alice["id"]] = "Alice"
     api.faces = {
         1: _face(1, media_id),
@@ -906,7 +906,7 @@ def test_lazy_face_grid_virtualizes_random_access_scroll_and_whole_group_accept(
     api = FaceApi(page)
     page.goto(server["url"])
     media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
-    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    alice = next(tag for tag in page.evaluate("window.imagineUI.state.tags") if tag["name"] == "Alice")
     api.names[alice["id"]] = "Alice"
     api.faces = {
         i: _face(i, media_id, [dict(tag_id=alice["id"], name="Alice", score=.85)])
@@ -1010,7 +1010,7 @@ def test_virtual_face_grid_keeps_bottom_position_while_far_page_is_pending(serve
     })();""")
     page.goto(server["url"])
     media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
-    alice = next(tag for tag in page.evaluate("window._imagineState.tags") if tag["name"] == "Alice")
+    alice = next(tag for tag in page.evaluate("window.imagineUI.state.tags") if tag["name"] == "Alice")
     api.names[alice["id"]] = "Alice"
     api.faces = {
         face_id: _face(face_id, media_id, [dict(tag_id=alice["id"], name="Alice", score=.85)])
@@ -1095,7 +1095,7 @@ def test_faces_toolbar_can_review_without_models_and_localizes_grid(server, page
     expect(page.locator("#faceGridList .face-grid-card")).to_have_count(0)
     for language in ("es", "de", "ru", "zh", "en"):
         translated, failure_notice = page.evaluate("""async lang => {
-            const i18n = await import('/i18n.js'); i18n.setLanguage(lang);
+            const i18n = await import('/i18n.js'); await i18n.setLanguage(lang);
             return [i18n.t('face_grid_title'), i18n.t('face_job_finished_with_failures', { failed: 2, remaining: 1 })];
         }""", language)
         expect(page.locator("#faceGridHeading")).to_have_text(translated)
@@ -1108,7 +1108,7 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     birthday_id = None
     _, alice_id, face_id = _seed_review_face(server)
     page.goto(server["url"])
-    page.evaluate("window._imagineState.mediaLimit = 1")
+    page.evaluate("window.imagineUI.state.mediaLimit = 1")
     media_queries = []
 
     def capture_media_query(request):
@@ -1126,7 +1126,7 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     birthday_id = int(birthday.get_attribute("data-id"))
     birthday.click()
     expect(birthday).to_have_class(re.compile(r"\bselected\b"))
-    assert birthday_id in page.evaluate("Array.from(window._imagineState.selectedIds)")
+    assert birthday_id in page.evaluate("Array.from(window.imagineUI.state.selectedIds)")
 
     media_queries.clear()
     _open_face_dialog(page)
@@ -1139,9 +1139,9 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     mountain = page.locator(".photo-card", has_text="mountain.bmp")
     expect(mountain).to_be_visible()
     expect(page.locator(".photo-card")).to_have_count(1)
-    assert page.evaluate("window._imagineState.totalCount") == 2
-    assert birthday_id not in page.evaluate("Array.from(window._imagineState.selectedIds)")
-    assert alice_id in page.evaluate("Array.from(window._imagineState.activeTagIds)")
+    assert page.evaluate("window.imagineUI.state.totalCount") == 2
+    assert birthday_id not in page.evaluate("Array.from(window.imagineUI.state.selectedIds)")
+    assert alice_id in page.evaluate("Array.from(window.imagineUI.state.activeTagIds)")
     refreshed_queries = [query for query in media_queries if query.get("tag_id") == [str(alice_id)]]
     assert refreshed_queries, media_queries
     assert any(query.get("limit") == ["1"] and query.get("offset") == ["0"] for query in refreshed_queries)
@@ -1160,8 +1160,8 @@ def test_identity_change_refreshes_active_people_filter_and_prunes_stale_selecti
     birthday = page.locator(".photo-card", has_text="birthday.bmp")
     expect(birthday).to_be_visible()
     expect(page.locator(".photo-card")).to_have_count(1)
-    assert page.evaluate("window._imagineState.totalCount") == 1
-    assert alice_id in page.evaluate("Array.from(window._imagineState.activeTagIds)")
+    assert page.evaluate("window.imagineUI.state.totalCount") == 1
+    assert alice_id in page.evaluate("Array.from(window.imagineUI.state.activeTagIds)")
     cleared_queries = [query for query in media_queries if query.get("tag_id") == [str(alice_id)]]
     assert cleared_queries, media_queries
     assert any(query.get("limit") == ["1"] and query.get("offset") == ["0"] for query in cleared_queries)

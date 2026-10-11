@@ -3,7 +3,7 @@ import { api, escapeHtml, formatDate } from './api.js';
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { t, getLocaleCode, onLanguageChange } from './i18n.js';
-import { loadMedia, loadMetadata } from './media-grid.js';
+import { loadMedia, loadMetadata } from './grid.js';
 import { updateInspector } from './inspector.js';
 
 let requestSerial = 0;

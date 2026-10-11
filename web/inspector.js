@@ -16,12 +16,14 @@ import {
   normalizeMediaItem,
   getOriginalMediaUrl
 } from './api.js';
-import { state } from './state.js';
 import { dom, showToast } from './dom.js';
-import { updateItemRating, loadMetadata, renderGrid, loadMedia } from './media-grid.js';
+import { state } from './state.js';
+import { updateItemRating, renderStarWidget } from './rating-flag.js';
+import { loadMetadata, renderGrid, loadMedia } from './grid.js';
 import { t } from './i18n.js';
 import { saveInspectorCollapsedState } from './persistence.js';
 import { timelinePeriodContainsTimestamp } from './timeline-range.js';
+import { ensureLeafletLoaded } from './leaflet-loader.js';
 
 let currentInspectorFetchId = 0;
 let inspectorAbortController = null;
@@ -313,29 +315,19 @@ export function renderInspectorTags(item) {
   });
 }
 
-export function renderStarWidget(container, currentRating, onSetRating) {
-  if (!container) return;
-  const stars = container.querySelectorAll('span');
-  stars.forEach(s => {
-    const starVal = parseInt(s.dataset.star, 10);
-    s.classList.toggle('active', starVal <= currentRating);
+export { renderStarWidget };
 
-    s.onclick = (e) => {
-      e.stopPropagation();
-      const newRating = starVal === currentRating ? 0 : starVal;
-      onSetRating(newRating);
-    };
-  });
-}
-
-export function updateInspectorMiniMap(item) {
+export async function updateInspectorMiniMap(item) {
   if (!dom.inspectorMiniMap) return;
-  if (!item || !window.L) {
+  if (!item || !hasValidGps(item)) {
     if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'none';
     if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'none';
     dom.inspectorMiniMap.style.display = 'none';
     return;
   }
+
+  await ensureLeafletLoaded();
+  if (!window.L) return;
 
   const exif = item.exif || {};
   if (hasValidGps(item)) {
@@ -779,10 +771,10 @@ export async function handleSaveRename() {
       }
 
       closeRenameForm();
-      showToast(`File renamed to ${res.file_name}`, 'success');
+      showToast(t('toast_file_renamed_to', { name: res.file_name }), 'success');
     }
   } catch (err) {
-    showToast('Failed to rename file: ' + (err.message || 'Error'), 'error');
+    showToast(t('toast_failed_rename', { error: err.message || 'Error' }), 'error');
   }
 }
 
@@ -816,13 +808,13 @@ export async function handleSaveDateTaken() {
   if (!currentInspectorItem || !dom.editDateTakenInput) return;
   const val = dom.editDateTakenInput.value;
   if (!val) {
-    showToast('Please enter a date and time', 'error');
+    showToast(t('toast_enter_datetime'), 'error');
     return;
   }
 
   const parts = val.split('T');
   if (parts.length < 1 || !parts[0]) {
-    showToast('Invalid date format', 'error');
+    showToast(t('toast_invalid_date_format'), 'error');
     return;
   }
   const dateParts = parts[0].split('-').map(Number);
@@ -836,7 +828,7 @@ export async function handleSaveDateTaken() {
   const ts = Math.floor(Date.UTC(y, m - 1, d, hh, min, sec) / 1000);
 
   if (isNaN(ts) || ts <= 0) {
-    showToast('Invalid date and time', 'error');
+    showToast(t('toast_invalid_datetime'), 'error');
     return;
   }
 
@@ -864,7 +856,7 @@ export async function handleSaveDateTaken() {
       if (state.activeTimelinePeriod) {
         if (!timelinePeriodContainsTimestamp(state.activeTimelinePeriod, res.date_taken)) {
           closeDateTakenForm();
-          showToast('Date updated', 'success');
+          showToast(t('toast_date_updated_short'), 'success');
           await loadMedia();
           await loadMetadata();
           return;
@@ -896,10 +888,10 @@ export async function handleSaveDateTaken() {
       loadMetadata();
 
       closeDateTakenForm();
-      showToast('Date updated', 'success');
+      showToast(t('toast_date_updated_short'), 'success');
     }
   } catch (err) {
-    showToast('Failed to update date: ' + (err.message || 'Error'), 'error');
+    showToast(t('toast_failed_update_date', { error: err.message || 'Error' }), 'error');
   }
 }
 
@@ -940,7 +932,7 @@ export async function handleSaveCaption() {
       showToast(t('toast_caption_saved'), 'success');
     }
   } catch (err) {
-    showToast('Failed to update caption: ' + (err.message || 'Error'), 'error');
+    showToast(t('toast_failed_update_caption', { error: err.message || 'Error' }), 'error');
   }
 }
 

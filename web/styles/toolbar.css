@@ -1,0 +1,217 @@
+/* Toolbar */
+.content-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 16px;
+  background-color: #232323;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.filter-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.filter-indicator strong {
+  color: #ffffff;
+}
+
+.sort-selector,
+.category-sort-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sort-selector {
+  margin-left: auto;
+}
+
+.category-sort-selector {
+  margin-left: 0;
+}
+
+.sort-selector select,
+.category-sort-selector select {
+  background-color: #1a1a1a;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.sort-selector select:hover,
+.category-sort-selector select:hover {
+  border-color: var(--text-muted);
+}
+
+.sort-selector select:focus,
+.category-sort-selector select:focus {
+  border-color: var(--accent-color);
+}
+
+/* Batch Action Bar */
+.batch-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: #1a1a1a;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--border-light);
+  margin-left: auto;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+
+.batch-count {
+  font-weight: 600;
+  color: var(--accent-color);
+  font-size: 12px;
+}
+
+.batch-rate-flag-select {
+  background-color: #2a2a2a;
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+  height: 24px;
+  line-height: 1.2;
+  transition: border-color 0.15s;
+}
+
+.batch-rate-flag-select:hover {
+  border-color: var(--text-muted);
+}
+
+.batch-rate-flag-select:focus {
+  border-color: var(--accent-color);
+}
+
+.batch-rate-flag-select optgroup {
+  background-color: #1f1f1f;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.batch-rate-flag-select option {
+  background-color: #2a2a2a;
+  color: var(--text-primary);
+}
+
+.batch-rating {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+
+/* Semantic Search Toolbar */
+.semantic-search-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 2px 0;
+  gap: 12px;
+}
+
+.content-toolbar.semantic-search-active .sort-selector,
+.content-toolbar.semantic-search-active #filterIndicator,
+.content-toolbar.semantic-search-active #viewModeToggle,
+.content-toolbar:has(#semanticSearchToolbar:not([style*="display: none"])) .sort-selector,
+.content-toolbar:has(#semanticSearchToolbar:not([style*="display: none"])) #filterIndicator,
+.content-toolbar:has(#semanticSearchToolbar:not([style*="display: none"])) #viewModeToggle {
+  display: none !important;
+}
+
+.semantic-search-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.semantic-search-sparkle-icon {
+  color: var(--accent-color);
+  flex-shrink: 0;
+}
+
+.semantic-search-title {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.semantic-search-count {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background-color: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+
+.semantic-search-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.btn-close-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+}
+
+.similarity-rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(14, 165, 233, 0.9);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  letter-spacing: 0.3px;
+}
+
+.album-order-card {
+  cursor: grab;
+}
+
+.album-order-card:active {
+  cursor: grabbing;
+}
+
+.album-order-card.dragging {
+  opacity: 0.45;
+}
+
+.album-order-card.drop-target {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 35%, transparent);
+}
