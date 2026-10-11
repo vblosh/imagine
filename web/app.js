@@ -448,9 +448,9 @@ export function setupEventListeners() {
 
         syncSemanticSearchUI();
         renderGrid();
-        showToast(`Found ${items.length} visually similar photos`, 'info');
+        showToast(t('toast_similar_found', { count: items.length }), 'info');
       } else {
-        showToast('No visually similar photos found', 'info');
+        showToast(t('toast_similar_none'), 'info');
       }
     });
   }

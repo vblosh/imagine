@@ -14,8 +14,10 @@ import {
 } from './api.js';
 import { state, invalidateGpsCache } from './state.js';
 import { showToast } from './dom.js';
+import { t } from './i18n.js';
 import { buildMediaParams, prepareAlbumOrderMode, syncAlbumOrderSortOption, isAlbumOrderMode } from './media-params.js';
 import { performSemanticSearch } from './semantic-search.js';
+import { restoreSemanticSnapshot } from './semantic-status.js';
 
 let currentLoadMediaId = 0;
 let loadMediaAbortController = null;
@@ -40,13 +42,14 @@ export function abortCurrentLoadMore() {
 }
 
 export async function loadMediaData(append = false, { preserveScroll = false } = {}) {
-  let isAppend = append;
-  let shouldPreserveScroll = preserveScroll;
+  let isAppend;
+  let shouldPreserveScroll;
   if (typeof append === 'object' && append !== null) {
     isAppend = Boolean(append.append);
     shouldPreserveScroll = Boolean(append.preserveScroll);
   } else {
     isAppend = Boolean(append);
+    shouldPreserveScroll = Boolean(preserveScroll);
   }
 
   syncAlbumOrderSortOption();
@@ -108,22 +111,7 @@ export async function loadMediaData(append = false, { preserveScroll = false } =
       if (state.semanticSearchActive) {
         state.semanticSearchActive = false;
         state.semanticSearchQuery = '';
-        if (state.semanticSearchSnapshot) {
-          const snap = state.semanticSearchSnapshot;
-          state.activeTab = snap.activeTab || 'media';
-          state.activeAlbumId = snap.activeAlbumId || null;
-          state.activeTagId = snap.activeTagId || null;
-          state.activeTagIds = new Set(snap.activeTagIds || []);
-          state.activeFolders = new Set(snap.activeFolders || []);
-          state.activeMediaType = snap.activeMediaType || 'all';
-          state.activeStatusFilter = snap.activeStatusFilter || null;
-          state.activeTimelinePeriod = snap.activeTimelinePeriod
-            ? { ...snap.activeTimelinePeriod }
-            : null;
-          state.sortBy = snap.sortBy || 'date_taken';
-          state.sortDesc = snap.sortDesc !== undefined ? snap.sortDesc : true;
-          state.semanticSearchSnapshot = null;
-        }
+        restoreSemanticSnapshot();
       }
       res = await api.get('/api/media', params, { signal: abortController.signal });
     }
@@ -229,7 +217,7 @@ export async function loadMediaData(append = false, { preserveScroll = false } =
     if (err.name === 'AbortError') return null;
     if (fetchId === currentLoadMediaId) {
       console.error('Failed to load media:', err);
-      showToast('Failed to load media: ' + (err.message || 'Server error'), 'error');
+      showToast(t('toast_failed_load_media', { error: err.message || 'Server error' }), 'error');
     }
     return null;
   } finally {
@@ -330,7 +318,7 @@ export async function loadMoreMediaData() {
     if (err.name === 'AbortError') return null;
     if (requestMediaId === currentLoadMediaId) {
       console.error('Failed to load more media:', err);
-      showToast('Failed to load more media: ' + (err.message || 'Server error'), 'error');
+      showToast(t('toast_failed_load_more', { error: err.message || 'Server error' }), 'error');
     }
     return null;
   } finally {
@@ -380,7 +368,7 @@ export async function loadMetadataData() {
     return { success: true };
   } catch (err) {
     console.error('Failed to load catalog metadata:', err);
-    showToast('Failed to load catalog metadata: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_load_metadata', { error: err.message || 'Server error' }), 'error');
     return null;
   }
 }

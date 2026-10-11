@@ -2,12 +2,9 @@ import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { api } from './api.js';
 import { t } from './i18n.js';
-import { getTimelinePeriodBounds } from './timeline-range.js';
 import { showModal, hideModal } from './modals.js';
 
 export const SEMANTIC_SEARCH_DEBOUNCE_MS = 2000;
-
-let activeJobId = null;
 import {
     checkSemanticStatus,
     updateSemanticToggleVisibility,
@@ -35,7 +32,7 @@ export async function performSemanticSearch(query, limit = 100, options = {}) {
     } catch (e) {
         if (e.name === 'AbortError') throw e;
         console.error('Semantic search failed:', e);
-        showToast('Semantic search failed: ' + (e.message || e), 'error');
+        showToast(t('toast_semantic_search_failed', { error: e.message || e }), 'error');
         return null;
     }
 }
@@ -48,7 +45,7 @@ export async function findSimilarMedia(mediaId, limit = 50, options = {}) {
     } catch (e) {
         if (e.name === 'AbortError') throw e;
         console.error('Find similar failed:', e);
-        showToast('Find similar failed: ' + (e.message || e), 'error');
+        showToast(t('toast_find_similar_failed', { error: e.message || e }), 'error');
         return null;
     }
 }
@@ -302,7 +299,7 @@ export async function startSemanticIndexing(scope = 'catalog', mediaIds = [], fo
         }
         return null;
     } catch (e) {
-        showToast('Failed to start indexing: ' + (e.message || e), 'error');
+        showToast(t('toast_failed_start_indexing', { error: e.message || e }), 'error');
         return null;
     }
 }
@@ -319,6 +316,6 @@ export async function cancelSemanticJob(jobId) {
     try {
         await api.post(`/api/semantic/jobs/${jobId}/cancel`);
     } catch (e) {
-        showToast('Failed to cancel job: ' + (e.message || e), 'error');
+        showToast(t('toast_failed_cancel_job', { error: e.message || e }), 'error');
     }
 }

@@ -15,6 +15,7 @@ import { updateSidebarActive } from './sidebar.js';
 import { renderTimeline } from './timeline.js';
 import { isWholeYearPeriod, isSingleMonthPeriod } from './timeline-range.js';
 import { clearFilterPreferences, saveActiveTabPreference } from './persistence.js';
+import { restoreSemanticSnapshot } from './semantic-status.js';
 
 let viewsOrchestrator = null;
 
@@ -42,6 +43,27 @@ export async function loadMetadata() {
   if (viewsOrchestrator?.loadMetadata) {
     return viewsOrchestrator.loadMetadata();
   }
+}
+
+export function renderLoadMore(container, onLoadMore = loadMoreMedia) {
+  if (state.mediaItems.length >= state.totalCount) return null;
+  const moreWrap = document.createElement('div');
+  moreWrap.className = 'grid-load-more-wrap';
+  moreWrap.style.cssText = 'padding:20px;text-align:center;width:100%;grid-column:1/-1;';
+  const showingText = t('showing_photos_count', {
+    current: state.mediaItems.length,
+    total: state.totalCount,
+  });
+  moreWrap.innerHTML = `
+    <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">${showingText}</div>
+    <button class="btn btn-secondary btn-sm" id="gridLoadMoreBtn">${t('load_more')}</button>
+  `;
+  const btn = moreWrap.querySelector('#gridLoadMoreBtn');
+  if (btn) btn.onclick = () => onLoadMore();
+  if (container) {
+    container.appendChild(moreWrap);
+  }
+  return moreWrap;
 }
 
 export function renderGrid() {
@@ -126,18 +148,7 @@ export function renderGrid() {
     fragment.appendChild(groupEl);
   });
 
-  if (state.mediaItems.length < state.totalCount) {
-    const moreWrap = document.createElement('div');
-    moreWrap.className = 'grid-load-more-wrap';
-    moreWrap.style.cssText = 'padding:20px;text-align:center;width:100%;grid-column:1/-1;';
-    moreWrap.innerHTML = `
-      <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">Showing ${state.mediaItems.length} of ${state.totalCount} photos</div>
-      <button class="btn btn-secondary btn-sm" id="gridLoadMoreBtn">Load More</button>
-    `;
-    const btn = moreWrap.querySelector('#gridLoadMoreBtn');
-    if (btn) btn.onclick = () => loadMoreMedia();
-    fragment.appendChild(moreWrap);
-  }
+  renderLoadMore(fragment);
 
   dom.mediaGrid.innerHTML = '';
   dom.mediaGrid.appendChild(fragment);
@@ -158,18 +169,7 @@ export function appendMediaToGrid(newItems) {
   if (existingLoadMore) existingLoadMore.remove();
 
   if (!newItems || newItems.length === 0) {
-    if (state.mediaItems.length < state.totalCount) {
-      const moreWrap = document.createElement('div');
-      moreWrap.className = 'grid-load-more-wrap';
-      moreWrap.style.cssText = 'padding:20px;text-align:center;width:100%;grid-column:1/-1;';
-      moreWrap.innerHTML = `
-        <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">Showing ${state.mediaItems.length} of ${state.totalCount} photos</div>
-        <button class="btn btn-secondary btn-sm" id="gridLoadMoreBtn">Load More</button>
-      `;
-      const btn = moreWrap.querySelector('#gridLoadMoreBtn');
-      if (btn) btn.onclick = () => loadMoreMedia();
-      dom.mediaGrid.appendChild(moreWrap);
-    }
+    renderLoadMore(dom.mediaGrid);
     return;
   }
 
@@ -231,18 +231,7 @@ export function appendMediaToGrid(newItems) {
     }
   });
 
-  if (state.mediaItems.length < state.totalCount) {
-    const moreWrap = document.createElement('div');
-    moreWrap.className = 'grid-load-more-wrap';
-    moreWrap.style.cssText = 'padding:20px;text-align:center;width:100%;grid-column:1/-1;';
-    moreWrap.innerHTML = `
-      <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">Showing ${state.mediaItems.length} of ${state.totalCount} photos</div>
-      <button class="btn btn-secondary btn-sm" id="gridLoadMoreBtn">Load More</button>
-    `;
-    const btn = moreWrap.querySelector('#gridLoadMoreBtn');
-    if (btn) btn.onclick = () => loadMoreMedia();
-    dom.mediaGrid.appendChild(moreWrap);
-  }
+  renderLoadMore(dom.mediaGrid);
 }
 
 export function updateFilterLabel() {
@@ -439,23 +428,7 @@ export async function closeSemanticSearch() {
     dom.clearSearchBtn.style.display = 'none';
   }
 
-  if (state.semanticSearchSnapshot) {
-    const snap = state.semanticSearchSnapshot;
-    state.activeTab = snap.activeTab || 'media';
-    state.activeAlbumId = snap.activeAlbumId || null;
-    state.activeTagId = snap.activeTagId || null;
-    state.activeTagIds = new Set(snap.activeTagIds || []);
-    state.activeFolders = new Set(snap.activeFolders || []);
-    state.activeMediaType = snap.activeMediaType || 'all';
-    state.activeStatusFilter = snap.activeStatusFilter || null;
-    state.activeTimelinePeriod = snap.activeTimelinePeriod ? { ...snap.activeTimelinePeriod } : null;
-    state.sortBy = snap.sortBy || 'date_taken';
-    state.sortDesc = snap.sortDesc !== undefined ? snap.sortDesc : true;
-    if (dom.sortSelect) {
-      dom.sortSelect.value = `${state.sortBy}-${state.sortDesc ? 'desc' : 'asc'}`;
-    }
-    state.semanticSearchSnapshot = null;
-  }
+  restoreSemanticSnapshot();
 
   syncSemanticSearchUI();
   updateSidebarActive();

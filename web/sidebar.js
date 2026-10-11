@@ -7,6 +7,7 @@ import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { api, escapeHtml } from './api.js';
 import { t } from './i18n.js';
+import { icon } from './icons.js';
 import { clearTimelineSelection, enterAlbumOrderMode, syncAlbumOrderSortOption } from './media-params.js';
 
 let persistenceHooks = {
@@ -251,74 +252,62 @@ export function clearSidebarSearch() {
   applySidebarSearch('');
 }
 
-export function expandTagCategory(category, save = true) {
-  const cat = (category || 'keyword').toLowerCase();
-  const group = document.querySelector(`.tag-category-group[data-category="${cat}"]`);
-  if (!group) return;
-  const items = group.querySelector('.tag-items');
-  const arrow = group.querySelector('.arrow');
-  if (items) {
-    items.style.display = 'block';
-    if (arrow) arrow.textContent = '▼';
-    const hdr = group.querySelector('.category-header');
-    if (hdr) hdr.setAttribute('aria-expanded', 'true');
-    if (save) persistenceHooks.saveTagCategoryCollapsedState(cat, false);
+export function setCollapsed(section, collapsed, save = true) {
+  let container;
+  let arrow;
+  let header;
+  let saveFn;
+
+  if (section === 'albums') {
+    container = dom.albumsList;
+    arrow = dom.albumsHeader?.querySelector('.arrow') || dom.albumsArrow;
+    header = dom.albumsHeader;
+    saveFn = persistenceHooks.saveAlbumsCollapsedState;
+  } else if (section === 'folders') {
+    container = dom.foldersTree;
+    arrow = dom.foldersHeader?.querySelector('.arrow') || dom.foldersArrow;
+    header = dom.foldersHeader;
+    saveFn = persistenceHooks.saveFoldersCollapsedState;
+  } else {
+    const cat = (section || 'keyword').toLowerCase();
+    const group = document.querySelector(`.tag-category-group[data-category="${cat}"]`);
+    if (!group) return;
+    container = group.querySelector('.tag-items');
+    arrow = group.querySelector('.arrow');
+    header = group.querySelector('.category-header');
+    saveFn = (val) => persistenceHooks.saveTagCategoryCollapsedState(cat, val);
   }
+
+  if (container) {
+    container.style.display = collapsed ? 'none' : 'block';
+    if (arrow) arrow.textContent = collapsed ? '▶' : '▼';
+    if (header) header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    if (save && saveFn) saveFn(collapsed);
+  }
+}
+
+export function expandTagCategory(category, save = true) {
+  setCollapsed(category, false, save);
 }
 
 export function collapseTagCategory(category, save = true) {
-  const cat = (category || 'keyword').toLowerCase();
-  const group = document.querySelector(`.tag-category-group[data-category="${cat}"]`);
-  if (!group) return;
-  const items = group.querySelector('.tag-items');
-  const arrow = group.querySelector('.arrow');
-  if (items) {
-    items.style.display = 'none';
-    if (arrow) arrow.textContent = '▶';
-    const hdr = group.querySelector('.category-header');
-    if (hdr) hdr.setAttribute('aria-expanded', 'false');
-    if (save) persistenceHooks.saveTagCategoryCollapsedState(cat, true);
-  }
+  setCollapsed(category, true, save);
 }
 
 export function expandAlbums(save = true) {
-  if (dom.albumsList) {
-    dom.albumsList.style.display = 'block';
-    const arrow = dom.albumsHeader?.querySelector('.arrow') || dom.albumsArrow;
-    if (arrow) arrow.textContent = '▼';
-    if (dom.albumsHeader) dom.albumsHeader.setAttribute('aria-expanded', 'true');
-    if (save) persistenceHooks.saveAlbumsCollapsedState(false);
-  }
+  setCollapsed('albums', false, save);
 }
 
 export function collapseAlbums(save = true) {
-  if (dom.albumsList) {
-    dom.albumsList.style.display = 'none';
-    const arrow = dom.albumsHeader?.querySelector('.arrow') || dom.albumsArrow;
-    if (arrow) arrow.textContent = '▶';
-    if (dom.albumsHeader) dom.albumsHeader.setAttribute('aria-expanded', 'false');
-    if (save) persistenceHooks.saveAlbumsCollapsedState(true);
-  }
+  setCollapsed('albums', true, save);
 }
 
 export function expandFolders(save = true) {
-  if (dom.foldersTree) {
-    dom.foldersTree.style.display = 'block';
-    const arrow = dom.foldersHeader?.querySelector('.arrow') || dom.foldersArrow;
-    if (arrow) arrow.textContent = '▼';
-    if (dom.foldersHeader) dom.foldersHeader.setAttribute('aria-expanded', 'true');
-    if (save) persistenceHooks.saveFoldersCollapsedState(false);
-  }
+  setCollapsed('folders', false, save);
 }
 
 export function collapseFolders(save = true) {
-  if (dom.foldersTree) {
-    dom.foldersTree.style.display = 'none';
-    const arrow = dom.foldersHeader?.querySelector('.arrow') || dom.foldersArrow;
-    if (arrow) arrow.textContent = '▶';
-    if (dom.foldersHeader) dom.foldersHeader.setAttribute('aria-expanded', 'false');
-    if (save) persistenceHooks.saveFoldersCollapsedState(true);
-  }
+  setCollapsed('folders', true, save);
 }
 
 export function renderSidebarTags() {
@@ -406,7 +395,7 @@ export function renderSidebarAlbums() {
     li.className = 'menu-item' + (state.activeAlbumId === album.id ? ' active' : '');
     const safeAlbumName = escapeHtml(album.name);
     li.innerHTML = `
-      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+      ${icon('book', { width: 14, height: 14 })}
       <span class="album-name">${safeAlbumName}</span>
       <span class="count-badge">${album.item_count || 0}</span>
       <button class="delete-album-btn" title="Delete album">&times;</button>
@@ -439,10 +428,10 @@ export function renderSidebarAlbums() {
           }
           await actionHooks.loadMetadata();
           actionHooks.loadMedia();
-          showToast(`Album "${album.name}" deleted.`, 'info');
+          showToast(t('toast_album_deleted_named', { name: album.name }), 'info');
         } catch (err) {
           console.error('Failed to delete album:', err);
-          showToast('Failed to delete album: ' + (err.message || 'Server error'), 'error');
+          showToast(t('toast_failed_delete_album', { error: err.message || 'Server error' }), 'error');
         }
       });
     }
@@ -486,7 +475,7 @@ export function renderSidebarFolders() {
     const shortName = parts[parts.length - 1] || folder;
 
     el.innerHTML = `
-      <svg class="folder-icon" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      ${icon('folder', { className: 'folder-icon', width: 13, height: 13 })}
       <span class="folder-name" title="${escapeHtml(folder)}">${escapeHtml(shortName)}</span>
     `;
     el.addEventListener('click', (e) => {

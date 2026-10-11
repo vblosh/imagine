@@ -60,3 +60,26 @@ export function updateSettingsSemanticStatus() {
     }
   }
 }
+
+export function restoreSemanticSnapshot() {
+  if (!state.semanticSearchSnapshot) return false;
+  const snap = state.semanticSearchSnapshot;
+  state.activeTab = snap.activeTab || 'media';
+  state.activeAlbumId = snap.activeAlbumId || null;
+  state.activeTagId = snap.activeTagId || null;
+  state.activeTagIds = new Set(snap.activeTagIds || []);
+  state.activeFolders = new Set(snap.activeFolders || []);
+  state.activeMediaType = snap.activeMediaType || 'all';
+  state.activeStatusFilter = snap.activeStatusFilter || null;
+  state.activeTimelinePeriod = snap.activeTimelinePeriod
+    ? { ...snap.activeTimelinePeriod }
+    : null;
+  state.sortBy = snap.sortBy || 'date_taken';
+  state.sortDesc = snap.sortDesc !== undefined ? snap.sortDesc : true;
+  if (dom.sortSelect) {
+    dom.sortSelect.value = `${state.sortBy}-${state.sortDesc ? 'desc' : 'asc'}`;
+  }
+  state.semanticSearchSnapshot = null;
+  return true;
+}
+

@@ -5,6 +5,7 @@
 
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
+import { t } from './i18n.js';
 import { clearCardSelections, updateBatchBar } from './media-selection.js';
 import {
   updateItemRating,
@@ -407,7 +408,7 @@ export function setupKeyboardShortcuts() {
         if (item) {
           const rating = parseInt(e.key, 10);
           updateItemRating(item.id, rating);
-          showToast(rating === 0 ? 'Rating cleared' : `Rating: ${rating}★`, 'info');
+          showToast(rating === 0 ? t('toast_rating_cleared') : t('toast_rating_value', { rating }), 'info');
         }
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         const item = state.mediaItems[state.loupeIndex];
@@ -416,19 +417,19 @@ export function setupKeyboardShortcuts() {
         const item = state.mediaItems[state.loupeIndex];
         if (item) {
           toggleItemFlag(item.id, -1);
-          showToast(item.flag === -1 ? 'Flag: Reject' : 'Flag cleared', 'info');
+          showToast(item.flag === -1 ? t('toast_flag_reject') : t('toast_flag_cleared'), 'info');
         }
       } else if (e.key === 'p' || e.key === 'P') {
         const item = state.mediaItems[state.loupeIndex];
         if (item) {
           toggleItemFlag(item.id, 1);
-          showToast(item.flag === 1 ? 'Flag: Pick' : 'Flag cleared', 'info');
+          showToast(item.flag === 1 ? t('toast_flag_pick') : t('toast_flag_cleared'), 'info');
         }
       } else if (e.key === 'u' || e.key === 'U') {
         const item = state.mediaItems[state.loupeIndex];
         if (item) {
           updateItemFlag(item.id, 0);
-          showToast('Flag cleared', 'info');
+          showToast(t('toast_flag_cleared'), 'info');
         }
       }
     } else {
@@ -452,12 +453,12 @@ export function setupKeyboardShortcuts() {
         const rating = parseInt(e.key, 10);
         if (state.selectedIds.size > 0) {
           batchUpdateRatings(Array.from(state.selectedIds), rating);
-          showToast(rating === 0 ? 'Rating cleared' : `Rating: ${rating}★`, 'info');
+          showToast(rating === 0 ? t('toast_rating_cleared') : t('toast_rating_value', { rating }), 'info');
         }
       } else if (e.key === 'p' || e.key === 'P') {
         if (state.selectedIds.size > 0) {
           toggleFlagsForIds(Array.from(state.selectedIds), 1);
-          showToast('Flag: Pick', 'info');
+          showToast(t('toast_flag_pick'), 'info');
         }
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (state.selectedIds.size > 0) {
@@ -466,12 +467,12 @@ export function setupKeyboardShortcuts() {
       } else if (e.key === 'x' || e.key === 'X') {
         if (state.selectedIds.size > 0) {
           toggleFlagsForIds(Array.from(state.selectedIds), -1);
-          showToast('Flag: Reject', 'info');
+          showToast(t('toast_flag_reject'), 'info');
         }
       } else if (e.key === 'u' || e.key === 'U') {
         if (state.selectedIds.size > 0) {
           batchUpdateFlags(Array.from(state.selectedIds), 0);
-          showToast('Flag cleared', 'info');
+          showToast(t('toast_flag_cleared'), 'info');
         }
       } else if (e.key === 'm' || e.key === 'M') {
         switchViewMode('map');

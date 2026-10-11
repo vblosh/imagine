@@ -3,6 +3,8 @@
  * Pure Vanilla JavaScript (Offline-ready, no dependencies)
  */
 
+import { t } from './i18n.js';
+
 export const dom = {
   mediaGrid: document.getElementById('mediaGrid'),
   emptyState: document.getElementById('emptyState'),
@@ -442,7 +444,7 @@ export function validateRequiredDom() {
   }
 }
 
-export function showToast(message, type = 'info') {
+export function showToast(messageOrKey, type = 'info', params = {}) {
   let container = document.getElementById('toastContainer');
   if (!container) {
     container = document.createElement('div');
@@ -450,10 +452,13 @@ export function showToast(message, type = 'info') {
     container.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
     document.body.appendChild(container);
   }
+  const text = (typeof messageOrKey === 'string' && /^[a-z0-9_]+$/.test(messageOrKey))
+    ? t(messageOrKey, params)
+    : messageOrKey;
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
   toast.style.cssText = 'background:rgba(30,30,30,0.95);color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.3);pointer-events:auto;border-left:4px solid ' + (type === 'error' ? '#e74c3c' : '#3498db');
-  toast.textContent = message;
+  toast.textContent = text;
   container.appendChild(toast);
   setTimeout(() => {
     toast.style.transition = 'opacity 0.3s';

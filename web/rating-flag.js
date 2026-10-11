@@ -6,6 +6,7 @@
 import { api } from './api.js';
 import { state } from './state.js';
 import { showToast } from './dom.js';
+import { t } from './i18n.js';
 import { patchCardRating, patchCardFlag } from './media-cards.js';
 
 const ratingFlagListeners = new Set();
@@ -66,7 +67,7 @@ export async function updateItemRating(id, rating) {
       patchCardRating(id, prevRating);
       notifyRatingFlagChange(item, id);
     }
-    showToast('Failed to update rating: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_update_rating', { error: err.message || 'Server error' }), 'error');
   }
 }
 
@@ -88,7 +89,7 @@ export async function updateItemFlag(id, flag) {
       patchCardFlag(id, prevFlag);
       notifyRatingFlagChange(item, id);
     }
-    showToast('Failed to update flag: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_update_flag', { error: err.message || 'Server error' }), 'error');
   }
 }
 
@@ -117,7 +118,7 @@ export async function batchUpdateFlags(ids, flag) {
         notifyRatingFlagChange(item, id);
       }
     });
-    showToast('Failed to batch update flags: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_batch_flags', { error: err.message || 'Server error' }), 'error');
   }
 }
 
@@ -146,7 +147,7 @@ export async function batchUpdateRatings(ids, rating) {
         notifyRatingFlagChange(item, id);
       }
     });
-    showToast('Failed to batch update ratings: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_batch_ratings', { error: err.message || 'Server error' }), 'error');
   }
 }
 
@@ -200,6 +201,6 @@ export async function batchUpdateDates(updates) {
         }
       }
     });
-    showToast('Failed to batch update dates: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_batch_dates', { error: err.message || 'Server error' }), 'error');
   }
 }

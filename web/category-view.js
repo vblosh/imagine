@@ -7,6 +7,7 @@ import { state } from './state.js';
 import { dom } from './dom.js';
 import { escapeHtml, api } from './api.js';
 import { t } from './i18n.js';
+import { icon } from './icons.js';
 import { enterAlbumOrderMode, clearTimelineSelection } from './media-params.js';
 import { updateSidebarActive } from './sidebar.js';
 import { loadMedia, updateFilterLabel } from './grid.js';
@@ -24,8 +25,8 @@ export function getCategoryConfig(cat) {
       addLabel: t('add_place'),
       emptyTitle: t('no_places_found'),
       emptyText: t('tag_places_prompt'),
-      iconSvg: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>',
-      thumbPlaceholderSvg: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>'
+      iconSvg: icon('map-pin', { width: 48, height: 48, strokeWidth: 1.5 }),
+      thumbPlaceholderSvg: icon('map-pin', { width: 36, height: 36, strokeWidth: 1.5 })
     };
   }
   if (c === 'events') {
@@ -37,8 +38,8 @@ export function getCategoryConfig(cat) {
       addLabel: t('add_event'),
       emptyTitle: t('no_events_found'),
       emptyText: t('tag_events_prompt'),
-      iconSvg: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
-      thumbPlaceholderSvg: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>'
+      iconSvg: icon('calendar', { width: 48, height: 48, strokeWidth: 1.5 }),
+      thumbPlaceholderSvg: icon('calendar', { width: 36, height: 36, strokeWidth: 1.5 })
     };
   }
   if (c === 'albums') {
@@ -50,8 +51,8 @@ export function getCategoryConfig(cat) {
       addLabel: t('add_album'),
       emptyTitle: t('no_albums_found'),
       emptyText: t('create_albums_prompt'),
-      iconSvg: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
-      thumbPlaceholderSvg: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>'
+      iconSvg: icon('book', { width: 48, height: 48, strokeWidth: 1.5 }),
+      thumbPlaceholderSvg: icon('book', { width: 36, height: 36, strokeWidth: 1.5 })
     };
   }
   // Default: People
@@ -63,8 +64,8 @@ export function getCategoryConfig(cat) {
     addLabel: t('add_person'),
     emptyTitle: t('no_people_found'),
     emptyText: t('tag_people_prompt'),
-    iconSvg: '<svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
-    thumbPlaceholderSvg: '<svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
+    iconSvg: icon('users', { width: 48, height: 48, strokeWidth: 1.5 }),
+    thumbPlaceholderSvg: icon('users', { width: 36, height: 36, strokeWidth: 1.5 })
   };
 }
 

@@ -21,6 +21,7 @@ import { loadMoreMedia, renderGrid } from './grid.js';
 import { updateInspector, openInspector } from './inspector.js';
 import { openLoupeForMedia } from './loupe.js';
 import { t } from './i18n.js';
+import { icon } from './icons.js';
 import { saveViewModePreference } from './persistence.js';
 
 let mapSearchAbortController = null;
@@ -728,7 +729,7 @@ export function renderUnmappedTray() {
   if (dom.unmappedLoadMoreBtn) {
     if (state.mediaItems.length < state.totalCount) {
       dom.unmappedLoadMoreBtn.style.display = 'inline-block';
-      dom.unmappedLoadMoreBtn.textContent = `Load More (${state.mediaItems.length}/${state.totalCount})`;
+      dom.unmappedLoadMoreBtn.textContent = `${t('load_more')} (${state.mediaItems.length}/${state.totalCount})`;
     } else {
       dom.unmappedLoadMoreBtn.style.display = 'none';
     }
@@ -898,7 +899,7 @@ export async function applyGeotagBatch(ids, lat, lon, alt = 0.0) {
     updateInspector();
   } catch (err) {
     console.error('Failed to batch geotag media:', err);
-    showToast('Failed to geotag photos: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_geotag', { error: err.message || 'Server error' }), 'error');
   }
 }
 
@@ -923,7 +924,7 @@ export async function clearGeotag(mediaId) {
     updateInspector();
   } catch (err) {
     console.error('Failed to clear geotag:', err);
-    showToast('Failed to clear geotag: ' + (err.message || 'Server error'), 'error');
+    showToast(t('toast_failed_clear_geotag', { error: err.message || 'Server error' }), 'error');
   }
 }
 
@@ -967,7 +968,7 @@ export function navigateToMapPlace(title, subtitle, lat, lng, zoom = 13) {
     className: 'search-location-pin',
     html: `
       <div class="search-location-inner" title="${escapeHtml(title)}">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/></svg>
+        ${icon('map-marker', { width: 15, height: 15, strokeWidth: 2.5 })}
         <div class="search-location-pointer"></div>
       </div>
     `,
@@ -1199,11 +1200,11 @@ export function renderMapSearchResults(results) {
     itemEl.className = 'map-search-item';
     itemEl.dataset.idx = idx;
 
-    let iconSvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
+    let iconSvg = icon('map-pin', { width: 14, height: 14 });
     if (r.type === 'coords') {
-      iconSvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>';
+      iconSvg = icon('crosshair', { width: 14, height: 14 });
     } else if (r.type === 'catalog') {
-      iconSvg = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+      iconSvg = icon('image', { width: 14, height: 14 });
     }
 
     const safeTitle = escapeHtml(r.title);
