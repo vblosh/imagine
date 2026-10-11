@@ -57,7 +57,7 @@ def web_dir() -> str:
 def get_free_port() -> int:
     """Allocate an available local port."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
+        s.bind(("0.0.0.0", 0))
         s.listen(1)
         return s.getsockname()[1]
 
@@ -341,26 +341,32 @@ def media_env(golden_media_template: Dict[str, Any]) -> Generator[Dict[str, Any]
 
 def start_backend(imagine_bin: str, web_dir: str, env: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
     """Helper to launch and teardown the imagine serve backend process."""
-    cmd = [
-        imagine_bin,
-        "serve",
-        "--catalog", env["db_path"],
-        "--thumbs", env["thumbs_dir"],
-        "--port", str(env["port"]),
-        "--web-dir", web_dir
-    ]
     proc_env = _clean_proc_env()
-    stdout_log = tempfile.TemporaryFile(mode="w+b")
-    stderr_log = tempfile.TemporaryFile(mode="w+b")
-    try:
-        proc = subprocess.Popen(cmd, stdout=stdout_log, stderr=stderr_log, env=proc_env)
-    except BaseException:
-        stdout_log.close()
-        stderr_log.close()
-        raise
-    url = f"http://127.0.0.1:{env['port']}"
-    try:
-        ready = wait_for_server(url, port=env["port"], timeout_sec=6.0)
+    proc = None
+    stdout_log = None
+    stderr_log = None
+    url = ""
+    max_retries = 5
+    for attempt in range(max_retries):
+        port = env["port"]
+        cmd = [
+            imagine_bin,
+            "serve",
+            "--catalog", env["db_path"],
+            "--thumbs", env["thumbs_dir"],
+            "--port", str(port),
+            "--web-dir", web_dir
+        ]
+        stdout_log = tempfile.TemporaryFile(mode="w+b")
+        stderr_log = tempfile.TemporaryFile(mode="w+b")
+        try:
+            proc = subprocess.Popen(cmd, stdout=stdout_log, stderr=stderr_log, env=proc_env)
+        except BaseException:
+            stdout_log.close()
+            stderr_log.close()
+            raise
+        url = f"http://127.0.0.1:{port}"
+        ready = wait_for_server(url, port=port, timeout_sec=6.0)
         if not ready:
             if proc.poll() is None:
                 proc.terminate()
@@ -372,29 +378,41 @@ def start_backend(imagine_bin: str, web_dir: str, env: Dict[str, Any]) -> Genera
             stdout_log.seek(0)
             stderr_log.seek(0)
             out, err = stdout_log.read(), stderr_log.read()
+            err_text = err.decode(errors="replace")
+            stdout_log.close()
+            stderr_log.close()
+            if "Failed to bind web server" in err_text and attempt < max_retries - 1:
+                time.sleep(0.05 * (attempt + 1))
+                env["port"] = get_free_port()
+                continue
             pytest.fail(
                 f"Backend failed to start on {url}.\n"
                 f"Stdout: {out.decode(errors='replace')}\n"
-                f"Stderr: {err.decode(errors='replace')}"
+                f"Stderr: {err_text}"
             )
 
-        server_info = {
-            "url": url,
-            "proc": proc,
-            "env": env
-        }
+        break
 
+    server_info = {
+        "url": url,
+        "proc": proc,
+        "env": env
+    }
+
+    try:
         yield server_info
     finally:
-        if proc.poll() is None:
+        if proc and proc.poll() is None:
             try:
                 proc.terminate()
                 proc.wait(timeout=3)
             except Exception:
                 proc.kill()
                 proc.wait(timeout=2)
-        stdout_log.close()
-        stderr_log.close()
+        if stdout_log and not stdout_log.closed:
+            stdout_log.close()
+        if stderr_log and not stderr_log.closed:
+            stderr_log.close()
 
 
 @pytest.fixture

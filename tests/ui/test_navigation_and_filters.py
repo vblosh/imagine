@@ -892,6 +892,7 @@ def test_scroll_resets_on_folder_and_filter_selection(server, page: Page):
 
     # 1. Select folder -> scrollbar resets to start
     family_folder.click()
+    expect(page.locator(".photo-card", has_text="birthday.bmp")).to_be_visible()
     expect(page.locator(".photo-card")).to_have_count(2)
     assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
 
@@ -904,7 +905,8 @@ def test_scroll_resets_on_folder_and_filter_selection(server, page: Page):
 
     # 3. Select another folder -> scrollbar resets to start
     nature_folder.click()
-    expect(page.locator(".photo-card")).to_have_count(2)
+    expect(page.locator(".photo-card", has_text="sunset.bmp")).to_be_visible()
+    expect(page.locator(".photo-card")).to_have_count(4)
     assert page.evaluate("() => document.getElementById('gridScrollContainer').scrollTop") == 0
 
     # 4. Scroll down again and select another filter (Picks)

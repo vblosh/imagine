@@ -5,6 +5,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+if command -v python3 >/dev/null 2>&1; then
+    exec python3 "${SCRIPT_DIR}/run_ui_tests.py" "$@"
+elif command -v python >/dev/null 2>&1; then
+    exec python "${SCRIPT_DIR}/run_ui_tests.py" "$@"
+fi
+
 echo "=== IMAGINE Deterministic UI Test Runner ==="
 echo "Repository Root: ${REPO_ROOT}"
 
