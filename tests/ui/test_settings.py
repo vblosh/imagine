@@ -1,5 +1,6 @@
 """Settings dialog and browser-side API authentication coverage."""
 
+import re
 from playwright.sync_api import Page, expect
 
 
@@ -253,9 +254,8 @@ def test_face_recognition_settings_status_and_button(server, page: Page):
     # Face Recognition status and button exist in settings dialog
     face_status = page.locator("#settingsFaceStatus")
     expect(face_status).to_be_visible()
-    status_text = face_status.text_content()
-    assert "Status:" in status_text
-    assert ("indexed" in status_text or "not built" in status_text or "unavailable" in status_text)
+    expect(face_status).to_contain_text("Status:")
+    expect(face_status).to_contain_text(re.compile(r"indexed|not built|unavailable"))
 
     face_btn = page.locator("#settingsFaceBtn")
     expect(face_btn).to_be_visible()
