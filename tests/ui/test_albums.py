@@ -483,13 +483,16 @@ def test_albums_top_selector_create_album_and_search(server, page: Page):
 def test_albums_top_selector_keyboard_navigation(server, page: Page):
     """Pressing Enter on an album card drills down and Escape navigates back to Albums grid."""
     page.goto(server["url"])
+    expect(page.locator(".photo-card")).to_have_count(6)
 
     page.locator('.tab-btn[data-tab="albums"]').click()
+    expect(page.locator("#categoryViewTitle")).to_have_text("Albums")
     best_card = page.locator('.category-card-item', has_text="Best of 2026")
     expect(best_card).to_be_visible()
 
     # Focus card and press Enter
     best_card.focus()
+    expect(best_card).to_be_focused()
     page.keyboard.press("Enter")
     expect(page.locator("#categoryViewContainer")).to_be_hidden()
     expect(page.locator(".photo-card")).to_have_count(2)
