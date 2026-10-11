@@ -876,8 +876,8 @@ export async function saveEdits(mode = "overwrite") {
         }
       }
       renderGrid();
-      if (window._imagineApp?.renderCurrentView) {
-        window._imagineApp.renderCurrentView();
+      if (window.imagineUI?.renderCurrentView) {
+        window.imagineUI.renderCurrentView();
       }
       showToast(t("quick_edit_saved_copy", { name: updatedItem.file_name }));
     }

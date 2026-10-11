@@ -148,7 +148,7 @@ def test_sidebar_collection_search_on_enter_and_clear(server, page: Page):
     search.press("Enter")
     expect(page.locator("#albumsList .menu-item", has_text="Vacation")).to_be_visible()
     expect(page.locator("#tagsTree .tag-item")).to_have_count(0)
-    assert page.evaluate("() => window._imagineState.activeTagIds.size") == 1
+    assert page.evaluate("() => window.imagineUI.state.activeTagIds.size") == 1
     page.locator("#refreshBtn").click()
     expect(page.locator("#albumsList .menu-item")).to_have_count(1)
 

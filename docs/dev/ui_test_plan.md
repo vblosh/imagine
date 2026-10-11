@@ -6,7 +6,7 @@ This plan outlines the architecture, implementation strategy, and verification s
 
 ## Goal Description
 
-The IMAGINE Web UI is a single-page application (`web/index.html`, `web/app.css`, `web/app.js`) designed for photo culling, catalog browsing, metadata inspection, tagging, album management, and batch operations.
+The IMAGINE Web UI is a modular vanilla ESM single-page application (`web/index.html`, `web/app.css`, `web/app.js` with `window.imagineUI` debug registry) designed for photo culling, catalog browsing, metadata inspection, tagging, album management, and batch operations.
 
 To ensure long-term stability and eliminate regression risks, we will implement a fully automated, **deterministic UI test suite** covering 100% of the UI features. The tests will use **Playwright (Python) + pytest**, interacting directly with headless Chromium against ephemeral instances of the C++ `imagine serve` backend.
 

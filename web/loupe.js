@@ -349,7 +349,7 @@ export async function loupeNext() {
   if (state.mediaItems.length === 0) return;
   if (state.loupeIndex === state.mediaItems.length - 1 && state.mediaItems.length < state.totalCount && !state.isLoadingMore) {
     const prevLen = state.mediaItems.length;
-    await (window._imagineApp?.loadMoreMedia ? window._imagineApp.loadMoreMedia() : loadMoreMedia());
+    await (window.imagineUI?.loadMoreMedia ? window.imagineUI.loadMoreMedia() : loadMoreMedia());
     if (state.mediaItems.length > prevLen) {
       state.loupeIndex = prevLen;
       updateLoupeView();

@@ -22,7 +22,7 @@ def test_api_token_settings_persist_and_attach_auth_header(server, page: Page):
     with page.expect_request("**/api/stats") as request_info:
         page.evaluate("""async () => {
             try {
-                await window._imagineApp.api.get('/api/stats');
+                await window.imagineUI.api.get('/api/stats');
             } catch (_) {}
         }""")
     assert request_info.value.headers.get("authorization") == "Bearer browser-secret"
@@ -36,7 +36,7 @@ def test_api_token_settings_persist_and_attach_auth_header(server, page: Page):
     with page.expect_request("**/api/stats") as cleared_request_info:
         page.evaluate("""async () => {
             try {
-                await window._imagineApp.api.get('/api/stats');
+                await window.imagineUI.api.get('/api/stats');
             } catch (_) {}
         }""")
     assert "authorization" not in cleared_request_info.value.headers
@@ -59,7 +59,7 @@ def test_semantic_index_modal_dialog_styling_and_behavior(server, page: Page):
     expect(settings_modal).to_be_hidden()
 
     # 2. Open the Semantic Index modal directly
-    page.evaluate("() => window._imagineApp.openSemanticIndexModal()")
+    page.evaluate("() => window.imagineUI.openSemanticIndexModal()")
     index_modal = page.locator("#semanticIndexModal")
     expect(index_modal).to_be_visible()
     expect(index_modal).to_have_class("modal face-job-modal")
@@ -133,19 +133,19 @@ def test_semantic_index_modal_dialog_styling_and_behavior(server, page: Page):
     expect(index_modal).to_be_hidden()
 
     # Re-open and test Escape key closing
-    page.evaluate("() => window._imagineApp.openSemanticIndexModal()")
+    page.evaluate("() => window.imagineUI.openSemanticIndexModal()")
     expect(index_modal).to_be_visible()
     page.keyboard.press("Escape")
     expect(index_modal).to_be_hidden()
 
     # Re-open and test Cancel button closing
-    page.evaluate("() => window._imagineApp.openSemanticIndexModal()")
+    page.evaluate("() => window.imagineUI.openSemanticIndexModal()")
     expect(index_modal).to_be_visible()
     cancel_btn.click()
     expect(index_modal).to_be_hidden()
 
     # Re-open and test clicking backdrop closing
-    page.evaluate("() => window._imagineApp.openSemanticIndexModal()")
+    page.evaluate("() => window.imagineUI.openSemanticIndexModal()")
     expect(index_modal).to_be_visible()
     backdrop.click(position={"x": 5, "y": 5})
     expect(index_modal).to_be_hidden()
@@ -164,15 +164,15 @@ def test_semantic_toggle_disabled_when_clip_inactive(server, page: Page):
 
     # Attempting to click does not activate the toggle
     toggle.click(force=True)
-    is_enabled = page.evaluate("() => window._imagineApp.state ? window._imagineApp.state.semanticSearchEnabled : null")
+    is_enabled = page.evaluate("() => window.imagineUI.state ? window.imagineUI.state.semanticSearchEnabled : null")
     assert is_enabled is False
     expect(toggle).not_to_have_class("active")
     expect(toggle).to_have_attribute("aria-pressed", "false")
 
     # When CLIP is enabled, button becomes active
     page.evaluate("""() => {
-        window._imagineApp.state.semanticSearchAvailable = true;
-        window._imagineApp.updateSemanticToggleVisibility();
+        window.imagineUI.state.semanticSearchAvailable = true;
+        window.imagineUI.updateSemanticToggleVisibility();
     }""")
     expect(toggle).to_be_enabled()
     expect(toggle).not_to_have_attribute("aria-disabled", "true")
@@ -180,7 +180,7 @@ def test_semantic_toggle_disabled_when_clip_inactive(server, page: Page):
 
     # Click now toggles state
     toggle.click()
-    is_enabled = page.evaluate("() => window._imagineApp.state ? window._imagineApp.state.semanticSearchEnabled : null")
+    is_enabled = page.evaluate("() => window.imagineUI.state ? window.imagineUI.state.semanticSearchEnabled : null")
     assert is_enabled is True
     expect(toggle).to_have_class("semantic-toggle active")
     expect(toggle).to_have_attribute("aria-pressed", "true")
@@ -196,7 +196,7 @@ def test_semantic_index_modal_scope_and_running_state(server, page: Page):
     first_photo.click()
 
     # Open semantic index modal
-    page.evaluate("() => window._imagineApp.openSemanticIndexModal()")
+    page.evaluate("() => window.imagineUI.openSemanticIndexModal()")
     index_modal = page.locator("#semanticIndexModal")
     expect(index_modal).to_be_visible()
 
@@ -216,7 +216,7 @@ def test_semantic_index_modal_scope_and_running_state(server, page: Page):
 
     # 2. Simulate running job state
     page.evaluate("""() => {
-        window._imagineApp.renderSemanticJobState();
+        window.imagineUI.renderSemanticJobState();
     }""")
     close_btn = page.locator("#cancelSemanticJobBtn")
     expect(close_btn).to_be_visible()

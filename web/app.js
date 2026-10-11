@@ -1652,9 +1652,8 @@ if (document.readyState === 'loading') {
   init();
 }
 
-// Expose state and API for UI test assertions and debugging
-window._imagineState = state;
-window._imaginePersistence = {
+// Expose debug registry for UI test assertions and developer inspection
+const imaginePersistence = {
   saveAlbumsCollapsedState,
   saveFoldersCollapsedState,
   saveTagCategoryCollapsedState,
@@ -1672,12 +1671,14 @@ window._imaginePersistence = {
   restoreNavigationPreferences,
   getSavedViewMode
 };
-window._imagineQuickEdit = {
+
+const imagineQuickEdit = {
   quickEditState,
   MAX_SMART_FIX_PREVIEW_DIM,
-  getFullResolutionExportCanvas,
+  getFullResolutionExportCanvas
 };
-window._imagineApp = {
+
+export const imagineUI = {
   state,
   dom,
   api,
@@ -1753,5 +1754,15 @@ window._imagineApp = {
   updateSettingsFaceStatus,
   STANDARD_SEARCH_DEBOUNCE_MS,
   SEMANTIC_SEARCH_DEBOUNCE_MS,
-  getSearchDebounceDelay
+  getSearchDebounceDelay,
+  persistence: imaginePersistence,
+  quickEdit: imagineQuickEdit
 };
+
+window.imagineUI = imagineUI;
+
+// Backward-compatibility aliases
+window._imagineApp = imagineUI;
+window._imagineState = state;
+window._imaginePersistence = imaginePersistence;
+window._imagineQuickEdit = imagineQuickEdit;
