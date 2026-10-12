@@ -21,8 +21,8 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Face Review & Naming**: Local face detection, cluster grouping, face crop cards, naming, and review suggestions using existing people tags.
   - **Semantic AI Search**: Natural language search and visual similarity ("Find Similar") powered by OpenAI CLIP via ONNX Runtime.
   - **Inspector Panel**: EXIF breakdown (camera, lens, shutter speed, aperture, ISO, focal length, GPS map link), 5-star ratings, pick/reject flags, face boxes, and tag editor.
-  - **Quick Edit**: Non-destructive photo adjustments (crop, rotate, flip, tonal adjustments) directly in the browser.
-  - **Fullscreen Loupe / Slideshow**: Keyboard-driven full-resolution viewer (0–5 star ratings, P/X flags, Arrow navigation, zoom & pan).
+  - **Quick Edit (Google Photos-Style Editor)**: Non-destructive browser photo editing featuring one-tap Smart Fix (adaptive dynamic range and exposure recovery), Quick Styles (Warm, Cool, B&W Drama), 12 filter presets with blend intensity, crop with aspect ratios, straighten with Auto Horizon leveling, granular light/color adjustments (sharpness and vignette from -100 to +100, press-0 reset), live comparison, 50-step undo/redo, and full-resolution export as copy.
+  - **Fullscreen Loupe / Slideshow**: Keyboard-driven full-resolution viewer with file path display, 0–5 star ratings, P/X flags, Arrow navigation, zoom & pan, and quick jump to Editor (`E`).
   - **Multilingual Support (i18n)**: 5 built-in languages (English, Spanish, German, Russian, Chinese) with instant switching, `localStorage` persistence, and URL parameter override (`?lang=...`).
 - **Local Face Detection & Recognition Engine**:
   - **100% Offline & Private**: Zero external cloud calls, no telemetry, all processing stays strictly on your machine.
