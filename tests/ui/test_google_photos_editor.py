@@ -948,7 +948,7 @@ def test_quick_style_buttons_reflect_active_state(server, page: Page):
     expect(cool_btn).to_have_class(re.compile(r"\bactive\b"))
     expect(warm_btn).not_to_have_class(re.compile(r"\bactive\b"))
 
-    # A manual adjustment invalidates the applied style
+    # 1. A manual adjustment invalidates the applied style
     page.locator("#editorTabAdjust").click()
     page.evaluate("""() => {
         const slider = document.getElementById('sliderSaturation');
@@ -959,6 +959,35 @@ def test_quick_style_buttons_reflect_active_state(server, page: Page):
 
     page.locator("#editorTabSuggestions").click()
     expect(cool_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+    # 2. Straighten invalidates the applied style
+    warm_btn.click()
+    expect(warm_btn).to_have_class(re.compile(r"\bactive\b"))
+    page.evaluate("""() => {
+        const slider = document.getElementById('editorStraightenSlider');
+        slider.value = '5';
+        slider.dispatchEvent(new Event('input'));
+        slider.dispatchEvent(new Event('change'));
+    }""")
+    expect(warm_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+    # 3. Rotation invalidates the applied style
+    warm_btn.click()
+    expect(warm_btn).to_have_class(re.compile(r"\bactive\b"))
+    page.locator("#quickEditRotateRightBtn").click()
+    expect(warm_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+    # 4. Flip invalidates the applied style
+    warm_btn.click()
+    expect(warm_btn).to_have_class(re.compile(r"\bactive\b"))
+    page.locator("#editorFlipVBtn").click()
+    expect(warm_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+    # 5. Smart Fix invalidates the applied style
+    warm_btn.click()
+    expect(warm_btn).to_have_class(re.compile(r"\bactive\b"))
+    page.locator("#quickEditSmartFixBtn").click()
+    expect(warm_btn).not_to_have_class(re.compile(r"\bactive\b"))
 
 
 def test_reset_all_edits_is_undoable(server, page: Page):
@@ -986,6 +1015,91 @@ def test_reset_all_edits_is_undoable(server, page: Page):
     expect(undo_btn).to_be_enabled()
     undo_btn.click()
     expect(page.locator("#valBrightness")).to_have_text("+40")
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.isDirty") is True
+
+    # Closing editor after undoing reset shows discard confirmation modal
+    page.locator("#quickEditCancelBtn").click()
+    expect(page.locator("#discardChangesModal")).to_be_visible()
+
+
+def test_undoing_reset_sets_dirty_even_when_history_becomes_empty(server, page: Page):
+    """Undoing Reset restores edits and marks session dirty even if history stack becomes empty."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Clear history to simulate single-item history before reset
+    page.evaluate("""() => {
+        window._imagineQuickEdit.quickEditState.history = [];
+        window._imagineQuickEdit.quickEditState.rotation = 90;
+        window._imagineQuickEdit.quickEditState.isDirty = true;
+    }""")
+
+    # Click Reset
+    page.locator("#quickEditResetBtn").click()
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.rotation") == 0
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.isDirty") is False
+
+    # Undo Reset
+    page.locator("#editorUndoBtn").click()
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.rotation") == 90
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.history.length") == 0
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.isDirty") is True
+
+    # Cancel prompt appears
+    page.locator("#quickEditCancelBtn").click()
+    expect(page.locator("#discardChangesModal")).to_be_visible()
+
+
+def test_crop_panel_flip_buttons_update_immediately(server, page: Page):
+    """Clicking panel flip buttons immediately updates active class on both panel and toolbar buttons."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Open Crop tab panel
+    page.locator("#editorTabCrop").click()
+    expect(page.locator("#editorPanelCrop")).to_be_visible()
+
+    panel_flip_h = page.locator("#panelFlipHBtn")
+    panel_flip_v = page.locator("#panelFlipVBtn")
+    toolbar_flip_h = page.locator("#editorFlipHBtn")
+    toolbar_flip_v = page.locator("#editorFlipVBtn")
+
+    expect(panel_flip_h).to_be_visible()
+    expect(panel_flip_v).to_be_visible()
+    expect(panel_flip_h).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(panel_flip_v).not_to_have_class(re.compile(r"\bactive\b"))
+
+    # 1. Click panel Flip H -> immediately active
+    panel_flip_h.click()
+    expect(panel_flip_h).to_have_class(re.compile(r"\bactive\b"))
+    expect(toolbar_flip_h).to_have_class(re.compile(r"\bactive\b"))
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipH") is True
+
+    # Click panel Flip H again -> immediately inactive
+    panel_flip_h.click()
+    expect(panel_flip_h).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(toolbar_flip_h).not_to_have_class(re.compile(r"\bactive\b"))
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipH") is False
+
+    # 2. Click panel Flip V -> immediately active
+    panel_flip_v.click()
+    expect(panel_flip_v).to_have_class(re.compile(r"\bactive\b"))
+    expect(toolbar_flip_v).to_have_class(re.compile(r"\bactive\b"))
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipV") is True
+
+    # Click panel Flip V again -> immediately inactive
+    panel_flip_v.click()
+    expect(panel_flip_v).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(toolbar_flip_v).not_to_have_class(re.compile(r"\bactive\b"))
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipV") is False
 
 
 def test_straighten_grid_overlay_syncs_with_undo(server, page: Page):
