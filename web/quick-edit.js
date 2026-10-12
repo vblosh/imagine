@@ -83,6 +83,7 @@ export const quickEditState = {
   adjustments: { ...DEFAULT_ADJUSTMENTS },
   filter: "none",
   filterIntensity: 100,
+  quickStyle: null,
   history: [],
   redoStack: [],
 };
@@ -187,6 +188,7 @@ export function captureStateSnapshot() {
     adjustments: { ...quickEditState.adjustments },
     filter: quickEditState.filter,
     filterIntensity: quickEditState.filterIntensity,
+    quickStyle: quickEditState.quickStyle,
   };
 }
 
@@ -215,6 +217,7 @@ function applyStateSnapshot(snap) {
   quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS, ...(snap.adjustments || {}) };
   quickEditState.filter = snap.filter || "none";
   quickEditState.filterIntensity = snap.filterIntensity ?? 100;
+  quickEditState.quickStyle = snap.quickStyle || null;
   quickEditState.smartFixLUT = null;
   quickEditState.previewCanvas = null;
 }
@@ -246,6 +249,33 @@ export function redo() {
 export function updateUndoRedoUI() {
   if (dom.editorUndoBtn) dom.editorUndoBtn.disabled = quickEditState.history.length === 0;
   if (dom.editorRedoBtn) dom.editorRedoBtn.disabled = quickEditState.redoStack.length === 0;
+}
+
+/* True when the current session holds any visible edit */
+function hasAnyEdits() {
+  return quickEditState.hasCropped
+    || quickEditState.rotation !== 0
+    || quickEditState.straighten !== 0
+    || quickEditState.flipH
+    || quickEditState.flipV
+    || quickEditState.smartFixActive
+    || quickEditState.filter !== "none"
+    || Object.values(quickEditState.adjustments).some(v => v !== 0);
+}
+
+/* Quick style buttons mirror the style currently in effect */
+function updateQuickStyleUI() {
+  [[dom.panelStyleWarmBtn, "warm"], [dom.panelStyleCoolBtn, "cool"], [dom.panelStyleBwBtn, "bw_drama"]]
+    .forEach(([btn, style]) => {
+      if (btn) btn.classList.toggle("active", quickEditState.quickStyle === style);
+    });
+}
+
+/* Drop the active quick style as soon as its parameters are edited by hand */
+function clearQuickStyle() {
+  if (!quickEditState.quickStyle) return;
+  quickEditState.quickStyle = null;
+  updateQuickStyleUI();
 }
 
 export function updateStraightenGridOverlay() {
@@ -313,6 +343,7 @@ export function openQuickEdit() {
   quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS };
   quickEditState.filter = "none";
   quickEditState.filterIntensity = 100;
+  quickEditState.quickStyle = null;
   quickEditState.history = [];
   quickEditState.redoStack = [];
 
@@ -981,6 +1012,7 @@ export function setSmartFixIntensity(val) {
 export function applyQuickStyle(styleName) {
   if (!quickEditState.isOpen) return;
   pushHistoryState();
+  quickEditState.quickStyle = styleName;
   if (styleName === "warm") {
     quickEditState.adjustments.warmth = 30;
     quickEditState.adjustments.saturation = 10;
@@ -1000,6 +1032,7 @@ export function applyQuickStyle(styleName) {
 export function setAdjustment(key, val) {
   if (!quickEditState.isOpen) return;
   quickEditState.adjustments[key] = parseFloat(val) || 0;
+  clearQuickStyle();
   quickEditState.isDirty = true;
   updateAdjustmentUI(key);
   renderQuickEditCanvas();
@@ -1009,6 +1042,7 @@ export function resetAdjustments() {
   if (!quickEditState.isOpen) return;
   pushHistoryState();
   quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS };
+  clearQuickStyle();
   updateQuickEditToolbarUI();
   renderQuickEditCanvas();
 }
@@ -1033,6 +1067,7 @@ export function setFilter(filterName) {
   if (!quickEditState.isOpen || !FILTERS[filterName]) return;
   pushHistoryState();
   quickEditState.filter = filterName;
+  quickEditState.quickStyle = null;
   updateQuickEditToolbarUI();
   renderQuickEditCanvas();
 }
@@ -1041,6 +1076,7 @@ export function setFilterIntensity(val) {
   if (!quickEditState.isOpen) return;
   const num = parseInt(val, 10);
   quickEditState.filterIntensity = Math.max(0, Math.min(100, isNaN(num) ? 100 : num));
+  clearQuickStyle();
   if (dom.editorFilterIntensitySlider) dom.editorFilterIntensitySlider.value = quickEditState.filterIntensity;
   if (dom.editorFilterIntensityVal) dom.editorFilterIntensityVal.textContent = `${quickEditState.filterIntensity}%`;
   quickEditState.isDirty = true;
@@ -1068,7 +1104,10 @@ export function stopCompare() {
 export function resetAllEdits() {
   if (!quickEditState.isOpen || !quickEditState.originalImage) return;
 
-  pushHistoryState();
+  // Only record history when there is actually something to revert to
+  if (hasAnyEdits()) {
+    pushHistoryState();
+  }
   initWorkingCanvas(quickEditState.originalImage);
   quickEditState.rotation = 0;
   quickEditState.straighten = 0;
@@ -1082,10 +1121,10 @@ export function resetAllEdits() {
   quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS };
   quickEditState.filter = "none";
   quickEditState.filterIntensity = 100;
+  quickEditState.quickStyle = null;
   quickEditState.isDirty = false;
   quickEditState.smartFixLUT = null;
-  quickEditState.history = [];
-  quickEditState.redoStack = [];
+  quickEditState.previewCanvas = null;
 
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
   updateStraightenGridOverlay();
@@ -1729,6 +1768,12 @@ export function updateQuickEditToolbarUI() {
   if (dom.editorFlipVBtn) {
     dom.editorFlipVBtn.classList.toggle("active", quickEditState.flipV);
   }
+  if (dom.panelFlipHBtn) {
+    dom.panelFlipHBtn.classList.toggle("active", quickEditState.flipH);
+  }
+  if (dom.panelFlipVBtn) {
+    dom.panelFlipVBtn.classList.toggle("active", quickEditState.flipV);
+  }
   if (dom.editorStraightenSlider) {
     dom.editorStraightenSlider.value = quickEditState.straighten;
   }
@@ -1764,7 +1809,11 @@ export function updateQuickEditToolbarUI() {
     dom.editorFilterIntensityVal.textContent = `${quickEditState.filterIntensity}%`;
   }
 
+  // Quick style buttons active state
+  updateQuickStyleUI();
+
   updateUndoRedoUI();
+  updateStraightenGridOverlay();
 }
 
 /* Crop pointer / mouse listeners */

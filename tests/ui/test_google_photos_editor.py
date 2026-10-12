@@ -923,3 +923,95 @@ def test_rotate_compact_buttons_and_flip_vertical(server, page: Page):
 
 
 
+
+
+def test_quick_style_buttons_reflect_active_state(server, page: Page):
+    """Quick style chips highlight the applied style and clear on manual edits."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    page.locator("#editorTabSuggestions").click()
+    warm_btn = page.locator("#panelStyleWarmBtn")
+    cool_btn = page.locator("#panelStyleCoolBtn")
+
+    expect(warm_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+    warm_btn.click()
+    expect(warm_btn).to_have_class(re.compile(r"\bactive\b"))
+    expect(cool_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+    cool_btn.click()
+    expect(cool_btn).to_have_class(re.compile(r"\bactive\b"))
+    expect(warm_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+    # A manual adjustment invalidates the applied style
+    page.locator("#editorTabAdjust").click()
+    page.evaluate("""() => {
+        const slider = document.getElementById('sliderSaturation');
+        slider.value = '20';
+        slider.dispatchEvent(new Event('input'));
+        slider.dispatchEvent(new Event('change'));
+    }""")
+
+    page.locator("#editorTabSuggestions").click()
+    expect(cool_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+
+def test_reset_all_edits_is_undoable(server, page: Page):
+    """Reset All records history so the previous edits can be restored with Undo."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    page.locator("#editorTabAdjust").click()
+    page.evaluate("""() => {
+        const slider = document.getElementById('sliderBrightness');
+        slider.value = '40';
+        slider.dispatchEvent(new Event('input'));
+        slider.dispatchEvent(new Event('change'));
+    }""")
+    expect(page.locator("#valBrightness")).to_have_text("+40")
+
+    page.locator("#quickEditResetBtn").click()
+    expect(page.locator("#valBrightness")).to_have_text("0")
+
+    undo_btn = page.locator("#editorUndoBtn")
+    expect(undo_btn).to_be_enabled()
+    undo_btn.click()
+    expect(page.locator("#valBrightness")).to_have_text("+40")
+
+
+def test_straighten_grid_overlay_syncs_with_undo(server, page: Page):
+    """Undoing a straighten change hides the alignment grid when the angle returns to 0."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    page.locator("#quickEditCropBtn").click()
+    expect(page.locator("#cropSubOptions")).to_be_visible()
+
+    grid_overlay = page.locator("#straightenGridOverlay")
+    expect(grid_overlay).to_be_hidden()
+
+    page.evaluate("""() => {
+        const slider = document.getElementById('editorStraightenSlider');
+        slider.value = '15';
+        slider.dispatchEvent(new Event('input'));
+        slider.dispatchEvent(new Event('change'));
+    }""")
+    expect(page.locator("#editorStraightenVal")).to_have_text("15°")
+    expect(grid_overlay).to_be_visible()
+
+    page.locator("#editorUndoBtn").click()
+    expect(page.locator("#editorStraightenVal")).to_have_text("0°")
+    expect(grid_overlay).to_be_hidden()

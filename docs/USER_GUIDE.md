@@ -441,7 +441,7 @@ Each filter includes an **Intensity Slider** (0% to 100%) allowing you to blend 
 
 ### 5. Compare & History
 - **Hold to Compare**: Press & hold the **Compare** button, press and hold directly on the preview canvas, or hold down the <kbd>\</kbd> key to instantly view the unedited original photo. Release to return to your edits.
-- **Undo & Redo**: A 50-step history snapshot stack allows undoing and redoing any edit step via toolbar buttons or shortcuts (<kbd>Ctrl+Z</kbd> / <kbd>Cmd+Z</kbd> and <kbd>Ctrl+Y</kbd> / <kbd>Ctrl+Shift+Z</kbd>).
+- **Undo & Redo**: A 100-step history snapshot stack allows undoing and redoing any edit step — including **Reset**, which restores your previous edits — via toolbar buttons or shortcuts (<kbd>Ctrl+Z</kbd> / <kbd>Cmd+Z</kbd> and <kbd>Ctrl+Y</kbd> / <kbd>Ctrl+Shift+Z</kbd>).
 - **Discard Unsaved Changes Modal**: If you attempt to close the editor (<kbd>Esc</kbd> or Cancel) after making changes, Imagine displays a styled confirmation dialog prompting to either **Keep Editing** or **Discard Changes**.
 
 ### 6. Non-Destructive Export ("Save Copy")
