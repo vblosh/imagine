@@ -1262,7 +1262,7 @@ export function setupEventListeners() {
   if (dom.quickEditCanvas) {
     dom.quickEditCanvas.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
-      if (quickEditState.isOpen && !quickEditState.cropActive && !e.target.closest('#cropOverlay')) {
+      if (quickEditState.isOpen && !quickEditState.cropActive) {
         startCompare();
       }
     });
@@ -1274,6 +1274,12 @@ export function setupEventListeners() {
   if (dom.quickEditCancelBtn) dom.quickEditCancelBtn.addEventListener('click', () => closeQuickEdit(true));
   if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.addEventListener('click', () => saveEdits('overwrite'));
   if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.addEventListener('click', () => saveEdits('copy'));
+  if (dom.quickEditToolbar) {
+    dom.quickEditToolbar.addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (btn) btn.blur();
+    });
+  }
   setupCropMouseListeners();
 
   // Discard changes dialog events

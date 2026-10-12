@@ -1129,3 +1129,90 @@ def test_straighten_grid_overlay_syncs_with_undo(server, page: Page):
     page.locator("#editorUndoBtn").click()
     expect(page.locator("#editorStraightenVal")).to_have_text("0°")
     expect(grid_overlay).to_be_hidden()
+
+
+def test_auto_level_horizon_no_op_on_uniform_image_leaves_clean_state(server, page: Page):
+    """Auto Horizon Level on a uniform image does not push history or mark editor dirty."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Open Horizon tool
+    page.locator("#quickEditHorizonBtn").click()
+    expect(page.locator("#horizonSubOptions")).to_be_visible()
+
+    # Replace workingCanvas with a solid uniform color (no horizon edges)
+    page.evaluate("""() => {
+        const qe = window._imagineQuickEdit.quickEditState;
+        const canvas = document.createElement('canvas');
+        canvas.width = 320;
+        canvas.height = 240;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#808080';
+        ctx.fillRect(0, 0, 320, 240);
+        qe.workingCanvas = canvas;
+        qe.workingCtx = ctx;
+        qe.isDirty = false;
+    }""")
+
+    # Verify editor is initially clean and undo is disabled
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.isDirty") is False
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.straighten") == 0
+    expect(page.locator("#editorUndoBtn")).to_be_disabled()
+
+    # Click Auto Horizon button
+    page.locator("#horizonAutoBtn").click()
+
+    # Must remain clean, 0° angle, no undo step created
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.isDirty") is False
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.straighten") == 0
+    expect(page.locator("#editorUndoBtn")).to_be_disabled()
+    expect(page.locator("#horizonAngleVal")).to_have_text("0°")
+
+
+def test_quick_edit_keyboard_guards_focused_button_and_select(server, page: Page):
+    """When a select dropdown or button is focused, Quick Edit single-key and Space shortcuts are suppressed."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Open Crop tool so cropAspectRatioSelect is visible
+    page.locator("#quickEditCropBtn").click()
+    expect(page.locator("#cropSubOptions")).to_be_visible()
+    aspect_select = page.locator("#cropAspectRatioSelect")
+    expect(aspect_select).to_be_visible()
+
+    # 1. Focus select element: single-letter shortcuts (c, s, l, r) and Space must NOT trigger Quick Edit actions
+    aspect_select.focus()
+    page.keyboard.press("c")
+    # Quick Edit crop tab / panel should remain open, cropActive should not toggle off
+    expect(page.locator("#cropSubOptions")).to_be_visible()
+
+    page.keyboard.press("s")
+    # Smart Fix should NOT have been activated
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.smartFixActive") is False
+
+    page.keyboard.down("Space")
+    # Compare badge should NOT be visible
+    expect(page.locator("#editorCompareBadge")).to_be_hidden()
+    page.keyboard.up("Space")
+
+    # 2. Focus a button element: single-letter shortcuts and Space must be suppressed
+    page.locator("#quickEditHorizonBtn").click()
+    expect(page.locator("#horizonSubOptions")).to_be_visible()
+    reset_btn = page.locator("#horizonResetBtn")
+    reset_btn.focus()
+    page.keyboard.press("s")
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.smartFixActive") is False
+
+    rot_before = page.evaluate("() => window._imagineQuickEdit.quickEditState.rotation")
+    page.keyboard.press("r")
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.rotation") == rot_before
+
+

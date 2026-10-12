@@ -436,4 +436,23 @@ def test_tag_modal_auto_detect_category_on_type(server, page: Page):
     expect(modal).to_be_hidden()
 
 
+def test_inspector_open_tag_modal_btn_opens_dialog(server, page: Page):
+    """Clicking inspectorOpenTagModalBtn (Choose People / Event / Dialog...) opens newTagModal."""
+    page.goto(server["url"])
+    card = page.locator(".photo-card", has_text="portrait.bmp")
+    card.click()
+
+    btn = page.locator("#inspectorOpenTagModalBtn")
+    expect(btn).to_be_visible()
+    btn.click()
+
+    modal = page.locator("#newTagModal")
+    expect(modal).to_be_visible()
+    expect(page.locator("#tagModalPhotoName")).to_contain_text("portrait.bmp")
+
+    page.locator("#cancelTagBtn").click()
+    expect(modal).to_be_hidden()
+
+
+
 

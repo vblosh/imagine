@@ -363,15 +363,21 @@ export function setupKeyboardShortcuts() {
         redo();
         return;
       }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        saveEdits('overwrite');
+        return;
+      }
+
+      const isButtonOrSelect = active?.matches('button, select');
+
       if (e.key === ' ' && !e.repeat) {
-        if (active?.matches('select')) return;
+        if (isButtonOrSelect) return;
         e.preventDefault();
         startCompare();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
-        e.preventDefault();
-        saveEdits('overwrite');
+      if (isButtonOrSelect) {
         return;
       }
       if (e.key === 'e' || e.key === 'E') {

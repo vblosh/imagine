@@ -619,8 +619,8 @@ export function resetStraighten() {
   if (!quickEditState.isOpen) return;
   if (quickEditState.straighten !== 0) {
     pushHistoryState();
+    setStraightenAngle(0);
   }
-  setStraightenAngle(0);
 }
 
 export function toggleHorizonTool() {
@@ -637,7 +637,6 @@ export function toggleHorizonTool() {
 
 export function autoLevelHorizon() {
   if (!quickEditState.isOpen || !quickEditState.workingCanvas) return;
-  pushHistoryState();
 
   const src = quickEditState.workingCanvas;
   const rot = quickEditState.rotation || 0;
@@ -725,7 +724,6 @@ export function autoLevelHorizon() {
 
   const numEdges = edgeXs.length;
   if (numEdges < 30) {
-    setStraightenAngle(0);
     return;
   }
 
@@ -781,12 +779,15 @@ export function autoLevelHorizon() {
   // Minimum confidence threshold to prevent false corrections on uniform or non-landscape images
   const CONFIDENCE_THRESHOLD = 600;
   if (bestScore < CONFIDENCE_THRESHOLD) {
-    setStraightenAngle(0);
     return;
   }
 
   const targetAngle = Math.round(bestAngle * 2) / 2;
   const correctionAngle = targetAngle === 0 ? 0 : -targetAngle;
+  if (correctionAngle === quickEditState.straighten) {
+    return;
+  }
+  pushHistoryState();
   setStraightenAngle(correctionAngle);
 }
 

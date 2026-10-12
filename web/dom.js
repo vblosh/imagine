@@ -408,6 +408,7 @@ export const dom = {
   tagSearchHelpChips: document.getElementById('tagSearchHelpChips'),
   tagSearchHelpBox: document.getElementById('tagSearchHelpBox'),
   inspectorAddTagModalBtn: document.getElementById('inspectorAddTagModalBtn'),
+  inspectorOpenTagModalBtn: document.getElementById('inspectorOpenTagModalBtn'),
   discardChangesModal: document.getElementById('discardChangesModal'),
   discardChangesBackdrop: document.getElementById('discardChangesBackdrop'),
   closeDiscardChangesModalBtn: document.getElementById('closeDiscardChangesModalBtn'),
