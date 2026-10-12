@@ -128,6 +128,10 @@ import {
   toggleFlipV,
   setStraightenAngle,
   resetStraighten,
+  toggleHorizonTool,
+  autoLevelHorizon,
+  hideDiscardModal,
+  performCloseQuickEdit,
   toggleCrop,
   setCropAspectRatio,
   applyCrop,
@@ -1094,8 +1098,48 @@ export function setupEventListeners() {
     dom.editorStraightenSlider.addEventListener('change', () => {
       isDragging = false;
     });
+    dom.editorStraightenSlider.addEventListener('keydown', (e) => {
+      if (e.key === '0' || e.code === 'Digit0' || e.code === 'Numpad0') {
+        e.preventDefault();
+        if (quickEditState.straighten !== 0) {
+          pushHistoryState();
+          setStraightenAngle(0);
+        }
+      }
+    });
   }
   if (dom.editorStraightenResetBtn) dom.editorStraightenResetBtn.addEventListener('click', resetStraighten);
+
+  // Horizon correction tool
+  if (dom.quickEditHorizonBtn) dom.quickEditHorizonBtn.addEventListener('click', toggleHorizonTool);
+  if (dom.horizonResetBtn) dom.horizonResetBtn.addEventListener('click', resetStraighten);
+  if (dom.horizonAutoBtn) dom.horizonAutoBtn.addEventListener('click', autoLevelHorizon);
+  if (dom.horizonAngleSlider) {
+    let isDragging = false;
+    dom.horizonAngleSlider.addEventListener('pointerdown', () => {
+      isDragging = true;
+      pushHistoryState();
+    });
+    dom.horizonAngleSlider.addEventListener('input', (e) => {
+      if (!isDragging) {
+        isDragging = true;
+        pushHistoryState();
+      }
+      setStraightenAngle(e.target.value);
+    });
+    dom.horizonAngleSlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+    dom.horizonAngleSlider.addEventListener('keydown', (e) => {
+      if (e.key === '0' || e.code === 'Digit0' || e.code === 'Numpad0') {
+        e.preventDefault();
+        if (quickEditState.straighten !== 0) {
+          pushHistoryState();
+          setStraightenAngle(0);
+        }
+      }
+    });
+  }
 
   // Tab switching
   if (dom.editorTabSuggestions) dom.editorTabSuggestions.addEventListener('click', () => switchTab('suggestions'));
@@ -1161,12 +1205,25 @@ export function setupEventListeners() {
       sliderEl.addEventListener('change', () => {
         isDragging = false;
       });
+      // Requirement 2: pressing '0' resets slider to 0
+      sliderEl.addEventListener('keydown', (e) => {
+        if (e.key === '0' || e.code === 'Digit0' || e.code === 'Numpad0') {
+          e.preventDefault();
+          if (quickEditState.adjustments[k] !== 0) {
+            pushHistoryState();
+            setAdjustment(k, 0);
+          }
+        }
+      });
     }
     if (valEl) {
-      valEl.addEventListener('dblclick', () => {
-        pushHistoryState();
-        setAdjustment(k, 0);
+      valEl.addEventListener('click', () => {
+        if (quickEditState.adjustments[k] !== 0) {
+          pushHistoryState();
+          setAdjustment(k, 0);
+        }
       });
+      valEl.title = t('click_to_reset_zero');
     }
   });
   if (dom.editorResetAdjustBtn) dom.editorResetAdjustBtn.addEventListener('click', resetAdjustments);
@@ -1205,7 +1262,7 @@ export function setupEventListeners() {
     dom.quickEditCompareBtn.addEventListener('pointerleave', stopCompare);
   }
   if (dom.quickEditCanvas) {
-    dom.quickEditCanvas.addEventListener('pointerdown', (e) => {
+    dom.quickEditCanvas.addEventListener('pointerdown', () => {
       if (quickEditState.isOpen && !quickEditState.cropActive) {
         startCompare();
       }
@@ -1219,6 +1276,12 @@ export function setupEventListeners() {
   if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.addEventListener('click', () => saveEdits('overwrite'));
   if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.addEventListener('click', () => saveEdits('copy'));
   setupCropMouseListeners();
+
+  // Discard changes dialog events
+  if (dom.closeDiscardChangesModalBtn) dom.closeDiscardChangesModalBtn.addEventListener('click', hideDiscardModal);
+  if (dom.cancelDiscardChangesBtn) dom.cancelDiscardChangesBtn.addEventListener('click', hideDiscardModal);
+  if (dom.discardChangesBackdrop) dom.discardChangesBackdrop.addEventListener('click', hideDiscardModal);
+  if (dom.confirmDiscardChangesBtn) dom.confirmDiscardChangesBtn.addEventListener('click', performCloseQuickEdit);
 
   // Loupe navigation
   if (dom.loupePrevBtn) dom.loupePrevBtn.addEventListener('click', loupePrev);

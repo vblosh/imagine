@@ -61,7 +61,10 @@ import {
   undo,
   redo,
   startCompare,
-  stopCompare
+  stopCompare,
+  toggleHorizonTool,
+  hideDiscardModal,
+  performCloseQuickEdit
 } from './quick-edit.js';
 import { navigateBackToCategory } from './category-view.js';
 import { isAutoEventOpen, cancelAutoEventReview } from './auto-events.js';
@@ -69,6 +72,11 @@ import { closeSemanticIndexModal } from './semantic-search.js';
 
 export function handleEscapeKey() {
   // 1. Modals (highest priority)
+  if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    hideDiscardModal();
+    return true;
+  }
   if (isAutoEventOpen()) {
     cancelAutoEventReview();
     return true;
@@ -328,6 +336,19 @@ export function setupKeyboardShortcuts() {
 
     // Quick Edit mode active (takes priority over button guard so Space, Ctrl+Z etc work reliably)
     if (state.loupeIndex >= 0 && quickEditState.isOpen) {
+      if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          hideDiscardModal();
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          performCloseQuickEdit();
+          return;
+        }
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
         if (e.shiftKey) {
@@ -370,6 +391,11 @@ export function setupKeyboardShortcuts() {
       if (e.key === 'c' || e.key === 'C') {
         e.preventDefault();
         toggleCrop();
+        return;
+      }
+      if (e.key === 'h' || e.key === 'H') {
+        e.preventDefault();
+        toggleHorizonTool();
         return;
       }
       if (e.key === 's' || e.key === 'S') {

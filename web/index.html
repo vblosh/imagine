@@ -78,6 +78,7 @@
     <symbol id="icon-flip-v" viewBox="0 0 24 24"><path d="m4 8 8-6 8 8"/><path d="m4 16 8 6 8-6"/><line x1="2" y1="12" x2="22" y2="12" stroke-dasharray="2 2"/></symbol>
     <symbol id="icon-sliders" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
     <symbol id="icon-filter" viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></symbol>
+    <symbol id="icon-horizon" viewBox="0 0 24 24"><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="5" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="19"/><circle cx="12" cy="12" r="1.5"/><path d="M5 16l2-8"/><path d="M19 8l-2 8"/></symbol>
   </svg>
   <div id="app" class="elements-app">
     <!-- Top Bar -->
@@ -950,6 +951,24 @@
 
               <div class="quick-edit-divider"></div>
 
+              <div class="quick-edit-group" title="Horizon" data-i18n-title="horizon_correction">
+                <button class="quick-edit-btn" id="quickEditHorizonBtn" title="Horizon Correction (H)" data-i18n-title="horizon_correction_title">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-horizon"></use></svg>
+                  <span data-i18n="horizon">Horizon</span>
+                </button>
+                <div class="quick-edit-sub-options" id="horizonSubOptions" style="display: none;">
+                  <label class="quick-edit-slider-label" title="Horizon Angle">
+                    <span data-i18n="angle">Angle:</span>
+                    <input type="range" id="horizonAngleSlider" min="-45" max="45" value="0" step="0.5" class="loupe-zoom-slider" style="width: 80px;">
+                    <span id="horizonAngleVal">0°</span>
+                  </label>
+                  <button class="btn btn-sm btn-secondary" id="horizonResetBtn" title="Reset angle (0)" style="padding: 2px 5px; font-size: 11px;">0°</button>
+                  <button class="btn btn-sm btn-secondary" id="horizonAutoBtn" title="Auto Horizon Level" data-i18n="auto_level" style="padding: 2px 6px; font-size: 11px;">Auto</button>
+                </div>
+              </div>
+
+              <div class="quick-edit-divider"></div>
+
               <div class="quick-edit-group" title="Smart Fix" data-i18n-title="smart_fix">
                 <button class="quick-edit-btn" id="quickEditSmartFixBtn" title="Auto Smart Fix (S)" data-i18n-title="smart_fix_title">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-wand"></use></svg>
@@ -1076,12 +1095,12 @@
                   <div class="editor-adjust-group-title" data-i18n="adjust_details">Details</div>
                   <div class="editor-slider-row">
                     <span data-i18n="sharpness">Sharpness</span>
-                    <input type="range" id="sliderSharpness" min="0" max="100" value="0" class="editor-range-slider">
+                    <input type="range" id="sliderSharpness" min="-100" max="100" value="0" class="editor-range-slider">
                     <span class="editor-slider-val" id="valSharpness">0</span>
                   </div>
                   <div class="editor-slider-row">
                     <span data-i18n="vignette">Vignette</span>
-                    <input type="range" id="sliderVignette" min="0" max="100" value="0" class="editor-range-slider">
+                    <input type="range" id="sliderVignette" min="-100" max="100" value="0" class="editor-range-slider">
                     <span class="editor-slider-val" id="valVignette">0</span>
                   </div>
                   <button class="btn btn-sm btn-secondary" id="editorResetAdjustBtn" style="margin-top: 8px;" data-i18n="reset_adjustments">Reset Adjustments</button>
@@ -1428,6 +1447,24 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" id="cancelTagBtn" data-i18n="cancel">Cancel</button>
           <button class="btn btn-primary" id="createTagSubmitBtn" data-i18n="create_tag_btn">Create Tag</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Discard Unsaved Changes Modal Dialog -->
+    <div class="modal" id="discardChangesModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="discardChangesModalTitle">
+      <div class="modal-backdrop" id="discardChangesBackdrop"></div>
+      <div class="modal-dialog discard-changes-dialog" style="max-width: 420px;">
+        <div class="modal-header">
+          <h3 id="discardChangesModalTitle" data-i18n="discard_changes_title">Discard unsaved changes?</h3>
+          <button class="btn-icon-sm" id="closeDiscardChangesModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin-bottom: 0; font-size: 14px; color: var(--text-normal);" data-i18n="discard_changes_prompt">You have unsaved edits. Are you sure you want to discard them?</p>
+        </div>
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+          <button class="btn btn-secondary" id="cancelDiscardChangesBtn" data-i18n="keep_editing">Keep Editing</button>
+          <button class="btn btn-danger" id="confirmDiscardChangesBtn" data-i18n="discard_changes">Discard Changes</button>
         </div>
       </div>
     </div>

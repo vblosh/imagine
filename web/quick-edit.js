@@ -432,15 +432,32 @@ export function openQuickEdit() {
   img.src = targetOriginalUrl;
 }
 
+export function showDiscardModal() {
+  if (dom.discardChangesModal) {
+    dom.discardChangesModal.style.display = "flex";
+    if (dom.confirmDiscardChangesBtn) dom.confirmDiscardChangesBtn.focus();
+  }
+}
+
+export function hideDiscardModal() {
+  if (dom.discardChangesModal) {
+    dom.discardChangesModal.style.display = "none";
+  }
+}
+
 export function closeQuickEdit(promptIfDirty = true) {
   if (!quickEditState.isOpen) return;
 
   if (promptIfDirty && quickEditState.isDirty) {
-    if (!window.confirm("Discard unsaved changes?")) {
-      return;
-    }
+    showDiscardModal();
+    return;
   }
 
+  performCloseQuickEdit();
+}
+
+export function performCloseQuickEdit() {
+  hideDiscardModal();
   if (quickEditState.imageLoadedReject) {
     try {
       quickEditState.imageLoadedReject(new Error("Quick edit cancelled"));
@@ -465,10 +482,19 @@ export function closeQuickEdit(promptIfDirty = true) {
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
   if (dom.editorCompareBadge) dom.editorCompareBadge.style.display = "none";
   if (dom.straightenGridOverlay) dom.straightenGridOverlay.style.display = "none";
+  if (dom.horizonSubOptions) dom.horizonSubOptions.style.display = "none";
+  if (dom.quickEditHorizonBtn) dom.quickEditHorizonBtn.classList.remove("active");
   if (dom.loupeImg) dom.loupeImg.style.display = "";
 
   if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = false;
   if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.disabled = false;
+  if (dom.quickEditSmartFixBtn) dom.quickEditSmartFixBtn.classList.remove("active");
+  if (dom.smartFixSubOptions) dom.smartFixSubOptions.style.display = "none";
+  if (dom.cropSubOptions) dom.cropSubOptions.style.display = "none";
+  if (dom.quickEditCropBtn) dom.quickEditCropBtn.classList.remove("active");
+
+  if (dom.loupePrevBtn) dom.loupePrevBtn.style.display = "";
+  if (dom.loupeNextBtn) dom.loupeNextBtn.style.display = "";
 
   quickEditState.originalImage = null;
   quickEditState.workingCanvas = null;
@@ -531,16 +557,81 @@ export function setStraightenAngle(angleDeg) {
   quickEditState.straighten = Math.max(-45, Math.min(45, parseFloat(angleDeg) || 0));
   if (dom.editorStraightenSlider) dom.editorStraightenSlider.value = quickEditState.straighten;
   if (dom.editorStraightenVal) dom.editorStraightenVal.textContent = `${quickEditState.straighten}°`;
+  if (dom.horizonAngleSlider) dom.horizonAngleSlider.value = quickEditState.straighten;
+  if (dom.horizonAngleVal) dom.horizonAngleVal.textContent = `${quickEditState.straighten}°`;
   if (dom.straightenGridOverlay) {
-    dom.straightenGridOverlay.style.display = quickEditState.straighten !== 0 ? "block" : "none";
+    const isHorizonOpen = dom.horizonSubOptions && dom.horizonSubOptions.style.display !== "none";
+    dom.straightenGridOverlay.style.display = (quickEditState.straighten !== 0 || isHorizonOpen) ? "block" : "none";
   }
   quickEditState.isDirty = true;
   renderQuickEditCanvas();
 }
 
 export function resetStraighten() {
-  setStraightenAngle(0);
+  if (!quickEditState.isOpen) return;
   pushHistoryState();
+  setStraightenAngle(0);
+}
+
+export function toggleHorizonTool() {
+  if (!quickEditState.isOpen) return;
+  const isOpening = !dom.horizonSubOptions || dom.horizonSubOptions.style.display === "none";
+  if (dom.horizonSubOptions) {
+    dom.horizonSubOptions.style.display = isOpening ? "flex" : "none";
+  }
+  if (dom.quickEditHorizonBtn) {
+    dom.quickEditHorizonBtn.classList.toggle("active", isOpening);
+  }
+  if (dom.straightenGridOverlay) {
+    dom.straightenGridOverlay.style.display = (isOpening || quickEditState.straighten !== 0) ? "block" : "none";
+  }
+}
+
+export function autoLevelHorizon() {
+  if (!quickEditState.isOpen || !quickEditState.workingCanvas) return;
+  pushHistoryState();
+  const src = quickEditState.workingCanvas;
+  const sampleW = 200;
+  const sampleH = 150;
+  const sampleCanvas = document.createElement("canvas");
+  sampleCanvas.width = sampleW;
+  sampleCanvas.height = sampleH;
+  const sCtx = sampleCanvas.getContext("2d");
+  sCtx.drawImage(src, 0, 0, sampleW, sampleH);
+  const imgData = sCtx.getImageData(0, 0, sampleW, sampleH);
+  const data = imgData.data;
+
+  const gray = new Float32Array(sampleW * sampleH);
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    gray[j] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+  }
+
+  let bestAngle = 0;
+  let maxEnergy = -1;
+
+  for (let deg = -15; deg <= 15; deg += 0.5) {
+    const rad = (deg * Math.PI) / 180;
+    let energy = 0;
+    for (let y = 20; y < sampleH - 20; y += 4) {
+      let prevVal = 0;
+      for (let x = 20; x < sampleW - 20; x += 4) {
+        const sampleX = Math.round(x);
+        const sampleY = Math.round(y + (x - sampleW / 2) * Math.tan(rad));
+        if (sampleY >= 1 && sampleY < sampleH - 1) {
+          const val = gray[sampleY * sampleW + sampleX];
+          energy += Math.abs(val - prevVal);
+          prevVal = val;
+        }
+      }
+    }
+    if (energy > maxEnergy) {
+      maxEnergy = energy;
+      bestAngle = deg;
+    }
+  }
+
+  const targetAngle = Math.round(bestAngle * 2) / 2;
+  setStraightenAngle(-targetAngle);
 }
 
 /* Crop Tool */
@@ -799,7 +890,7 @@ function updateAdjustmentUI(key) {
   const val = quickEditState.adjustments[key] ?? 0;
   if (sliderEl) sliderEl.value = val;
   if (valEl) {
-    if (val > 0 && key !== "sharpness" && key !== "vignette") {
+    if (val > 0) {
       valEl.textContent = `+${val}`;
     } else {
       valEl.textContent = `${val}`;
@@ -1022,12 +1113,14 @@ function processImageDataInPlace(imgData) {
 
 /* Apply Vignette falloff overlay */
 function applyVignetteOverlay(ctx, w, h, amount) {
-  if (amount <= 0) return;
+  if (amount === 0) return;
   const radius = Math.sqrt((w / 2) ** 2 + (h / 2) ** 2);
   const grad = ctx.createRadialGradient(w / 2, h / 2, radius * 0.4, w / 2, h / 2, radius);
-  const alpha = Math.min(0.85, (amount / 100) * 0.85);
-  grad.addColorStop(0, "rgba(0,0,0,0)");
-  grad.addColorStop(1, `rgba(0,0,0,${alpha})`);
+  const absAmount = Math.abs(amount);
+  const alpha = Math.min(0.85, (absAmount / 100) * 0.85);
+  const color = amount > 0 ? "0,0,0" : "255,255,255";
+  grad.addColorStop(0, `rgba(${color},0)`);
+  grad.addColorStop(1, `rgba(${color},${alpha})`);
 
   ctx.save();
   ctx.fillStyle = grad;
@@ -1035,26 +1128,45 @@ function applyVignetteOverlay(ctx, w, h, amount) {
   ctx.restore();
 }
 
-/* Sharpness 3x3 unsharp mask convolution */
+/* Sharpness 3x3 unsharp mask convolution & softening */
 function applySharpnessInPlace(imgData, amount) {
-  if (amount <= 0) return;
-  const strength = (amount / 100) * 1.5;
+  if (amount === 0) return;
   const src = new Uint8ClampedArray(imgData.data);
   const dst = imgData.data;
   const w = imgData.width;
   const h = imgData.height;
 
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const idx = (y * w + x) * 4;
-      for (let c = 0; c < 3; c++) {
-        const center = src[idx + c];
-        const up = src[((y - 1) * w + x) * 4 + c];
-        const down = src[((y + 1) * w + x) * 4 + c];
-        const left = src[(y * w + (x - 1)) * 4 + c];
-        const right = src[(y * w + (x + 1)) * 4 + c];
-        const laplacian = center * 4 - up - down - left - right;
-        dst[idx + c] = Math.max(0, Math.min(255, center + laplacian * strength));
+  if (amount > 0) {
+    const strength = (amount / 100) * 1.5;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = (y * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          const center = src[idx + c];
+          const up = src[((y - 1) * w + x) * 4 + c];
+          const down = src[((y + 1) * w + x) * 4 + c];
+          const left = src[(y * w + (x - 1)) * 4 + c];
+          const right = src[(y * w + (x + 1)) * 4 + c];
+          const laplacian = center * 4 - up - down - left - right;
+          dst[idx + c] = Math.max(0, Math.min(255, center + laplacian * strength));
+        }
+      }
+    }
+  } else {
+    // Negative sharpness: smoothing / softening
+    const t = Math.min(1, Math.abs(amount) / 100) * 0.75;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = (y * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          const center = src[idx + c];
+          const up = src[((y - 1) * w + x) * 4 + c];
+          const down = src[((y + 1) * w + x) * 4 + c];
+          const left = src[(y * w + (x - 1)) * 4 + c];
+          const right = src[(y * w + (x + 1)) * 4 + c];
+          const neighbors = (up + down + left + right) * 0.25;
+          dst[idx + c] = Math.max(0, Math.min(255, center * (1 - t) + neighbors * t));
+        }
       }
     }
   }
@@ -1150,12 +1262,12 @@ export function renderQuickEditCanvas() {
 
       const imgData = prevCtx.getImageData(0, 0, pW, pH);
       processImageDataInPlace(imgData);
-      if (quickEditState.adjustments.sharpness > 0) {
+      if (quickEditState.adjustments.sharpness !== 0) {
         applySharpnessInPlace(imgData, quickEditState.adjustments.sharpness);
       }
       prevCtx.putImageData(imgData, 0, 0);
 
-      if (quickEditState.adjustments.vignette > 0) {
+      if (quickEditState.adjustments.vignette !== 0) {
         applyVignetteOverlay(prevCtx, pW, pH, quickEditState.adjustments.vignette);
       }
 
@@ -1164,12 +1276,12 @@ export function renderQuickEditCanvas() {
     } else {
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       processImageDataInPlace(imgData);
-      if (quickEditState.adjustments.sharpness > 0) {
+      if (quickEditState.adjustments.sharpness !== 0) {
         applySharpnessInPlace(imgData, quickEditState.adjustments.sharpness);
       }
       ctx.putImageData(imgData, 0, 0);
 
-      if (quickEditState.adjustments.vignette > 0) {
+      if (quickEditState.adjustments.vignette !== 0) {
         applyVignetteOverlay(ctx, canvas.width, canvas.height, quickEditState.adjustments.vignette);
       }
     }
@@ -1233,12 +1345,12 @@ export function getFullResolutionExportCanvas() {
   if (hasAdjustments || hasFilter || hasSmartFix) {
     const imgData = expCtx.getImageData(0, 0, targetW, targetH);
     processImageDataInPlace(imgData);
-    if (quickEditState.adjustments.sharpness > 0) {
+    if (quickEditState.adjustments.sharpness !== 0) {
       applySharpnessInPlace(imgData, quickEditState.adjustments.sharpness);
     }
     expCtx.putImageData(imgData, 0, 0);
 
-    if (quickEditState.adjustments.vignette > 0) {
+    if (quickEditState.adjustments.vignette !== 0) {
       applyVignetteOverlay(expCtx, targetW, targetH, quickEditState.adjustments.vignette);
     }
   }
@@ -1424,6 +1536,12 @@ export function updateQuickEditToolbarUI() {
   }
   if (dom.editorStraightenVal) {
     dom.editorStraightenVal.textContent = `${quickEditState.straighten}°`;
+  }
+  if (dom.horizonAngleSlider) {
+    dom.horizonAngleSlider.value = quickEditState.straighten;
+  }
+  if (dom.horizonAngleVal) {
+    dom.horizonAngleVal.textContent = `${quickEditState.straighten}°`;
   }
 
   // Adjustments sliders

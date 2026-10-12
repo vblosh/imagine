@@ -502,6 +502,16 @@ export default {
     filter_onyx: '玛瑙黑',
     filter_blush: '腮红',
     intensity: '强度：',
+    discard_changes_title: '放弃未保存的更改？',
+    discard_changes_prompt: '您有未保存的编辑内容。确定要放弃它们吗？',
+    keep_editing: '继续编辑',
+    discard_changes: '放弃更改',
+    horizon: '水平校正',
+    horizon_correction: '水平校正',
+    horizon_correction_title: '水平校正 (H)',
+    angle: '角度：',
+    auto_level: '自动',
+    click_to_reset_zero: '点击或按 0 重置',
 
     // Import Modal
     import_modal_title: '导入照片到目录',

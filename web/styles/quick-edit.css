@@ -309,16 +309,47 @@
 }
 
 .editor-slider-val {
-  min-width: 26px;
+  min-width: 28px;
   font-size: 10px;
   font-weight: 600;
   color: var(--text-primary);
   text-align: right;
   cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  user-select: none;
 }
 
 .editor-slider-val:hover {
+  background: rgba(255, 255, 255, 0.12);
   color: var(--accent-color);
+}
+
+.editor-slider-val:active {
+  transform: scale(0.95);
+}
+
+/* Discard Unsaved Changes Dialog */
+.discard-changes-dialog {
+  max-width: 420px;
+  width: 90%;
+  border-radius: 12px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.65);
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  background: var(--modal-bg, #23272e);
+  animation: modalPopIn 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalPopIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 
 /* Filters Panel */

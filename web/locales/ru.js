@@ -502,6 +502,16 @@ export default {
     filter_onyx: 'Оникс',
     filter_blush: 'Румянец',
     intensity: 'Интенсивность:',
+    discard_changes_title: 'Отменить несохранённые изменения?',
+    discard_changes_prompt: 'У вас есть несохранённые изменения. Вы уверены, что хотите отменить их?',
+    keep_editing: 'Продолжить редактирование',
+    discard_changes: 'Отменить изменения',
+    horizon: 'Горизонт',
+    horizon_correction: 'Выравнивание горизонта',
+    horizon_correction_title: 'Выравнивание горизонта (H)',
+    angle: 'Угол:',
+    auto_level: 'Авто',
+    click_to_reset_zero: 'Нажмите или нажмите 0 для сброса',
 
     // Import Modal
     import_modal_title: 'Импорт фотографий в каталог',

@@ -502,6 +502,16 @@ export default {
     filter_onyx: 'Onyx',
     filter_blush: 'Blush',
     intensity: 'Intensity:',
+    discard_changes_title: 'Discard unsaved changes?',
+    discard_changes_prompt: 'You have unsaved edits. Are you sure you want to discard them?',
+    keep_editing: 'Keep Editing',
+    discard_changes: 'Discard Changes',
+    horizon: 'Horizon',
+    horizon_correction: 'Horizon Correction',
+    horizon_correction_title: 'Horizon Correction (H)',
+    angle: 'Angle:',
+    auto_level: 'Auto',
+    click_to_reset_zero: 'Click or press 0 to reset',
 
     // Import Modal
     import_modal_title: 'Import Photos to Catalog',

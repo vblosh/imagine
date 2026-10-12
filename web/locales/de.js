@@ -502,6 +502,16 @@ export default {
     filter_onyx: 'Onyx',
     filter_blush: 'Blush',
     intensity: 'Intensität:',
+    discard_changes_title: 'Nicht gespeicherte Änderungen verwerfen?',
+    discard_changes_prompt: 'Sie haben nicht gespeicherte Bearbeitungen. Möchten Sie diese wirklich verwerfen?',
+    keep_editing: 'Weiter bearbeiten',
+    discard_changes: 'Änderungen verwerfen',
+    horizon: 'Horizont',
+    horizon_correction: 'Horizontkorrektur',
+    horizon_correction_title: 'Horizontkorrektur (H)',
+    angle: 'Winkel:',
+    auto_level: 'Auto',
+    click_to_reset_zero: 'Klicken oder 0 drücken zum Zurücksetzen',
 
     // Import Modal
     import_modal_title: 'Fotos in den Katalog importieren',

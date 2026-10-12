@@ -502,6 +502,16 @@ export default {
     filter_onyx: 'Ónix',
     filter_blush: 'Rubor',
     intensity: 'Intensidad:',
+    discard_changes_title: '¿Descartar cambios no guardados?',
+    discard_changes_prompt: 'Tienes ediciones sin guardar. ¿Estás seguro de que deseas descartarlas?',
+    keep_editing: 'Seguir editando',
+    discard_changes: 'Descartar cambios',
+    horizon: 'Horizonte',
+    horizon_correction: 'Corrección de horizonte',
+    horizon_correction_title: 'Corrección de horizonte (H)',
+    angle: 'Ángulo:',
+    auto_level: 'Auto',
+    click_to_reset_zero: 'Hacer clic o pulsar 0 para restablecer',
 
     // Import Modal
     import_modal_title: 'Importar fotos al catálogo',
