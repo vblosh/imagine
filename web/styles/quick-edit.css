@@ -1,0 +1,416 @@
+/* Google Photos-style Photo Editor Styles */
+
+/* Main quick-edit container and canvas */
+.quick-edit-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  user-select: none;
+}
+
+#quickEditCanvas {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.85);
+  border-radius: 4px;
+  transition: box-shadow 0.2s ease;
+}
+
+/* Comparison badge overlay */
+.editor-compare-badge {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  z-index: 1005;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* Straighten grid overlay */
+.straighten-grid-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 998;
+}
+
+.straighten-grid-line {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 0 1px rgba(0, 0, 0, 0.8);
+}
+
+.straighten-grid-line.h1 { top: 33.333%; left: 0; width: 100%; height: 1px; }
+.straighten-grid-line.h2 { top: 66.666%; left: 0; width: 100%; height: 1px; }
+.straighten-grid-line.v1 { left: 33.333%; top: 0; width: 1px; height: 100%; }
+.straighten-grid-line.v2 { left: 66.666%; top: 0; width: 1px; height: 100%; }
+
+/* Redesigned Quick Edit Toolbar as a unified Google Photos Editor panel */
+.quick-edit-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  background: rgba(24, 24, 24, 0.94);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 10px 18px 12px;
+  border-radius: 16px;
+  z-index: 1003;
+  flex-shrink: 0;
+  max-width: 96vw;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7);
+  transition: all 0.2s ease;
+}
+
+/* Header action row */
+.editor-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.editor-header-left,
+.editor-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Tab Navigation Buttons */
+.editor-tab-bar {
+  display: flex;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.35);
+  padding: 3px;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  gap: 2px;
+}
+
+.editor-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 16px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.editor-tab-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.editor-tab-btn.active {
+  background: var(--accent-color);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 150, 230, 0.35);
+}
+
+/* Tab Panels */
+.editor-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  width: 100%;
+  min-height: 40px;
+  animation: editorPanelFade 0.18s ease;
+}
+
+@keyframes editorPanelFade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Suggestions Panel */
+.editor-quick-styles {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.editor-quick-style-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #2a2a2a;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.editor-quick-style-btn:hover {
+  background: #383838;
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.editor-quick-style-btn.active {
+  background: rgba(0, 150, 230, 0.25);
+  border-color: var(--accent-color);
+  color: #ffffff;
+}
+
+.style-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.style-dot.warm { background: #f39c12; }
+.style-dot.cool { background: #3498db; }
+.style-dot.bw { background: #bdc3c7; }
+
+/* Crop & Straighten Panel */
+.editor-crop-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.editor-straighten-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.editor-straighten-control label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+#editorStraightenVal {
+  min-width: 30px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffffff;
+  text-align: right;
+}
+
+/* Adjust Panel */
+.editor-adjust-container {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  overflow-x: auto;
+  max-width: 100%;
+  padding: 4px 2px;
+}
+
+.editor-adjust-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  min-width: 200px;
+}
+
+.editor-adjust-group-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-dim);
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.editor-slider-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.editor-slider-row span:first-child {
+  width: 66px;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+
+.editor-slider-row .editor-range-slider {
+  width: 90px;
+  height: 4px;
+  -webkit-appearance: none;
+  background: #3e3e3e;
+  border-radius: 2px;
+  outline: none;
+}
+
+.editor-slider-row .editor-range-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  transition: transform 0.1s ease;
+}
+
+.editor-slider-row .editor-range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  background: var(--accent-color);
+}
+
+.editor-slider-val {
+  min-width: 26px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: right;
+  cursor: pointer;
+}
+
+.editor-slider-val:hover {
+  color: var(--accent-color);
+}
+
+/* Filters Panel */
+.editor-filters-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.editor-filters-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 2px;
+  max-width: 100%;
+  scrollbar-width: thin;
+}
+
+.editor-filter-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: #252525;
+  border: 2px solid transparent;
+  padding: 4px;
+  border-radius: 8px;
+  cursor: pointer;
+  min-width: 62px;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.editor-filter-chip:hover {
+  background: #333333;
+}
+
+.editor-filter-chip.active {
+  border-color: var(--accent-color);
+  background: #2e2e2e;
+  box-shadow: 0 2px 8px rgba(0, 150, 230, 0.35);
+}
+
+.editor-filter-preview {
+  width: 50px;
+  height: 38px;
+  border-radius: 4px;
+  background-size: cover;
+  background-position: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.editor-filter-name {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.editor-filter-chip.active .editor-filter-name {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.editor-filter-intensity {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* Responsive compact viewports */
+@media (max-width: 768px) {
+  .quick-edit-toolbar {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .editor-header-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .editor-tab-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+  .editor-adjust-container {
+    flex-direction: column;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+}

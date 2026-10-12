@@ -150,7 +150,7 @@ def test_keyboard_open_and_close_loupe(server, page: Page):
     # Press Enter
     page.keyboard.press("Enter")
     expect(loupe).to_be_visible()
-    expect(page.locator("#loupeFileName")).to_have_text("mountain.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("mountain.bmp")
 
     # Press Escape to close loupe
     page.keyboard.press("Escape")

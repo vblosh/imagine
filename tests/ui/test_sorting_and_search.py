@@ -372,23 +372,23 @@ def test_loupe_navigation_in_semantic_search_probability_rank_order(server, page
     expect(loupe_modal).to_be_visible()
 
     # Loupe index indicates Rank #1 of 3
-    expect(page.locator("#loupeFileName")).to_have_text("sunset.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("sunset.bmp")
     expect(page.locator("#loupeIndex")).to_contain_text("Rank #1 of 3")
     expect(page.locator("#loupeIndex")).to_contain_text("golden beach sunset")
 
     # Press ArrowRight to move to Rank #2
     page.keyboard.press("ArrowRight")
-    expect(page.locator("#loupeFileName")).to_have_text("beach.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("beach.bmp")
     expect(page.locator("#loupeIndex")).to_contain_text("Rank #2 of 3")
 
     # Press ArrowRight to move to Rank #3
     page.keyboard.press("ArrowRight")
-    expect(page.locator("#loupeFileName")).to_have_text("forest.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("forest.bmp")
     expect(page.locator("#loupeIndex")).to_contain_text("Rank #3 of 3")
 
     # Press ArrowLeft to go back to Rank #2
     page.keyboard.press("ArrowLeft")
-    expect(page.locator("#loupeFileName")).to_have_text("beach.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("beach.bmp")
     expect(page.locator("#loupeIndex")).to_contain_text("Rank #2 of 3")
 
     # Press Escape closes Loupe, preserving the search grid

@@ -124,14 +124,27 @@ import {
   closeQuickEdit,
   rotateLeft,
   rotateRight,
+  toggleFlipH,
+  toggleFlipV,
+  setStraightenAngle,
+  resetStraighten,
   toggleCrop,
   setCropAspectRatio,
   applyCrop,
   cancelCrop,
   toggleSmartFix,
   setSmartFixIntensity,
+  applyQuickStyle,
+  setAdjustment,
+  resetAdjustments,
+  setFilter,
+  setFilterIntensity,
   startCompare,
   stopCompare,
+  undo,
+  redo,
+  switchTab,
+  pushHistoryState,
   resetAllEdits,
   saveEdits,
   setupCropMouseListeners,
@@ -1059,23 +1072,148 @@ export function setupEventListeners() {
       }
     });
   }
+  if (dom.editorUndoBtn) dom.editorUndoBtn.addEventListener('click', undo);
+  if (dom.editorRedoBtn) dom.editorRedoBtn.addEventListener('click', redo);
   if (dom.quickEditRotateLeftBtn) dom.quickEditRotateLeftBtn.addEventListener('click', rotateLeft);
   if (dom.quickEditRotateRightBtn) dom.quickEditRotateRightBtn.addEventListener('click', rotateRight);
+  if (dom.editorFlipHBtn) dom.editorFlipHBtn.addEventListener('click', toggleFlipH);
+  if (dom.editorFlipVBtn) dom.editorFlipVBtn.addEventListener('click', toggleFlipV);
+  if (dom.editorStraightenSlider) {
+    let isDragging = false;
+    dom.editorStraightenSlider.addEventListener('pointerdown', () => {
+      isDragging = true;
+      pushHistoryState();
+    });
+    dom.editorStraightenSlider.addEventListener('input', (e) => {
+      if (!isDragging) {
+        isDragging = true;
+        pushHistoryState();
+      }
+      setStraightenAngle(e.target.value);
+    });
+    dom.editorStraightenSlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+  }
+  if (dom.editorStraightenResetBtn) dom.editorStraightenResetBtn.addEventListener('click', resetStraighten);
+
+  // Tab switching
+  if (dom.editorTabSuggestions) dom.editorTabSuggestions.addEventListener('click', () => switchTab('suggestions'));
+  if (dom.editorTabCrop) dom.editorTabCrop.addEventListener('click', () => switchTab('crop'));
+  if (dom.editorTabAdjust) dom.editorTabAdjust.addEventListener('click', () => switchTab('adjust'));
+  if (dom.editorTabFilters) dom.editorTabFilters.addEventListener('click', () => switchTab('filters'));
+
+  // Quick styles
+  if (dom.styleWarmBtn) dom.styleWarmBtn.addEventListener('click', () => applyQuickStyle('warm'));
+  if (dom.styleCoolBtn) dom.styleCoolBtn.addEventListener('click', () => applyQuickStyle('cool'));
+  if (dom.styleBwBtn) dom.styleBwBtn.addEventListener('click', () => applyQuickStyle('bw_drama'));
+
+  // Crop controls
   if (dom.quickEditCropBtn) dom.quickEditCropBtn.addEventListener('click', toggleCrop);
   if (dom.cropAspectRatioSelect) {
     dom.cropAspectRatioSelect.addEventListener('change', (e) => setCropAspectRatio(e.target.value));
   }
   if (dom.quickEditApplyCropBtn) dom.quickEditApplyCropBtn.addEventListener('click', applyCrop);
   if (dom.quickEditCancelCropBtn) dom.quickEditCancelCropBtn.addEventListener('click', cancelCrop);
+
+  // Smart fix controls
   if (dom.quickEditSmartFixBtn) dom.quickEditSmartFixBtn.addEventListener('click', toggleSmartFix);
   if (dom.smartFixIntensitySlider) {
-    dom.smartFixIntensitySlider.addEventListener('input', (e) => setSmartFixIntensity(parseInt(e.target.value, 10)));
+    let isDragging = false;
+    dom.smartFixIntensitySlider.addEventListener('pointerdown', () => {
+      isDragging = true;
+      pushHistoryState();
+    });
+    dom.smartFixIntensitySlider.addEventListener('input', (e) => {
+      if (!isDragging) {
+        isDragging = true;
+        pushHistoryState();
+      }
+      setSmartFixIntensity(parseInt(e.target.value, 10));
+    });
+    dom.smartFixIntensitySlider.addEventListener('change', () => {
+      isDragging = false;
+    });
   }
+
+  // Adjustment sliders
+  const adjKeys = [
+    'brightness', 'contrast', 'highlights', 'shadows', 'whites', 'blacks',
+    'saturation', 'warmth', 'tint', 'vibrance', 'sharpness', 'vignette'
+  ];
+  adjKeys.forEach(k => {
+    const cap = k.charAt(0).toUpperCase() + k.slice(1);
+    const sliderEl = dom[`slider${cap}`];
+    const valEl = dom[`val${cap}`];
+    if (sliderEl) {
+      let isDragging = false;
+      sliderEl.addEventListener('pointerdown', () => {
+        isDragging = true;
+        pushHistoryState();
+      });
+      sliderEl.addEventListener('input', (e) => {
+        if (!isDragging) {
+          isDragging = true;
+          pushHistoryState();
+        }
+        setAdjustment(k, e.target.value);
+      });
+      sliderEl.addEventListener('change', () => {
+        isDragging = false;
+      });
+    }
+    if (valEl) {
+      valEl.addEventListener('dblclick', () => {
+        pushHistoryState();
+        setAdjustment(k, 0);
+      });
+    }
+  });
+  if (dom.editorResetAdjustBtn) dom.editorResetAdjustBtn.addEventListener('click', resetAdjustments);
+
+  // Filters strip
+  if (dom.editorFiltersStrip) {
+    dom.editorFiltersStrip.addEventListener('click', (e) => {
+      const chip = e.target.closest('.editor-filter-chip');
+      if (chip && chip.dataset.filter) {
+        setFilter(chip.dataset.filter);
+      }
+    });
+  }
+  if (dom.editorFilterIntensitySlider) {
+    let isDragging = false;
+    dom.editorFilterIntensitySlider.addEventListener('pointerdown', () => {
+      isDragging = true;
+      pushHistoryState();
+    });
+    dom.editorFilterIntensitySlider.addEventListener('input', (e) => {
+      if (!isDragging) {
+        isDragging = true;
+        pushHistoryState();
+      }
+      setFilterIntensity(e.target.value);
+    });
+    dom.editorFilterIntensitySlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+  }
+
+  // Compare & Canvas hold-to-compare
   if (dom.quickEditCompareBtn) {
     dom.quickEditCompareBtn.addEventListener('pointerdown', startCompare);
     dom.quickEditCompareBtn.addEventListener('pointerup', stopCompare);
     dom.quickEditCompareBtn.addEventListener('pointerleave', stopCompare);
   }
+  if (dom.quickEditCanvas) {
+    dom.quickEditCanvas.addEventListener('pointerdown', (e) => {
+      if (quickEditState.isOpen && !quickEditState.cropActive) {
+        startCompare();
+      }
+    });
+    dom.quickEditCanvas.addEventListener('pointerup', stopCompare);
+    dom.quickEditCanvas.addEventListener('pointerleave', stopCompare);
+  }
+
   if (dom.quickEditResetBtn) dom.quickEditResetBtn.addEventListener('click', resetAllEdits);
   if (dom.quickEditCancelBtn) dom.quickEditCancelBtn.addEventListener('click', () => closeQuickEdit(true));
   if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.addEventListener('click', () => saveEdits('overwrite'));
