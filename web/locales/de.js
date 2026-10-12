@@ -427,6 +427,7 @@ export default {
     zoom_in: 'Vergrößern (+)',
     zoom_slider: 'Zoom-Schieberegler',
     reset_zoom: 'Zoom zurücksetzen (Z oder Strg+0)',
+    rotate: 'Drehen',
     rotate_left: 'Nach links drehen',
     rotate_left_title: '90° nach links drehen (L)',
     rotate_right: 'Nach rechts drehen',

@@ -99,6 +99,8 @@
   border-radius: 20px;
   z-index: 1002;
   flex-shrink: 0;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
 }
 
 .loupe-zoom-controls {
@@ -192,11 +194,23 @@
   gap: 12px;
   color: #ffffff;
   font-size: 13px;
+  min-width: 0;
+  max-width: clamp(180px, 30vw, 420px);
+}
+
+#loupeFileName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  min-width: 0;
 }
 
 .loupe-info span:last-child {
   color: var(--text-secondary);
   font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .loupe-btn {
@@ -294,6 +308,14 @@
   margin: 0 4px;
 }
 
+.quick-edit-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+  margin-right: 2px;
+}
+
 .quick-edit-btn {
   display: inline-flex;
   align-items: center;
@@ -308,6 +330,10 @@
   cursor: pointer;
   transition: all 0.15s ease;
   user-select: none;
+}
+
+.quick-edit-btn:has(> svg:only-child) {
+  padding: 5px 8px;
 }
 
 .quick-edit-btn:hover {

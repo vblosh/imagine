@@ -427,6 +427,7 @@ export default {
     zoom_in: 'Увеличить (+)',
     zoom_slider: 'Ползунок масштаба',
     reset_zoom: 'Сбросить масштаб (Z или Ctrl+0)',
+    rotate: 'Поворот',
     rotate_left: 'Повернуть влево',
     rotate_left_title: 'Повернуть на 90° влево (L)',
     rotate_right: 'Повернуть вправо',

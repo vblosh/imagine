@@ -427,6 +427,7 @@ export default {
     zoom_in: 'Zoom In (+)',
     zoom_slider: 'Zoom Slider',
     reset_zoom: 'Reset Zoom (Z or Ctrl+0)',
+    rotate: 'Rotate',
     rotate_left: 'Rotate Left',
     rotate_left_title: 'Rotate Left 90° (L)',
     rotate_right: 'Rotate Right',

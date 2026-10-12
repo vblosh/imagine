@@ -904,14 +904,16 @@
           <div class="quick-edit-toolbar" id="quickEditToolbar" style="display: none;">
             <!-- Main Unified Toolbar Row -->
             <div class="editor-header-row">
-              <div class="quick-edit-group" title="Rotate" data-i18n-title="rotate_left">
+              <div class="quick-edit-group" title="Rotate" data-i18n-title="rotate">
+                <span class="quick-edit-group-label" data-i18n="rotate">Rotate</span>
                 <button class="quick-edit-btn" id="quickEditRotateLeftBtn" title="Rotate Left 90° (L)" data-i18n-title="rotate_left_title">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-rotate-ccw"></use></svg>
-                  <span data-i18n="rotate_left">Rotate Left</span>
                 </button>
                 <button class="quick-edit-btn" id="quickEditRotateRightBtn" title="Rotate Right 90° (R)" data-i18n-title="rotate_right_title">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-rotate-cw"></use></svg>
-                  <span data-i18n="rotate_right">Rotate Right</span>
+                </button>
+                <button class="quick-edit-btn" id="editorFlipVBtn" title="Flip Vertical" data-i18n-title="flip_vertical">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-v"></use></svg>
                 </button>
               </div>
 
@@ -936,9 +938,6 @@
                   <button class="btn btn-sm btn-secondary" id="quickEditCancelCropBtn" title="Cancel Crop (Esc)" data-i18n-title="cancel_crop" data-i18n="cancel">Cancel</button>
                   <button class="quick-edit-btn" id="editorFlipHBtn" title="Flip Horizontal" data-i18n-title="flip_horizontal">
                     <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-h"></use></svg>
-                  </button>
-                  <button class="quick-edit-btn" id="editorFlipVBtn" title="Flip Vertical" data-i18n-title="flip_vertical">
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-v"></use></svg>
                   </button>
                   <div class="editor-straighten-control">
                     <label title="Straighten Angle">
@@ -981,18 +980,6 @@
                     <input type="range" id="smartFixIntensitySlider" min="10" max="100" value="100" class="loupe-zoom-slider" style="width: 65px;">
                     <span id="smartFixIntensityVal">100%</span>
                   </label>
-                  <button class="editor-quick-style-btn" id="styleWarmBtn" data-style="warm" title="Warm Glow">
-                    <span class="style-dot warm"></span>
-                    <span data-i18n="style_warm">Warm</span>
-                  </button>
-                  <button class="editor-quick-style-btn" id="styleCoolBtn" data-style="cool" title="Cool Breeze">
-                    <span class="style-dot cool"></span>
-                    <span data-i18n="style_cool">Cool</span>
-                  </button>
-                  <button class="editor-quick-style-btn" id="styleBwBtn" data-style="bw_drama" title="B&W Drama">
-                    <span class="style-dot bw"></span>
-                    <span data-i18n="style_bw">B&W</span>
-                  </button>
                 </div>
               </div>
 

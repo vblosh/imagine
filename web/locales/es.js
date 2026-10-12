@@ -427,6 +427,7 @@ export default {
     zoom_in: 'Acercar (+)',
     zoom_slider: 'Control deslizante de zoom',
     reset_zoom: 'Restablecer zoom (Z o Ctrl+0)',
+    rotate: 'Girar',
     rotate_left: 'Girar a la izquierda',
     rotate_left_title: 'Girar 90° a la izquierda (L)',
     rotate_right: 'Girar a la derecha',

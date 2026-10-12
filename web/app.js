@@ -1148,10 +1148,7 @@ export function setupEventListeners() {
   if (dom.editorTabAdjust) dom.editorTabAdjust.addEventListener('click', () => switchTab('adjust'));
   if (dom.editorTabFilters) dom.editorTabFilters.addEventListener('click', () => switchTab('filters'));
 
-  // Quick styles
-  if (dom.styleWarmBtn) dom.styleWarmBtn.addEventListener('click', () => applyQuickStyle('warm'));
-  if (dom.styleCoolBtn) dom.styleCoolBtn.addEventListener('click', () => applyQuickStyle('cool'));
-  if (dom.styleBwBtn) dom.styleBwBtn.addEventListener('click', () => applyQuickStyle('bw_drama'));
+  // Quick styles (Suggestions panel)
   if (dom.panelStyleWarmBtn) dom.panelStyleWarmBtn.addEventListener('click', () => applyQuickStyle('warm'));
   if (dom.panelStyleCoolBtn) dom.panelStyleCoolBtn.addEventListener('click', () => applyQuickStyle('cool'));
   if (dom.panelStyleBwBtn) dom.panelStyleBwBtn.addEventListener('click', () => applyQuickStyle('bw_drama'));

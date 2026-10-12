@@ -873,3 +873,53 @@ def test_auto_level_horizon_detection(server, page: Page):
     assert straighten_val == 6.0
 
 
+def test_rotate_compact_buttons_and_flip_vertical(server, page: Page):
+    """Rotate group has Rotate label, icon-only Rotate Left/Right buttons, and Flip Vertical button."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    rotate_group = page.locator(".quick-edit-toolbar .editor-header-row .quick-edit-group").first
+    expect(rotate_group).to_be_visible()
+
+    # 1. Label 'Rotate' is present
+    label = rotate_group.locator(".quick-edit-group-label")
+    expect(label).to_have_text("Rotate")
+
+    # 2. Buttons Rotate Left and Rotate Right have icons and no text
+    btn_rot_left = rotate_group.locator("#quickEditRotateLeftBtn")
+    btn_rot_right = rotate_group.locator("#quickEditRotateRightBtn")
+    expect(btn_rot_left).to_be_visible()
+    expect(btn_rot_right).to_be_visible()
+    expect(btn_rot_left).to_have_text("")
+    expect(btn_rot_right).to_have_text("")
+    expect(btn_rot_left.locator("svg use")).to_have_attribute("href", "#icon-rotate-ccw")
+    expect(btn_rot_right.locator("svg use")).to_have_attribute("href", "#icon-rotate-cw")
+
+    # 3. Button with icon Flip Vertical is positioned right after Rotate Right
+    flip_v_btn = rotate_group.locator("#quickEditRotateRightBtn + #editorFlipVBtn")
+    expect(flip_v_btn).to_be_visible()
+    expect(flip_v_btn.locator("svg use")).to_have_attribute("href", "#icon-flip-v")
+    expect(flip_v_btn).not_to_have_class(re.compile(r"\bactive\b"))
+
+    # 4. Clicking Flip Vertical toggles flipV state
+    flip_v_btn.click()
+    expect(flip_v_btn).to_have_class(re.compile(r"\bactive\b"))
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipV") is True
+
+    # Clicking again un-flips
+    flip_v_btn.click()
+    expect(flip_v_btn).not_to_have_class(re.compile(r"\bactive\b"))
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipV") is False
+
+    # 5. Rotate buttons function properly
+    btn_rot_right.click()
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.rotation") == 90
+    btn_rot_left.click()
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.rotation") == 0
+
+
+

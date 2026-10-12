@@ -427,6 +427,7 @@ export default {
     zoom_in: '放大 (+)',
     zoom_slider: '缩放滑块',
     reset_zoom: '重置缩放 (Z 或 Ctrl+0)',
+    rotate: '旋转',
     rotate_left: '向左旋转',
     rotate_left_title: '向左旋转 90° (L)',
     rotate_right: '向右旋转',
