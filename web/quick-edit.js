@@ -49,7 +49,7 @@ export const FILTERS = {
   bazaar: { name: "Bazaar", adjust: { brightness: 5, contrast: 20, saturation: 30, warmth: 30 } },
   alpaca: { name: "Alpaca", adjust: { brightness: 10, contrast: -15, saturation: -10, warmth: 15, highlights: -10 } },
   vista: { name: "Vista", adjust: { contrast: 20, saturation: 35, warmth: -5, highlights: 10 } },
-  onyx: { name: "Onyx", isBw: true, contrast: 30, blacks: -15, whites: 15 },
+  onyx: { name: "Onyx", isBw: true, adjust: { contrast: 30, blacks: -15, whites: 15 } },
   blush: { name: "Blush", adjust: { brightness: 8, contrast: -5, warmth: 15, tint: 25, saturation: 10 } },
 };
 
@@ -175,6 +175,7 @@ function computeSmartFixLUT(imgData) {
 /* History Stack Management */
 export function captureStateSnapshot() {
   return {
+    workingCanvas: quickEditState.workingCanvas,
     rotation: quickEditState.rotation,
     straighten: quickEditState.straighten,
     flipH: quickEditState.flipH,
@@ -199,6 +200,10 @@ export function pushHistoryState() {
 
 function applyStateSnapshot(snap) {
   if (!snap) return;
+  if (snap.workingCanvas) {
+    quickEditState.workingCanvas = snap.workingCanvas;
+    quickEditState.workingCtx = snap.workingCanvas.getContext("2d");
+  }
   quickEditState.rotation = snap.rotation || 0;
   quickEditState.straighten = snap.straighten || 0;
   quickEditState.flipH = !!snap.flipH;
@@ -210,6 +215,8 @@ function applyStateSnapshot(snap) {
   quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS, ...(snap.adjustments || {}) };
   quickEditState.filter = snap.filter || "none";
   quickEditState.filterIntensity = snap.filterIntensity ?? 100;
+  quickEditState.smartFixLUT = null;
+  quickEditState.previewCanvas = null;
 }
 
 export function undo() {
@@ -297,7 +304,7 @@ export function openQuickEdit() {
   quickEditState.smartFixIntensity = 100;
   quickEditState.isComparing = false;
   quickEditState.smartFixLUT = null;
-  quickEditState.activeTab = "suggestions";
+  quickEditState.activeTab = null;
   quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS };
   quickEditState.filter = "none";
   quickEditState.filterIntensity = 100;
@@ -312,7 +319,6 @@ export function openQuickEdit() {
   if (dom.editorCompareBadge) dom.editorCompareBadge.style.display = "none";
   if (dom.straightenGridOverlay) dom.straightenGridOverlay.style.display = "none";
 
-  switchTab("suggestions");
   updateUndoRedoUI();
   updateQuickEditToolbarUI();
 
@@ -569,7 +575,9 @@ export function setStraightenAngle(angleDeg) {
 
 export function resetStraighten() {
   if (!quickEditState.isOpen) return;
-  pushHistoryState();
+  if (quickEditState.straighten !== 0) {
+    pushHistoryState();
+  }
   setStraightenAngle(0);
 }
 
@@ -713,6 +721,7 @@ function getNumericAspectRatio(ratioName, currentW, currentH) {
     case "4:3": return 4 / 3;
     case "16:9": return 16 / 9;
     case "3:2": return 3 / 2;
+    case "5:4": return 5 / 4;
     case "free":
     default: return null;
   }
@@ -788,22 +797,34 @@ export function applyCrop() {
   const croppedCtx = croppedCanvas.getContext("2d");
 
   const rot = quickEditState.rotation;
+  const straighten = quickEditState.straighten;
+  const flipH = quickEditState.flipH;
+  const flipV = quickEditState.flipV;
   const srcCanvas = quickEditState.workingCanvas;
-  const fullRotCanvas = document.createElement("canvas");
-  fullRotCanvas.width = canvas.width;
-  fullRotCanvas.height = canvas.height;
-  const fullRotCtx = fullRotCanvas.getContext("2d");
-  fullRotCtx.save();
-  fullRotCtx.translate(canvas.width / 2, canvas.height / 2);
-  fullRotCtx.rotate((rot * Math.PI) / 180);
-  fullRotCtx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
-  fullRotCtx.restore();
+  const fullTransformedCanvas = document.createElement("canvas");
+  fullTransformedCanvas.width = canvas.width;
+  fullTransformedCanvas.height = canvas.height;
+  const fullCtx = fullTransformedCanvas.getContext("2d");
+  fullCtx.save();
+  fullCtx.translate(canvas.width / 2, canvas.height / 2);
+  const totalAngleDeg = rot + straighten;
+  fullCtx.rotate((totalAngleDeg * Math.PI) / 180);
+  const rad = Math.abs((straighten * Math.PI) / 180);
+  const sFactor = straighten !== 0
+    ? Math.cos(rad) + Math.max(canvas.height / canvas.width, canvas.width / canvas.height) * Math.sin(rad)
+    : 1;
+  fullCtx.scale((flipH ? -1 : 1) * sFactor, (flipV ? -1 : 1) * sFactor);
+  fullCtx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
+  fullCtx.restore();
 
-  croppedCtx.drawImage(fullRotCanvas, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+  croppedCtx.drawImage(fullTransformedCanvas, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
 
   quickEditState.workingCanvas = croppedCanvas;
   quickEditState.workingCtx = croppedCtx;
   quickEditState.rotation = 0;
+  quickEditState.straighten = 0;
+  quickEditState.flipH = false;
+  quickEditState.flipV = false;
   quickEditState.cropActive = false;
   quickEditState.hasCropped = true;
   quickEditState.normalizedCrop = {
@@ -909,7 +930,8 @@ export function setFilter(filterName) {
 
 export function setFilterIntensity(val) {
   if (!quickEditState.isOpen) return;
-  quickEditState.filterIntensity = Math.max(10, Math.min(100, parseInt(val, 10) || 100));
+  const num = parseInt(val, 10);
+  quickEditState.filterIntensity = Math.max(0, Math.min(100, isNaN(num) ? 100 : num));
   if (dom.editorFilterIntensitySlider) dom.editorFilterIntensitySlider.value = quickEditState.filterIntensity;
   if (dom.editorFilterIntensityVal) dom.editorFilterIntensityVal.textContent = `${quickEditState.filterIntensity}%`;
   quickEditState.isDirty = true;
@@ -994,6 +1016,10 @@ function processImageDataInPlace(imgData) {
   const fWarmth = (fAdj.warmth || 0) * 0.4;
   const fTint = (fAdj.tint || 0) * 0.3;
   const fBrightness = (fAdj.brightness || 0) * 1.28;
+  const fHighlights = fAdj.highlights || 0;
+  const fShadows = fAdj.shadows || 0;
+  const fWhites = fAdj.whites || 0;
+  const fBlacks = fAdj.blacks || 0;
 
   // Pixel loop
   for (let i = 0; i < len; i += 4) {
@@ -1082,14 +1108,34 @@ function processImageDataInPlace(imgData) {
 
       if (filterDef.isBw) {
         const lum = 0.299 * fr + 0.587 * fg + 0.114 * fb;
-        fr = fg = fb = (lum - 128) * 1.35 + 128;
-      } else {
-        if (fBrightness) { fr += fBrightness; fg += fBrightness; fb += fBrightness; }
-        if (fContrastFactor !== 1) {
-          fr = (fr - 128) * fContrastFactor + 128;
-          fg = (fg - 128) * fContrastFactor + 128;
-          fb = (fb - 128) * fContrastFactor + 128;
+        fr = fg = fb = lum;
+      }
+
+      if (fBrightness) { fr += fBrightness; fg += fBrightness; fb += fBrightness; }
+      if (fContrastFactor !== 1) {
+        fr = (fr - 128) * fContrastFactor + 128;
+        fg = (fg - 128) * fContrastFactor + 128;
+        fb = (fb - 128) * fContrastFactor + 128;
+      }
+      if (fHighlights !== 0 || fShadows !== 0 || fWhites !== 0 || fBlacks !== 0) {
+        const lum = 0.299 * fr + 0.587 * fg + 0.114 * fb;
+        if (lum < 128 && fShadows !== 0) {
+          const factor = (1 - lum / 128) * (fShadows / 100) * 35;
+          fr += factor; fg += factor; fb += factor;
+        } else if (lum >= 128 && fHighlights !== 0) {
+          const factor = ((lum - 128) / 128) * (fHighlights / 100) * 35;
+          fr += factor; fg += factor; fb += factor;
         }
+        if (fBlacks !== 0) {
+          const factor = (1 - lum / 255) * (fBlacks / 100) * 25;
+          fr += factor; fg += factor; fb += factor;
+        }
+        if (fWhites !== 0) {
+          const factor = (lum / 255) * (fWhites / 100) * 25;
+          fr += factor; fg += factor; fb += factor;
+        }
+      }
+      if (!filterDef.isBw) {
         if (fWarmth) { fr += fWarmth; fb -= fWarmth; }
         if (fTint) { fg += fTint; fr -= fTint * 0.5; fb -= fTint * 0.5; }
         if (fSatBoost) {
@@ -1204,7 +1250,11 @@ export function renderQuickEditCanvas() {
   ctx.translate(targetW / 2, targetH / 2);
   const totalAngleDeg = rot + straighten;
   ctx.rotate((totalAngleDeg * Math.PI) / 180);
-  ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
+  const rad = Math.abs((straighten * Math.PI) / 180);
+  const sFactor = straighten !== 0
+    ? Math.cos(rad) + Math.max(targetH / targetW, targetW / targetH) * Math.sin(rad)
+    : 1;
+  ctx.scale((flipH ? -1 : 1) * sFactor, (flipV ? -1 : 1) * sFactor);
   ctx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
   ctx.restore();
 
@@ -1267,8 +1317,16 @@ export function renderQuickEditCanvas() {
       }
       prevCtx.putImageData(imgData, 0, 0);
 
-      if (quickEditState.adjustments.vignette !== 0) {
-        applyVignetteOverlay(prevCtx, pW, pH, quickEditState.adjustments.vignette);
+      const filterDef = FILTERS[quickEditState.filter] || FILTERS.none;
+      const fAdj = filterDef.adjust || {};
+      const filterAlpha = quickEditState.filterIntensity / 100;
+      const filterVignette = (quickEditState.filter !== "none" && fAdj.vignette)
+        ? fAdj.vignette * filterAlpha
+        : 0;
+      const effectiveVignette = Math.max(-100, Math.min(100, quickEditState.adjustments.vignette + filterVignette));
+
+      if (effectiveVignette !== 0) {
+        applyVignetteOverlay(prevCtx, pW, pH, effectiveVignette);
       }
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1281,8 +1339,16 @@ export function renderQuickEditCanvas() {
       }
       ctx.putImageData(imgData, 0, 0);
 
-      if (quickEditState.adjustments.vignette !== 0) {
-        applyVignetteOverlay(ctx, canvas.width, canvas.height, quickEditState.adjustments.vignette);
+      const filterDef = FILTERS[quickEditState.filter] || FILTERS.none;
+      const fAdj = filterDef.adjust || {};
+      const filterAlpha = quickEditState.filterIntensity / 100;
+      const filterVignette = (quickEditState.filter !== "none" && fAdj.vignette)
+        ? fAdj.vignette * filterAlpha
+        : 0;
+      const effectiveVignette = Math.max(-100, Math.min(100, quickEditState.adjustments.vignette + filterVignette));
+
+      if (effectiveVignette !== 0) {
+        applyVignetteOverlay(ctx, canvas.width, canvas.height, effectiveVignette);
       }
     }
   }
@@ -1312,7 +1378,11 @@ export function getFullResolutionExportCanvas() {
   expCtx.translate(targetW / 2, targetH / 2);
   const totalAngleDeg = rot + straighten;
   expCtx.rotate((totalAngleDeg * Math.PI) / 180);
-  expCtx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
+  const rad = Math.abs((straighten * Math.PI) / 180);
+  const sFactor = straighten !== 0
+    ? Math.cos(rad) + Math.max(targetH / targetW, targetW / targetH) * Math.sin(rad)
+    : 1;
+  expCtx.scale((flipH ? -1 : 1) * sFactor, (flipV ? -1 : 1) * sFactor);
   expCtx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
   expCtx.restore();
 
@@ -1350,8 +1420,16 @@ export function getFullResolutionExportCanvas() {
     }
     expCtx.putImageData(imgData, 0, 0);
 
-    if (quickEditState.adjustments.vignette !== 0) {
-      applyVignetteOverlay(expCtx, targetW, targetH, quickEditState.adjustments.vignette);
+    const filterDef = FILTERS[quickEditState.filter] || FILTERS.none;
+    const fAdj = filterDef.adjust || {};
+    const filterAlpha = quickEditState.filterIntensity / 100;
+    const filterVignette = (quickEditState.filter !== "none" && fAdj.vignette)
+      ? fAdj.vignette * filterAlpha
+      : 0;
+    const effectiveVignette = Math.max(-100, Math.min(100, quickEditState.adjustments.vignette + filterVignette));
+
+    if (effectiveVignette !== 0) {
+      applyVignetteOverlay(expCtx, targetW, targetH, effectiveVignette);
     }
   }
 
@@ -1661,6 +1739,8 @@ export function setupCropMouseListeners() {
       return;
     }
 
+    e.stopPropagation();
+    e.preventDefault();
     quickEditState.cropDragStart = {
       x: e.clientX,
       y: e.clientY,
@@ -1669,8 +1749,15 @@ export function setupCropMouseListeners() {
       boxW: quickEditState.cropBox.w,
       boxH: quickEditState.cropBox.h,
     };
-    e.preventDefault();
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
   });
+
+  if (dom.cropOverlay) {
+    dom.cropOverlay.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("#cropOverlay")) {
+        e.stopPropagation();
+      }
+    });
+  }
 }

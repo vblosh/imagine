@@ -440,6 +440,7 @@ export default {
     aspect_4_3: '4:3 标准',
     aspect_16_9: '16:9 宽屏',
     aspect_3_2: '3:2 经典',
+    aspect_5_4: '5:4 标准',
     apply: '应用',
     apply_crop: '应用裁剪 (Enter)',
     cancel: '取消',

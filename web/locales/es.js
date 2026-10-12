@@ -440,6 +440,7 @@ export default {
     aspect_4_3: '4:3 Estándar',
     aspect_16_9: '16:9 Panorámica',
     aspect_3_2: '3:2 Clásico',
+    aspect_5_4: '5:4 Estándar',
     apply: 'Aplicar',
     apply_crop: 'Aplicar recorte (Enter)',
     cancel: 'Cancelar',

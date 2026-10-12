@@ -486,3 +486,317 @@ def test_save_copy_with_adjustments_and_filter(server, page: Page):
     # Loupe exits edit mode
     expect(loupe).not_to_have_class(re.compile(r"\bis-quick-editing\b"))
     expect(page.locator("#quickEditToolbar")).to_be_hidden()
+
+
+def test_crop_undo_redo_restores_canvas(server, page: Page):
+    """Cropping changes canvas dimensions; Undo restores original uncropped canvas; Redo re-crops."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Capture initial dimensions
+    dims = page.evaluate("""() => {
+        const qe = window._imagineQuickEdit.quickEditState;
+        return {
+            w: qe.workingCanvas.width,
+            h: qe.workingCanvas.height
+        };
+    }""")
+    assert dims["w"] > 0 and dims["h"] > 0
+
+    # Open crop tool and select 1:1 ratio
+    page.locator("#quickEditCropBtn").click()
+    expect(page.locator("#cropOverlay")).to_be_visible()
+    page.locator("#cropAspectRatioSelect").select_option("1:1")
+
+    # Apply crop
+    page.locator("#quickEditApplyCropBtn").click()
+    expect(page.locator("#cropOverlay")).to_be_hidden()
+
+    cropped_dims = page.evaluate("""() => {
+        const qe = window._imagineQuickEdit.quickEditState;
+        return {
+            hasCropped: qe.hasCropped,
+            w: qe.workingCanvas.width,
+            h: qe.workingCanvas.height
+        };
+    }""")
+    assert cropped_dims["hasCropped"] is True
+    # In 1:1 crop, width and height must match
+    assert cropped_dims["w"] == cropped_dims["h"]
+
+    # Undo crop
+    undo_btn = page.locator("#editorUndoBtn")
+    expect(undo_btn).to_be_enabled()
+    undo_btn.click()
+
+    restored_dims = page.evaluate("""() => {
+        const qe = window._imagineQuickEdit.quickEditState;
+        return {
+            hasCropped: qe.hasCropped,
+            w: qe.workingCanvas.width,
+            h: qe.workingCanvas.height
+        };
+    }""")
+    assert restored_dims["hasCropped"] is False
+    assert restored_dims["w"] == dims["w"]
+    assert restored_dims["h"] == dims["h"]
+
+    # Redo crop
+    redo_btn = page.locator("#editorRedoBtn")
+    expect(redo_btn).to_be_enabled()
+    redo_btn.click()
+
+    re_cropped_dims = page.evaluate("""() => {
+        const qe = window._imagineQuickEdit.quickEditState;
+        return {
+            hasCropped: qe.hasCropped,
+            w: qe.workingCanvas.width,
+            h: qe.workingCanvas.height
+        };
+    }""")
+    assert re_cropped_dims["hasCropped"] is True
+    assert re_cropped_dims["w"] == cropped_dims["w"]
+    assert re_cropped_dims["h"] == cropped_dims["h"]
+
+
+def test_crop_with_straighten_and_flip(server, page: Page):
+    """Applying crop when straighten and flip transforms are active resets transforms to 0."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Open crop tool
+    page.locator("#quickEditCropBtn").click()
+    expect(page.locator("#cropSubOptions")).to_be_visible()
+
+    # Set straighten angle to 15°
+    page.evaluate("""() => {
+        const slider = document.getElementById('editorStraightenSlider');
+        slider.value = '15';
+        slider.dispatchEvent(new Event('input'));
+        slider.dispatchEvent(new Event('change'));
+    }""")
+    expect(page.locator("#editorStraightenVal")).to_have_text("15°")
+
+    # Flip horizontal
+    page.locator("#editorFlipHBtn").click()
+
+    # Apply crop
+    page.locator("#quickEditApplyCropBtn").click()
+    expect(page.locator("#cropOverlay")).to_be_hidden()
+
+    # Active transforms must be reset to 0 to prevent double-transforms
+    state_after = page.evaluate("""() => {
+        const qe = window._imagineQuickEdit.quickEditState;
+        return {
+            rotation: qe.rotation,
+            straighten: qe.straighten,
+            flipH: qe.flipH,
+            flipV: qe.flipV,
+            hasCropped: qe.hasCropped
+        };
+    }""")
+    assert state_after["hasCropped"] is True
+    assert state_after["rotation"] == 0
+    assert state_after["straighten"] == 0
+    assert state_after["flipH"] is False
+    assert state_after["flipV"] is False
+
+
+def test_suggestions_and_crop_tab_navigation(server, page: Page):
+    """Suggestions and Crop tabs open their panels and trigger quick styles and flips."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Open Suggestions panel
+    tab_suggestions = page.locator("#editorTabSuggestions")
+    panel_suggestions = page.locator("#editorPanelSuggestions")
+    tab_suggestions.click()
+    expect(panel_suggestions).to_be_visible()
+
+    # Test Warm quick style
+    page.locator("#panelStyleWarmBtn").click()
+    expect(page.locator("#valWarmth")).to_have_text("+30")
+    expect(page.locator("#valSaturation")).to_have_text("+10")
+
+    # Test Cool quick style
+    page.locator("#panelStyleCoolBtn").click()
+    expect(page.locator("#valWarmth")).to_have_text("-25")
+
+    # Test B&W Drama quick style
+    page.locator("#panelStyleBwBtn").click()
+    filter_val = page.evaluate("() => window._imagineQuickEdit.quickEditState.filter")
+    assert filter_val == "onyx"
+
+    # Switch to Crop panel
+    tab_crop = page.locator("#editorTabCrop")
+    panel_crop = page.locator("#editorPanelCrop")
+    tab_crop.click()
+    expect(panel_crop).to_be_visible()
+    expect(panel_suggestions).to_be_hidden()
+
+    # Click panel flip H button
+    page.locator("#panelFlipHBtn").click()
+    is_flip_h = page.evaluate("() => window._imagineQuickEdit.quickEditState.flipH")
+    assert is_flip_h is True
+
+
+def test_aspect_ratio_5_4_selection(server, page: Page):
+    """5:4 aspect ratio option exists, can be selected, and formats crop box correctly."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+
+    page.locator("#quickEditCropBtn").click()
+    expect(page.locator("#cropSubOptions")).to_be_visible()
+
+    aspect_select = page.locator("#cropAspectRatioSelect")
+    # Verify 5:4 option exists
+    option_5_4 = aspect_select.locator('option[value="5:4"]')
+    expect(option_5_4).to_be_attached()
+
+    # Select 5:4
+    aspect_select.select_option("5:4")
+    crop_state = page.evaluate("""() => {
+        const qe = window._imagineQuickEdit.quickEditState;
+        return {
+            cropRatio: qe.cropRatio,
+            w: qe.cropBox.w,
+            h: qe.cropBox.h
+        };
+    }""")
+    assert crop_state["cropRatio"] == "5:4"
+    # Ratio width/height should be approximately 5/4 = 1.25
+    ratio = crop_state["w"] / crop_state["h"]
+    assert abs(ratio - 1.25) < 0.05
+
+
+def test_filter_intensity_reaches_zero(server, page: Page):
+    """Filter intensity slider has min=0 and can fade preset to 0%."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+
+    page.locator("#editorTabFilters").click()
+    expect(page.locator("#editorPanelFilters")).to_be_visible()
+
+    # Select Vivid filter
+    page.locator('.editor-filter-chip[data-filter="vivid"]').click()
+
+    slider = page.locator("#editorFilterIntensitySlider")
+    expect(slider).to_have_attribute("min", "0")
+
+    # Set intensity to 0
+    page.evaluate("""() => {
+        const sl = document.getElementById('editorFilterIntensitySlider');
+        sl.value = '0';
+        sl.dispatchEvent(new Event('input'));
+        sl.dispatchEvent(new Event('change'));
+    }""")
+    expect(page.locator("#editorFilterIntensityVal")).to_have_text("0%")
+    intensity = page.evaluate("() => window._imagineQuickEdit.quickEditState.filterIntensity")
+    assert intensity == 0
+
+
+def test_onyx_filter_adjustments_and_parameters(server, page: Page):
+    """Onyx filter has adjust wrapper with contrast, blacks, whites and Reel has vignette."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+
+    filters_meta = page.evaluate("""() => {
+        const F = window._imagineQuickEdit.FILTERS;
+        return {
+            onyx: F.onyx,
+            reel: F.reel
+        };
+    }""")
+    assert filters_meta["onyx"]["isBw"] is True
+    assert filters_meta["onyx"]["adjust"]["contrast"] == 30
+    assert filters_meta["onyx"]["adjust"]["blacks"] == -15
+    assert filters_meta["onyx"]["adjust"]["whites"] == 15
+    assert filters_meta["reel"]["adjust"]["vignette"] == 20
+
+    # Select Onyx filter chip
+    page.locator("#editorTabFilters").click()
+    chip_onyx = page.locator('.editor-filter-chip[data-filter="onyx"]')
+    chip_onyx.click()
+    expect(chip_onyx).to_have_class(re.compile(r"\bactive\b"))
+
+
+def test_straighten_reset_recorded_in_history(server, page: Page):
+    """Straightening angle and clicking 0° reset button records previous angle in history for Undo."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+
+    # Open crop tool
+    page.locator("#quickEditCropBtn").click()
+    expect(page.locator("#cropSubOptions")).to_be_visible()
+
+    # Adjust straighten slider to 20°
+    page.evaluate("""() => {
+        const slider = document.getElementById('editorStraightenSlider');
+        slider.value = '20';
+        slider.dispatchEvent(new Event('input'));
+        slider.dispatchEvent(new Event('change'));
+    }""")
+    expect(page.locator("#editorStraightenVal")).to_have_text("20°")
+
+    # Click 0° Reset button
+    page.locator("#editorStraightenResetBtn").click()
+    expect(page.locator("#editorStraightenVal")).to_have_text("0°")
+
+    # Undo must restore 20°
+    undo_btn = page.locator("#editorUndoBtn")
+    expect(undo_btn).to_be_enabled()
+    undo_btn.click()
+    expect(page.locator("#editorStraightenVal")).to_have_text("20°")
+    angle_after_undo = page.evaluate("() => window._imagineQuickEdit.quickEditState.straighten")
+    assert angle_after_undo == 20
+
+
+def test_canvas_pointerdown_crop_handles_no_conflict(server, page: Page):
+    """Interacting with crop overlay/handles does not trigger compare mode on the canvas."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+
+    page.locator("#quickEditCropBtn").click()
+    expect(page.locator("#cropOverlay")).to_be_visible()
+
+    compare_badge = page.locator("#editorCompareBadge")
+    expect(compare_badge).to_be_hidden()
+
+    # Dispatch pointerdown on crop handle
+    page.evaluate("""() => {
+        const handle = document.querySelector('.crop-handle[data-handle="se"]');
+        if (handle) {
+            handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+        }
+    }""")
+    expect(compare_badge).to_be_hidden()
+    is_comparing = page.evaluate("() => window._imagineQuickEdit.quickEditState.isComparing")
+    assert is_comparing is False
+

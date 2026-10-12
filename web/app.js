@@ -153,6 +153,7 @@ import {
   saveEdits,
   setupCropMouseListeners,
   quickEditState,
+  FILTERS,
   MAX_SMART_FIX_PREVIEW_DIM,
   getFullResolutionExportCanvas
 } from './quick-edit.js';
@@ -1151,6 +1152,11 @@ export function setupEventListeners() {
   if (dom.styleWarmBtn) dom.styleWarmBtn.addEventListener('click', () => applyQuickStyle('warm'));
   if (dom.styleCoolBtn) dom.styleCoolBtn.addEventListener('click', () => applyQuickStyle('cool'));
   if (dom.styleBwBtn) dom.styleBwBtn.addEventListener('click', () => applyQuickStyle('bw_drama'));
+  if (dom.panelStyleWarmBtn) dom.panelStyleWarmBtn.addEventListener('click', () => applyQuickStyle('warm'));
+  if (dom.panelStyleCoolBtn) dom.panelStyleCoolBtn.addEventListener('click', () => applyQuickStyle('cool'));
+  if (dom.panelStyleBwBtn) dom.panelStyleBwBtn.addEventListener('click', () => applyQuickStyle('bw_drama'));
+  if (dom.panelFlipHBtn) dom.panelFlipHBtn.addEventListener('click', toggleFlipH);
+  if (dom.panelFlipVBtn) dom.panelFlipVBtn.addEventListener('click', toggleFlipV);
 
   // Crop controls
   if (dom.quickEditCropBtn) dom.quickEditCropBtn.addEventListener('click', toggleCrop);
@@ -1262,8 +1268,8 @@ export function setupEventListeners() {
     dom.quickEditCompareBtn.addEventListener('pointerleave', stopCompare);
   }
   if (dom.quickEditCanvas) {
-    dom.quickEditCanvas.addEventListener('pointerdown', () => {
-      if (quickEditState.isOpen && !quickEditState.cropActive) {
+    dom.quickEditCanvas.addEventListener('pointerdown', (e) => {
+      if (quickEditState.isOpen && !quickEditState.cropActive && !e.target.closest('#cropOverlay')) {
         startCompare();
       }
     });
@@ -1875,6 +1881,7 @@ const imaginePersistence = {
 
 const imagineQuickEdit = {
   quickEditState,
+  FILTERS,
   MAX_SMART_FIX_PREVIEW_DIM,
   getFullResolutionExportCanvas
 };

@@ -440,6 +440,7 @@ export default {
     aspect_4_3: '4:3 Standard',
     aspect_16_9: '16:9 Widescreen',
     aspect_3_2: '3:2 Classic',
+    aspect_5_4: '5:4 Standard',
     apply: 'Apply',
     apply_crop: 'Apply Crop (Enter)',
     cancel: 'Cancel',
