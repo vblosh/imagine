@@ -13,14 +13,15 @@ Imagine combines a high-speed C++20 core engine with an interactive Command-Line
 4. [Browsing & Navigation (including Language / i18n)](#4-browsing--navigation)
 5. [Organizing & Tagging](#5-organizing--tagging)
 6. [Fullscreen Loupe Viewer](#6-fullscreen-loupe-viewer)
-7. [Inspector & EXIF Metadata](#7-inspector--exif-metadata)
-8. [Map View & Geotagging](#8-map-view--geotagging)
-9. [CLI Reference](#9-cli-reference)
-10. [REST API Reference](#10-rest-api-reference)
-11. [Under the Hood: Database & Cache](#11-under-the-hood-database--cache)
-12. [Troubleshooting & FAQ](#12-troubleshooting--faq)
-13. [Face Detection & Recognition](#13-face-detection--recognition)
-14. [Semantic AI Search (Natural Language & Visual Similarity)](#14-semantic-ai-search-natural-language--visual-similarity)
+7. [Photo Editor & Quick Edit](#7-photo-editor--quick-edit)
+8. [Inspector & EXIF Metadata](#8-inspector--exif-metadata)
+9. [Map View & Geotagging](#9-map-view--geotagging)
+10. [CLI Reference](#10-cli-reference)
+11. [REST API Reference](#11-rest-api-reference)
+12. [Under the Hood: Database & Cache](#12-under-the-hood-database--cache)
+13. [Troubleshooting & FAQ](#13-troubleshooting--faq)
+14. [Face Detection & Recognition](#14-face-detection--recognition)
+15. [Semantic AI Search (Natural Language & Visual Similarity)](#15-semantic-ai-search-natural-language--visual-similarity)
 
 ---
 
@@ -307,13 +308,16 @@ To organize multiple photos simultaneously:
 Double-click any photo card or click the expand icon in the Inspector to enter **Fullscreen Loupe Mode**.
 
 ```
-+-------------------------------------------------------------+
-| [<]                      [ IMAGE ]                      [>] |
-|                                                             |
-|-------------------------------------------------------------|
-| DSC_0042.JPG (14 / 85)   [***..] [✔][✖]  [-] [100%] [+] [X]|
-+-------------------------------------------------------------+
++-------------------------------------------------------------------------+
+| [<]                             [ IMAGE ]                           [>] |
+|                                                                         |
+|-------------------------------------------------------------------------|
+| /photos/vacation/DSC_0042.JPG (14/85) [Edit] [***..] [✔][✖] [-][100%][+][X]|
++-------------------------------------------------------------------------+
 ```
+
+- **File Path Display**: The bottom status bar displays the complete file path of the media item (matching the Inspector panel) with a full path tooltip on hover, providing instant filesystem context.
+- **Launch Photo Editor**: Click the **Edit** button (pencil icon) in the bottom control bar or press <kbd>E</kbd> to open the built-in non-destructive editing suite.
 
 ### Zoom & Pan
 - **Zoom In / Out**: Click the `+` / `−` buttons or use the zoom slider in the loupe toolbar.
@@ -332,6 +336,7 @@ Double-click any photo card or click the expand icon in the Inspector to enter *
 | `-` or `_` | Zoom out |
 | `Z` | Toggle zoom between Fit (100%) and 200% |
 | `Ctrl+0` / `Cmd+0` | Reset zoom to Fit (100%) |
+| `E` | Open Photo Editor (Google Photos-style Quick Edit) |
 | `1` – `5` | Assign 1 to 5 star rating |
 | `0` | Clear rating (0 stars) |
 | `P` | Mark as Pick |
@@ -342,7 +347,128 @@ Double-click any photo card or click the expand icon in the Inspector to enter *
 
 ---
 
-## 7. Inspector & EXIF Metadata
+## 7. Photo Editor & Quick Edit
+
+Imagine includes a comprehensive, browser-native photo editing suite inspired by **Google Photos**, providing non-destructive adjustments, smart AI-like corrections, perspective transformations, and professional color grading without leaving your browser.
+
+### Opening the Editor
+- In the **Fullscreen Loupe Viewer**, click the **Edit** button in the toolbar or press <kbd>E</kbd>.
+- You can also double-click a photo from the grid or inspector preview to open it directly into Loupe mode, then press <kbd>E</kbd>.
+
+```
++---------------------------------------------------------------------------------------------------+
+|  [ Cancel ]                                                                       [ Save Copy ]   |
+|                                                                                                   |
+|                                      [ PREVIEW CANVAS ]                                           |
+|                                                                                                   |
+|---------------------------------------------------------------------------------------------------|
+| [Undo][Redo] | [Rotate][Flip H][Flip V] | [Horiz.] | [Smart Fix (100%)] [Warm][Cool][B&W] | [Compare] |
+|              | Tabs: [Suggestions] [Crop] [Adjust] [Filters]                                      |
++---------------------------------------------------------------------------------------------------+
+```
+
+### 1. Suggestions & Smart Fix
+Designed for rapid, one-tap enhancements:
+- **Smart Fix (<kbd>S</kbd>)**: Analyzes the image's dynamic range and 256-bin RGB histograms.
+  - Automatically stretches contrast using 0.5% percentile shadow/highlight clipping.
+  - Applies adaptive gamma compensation ($\gamma \approx 0.72–1.0$) to lift underexposed shadows without blowing out highlights.
+  - Balances channel means to eliminate unnatural indoor tungsten or cold shadow color casts.
+  - Adds selective vibrance boosts to muted colors while protecting already-saturated skin tones.
+- **Smart Fix Intensity Slider**: Controls the blend amount from 10% to 100% (default 100%).
+- **Quick Style Looks**:
+  - **Warm**: Sets warmth to `+30` and saturation to `+10` for an instant golden-hour aesthetic.
+  - **Cool**: Sets warmth to `-25`, tint to `-5`, and vibrance to `+15` for a crisp, fresh, cinematic look.
+  - **B&W Drama**: Instantly applies the high-contrast *Onyx* monochrome filter preset with deep blacks and punchy whites.
+
+### 2. Crop, Rotate & Horizon Correction
+- **Aspect Ratio Selector**:
+  - `Original`: Constrains crop box to original image proportions.
+  - `Free`: Unconstrained freeform rectangular crop.
+  - `1:1 (Square)`: Ideal for square avatars and social feeds.
+  - `4:3`, `16:9`, `3:2`: Standard photography and widescreen aspect ratios.
+- **Interactive Crop Box**: Drag the corners or edges of the 8-handle crop box with real-time darkened scrim overlays and a pixel dimensions badge.
+- **Rotation & Flipping**:
+  - **Rotate 90° (<kbd>R</kbd>)**: Rotates the image 90 degrees clockwise.
+  - **Flip Horizontal (<kbd>H</kbd>)**: Mirrors the image horizontally.
+  - **Flip Vertical (<kbd>V</kbd>)**: Flips the image vertically.
+- **Straighten Angle Slider**: Rotates between `-45°` and `+45°` with automatic inner-bounding-box scaling so no blank corners appear.
+- **Horizon Correction Tool**:
+  - Click the **Horizon** tool button (level icon) to open dedicated angle controls.
+  - **Angle Slider**: Fine-tune horizon angle from `-45°` to `+45°`.
+  - **Auto Level**: Automatically scans horizontal edge gradient energy across angles from -15° to +15° in 0.5° increments and levels tilted horizons with a single click.
+  - **0° Reset**: Quickly resets the straighten and horizon angle to zero.
+  - **Alignment Grid**: Displays an interactive 3×3 rule-of-thirds grid while adjusting angles or crop.
+
+### 3. Tonal & Color Adjustments
+Granular controls organized into intuitive categories under the **Adjust** tab:
+
+| Category | Control | Range | Description |
+|---|---|---|---|
+| **Light** | Brightness | -100 to 100 | Shifts overall exposure levels. |
+| | Contrast | -100 to 100 | S-curve contrast scaling around midtone gray. |
+| | Highlights | -100 to 100 | Selectively compresses or lifts high-luminance pixels. |
+| | Shadows | -100 to 100 | Recovers shadow details or deepens dark tones. |
+| | Whites | -100 to 100 | Adjusts extreme white point headroom. |
+| | Blacks | -100 to 100 | Deepens or lifts true black clipping point. |
+| **Color** | Saturation | -100 to 100 | Uniform color intensity scaling. |
+| | Warmth | -100 to 100 | Shifts color temperature (blue ↔ amber). |
+| | Tint | -100 to 100 | Green ↔ magenta color balance shift. |
+| | Vibrance | -100 to 100 | Intelligent saturation targeting muted tones while preserving skin. |
+| **Detail** | Sharpness | -100 to 100 | Positive values sharpen fine details via Laplacian convolution; negative values apply smooth, natural softening blur. |
+| **Effects** | Vignette | -100 to 100 | Positive values add classic darkened radial lens falloff; negative values apply a white, high-key radial glow. |
+
+#### Quick Slider Reset
+- **Press <kbd>0</kbd>**: Pressing `0` on your keyboard while focusing any adjustment slider instantly resets its value to 0.
+- **Click Value Badge**: Click directly on the numeric pill badge (e.g., `+25`) next to any slider to reset it to 0.
+- **Reset Adjustments**: Click the reset button in the adjustment panel to restore all sliders to neutral defaults simultaneously.
+
+### 4. Filter Presets
+Imagine includes 12 Google Photos-inspired stylized color presets under the **Filters** tab:
+- **Vivid**: High contrast and punchy color saturation.
+- **West**: Warm, nostalgic tones with rich amber undertones.
+- **Palma**: Slightly brightened, balanced Mediterranean vacation tones.
+- **Metro**: Desaturated urban aesthetic with cool shadows.
+- **Eiffel**: Soft, warm highlights with lifted shadow detail.
+- **Modena**: Moody, high-contrast warmth with deep blacks.
+- **Reel**: Vintage film stock simulation with subtle vignette.
+- **Bazaar**: Rich, saturated exotic warmth.
+- **Alpaca**: Muted contrast, soft highlights, and gentle warmth.
+- **Vista**: Vivid landscape enhancement with deep blues and punchy contrast.
+- **Onyx**: Dramatic, high-contrast black-and-white.
+- **Blush**: Soft portrait warmth with delicate magenta/rose tinting.
+
+Each filter includes an **Intensity Slider** (0% to 100%) allowing you to blend the preset seamlessly with the underlying photo.
+
+### 5. Compare & History
+- **Hold to Compare**: Press & hold the **Compare** button, press and hold directly on the preview canvas, or hold down the <kbd>\</kbd> key to instantly view the unedited original photo. Release to return to your edits.
+- **Undo & Redo**: A 50-step history snapshot stack allows undoing and redoing any edit step via toolbar buttons or shortcuts (<kbd>Ctrl+Z</kbd> / <kbd>Cmd+Z</kbd> and <kbd>Ctrl+Y</kbd> / <kbd>Ctrl+Shift+Z</kbd>).
+- **Discard Unsaved Changes Modal**: If you attempt to close the editor (<kbd>Esc</kbd> or Cancel) after making changes, Imagine displays a styled confirmation dialog prompting to either **Keep Editing** or **Discard Changes**.
+
+### 6. Non-Destructive Export ("Save Copy")
+- Clicking **Save Copy** exports the edited image at **full source camera resolution** with all crops, perspective rotations, adjustments, and filters accurately composited.
+- The exported file is saved as a new JPEG with the `_edit` suffix (e.g. `IMG_0042_edit.jpg`) in the same directory as the original file.
+- All original EXIF metadata (camera, lens, capture timestamp, GPS coordinates) is automatically preserved.
+- The new photo is immediately indexed into the catalog database and assigned to any albums containing the source photo.
+- **The original source photo is never modified or overwritten.**
+
+### Editor Keyboard Shortcuts
+| Key | Action |
+|---|---|
+| <kbd>E</kbd> | Open Photo Editor from Loupe view |
+| <kbd>S</kbd> | Toggle Auto Smart Fix on/off |
+| <kbd>C</kbd> | Toggle Crop tool |
+| <kbd>R</kbd> | Rotate 90° clockwise |
+| <kbd>H</kbd> | Toggle Horizon correction tool (or Flip Horizontal in transform sub-menu) |
+| <kbd>V</kbd> | Flip Vertical |
+| <kbd>\</kbd> (Hold) | Compare with unedited original |
+| <kbd>Ctrl+Z</kbd> / <kbd>Cmd+Z</kbd> | Undo last edit step |
+| <kbd>Ctrl+Y</kbd> / <kbd>Cmd+Y</kbd> | Redo edit step |
+| <kbd>0</kbd> | Reset focused adjustment slider to 0 |
+| <kbd>Esc</kbd> | Cancel / close editor (shows Discard dialog if dirty) |
+
+---
+
+## 8. Inspector & EXIF Metadata
 
 The right-hand **Inspector Panel** provides an exhaustive breakdown of the technical and camera properties for the active photo.
 
@@ -374,7 +500,7 @@ The right-hand **Inspector Panel** provides an exhaustive breakdown of the techn
 
 ---
 
-## 8. Map View & Geotagging
+## 9. Map View & Geotagging
 
 Imagine features an embedded, interactive world map powered by **Leaflet** and **OpenStreetMap**, allowing you to explore your catalog geographically, inspect photo pins, and assign or edit GPS coordinates.
 
@@ -429,7 +555,7 @@ When selecting a photo with GPS metadata:
 
 ---
 
-## 9. CLI Reference
+## 10. CLI Reference
 
 Imagine provides a unified command-line tool (`imagine`) for headless servers, scripts, and automation.
 
@@ -520,7 +646,7 @@ imagine delete <media_id...> [options]
 
 ---
 
-## 10. REST API Reference
+## 11. REST API Reference
 
 The embedded C++ HTTP server provides a full REST API for developers and external integrations.
 
@@ -561,7 +687,7 @@ When `IMAGINE_API_TOKEN` is configured, catalog-changing `POST` and `DELETE` end
 
 ---
 
-## 11. Under the Hood: Database & Cache
+## 12. Under the Hood: Database & Cache
 
 ### SQLite Catalog
 - **Location**: Default is `catalog.db` in your working directory (or any path specified via `--catalog`).
@@ -583,7 +709,7 @@ When `IMAGINE_API_TOKEN` is configured, catalog-changing `POST` and `DELETE` end
 
 ---
 
-## 12. Troubleshooting & FAQ
+## 13. Troubleshooting & FAQ
 
 ### Q: Why do my photos rotate sideways when imported?
 **A**: Imagine automatically reads EXIF orientation tags (1 through 8) and losslessly rotates thumbnails to the correct upright orientation during thumbnail generation.
@@ -603,7 +729,7 @@ Then navigate to `http://<your-server-ip>:8080` from any computer or tablet on y
 
 ---
 
-## 13. Face Detection & Recognition
+## 14. Face Detection & Recognition
 
 Face analysis is an optional local feature. Build with ONNX Runtime support and configure a local `buffalo_l` model folder containing `det_10g.onnx` and `w600k_r50.onnx` before starting the server. See [Face analysis setup](face-analysis-runtime.md) for installation, CPU/CUDA configuration, model-use restrictions, and reference validation.
 
@@ -623,7 +749,7 @@ Analysis does not modify originals or upload photos. Editing the original invali
 
 ---
 
-## 14. Semantic AI Search (Natural Language & Visual Similarity)
+## 15. Semantic AI Search (Natural Language & Visual Similarity)
 
 Imagine includes a local, privacy-first semantic AI search engine powered by OpenAI's CLIP (Contrastive Language-Image Pre-Training) via ONNX Runtime. For complete setup, model specifications, and API documentation, see the [Semantic Search Guide](semantic-search.md).
 

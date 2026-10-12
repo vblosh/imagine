@@ -168,7 +168,10 @@ export function updateLoupeView() {
     }
   }
 
-  if (dom.loupeFileName) dom.loupeFileName.textContent = item.file_name;
+  if (dom.loupeFileName) {
+    dom.loupeFileName.textContent = item.file_path || item.file_name || '-';
+    dom.loupeFileName.title = item.file_path || item.file_name || '';
+  }
   if (dom.loupeIndex) {
     if (state.semanticSearchActive) {
       const rank = item.rank || (state.loupeIndex + 1);

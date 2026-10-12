@@ -347,7 +347,7 @@ def test_save_copy_preserves_loupe_photo_identity(server, page: Page):
     card.dblclick()
     loupe = page.locator("#loupeModal")
     expect(loupe).to_be_visible()
-    expect(page.locator("#loupeFileName")).to_have_text("birthday.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("birthday.bmp")
 
     # Open Quick Edit
     page.locator("#loupeQuickEditBtn").click()
@@ -359,7 +359,7 @@ def test_save_copy_preserves_loupe_photo_identity(server, page: Page):
     expect(page.locator("#toastContainer .toast", has_text="Saved as new copy")).to_be_visible()
 
     # Loupe should still be viewing birthday.bmp, not the newly created copy or previous item
-    expect(page.locator("#loupeFileName")).to_have_text("birthday.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("birthday.bmp")
 
     # Rate the displayed photo with '5'
     page.keyboard.press("5")
@@ -443,7 +443,7 @@ def test_quick_edit_cancel_while_loading_settles_and_restores_buttons(server, pa
 
     # Open Quick Edit on next photo (sunset.bmp)
     page.locator("#loupeNextBtn").click()
-    expect(page.locator("#loupeFileName")).to_have_text("sunset.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("sunset.bmp")
     page.locator("#loupeQuickEditBtn").click()
     expect(page.locator("#quickEditToolbar")).to_be_visible()
 

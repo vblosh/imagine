@@ -124,18 +124,36 @@ import {
   closeQuickEdit,
   rotateLeft,
   rotateRight,
+  toggleFlipH,
+  toggleFlipV,
+  setStraightenAngle,
+  resetStraighten,
+  toggleHorizonTool,
+  autoLevelHorizon,
+  hideDiscardModal,
+  performCloseQuickEdit,
   toggleCrop,
   setCropAspectRatio,
   applyCrop,
   cancelCrop,
   toggleSmartFix,
   setSmartFixIntensity,
+  applyQuickStyle,
+  setAdjustment,
+  resetAdjustments,
+  setFilter,
+  setFilterIntensity,
   startCompare,
   stopCompare,
+  undo,
+  redo,
+  switchTab,
+  pushHistoryState,
   resetAllEdits,
   saveEdits,
   setupCropMouseListeners,
   quickEditState,
+  FILTERS,
   MAX_SMART_FIX_PREVIEW_DIM,
   getFullResolutionExportCanvas
 } from './quick-edit.js';
@@ -1059,28 +1077,210 @@ export function setupEventListeners() {
       }
     });
   }
+  if (dom.editorUndoBtn) dom.editorUndoBtn.addEventListener('click', undo);
+  if (dom.editorRedoBtn) dom.editorRedoBtn.addEventListener('click', redo);
   if (dom.quickEditRotateLeftBtn) dom.quickEditRotateLeftBtn.addEventListener('click', rotateLeft);
   if (dom.quickEditRotateRightBtn) dom.quickEditRotateRightBtn.addEventListener('click', rotateRight);
+  if (dom.editorFlipHBtn) dom.editorFlipHBtn.addEventListener('click', toggleFlipH);
+  if (dom.editorFlipVBtn) dom.editorFlipVBtn.addEventListener('click', toggleFlipV);
+  if (dom.editorStraightenSlider) {
+    let isDragging = false;
+    dom.editorStraightenSlider.addEventListener('input', (e) => {
+      if (!isDragging) {
+        isDragging = true;
+        pushHistoryState();
+      }
+      setStraightenAngle(e.target.value);
+    });
+    dom.editorStraightenSlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+    dom.editorStraightenSlider.addEventListener('blur', () => {
+      isDragging = false;
+    });
+    dom.editorStraightenSlider.addEventListener('keydown', (e) => {
+      if (e.key === '0' || e.code === 'Digit0' || e.code === 'Numpad0') {
+        e.preventDefault();
+        if (quickEditState.straighten !== 0) {
+          pushHistoryState();
+          setStraightenAngle(0);
+        }
+      }
+    });
+  }
+  if (dom.editorStraightenResetBtn) dom.editorStraightenResetBtn.addEventListener('click', resetStraighten);
+
+  // Horizon correction tool
+  if (dom.quickEditHorizonBtn) dom.quickEditHorizonBtn.addEventListener('click', toggleHorizonTool);
+  if (dom.horizonResetBtn) dom.horizonResetBtn.addEventListener('click', resetStraighten);
+  if (dom.horizonAutoBtn) dom.horizonAutoBtn.addEventListener('click', autoLevelHorizon);
+  if (dom.horizonAngleSlider) {
+    let isDragging = false;
+    dom.horizonAngleSlider.addEventListener('input', (e) => {
+      if (!isDragging) {
+        isDragging = true;
+        pushHistoryState();
+      }
+      setStraightenAngle(e.target.value);
+    });
+    dom.horizonAngleSlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+    dom.horizonAngleSlider.addEventListener('blur', () => {
+      isDragging = false;
+    });
+    dom.horizonAngleSlider.addEventListener('keydown', (e) => {
+      if (e.key === '0' || e.code === 'Digit0' || e.code === 'Numpad0') {
+        e.preventDefault();
+        if (quickEditState.straighten !== 0) {
+          pushHistoryState();
+          setStraightenAngle(0);
+        }
+      }
+    });
+  }
+
+  // Tab switching
+  if (dom.editorTabSuggestions) dom.editorTabSuggestions.addEventListener('click', () => switchTab('suggestions'));
+  if (dom.editorTabCrop) dom.editorTabCrop.addEventListener('click', () => switchTab('crop'));
+  if (dom.editorTabAdjust) dom.editorTabAdjust.addEventListener('click', () => switchTab('adjust'));
+  if (dom.editorTabFilters) dom.editorTabFilters.addEventListener('click', () => switchTab('filters'));
+
+  // Quick styles (Suggestions panel)
+  if (dom.panelStyleWarmBtn) dom.panelStyleWarmBtn.addEventListener('click', () => applyQuickStyle('warm'));
+  if (dom.panelStyleCoolBtn) dom.panelStyleCoolBtn.addEventListener('click', () => applyQuickStyle('cool'));
+  if (dom.panelStyleBwBtn) dom.panelStyleBwBtn.addEventListener('click', () => applyQuickStyle('bw_drama'));
+  if (dom.panelFlipHBtn) dom.panelFlipHBtn.addEventListener('click', toggleFlipH);
+  if (dom.panelFlipVBtn) dom.panelFlipVBtn.addEventListener('click', toggleFlipV);
+
+  // Crop controls
   if (dom.quickEditCropBtn) dom.quickEditCropBtn.addEventListener('click', toggleCrop);
   if (dom.cropAspectRatioSelect) {
     dom.cropAspectRatioSelect.addEventListener('change', (e) => setCropAspectRatio(e.target.value));
   }
   if (dom.quickEditApplyCropBtn) dom.quickEditApplyCropBtn.addEventListener('click', applyCrop);
   if (dom.quickEditCancelCropBtn) dom.quickEditCancelCropBtn.addEventListener('click', cancelCrop);
+
+  // Smart fix controls
   if (dom.quickEditSmartFixBtn) dom.quickEditSmartFixBtn.addEventListener('click', toggleSmartFix);
   if (dom.smartFixIntensitySlider) {
-    dom.smartFixIntensitySlider.addEventListener('input', (e) => setSmartFixIntensity(parseInt(e.target.value, 10)));
+    let isDragging = false;
+    dom.smartFixIntensitySlider.addEventListener('input', (e) => {
+      if (!isDragging) {
+        isDragging = true;
+        pushHistoryState();
+      }
+      setSmartFixIntensity(parseInt(e.target.value, 10));
+    });
+    dom.smartFixIntensitySlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+    dom.smartFixIntensitySlider.addEventListener('blur', () => {
+      isDragging = false;
+    });
   }
+
+  // Adjustment sliders
+  const adjKeys = [
+    'brightness', 'contrast', 'highlights', 'shadows', 'whites', 'blacks',
+    'saturation', 'warmth', 'tint', 'vibrance', 'sharpness', 'vignette'
+  ];
+  adjKeys.forEach(k => {
+    const cap = k.charAt(0).toUpperCase() + k.slice(1);
+    const sliderEl = dom[`slider${cap}`];
+    const valEl = dom[`val${cap}`];
+    if (sliderEl) {
+      let isDragging = false;
+      sliderEl.addEventListener('input', (e) => {
+        if (!isDragging) {
+          isDragging = true;
+          pushHistoryState();
+        }
+        setAdjustment(k, e.target.value);
+      });
+      sliderEl.addEventListener('change', () => {
+        isDragging = false;
+      });
+      sliderEl.addEventListener('blur', () => {
+        isDragging = false;
+      });
+      // Requirement 2: pressing '0' resets slider to 0
+      sliderEl.addEventListener('keydown', (e) => {
+        if (e.key === '0' || e.code === 'Digit0' || e.code === 'Numpad0') {
+          e.preventDefault();
+          if (quickEditState.adjustments[k] !== 0) {
+            pushHistoryState();
+            setAdjustment(k, 0);
+          }
+        }
+      });
+    }
+    if (valEl) {
+      valEl.addEventListener('click', () => {
+        if (quickEditState.adjustments[k] !== 0) {
+          pushHistoryState();
+          setAdjustment(k, 0);
+        }
+      });
+      valEl.title = t('click_to_reset_zero');
+    }
+  });
+  if (dom.editorResetAdjustBtn) dom.editorResetAdjustBtn.addEventListener('click', resetAdjustments);
+
+  // Filters strip
+  if (dom.editorFiltersStrip) {
+    dom.editorFiltersStrip.addEventListener('click', (e) => {
+      const chip = e.target.closest('.editor-filter-chip');
+      if (chip && chip.dataset.filter) {
+        setFilter(chip.dataset.filter);
+      }
+    });
+  }
+  if (dom.editorFilterIntensitySlider) {
+    let isDragging = false;
+    dom.editorFilterIntensitySlider.addEventListener('input', (e) => {
+      if (!isDragging) {
+        isDragging = true;
+        pushHistoryState();
+      }
+      setFilterIntensity(e.target.value);
+    });
+    dom.editorFilterIntensitySlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+    dom.editorFilterIntensitySlider.addEventListener('blur', () => {
+      isDragging = false;
+    });
+  }
+
+  // Compare & Canvas hold-to-compare
   if (dom.quickEditCompareBtn) {
     dom.quickEditCompareBtn.addEventListener('pointerdown', startCompare);
     dom.quickEditCompareBtn.addEventListener('pointerup', stopCompare);
     dom.quickEditCompareBtn.addEventListener('pointerleave', stopCompare);
   }
+  if (dom.quickEditCanvas) {
+    dom.quickEditCanvas.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      if (quickEditState.isOpen && !quickEditState.cropActive && !e.target.closest('#cropOverlay')) {
+        startCompare();
+      }
+    });
+    dom.quickEditCanvas.addEventListener('pointerup', stopCompare);
+    dom.quickEditCanvas.addEventListener('pointerleave', stopCompare);
+  }
+
   if (dom.quickEditResetBtn) dom.quickEditResetBtn.addEventListener('click', resetAllEdits);
   if (dom.quickEditCancelBtn) dom.quickEditCancelBtn.addEventListener('click', () => closeQuickEdit(true));
   if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.addEventListener('click', () => saveEdits('overwrite'));
   if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.addEventListener('click', () => saveEdits('copy'));
   setupCropMouseListeners();
+
+  // Discard changes dialog events
+  if (dom.closeDiscardChangesModalBtn) dom.closeDiscardChangesModalBtn.addEventListener('click', hideDiscardModal);
+  if (dom.cancelDiscardChangesBtn) dom.cancelDiscardChangesBtn.addEventListener('click', hideDiscardModal);
+  if (dom.discardChangesBackdrop) dom.discardChangesBackdrop.addEventListener('click', hideDiscardModal);
+  if (dom.confirmDiscardChangesBtn) dom.confirmDiscardChangesBtn.addEventListener('click', performCloseQuickEdit);
 
   // Loupe navigation
   if (dom.loupePrevBtn) dom.loupePrevBtn.addEventListener('click', loupePrev);
@@ -1674,6 +1874,7 @@ const imaginePersistence = {
 
 const imagineQuickEdit = {
   quickEditState,
+  FILTERS,
   MAX_SMART_FIX_PREVIEW_DIM,
   getFullResolutionExportCanvas
 };

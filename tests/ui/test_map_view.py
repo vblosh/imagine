@@ -81,7 +81,7 @@ def test_map_markers_and_popup(server, page: Page):
     # Click Loupe hint in popup to open fullscreen Loupe
     popup.locator(".map-popup-thumb-wrap").click()
     expect(page.locator("#loupeModal")).to_be_visible()
-    expect(page.locator("#loupeFileName")).to_have_text("mountain.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("mountain.bmp")
 
     # Close loupe returns to map view
     page.locator("#loupeCloseBtn").click()

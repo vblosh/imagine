@@ -17,7 +17,7 @@ def test_open_loupe_via_double_click_and_inspector_overlay(server, page: Page):
     card = page.locator(".photo-card", has_text="mountain.bmp")
     card.dblclick()
     expect(loupe).to_be_visible()
-    expect(page.locator("#loupeFileName")).to_have_text("mountain.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("mountain.bmp")
     expect(page.locator("#loupeIndex")).to_contain_text("1 / 6")
     expect(page.locator("#loupeImg")).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
 
@@ -34,7 +34,7 @@ def test_open_loupe_via_double_click_and_inspector_overlay(server, page: Page):
     expect(page.locator("#openLoupeFromInspector")).to_be_visible()
     page.locator("#openLoupeFromInspector").click()
     expect(loupe).to_be_visible()
-    expect(page.locator("#loupeFileName")).to_have_text("mountain.bmp")
+    expect(page.locator("#loupeFileName")).to_contain_text("mountain.bmp")
     expect(page.locator("#loupeImg")).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
     page.locator("#loupeCloseBtn").click()
     expect(loupe).to_be_hidden()

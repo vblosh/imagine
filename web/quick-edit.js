@@ -1,14 +1,19 @@
 /**
- * IMAGINE Photo Organizer - Quick Edit Mode
- * Pure Vanilla JavaScript (Offline-ready, no external dependencies)
+ * IMAGINE Photo Organizer - Google Photos-Style Photo Editor
+ * Pure Vanilla JavaScript (Offline-ready, zero external dependencies)
  *
- * Supports:
- * - Rotate Left (-90°) and Rotate Right (+90°)
- * - Interactive Crop tool with 8 resize handles, rule-of-thirds grid, and aspect ratios
- * - Auto Smart Fix (Dynamic range stretching, auto contrast, midtone gamma exposure, color cast neutralization, vibrance)
- * - Compare (before/after view)
- * - Revert / Reset
- * - Save (in-place overwrite with thumbnail & DB update) and Save Copy
+ * Features:
+ * - 4 Category Tabs: Suggestions (Auto/Enhance & Styles), Crop & Straighten, Adjust, Filters
+ * - Suggestions: One-tap Auto Enhance (Smart Fix) with intensity slider, Quick style looks (Warm, Cool, B&W Drama)
+ * - Crop & Straighten: Aspect ratios, 90° rotate (L/R), Angle straighten (-45°..+45°), Flip H & Flip V, interactive 8-handle crop box
+ * - Adjust: Light (Brightness, Contrast, Highlights, Shadows, Whites, Blacks),
+ *           Color (Saturation, Warmth, Tint, Vibrance),
+ *           Details (Sharpness, Vignette)
+ * - Filters: 12 curated photographic presets (Vivid, West, Palma, Metro, Eiffel, Modena, Reel, Bazaar, Alpaca, Vista, Onyx, Blush) with intensity slider
+ * - Undo & Redo (Ctrl+Z / Ctrl+Y) with full parametric history stack
+ * - Hold-to-Compare (Spacebar or mouse hold) with "ORIGINAL" badge overlay
+ * - Non-destructive in-session adjustments + 60fps real-time preview pipeline + full-resolution pristine export
+ * - Save (in-place overwrite) and Save Copy
  */
 
 import { normalizeMediaItem, getOriginalMediaUrl, getAuthHeaders } from "./api.js";
@@ -16,6 +21,37 @@ import { state } from "./state.js";
 import { dom, showToast } from "./dom.js";
 import { renderGrid } from "./grid.js";
 import { t } from "./i18n.js";
+
+export const DEFAULT_ADJUSTMENTS = Object.freeze({
+  brightness: 0,
+  contrast: 0,
+  highlights: 0,
+  shadows: 0,
+  whites: 0,
+  blacks: 0,
+  saturation: 0,
+  warmth: 0,
+  tint: 0,
+  vibrance: 0,
+  sharpness: 0,
+  vignette: 0,
+});
+
+export const FILTERS = {
+  none: { name: "Original", adjust: null },
+  vivid: { name: "Vivid", adjust: { contrast: 25, saturation: 35, warmth: 5 } },
+  west: { name: "West", adjust: { contrast: 10, warmth: 35, tint: 5, saturation: 10 } },
+  palma: { name: "Palma", adjust: { brightness: 5, contrast: 20, saturation: 20, warmth: -10 } },
+  metro: { name: "Metro", adjust: { contrast: 15, saturation: -25, tint: -10, warmth: -15 } },
+  eiffel: { name: "Eiffel", adjust: { brightness: 5, contrast: -10, warmth: 25, shadows: 20, saturation: -10 } },
+  modena: { name: "Modena", adjust: { contrast: 35, warmth: 15, shadows: -15, blacks: -10 } },
+  reel: { name: "Reel", adjust: { contrast: 15, warmth: 10, tint: -10, saturation: -15, vignette: 20 } },
+  bazaar: { name: "Bazaar", adjust: { brightness: 5, contrast: 20, saturation: 30, warmth: 30 } },
+  alpaca: { name: "Alpaca", adjust: { brightness: 10, contrast: -15, saturation: -10, warmth: 15, highlights: -10 } },
+  vista: { name: "Vista", adjust: { contrast: 20, saturation: 35, warmth: -5, highlights: 10 } },
+  onyx: { name: "Onyx", isBw: true, adjust: { contrast: 30, blacks: -15, whites: 15 } },
+  blush: { name: "Blush", adjust: { brightness: 8, contrast: -5, warmth: 15, tint: 25, saturation: 10 } },
+};
 
 export const quickEditState = {
   isOpen: false,
@@ -25,11 +61,15 @@ export const quickEditState = {
   originalImage: null,
   workingCanvas: null,
   workingCtx: null,
+  previewCanvas: null,
   hasCropped: false,
   normalizedCrop: null,
   imageLoadedPromise: null,
   imageLoadedReject: null,
   rotation: 0,
+  straighten: 0,
+  flipH: false,
+  flipV: false,
   cropActive: false,
   cropRatio: "original",
   cropBox: { x: 0, y: 0, w: 0, h: 0 },
@@ -39,11 +79,17 @@ export const quickEditState = {
   smartFixIntensity: 100,
   isComparing: false,
   smartFixLUT: null,
-  previewCanvas: null,
+  activeTab: "suggestions",
+  adjustments: { ...DEFAULT_ADJUSTMENTS },
+  filter: "none",
+  filterIntensity: 100,
+  history: [],
+  redoStack: [],
 };
 
 export const MAX_SMART_FIX_PREVIEW_DIM = 1200;
 
+/* Smart Fix LUT histogram calculation */
 function computeSmartFixLUT(imgData) {
   const data = imgData.data;
   const len = data.length;
@@ -70,7 +116,6 @@ function computeSmartFixLUT(imgData) {
   const avgLum = 0.299 * avgR + 0.587 * avgG + 0.114 * avgB;
 
   const clipLow = sampledCount * 0.005;
-  const clipHigh = sampledCount * 0.995;
 
   function findCutoffs(hist) {
     let count = 0;
@@ -127,35 +172,123 @@ function computeSmartFixLUT(imgData) {
   return { lutR, lutG, lutB };
 }
 
-function applySmartFixToImageData(srcData, dstData, lut, intensity) {
-  const { lutR, lutG, lutB } = lut;
-  const src = srcData.data;
-  const dst = dstData.data;
-  const len = src.length;
-  const alpha = intensity / 100;
-  const oneMinusAlpha = 1 - alpha;
-
-  for (let i = 0; i < len; i += 4) {
-    let r = lutR[src[i]];
-    let g = lutG[src[i + 1]];
-    let b = lutB[src[i + 2]];
-
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const sat = max > 0 ? (max - min) / max : 0;
-    const boost = (1 - sat) * 0.12;
-    const avg = (r + g + b) / 3;
-    r = Math.min(255, Math.max(0, r + (r - avg) * boost));
-    g = Math.min(255, Math.max(0, g + (g - avg) * boost));
-    b = Math.min(255, Math.max(0, b + (b - avg) * boost));
-
-    dst[i] = Math.round(src[i] * oneMinusAlpha + r * alpha);
-    dst[i + 1] = Math.round(src[i + 1] * oneMinusAlpha + g * alpha);
-    dst[i + 2] = Math.round(src[i + 2] * oneMinusAlpha + b * alpha);
-    dst[i + 3] = src[i + 3];
-  }
+/* History Stack Management */
+export function captureStateSnapshot() {
+  return {
+    workingCanvas: quickEditState.workingCanvas,
+    rotation: quickEditState.rotation,
+    straighten: quickEditState.straighten,
+    flipH: quickEditState.flipH,
+    flipV: quickEditState.flipV,
+    hasCropped: quickEditState.hasCropped,
+    normalizedCrop: quickEditState.normalizedCrop ? { ...quickEditState.normalizedCrop } : null,
+    smartFixActive: quickEditState.smartFixActive,
+    smartFixIntensity: quickEditState.smartFixIntensity,
+    adjustments: { ...quickEditState.adjustments },
+    filter: quickEditState.filter,
+    filterIntensity: quickEditState.filterIntensity,
+  };
 }
 
+export function pushHistoryState() {
+  quickEditState.history.push(captureStateSnapshot());
+  if (quickEditState.history.length > 100) quickEditState.history.shift();
+  quickEditState.redoStack = [];
+  quickEditState.isDirty = true;
+  updateUndoRedoUI();
+}
+
+function applyStateSnapshot(snap) {
+  if (!snap) return;
+  if (snap.workingCanvas) {
+    quickEditState.workingCanvas = snap.workingCanvas;
+    quickEditState.workingCtx = snap.workingCanvas.getContext("2d");
+  }
+  quickEditState.rotation = snap.rotation || 0;
+  quickEditState.straighten = snap.straighten || 0;
+  quickEditState.flipH = !!snap.flipH;
+  quickEditState.flipV = !!snap.flipV;
+  quickEditState.hasCropped = !!snap.hasCropped;
+  quickEditState.normalizedCrop = snap.normalizedCrop ? { ...snap.normalizedCrop } : null;
+  quickEditState.smartFixActive = !!snap.smartFixActive;
+  quickEditState.smartFixIntensity = snap.smartFixIntensity ?? 100;
+  quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS, ...(snap.adjustments || {}) };
+  quickEditState.filter = snap.filter || "none";
+  quickEditState.filterIntensity = snap.filterIntensity ?? 100;
+  quickEditState.smartFixLUT = null;
+  quickEditState.previewCanvas = null;
+}
+
+export function undo() {
+  if (!quickEditState.isOpen || quickEditState.history.length === 0) return;
+  const current = captureStateSnapshot();
+  quickEditState.redoStack.push(current);
+  const prev = quickEditState.history.pop();
+  applyStateSnapshot(prev);
+  quickEditState.isDirty = quickEditState.history.length > 0;
+  updateUndoRedoUI();
+  updateQuickEditToolbarUI();
+  renderQuickEditCanvas();
+}
+
+export function redo() {
+  if (!quickEditState.isOpen || quickEditState.redoStack.length === 0) return;
+  const current = captureStateSnapshot();
+  quickEditState.history.push(current);
+  const next = quickEditState.redoStack.pop();
+  applyStateSnapshot(next);
+  quickEditState.isDirty = true;
+  updateUndoRedoUI();
+  updateQuickEditToolbarUI();
+  renderQuickEditCanvas();
+}
+
+export function updateUndoRedoUI() {
+  if (dom.editorUndoBtn) dom.editorUndoBtn.disabled = quickEditState.history.length === 0;
+  if (dom.editorRedoBtn) dom.editorRedoBtn.disabled = quickEditState.redoStack.length === 0;
+}
+
+export function updateStraightenGridOverlay() {
+  if (!dom.straightenGridOverlay) return;
+  const isCropActive = quickEditState.activeTab === "crop" || quickEditState.cropActive;
+  const isHorizonOpen = dom.horizonSubOptions && dom.horizonSubOptions.style.display !== "none";
+  const hasStraighten = quickEditState.straighten !== 0;
+  dom.straightenGridOverlay.style.display = (isCropActive && hasStraighten) || isHorizonOpen ? "block" : "none";
+}
+
+/* Tab Management */
+export function switchTab(tabName) {
+  if (!quickEditState.isOpen) return;
+
+  const tabs = [
+    { name: "suggestions", btn: dom.editorTabSuggestions, panel: dom.editorPanelSuggestions },
+    { name: "crop", btn: dom.editorTabCrop, panel: dom.editorPanelCrop },
+    { name: "adjust", btn: dom.editorTabAdjust, panel: dom.editorPanelAdjust },
+    { name: "filters", btn: dom.editorTabFilters, panel: dom.editorPanelFilters },
+  ];
+
+  if (quickEditState.activeTab === tabName) {
+    quickEditState.activeTab = null;
+    tabs.forEach(t => {
+      if (t.btn) t.btn.classList.remove("active");
+      if (t.panel) t.panel.style.display = "none";
+    });
+    updateStraightenGridOverlay();
+    return;
+  }
+
+  quickEditState.activeTab = tabName;
+
+  tabs.forEach(t => {
+    const isActive = t.name === tabName;
+    if (t.btn) t.btn.classList.toggle("active", isActive);
+    if (t.panel) t.panel.style.display = isActive ? "flex" : "none";
+  });
+
+  updateStraightenGridOverlay();
+}
+
+/* Open / Close Quick Edit */
 export function openQuickEdit() {
   if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return;
   const item = state.mediaItems[state.loupeIndex];
@@ -166,6 +299,9 @@ export function openQuickEdit() {
   quickEditState.isOriginalLoaded = false;
   quickEditState.photoId = item.id;
   quickEditState.rotation = 0;
+  quickEditState.straighten = 0;
+  quickEditState.flipH = false;
+  quickEditState.flipV = false;
   quickEditState.cropActive = false;
   quickEditState.hasCropped = false;
   quickEditState.normalizedCrop = null;
@@ -173,13 +309,22 @@ export function openQuickEdit() {
   quickEditState.smartFixIntensity = 100;
   quickEditState.isComparing = false;
   quickEditState.smartFixLUT = null;
+  quickEditState.activeTab = null;
+  quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS };
+  quickEditState.filter = "none";
+  quickEditState.filterIntensity = 100;
+  quickEditState.history = [];
+  quickEditState.redoStack = [];
 
   if (dom.loupeModal) dom.loupeModal.classList.add("is-quick-editing");
   if (dom.loupeQuickEditBtn) dom.loupeQuickEditBtn.classList.add("active");
   if (dom.quickEditToolbar) dom.quickEditToolbar.style.display = "flex";
   if (dom.quickEditContainer) dom.quickEditContainer.style.display = "flex";
   if (dom.loupeImg) dom.loupeImg.style.display = "none";
+  if (dom.editorCompareBadge) dom.editorCompareBadge.style.display = "none";
+  if (dom.straightenGridOverlay) dom.straightenGridOverlay.style.display = "none";
 
+  updateUndoRedoUI();
   updateQuickEditToolbarUI();
 
   const w = item.width || (dom.loupeImg && dom.loupeImg.naturalWidth) || 800;
@@ -298,15 +443,32 @@ export function openQuickEdit() {
   img.src = targetOriginalUrl;
 }
 
+export function showDiscardModal() {
+  if (dom.discardChangesModal) {
+    dom.discardChangesModal.style.display = "flex";
+    if (dom.confirmDiscardChangesBtn) dom.confirmDiscardChangesBtn.focus();
+  }
+}
+
+export function hideDiscardModal() {
+  if (dom.discardChangesModal) {
+    dom.discardChangesModal.style.display = "none";
+  }
+}
+
 export function closeQuickEdit(promptIfDirty = true) {
   if (!quickEditState.isOpen) return;
 
   if (promptIfDirty && quickEditState.isDirty) {
-    if (!window.confirm("Discard unsaved changes?")) {
-      return;
-    }
+    showDiscardModal();
+    return;
   }
 
+  performCloseQuickEdit();
+}
+
+export function performCloseQuickEdit() {
+  hideDiscardModal();
   if (quickEditState.imageLoadedReject) {
     try {
       quickEditState.imageLoadedReject(new Error("Quick edit cancelled"));
@@ -321,16 +483,29 @@ export function closeQuickEdit(promptIfDirty = true) {
   quickEditState.hasCropped = false;
   quickEditState.normalizedCrop = null;
   quickEditState.imageLoadedPromise = null;
+  quickEditState.history = [];
+  quickEditState.redoStack = [];
 
   if (dom.loupeModal) dom.loupeModal.classList.remove("is-quick-editing");
   if (dom.loupeQuickEditBtn) dom.loupeQuickEditBtn.classList.remove("active");
   if (dom.quickEditToolbar) dom.quickEditToolbar.style.display = "none";
   if (dom.quickEditContainer) dom.quickEditContainer.style.display = "none";
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
+  if (dom.editorCompareBadge) dom.editorCompareBadge.style.display = "none";
+  if (dom.straightenGridOverlay) dom.straightenGridOverlay.style.display = "none";
+  if (dom.horizonSubOptions) dom.horizonSubOptions.style.display = "none";
+  if (dom.quickEditHorizonBtn) dom.quickEditHorizonBtn.classList.remove("active");
   if (dom.loupeImg) dom.loupeImg.style.display = "";
 
   if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = false;
   if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.disabled = false;
+  if (dom.quickEditSmartFixBtn) dom.quickEditSmartFixBtn.classList.remove("active");
+  if (dom.smartFixSubOptions) dom.smartFixSubOptions.style.display = "none";
+  if (dom.cropSubOptions) dom.cropSubOptions.style.display = "none";
+  if (dom.quickEditCropBtn) dom.quickEditCropBtn.classList.remove("active");
+
+  if (dom.loupePrevBtn) dom.loupePrevBtn.style.display = "";
+  if (dom.loupeNextBtn) dom.loupeNextBtn.style.display = "";
 
   quickEditState.originalImage = null;
   quickEditState.workingCanvas = null;
@@ -351,10 +526,11 @@ function initWorkingCanvas(img) {
   quickEditState.smartFixLUT = null;
 }
 
+/* Rotation and Flips */
 export function rotateLeft() {
   if (!quickEditState.isOpen) return;
+  pushHistoryState();
   quickEditState.rotation = (quickEditState.rotation - 90 + 360) % 360;
-  quickEditState.isDirty = true;
   if (quickEditState.cropActive) {
     initCropBox();
   }
@@ -363,14 +539,218 @@ export function rotateLeft() {
 
 export function rotateRight() {
   if (!quickEditState.isOpen) return;
+  pushHistoryState();
   quickEditState.rotation = (quickEditState.rotation + 90) % 360;
-  quickEditState.isDirty = true;
   if (quickEditState.cropActive) {
     initCropBox();
   }
   renderQuickEditCanvas();
 }
 
+export function toggleFlipH() {
+  if (!quickEditState.isOpen) return;
+  pushHistoryState();
+  quickEditState.flipH = !quickEditState.flipH;
+  if (dom.editorFlipHBtn) dom.editorFlipHBtn.classList.toggle("active", quickEditState.flipH);
+  renderQuickEditCanvas();
+}
+
+export function toggleFlipV() {
+  if (!quickEditState.isOpen) return;
+  pushHistoryState();
+  quickEditState.flipV = !quickEditState.flipV;
+  if (dom.editorFlipVBtn) dom.editorFlipVBtn.classList.toggle("active", quickEditState.flipV);
+  renderQuickEditCanvas();
+}
+
+export function setStraightenAngle(angleDeg) {
+  if (!quickEditState.isOpen) return;
+  quickEditState.straighten = Math.max(-45, Math.min(45, parseFloat(angleDeg) || 0));
+  if (dom.editorStraightenSlider) dom.editorStraightenSlider.value = quickEditState.straighten;
+  if (dom.editorStraightenVal) dom.editorStraightenVal.textContent = `${quickEditState.straighten}°`;
+  if (dom.horizonAngleSlider) dom.horizonAngleSlider.value = quickEditState.straighten;
+  if (dom.horizonAngleVal) dom.horizonAngleVal.textContent = `${quickEditState.straighten}°`;
+  updateStraightenGridOverlay();
+  quickEditState.isDirty = true;
+  renderQuickEditCanvas();
+}
+
+export function resetStraighten() {
+  if (!quickEditState.isOpen) return;
+  if (quickEditState.straighten !== 0) {
+    pushHistoryState();
+  }
+  setStraightenAngle(0);
+}
+
+export function toggleHorizonTool() {
+  if (!quickEditState.isOpen) return;
+  const isOpening = !dom.horizonSubOptions || dom.horizonSubOptions.style.display === "none";
+  if (dom.horizonSubOptions) {
+    dom.horizonSubOptions.style.display = isOpening ? "flex" : "none";
+  }
+  if (dom.quickEditHorizonBtn) {
+    dom.quickEditHorizonBtn.classList.toggle("active", isOpening);
+  }
+  updateStraightenGridOverlay();
+}
+
+export function autoLevelHorizon() {
+  if (!quickEditState.isOpen || !quickEditState.workingCanvas) return;
+  pushHistoryState();
+
+  const src = quickEditState.workingCanvas;
+  const rot = quickEditState.rotation || 0;
+  const is90or270 = rot === 90 || rot === 270;
+  const origW = is90or270 ? src.height : src.width;
+  const origH = is90or270 ? src.width : src.height;
+
+  const maxDim = 320;
+  let sampleW = origW;
+  let sampleH = origH;
+  if (sampleW > maxDim || sampleH > maxDim) {
+    if (sampleW >= sampleH) {
+      sampleH = Math.max(20, Math.round((sampleH * maxDim) / sampleW));
+      sampleW = maxDim;
+    } else {
+      sampleW = Math.max(20, Math.round((sampleW * maxDim) / sampleH));
+      sampleH = maxDim;
+    }
+  }
+
+  const sampleCanvas = document.createElement("canvas");
+  sampleCanvas.width = sampleW;
+  sampleCanvas.height = sampleH;
+  const sCtx = sampleCanvas.getContext("2d");
+
+  // Render proportional sample canvas with 90° rotation if applied
+  sCtx.save();
+  sCtx.translate(sampleW / 2, sampleH / 2);
+  sCtx.rotate((rot * Math.PI) / 180);
+  const srcSampleW = is90or270 ? sampleH : sampleW;
+  const srcSampleH = is90or270 ? sampleW : sampleH;
+  sCtx.drawImage(src, -srcSampleW / 2, -srcSampleH / 2, srcSampleW, srcSampleH);
+  sCtx.restore();
+
+  const imgData = sCtx.getImageData(0, 0, sampleW, sampleH);
+  const data = imgData.data;
+
+  // Convert to luminance array
+  const gray = new Float32Array(sampleW * sampleH);
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    gray[j] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+  }
+
+  const xc = sampleW / 2;
+  const numSectors = 16;
+  const sectorW = sampleW / numSectors;
+
+  const edgeXs = [];
+  const edgeYs = [];
+  const edgeMags = [];
+  const edgeSectors = [];
+
+  // Gradient computation & near-horizontal edge extraction
+  function findEdges(gyThresh, gxRatio) {
+    edgeXs.length = 0;
+    edgeYs.length = 0;
+    edgeMags.length = 0;
+    edgeSectors.length = 0;
+    for (let y = 1; y < sampleH - 1; y++) {
+      const rowOffset = y * sampleW;
+      for (let x = 1; x < sampleW - 1; x++) {
+        const idx = rowOffset + x;
+        const gx = (gray[idx + 1] - gray[idx - 1]) * 0.5;
+        const gy = (gray[idx + sampleW] - gray[idx - sampleW]) * 0.5;
+        const absGx = Math.abs(gx);
+        const absGy = Math.abs(gy);
+
+        // Near-horizontal edges: vertical gradient dominates horizontal gradient
+        if (absGy >= gyThresh && absGx <= absGy * gxRatio) {
+          const mag = Math.hypot(gx, gy);
+          const sector = Math.min(numSectors - 1, Math.max(0, Math.floor(x / sectorW)));
+          edgeXs.push(x);
+          edgeYs.push(y);
+          edgeMags.push(mag);
+          edgeSectors.push(sector);
+        }
+      }
+    }
+  }
+
+  findEdges(18, 0.5);
+  if (edgeXs.length < 40) {
+    findEdges(10, 0.6);
+  }
+
+  const numEdges = edgeXs.length;
+  if (numEdges < 30) {
+    setStraightenAngle(0);
+    return;
+  }
+
+  const rowWeight = new Float32Array(sampleH);
+  const rowSectors = new Uint16Array(sampleH);
+
+  let bestAngle = 0;
+  let bestScore = 0;
+
+  // Search tilt angles in range -15°..+15° at 0.5° steps
+  for (let deg = -15.0; deg <= 15.05; deg += 0.5) {
+    rowWeight.fill(0);
+    rowSectors.fill(0);
+
+    const rad = (deg * Math.PI) / 180;
+    const tanR = Math.tan(rad);
+
+    for (let i = 0; i < numEdges; i++) {
+      const x = edgeXs[i];
+      const y = edgeYs[i];
+      const y0 = Math.round(y - (x - xc) * tanR);
+
+      if (y0 >= 5 && y0 < sampleH - 5) {
+        rowWeight[y0] += edgeMags[i];
+        rowSectors[y0] |= (1 << edgeSectors[i]);
+      }
+    }
+
+    // Evaluate candidate lines across rows
+    for (let r = 5; r < sampleH - 5; r++) {
+      const mask = rowSectors[r];
+      if (!mask) continue;
+
+      let cov = 0;
+      let m = mask;
+      while (m > 0) {
+        cov += m & 1;
+        m >>= 1;
+      }
+
+      // A dominant horizon must span across significant width (>= 6 sectors out of 16)
+      if (cov >= 6) {
+        const covRatio = cov / numSectors;
+        const score = rowWeight[r] * covRatio * covRatio;
+        if (score > bestScore) {
+          bestScore = score;
+          bestAngle = deg;
+        }
+      }
+    }
+  }
+
+  // Minimum confidence threshold to prevent false corrections on uniform or non-landscape images
+  const CONFIDENCE_THRESHOLD = 600;
+  if (bestScore < CONFIDENCE_THRESHOLD) {
+    setStraightenAngle(0);
+    return;
+  }
+
+  const targetAngle = Math.round(bestAngle * 2) / 2;
+  const correctionAngle = targetAngle === 0 ? 0 : -targetAngle;
+  setStraightenAngle(correctionAngle);
+}
+
+/* Crop Tool */
 export function toggleCrop() {
   if (!quickEditState.isOpen) return;
   quickEditState.cropActive = !quickEditState.cropActive;
@@ -382,6 +762,7 @@ export function toggleCrop() {
   } else {
     if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
   }
+  updateStraightenGridOverlay();
 }
 
 export function setCropAspectRatio(ratio) {
@@ -449,6 +830,7 @@ function getNumericAspectRatio(ratioName, currentW, currentH) {
     case "4:3": return 4 / 3;
     case "16:9": return 16 / 9;
     case "3:2": return 3 / 2;
+    case "5:4": return 5 / 4;
     case "free":
     default: return null;
   }
@@ -516,29 +898,42 @@ export function applyCrop() {
 
   if (srcW <= 10 || srcH <= 10) return;
 
+  pushHistoryState();
+
   const croppedCanvas = document.createElement("canvas");
   croppedCanvas.width = srcW;
   croppedCanvas.height = srcH;
   const croppedCtx = croppedCanvas.getContext("2d");
 
-  // Crop from full-resolution rotated source so crop is never degraded by preview downsampling
   const rot = quickEditState.rotation;
+  const straighten = quickEditState.straighten;
+  const flipH = quickEditState.flipH;
+  const flipV = quickEditState.flipV;
   const srcCanvas = quickEditState.workingCanvas;
-  const fullRotCanvas = document.createElement("canvas");
-  fullRotCanvas.width = canvas.width;
-  fullRotCanvas.height = canvas.height;
-  const fullRotCtx = fullRotCanvas.getContext("2d");
-  fullRotCtx.save();
-  fullRotCtx.translate(canvas.width / 2, canvas.height / 2);
-  fullRotCtx.rotate((rot * Math.PI) / 180);
-  fullRotCtx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
-  fullRotCtx.restore();
+  const fullTransformedCanvas = document.createElement("canvas");
+  fullTransformedCanvas.width = canvas.width;
+  fullTransformedCanvas.height = canvas.height;
+  const fullCtx = fullTransformedCanvas.getContext("2d");
+  fullCtx.save();
+  fullCtx.translate(canvas.width / 2, canvas.height / 2);
+  const totalAngleDeg = rot + straighten;
+  fullCtx.rotate((totalAngleDeg * Math.PI) / 180);
+  const rad = Math.abs((straighten * Math.PI) / 180);
+  const sFactor = straighten !== 0
+    ? Math.cos(rad) + Math.max(canvas.height / canvas.width, canvas.width / canvas.height) * Math.sin(rad)
+    : 1;
+  fullCtx.scale((flipH ? -1 : 1) * sFactor, (flipV ? -1 : 1) * sFactor);
+  fullCtx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
+  fullCtx.restore();
 
-  croppedCtx.drawImage(fullRotCanvas, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+  croppedCtx.drawImage(fullTransformedCanvas, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
 
   quickEditState.workingCanvas = croppedCanvas;
   quickEditState.workingCtx = croppedCtx;
   quickEditState.rotation = 0;
+  quickEditState.straighten = 0;
+  quickEditState.flipH = false;
+  quickEditState.flipV = false;
   quickEditState.cropActive = false;
   quickEditState.hasCropped = true;
   quickEditState.normalizedCrop = {
@@ -553,6 +948,7 @@ export function applyCrop() {
   quickEditState.previewCanvas = null;
 
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
+  updateStraightenGridOverlay();
   updateQuickEditToolbarUI();
   renderQuickEditCanvas();
 }
@@ -561,13 +957,15 @@ export function cancelCrop() {
   if (!quickEditState.isOpen) return;
   quickEditState.cropActive = false;
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
+  updateStraightenGridOverlay();
   updateQuickEditToolbarUI();
 }
 
+/* Suggestions & Smart Fix */
 export function toggleSmartFix() {
   if (!quickEditState.isOpen) return;
+  pushHistoryState();
   quickEditState.smartFixActive = !quickEditState.smartFixActive;
-  quickEditState.isDirty = true;
   updateQuickEditToolbarUI();
   renderQuickEditCanvas();
 }
@@ -580,10 +978,81 @@ export function setSmartFixIntensity(val) {
   renderQuickEditCanvas();
 }
 
+export function applyQuickStyle(styleName) {
+  if (!quickEditState.isOpen) return;
+  pushHistoryState();
+  if (styleName === "warm") {
+    quickEditState.adjustments.warmth = 30;
+    quickEditState.adjustments.saturation = 10;
+  } else if (styleName === "cool") {
+    quickEditState.adjustments.warmth = -25;
+    quickEditState.adjustments.tint = -5;
+    quickEditState.adjustments.vibrance = 15;
+  } else if (styleName === "bw_drama") {
+    quickEditState.filter = "onyx";
+    quickEditState.filterIntensity = 100;
+  }
+  updateQuickEditToolbarUI();
+  renderQuickEditCanvas();
+}
+
+/* Adjustments */
+export function setAdjustment(key, val) {
+  if (!quickEditState.isOpen) return;
+  quickEditState.adjustments[key] = parseFloat(val) || 0;
+  quickEditState.isDirty = true;
+  updateAdjustmentUI(key);
+  renderQuickEditCanvas();
+}
+
+export function resetAdjustments() {
+  if (!quickEditState.isOpen) return;
+  pushHistoryState();
+  quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS };
+  updateQuickEditToolbarUI();
+  renderQuickEditCanvas();
+}
+
+function updateAdjustmentUI(key) {
+  const cap = key.charAt(0).toUpperCase() + key.slice(1);
+  const sliderEl = dom[`slider${cap}`];
+  const valEl = dom[`val${cap}`];
+  const val = quickEditState.adjustments[key] ?? 0;
+  if (sliderEl) sliderEl.value = val;
+  if (valEl) {
+    if (val > 0) {
+      valEl.textContent = `+${val}`;
+    } else {
+      valEl.textContent = `${val}`;
+    }
+  }
+}
+
+/* Filter presets */
+export function setFilter(filterName) {
+  if (!quickEditState.isOpen || !FILTERS[filterName]) return;
+  pushHistoryState();
+  quickEditState.filter = filterName;
+  updateQuickEditToolbarUI();
+  renderQuickEditCanvas();
+}
+
+export function setFilterIntensity(val) {
+  if (!quickEditState.isOpen) return;
+  const num = parseInt(val, 10);
+  quickEditState.filterIntensity = Math.max(0, Math.min(100, isNaN(num) ? 100 : num));
+  if (dom.editorFilterIntensitySlider) dom.editorFilterIntensitySlider.value = quickEditState.filterIntensity;
+  if (dom.editorFilterIntensityVal) dom.editorFilterIntensityVal.textContent = `${quickEditState.filterIntensity}%`;
+  quickEditState.isDirty = true;
+  renderQuickEditCanvas();
+}
+
+/* Compare Mode */
 export function startCompare() {
   if (!quickEditState.isOpen) return;
   quickEditState.isComparing = true;
   if (dom.quickEditCompareBtn) dom.quickEditCompareBtn.classList.add("active");
+  if (dom.editorCompareBadge) dom.editorCompareBadge.style.display = "block";
   renderQuickEditCanvas();
 }
 
@@ -591,33 +1060,297 @@ export function stopCompare() {
   if (!quickEditState.isOpen) return;
   quickEditState.isComparing = false;
   if (dom.quickEditCompareBtn) dom.quickEditCompareBtn.classList.remove("active");
+  if (dom.editorCompareBadge) dom.editorCompareBadge.style.display = "none";
   renderQuickEditCanvas();
 }
 
+/* Reset All */
 export function resetAllEdits() {
   if (!quickEditState.isOpen || !quickEditState.originalImage) return;
 
+  pushHistoryState();
   initWorkingCanvas(quickEditState.originalImage);
   quickEditState.rotation = 0;
+  quickEditState.straighten = 0;
+  quickEditState.flipH = false;
+  quickEditState.flipV = false;
   quickEditState.cropActive = false;
   quickEditState.hasCropped = false;
   quickEditState.normalizedCrop = null;
   quickEditState.smartFixActive = false;
   quickEditState.smartFixIntensity = 100;
+  quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS };
+  quickEditState.filter = "none";
+  quickEditState.filterIntensity = 100;
   quickEditState.isDirty = false;
   quickEditState.smartFixLUT = null;
+  quickEditState.history = [];
+  quickEditState.redoStack = [];
 
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
+  updateStraightenGridOverlay();
+  updateUndoRedoUI();
   updateQuickEditToolbarUI();
   renderQuickEditCanvas();
 }
 
+/* Pixel Shader Math: Combine SmartFix, Adjustments, and Filters into single pass */
+function processImageDataInPlace(imgData) {
+  const data = imgData.data;
+  const len = data.length;
+
+  const {
+    brightness, contrast, highlights, shadows, whites, blacks,
+    saturation, warmth, tint, vibrance,
+  } = quickEditState.adjustments;
+
+  const hasSmartFix = quickEditState.smartFixActive && quickEditState.smartFixLUT;
+  const sfLUT = hasSmartFix ? quickEditState.smartFixLUT : null;
+  const sfAlpha = quickEditState.smartFixIntensity / 100;
+
+  // Active filter
+  const filterKey = quickEditState.filter;
+  const filterDef = FILTERS[filterKey] || FILTERS.none;
+  const isFilterActive = filterKey !== "none";
+  const filterAlpha = quickEditState.filterIntensity / 100;
+
+  // Contrast scale factor
+  const cFactor = (259 * (contrast + 255)) / (255 * (259 - contrast) || 1);
+  const bOffset = brightness * 1.28;
+
+  // Filter adjustment overlay
+  const fAdj = filterDef.adjust || {};
+  const fContrastFactor = fAdj.contrast ? (259 * (fAdj.contrast + 255)) / (255 * (259 - fAdj.contrast) || 1) : 1;
+  const fSatBoost = (fAdj.saturation || 0) / 100;
+  const fWarmth = (fAdj.warmth || 0) * 0.4;
+  const fTint = (fAdj.tint || 0) * 0.3;
+  const fBrightness = (fAdj.brightness || 0) * 1.28;
+  const fHighlights = fAdj.highlights || 0;
+  const fShadows = fAdj.shadows || 0;
+  const fWhites = fAdj.whites || 0;
+  const fBlacks = fAdj.blacks || 0;
+
+  // Pixel loop
+  for (let i = 0; i < len; i += 4) {
+    let r = data[i];
+    let g = data[i + 1];
+    let b = data[i + 2];
+
+    // 1. Smart Fix (if active)
+    if (hasSmartFix) {
+      let sfr = sfLUT.lutR[r];
+      let sfg = sfLUT.lutG[g];
+      let sfb = sfLUT.lutB[b];
+      const max = Math.max(sfr, sfg, sfb);
+      const min = Math.min(sfr, sfg, sfb);
+      const sat = max > 0 ? (max - min) / max : 0;
+      const boost = (1 - sat) * 0.12;
+      const avg = (sfr + sfg + sfb) / 3;
+      sfr = Math.min(255, Math.max(0, sfr + (sfr - avg) * boost));
+      sfg = Math.min(255, Math.max(0, sfg + (sfg - avg) * boost));
+      sfb = Math.min(255, Math.max(0, sfb + (sfb - avg) * boost));
+
+      r = r * (1 - sfAlpha) + sfr * sfAlpha;
+      g = g * (1 - sfAlpha) + sfg * sfAlpha;
+      b = b * (1 - sfAlpha) + sfb * sfAlpha;
+    }
+
+    // 2. Brightness & Contrast
+    if (brightness !== 0 || contrast !== 0) {
+      r = (r - 128) * cFactor + 128 + bOffset;
+      g = (g - 128) * cFactor + 128 + bOffset;
+      b = (b - 128) * cFactor + 128 + bOffset;
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
+    }
+
+    // 3. Highlights & Shadows & Whites & Blacks
+    if (highlights !== 0 || shadows !== 0 || whites !== 0 || blacks !== 0) {
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (lum < 128 && shadows !== 0) {
+        const factor = (1 - lum / 128) * (shadows / 100) * 35;
+        r += factor; g += factor; b += factor;
+      } else if (lum >= 128 && highlights !== 0) {
+        const factor = ((lum - 128) / 128) * (highlights / 100) * 35;
+        r += factor; g += factor; b += factor;
+      }
+      if (blacks !== 0) {
+        const factor = (1 - lum / 255) * (blacks / 100) * 25;
+        r += factor; g += factor; b += factor;
+      }
+      if (whites !== 0) {
+        const factor = (lum / 255) * (whites / 100) * 25;
+        r += factor; g += factor; b += factor;
+      }
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
+    }
+
+    // 4. Color: Warmth & Tint
+    if (warmth !== 0) {
+      const w = warmth * 0.35;
+      r += w;
+      b -= w;
+    }
+    if (tint !== 0) {
+      const t = tint * 0.3;
+      g += t;
+      r -= t * 0.5;
+      b -= t * 0.5;
+    }
+    if (warmth !== 0 || tint !== 0) {
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
+    }
+
+    // 5. Saturation & Vibrance
+    if (saturation !== 0 || vibrance !== 0) {
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const curSat = max > 0 ? (max - min) / max : 0;
+      const vibBoost = vibrance !== 0 ? (1 - curSat) * (vibrance / 100) : 0;
+      const totalSatMult = 1 + (saturation / 100) + vibBoost;
+
+      r = lum + (r - lum) * totalSatMult;
+      g = lum + (g - lum) * totalSatMult;
+      b = lum + (b - lum) * totalSatMult;
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
+    }
+
+    // 6. Filter Preset
+    if (isFilterActive) {
+      let fr = r;
+      let fg = g;
+      let fb = b;
+
+      if (filterDef.isBw) {
+        const lum = 0.299 * fr + 0.587 * fg + 0.114 * fb;
+        fr = fg = fb = lum;
+      }
+
+      if (fBrightness) { fr += fBrightness; fg += fBrightness; fb += fBrightness; }
+      if (fContrastFactor !== 1) {
+        fr = (fr - 128) * fContrastFactor + 128;
+        fg = (fg - 128) * fContrastFactor + 128;
+        fb = (fb - 128) * fContrastFactor + 128;
+      }
+      if (fHighlights !== 0 || fShadows !== 0 || fWhites !== 0 || fBlacks !== 0) {
+        const lum = 0.299 * fr + 0.587 * fg + 0.114 * fb;
+        if (lum < 128 && fShadows !== 0) {
+          const factor = (1 - lum / 128) * (fShadows / 100) * 35;
+          fr += factor; fg += factor; fb += factor;
+        } else if (lum >= 128 && fHighlights !== 0) {
+          const factor = ((lum - 128) / 128) * (fHighlights / 100) * 35;
+          fr += factor; fg += factor; fb += factor;
+        }
+        if (fBlacks !== 0) {
+          const factor = (1 - lum / 255) * (fBlacks / 100) * 25;
+          fr += factor; fg += factor; fb += factor;
+        }
+        if (fWhites !== 0) {
+          const factor = (lum / 255) * (fWhites / 100) * 25;
+          fr += factor; fg += factor; fb += factor;
+        }
+      }
+      if (!filterDef.isBw) {
+        if (fWarmth) { fr += fWarmth; fb -= fWarmth; }
+        if (fTint) { fg += fTint; fr -= fTint * 0.5; fb -= fTint * 0.5; }
+        if (fSatBoost) {
+          const lum = 0.299 * fr + 0.587 * fg + 0.114 * fb;
+          fr = lum + (fr - lum) * (1 + fSatBoost);
+          fg = lum + (fg - lum) * (1 + fSatBoost);
+          fb = lum + (fb - lum) * (1 + fSatBoost);
+        }
+      }
+
+      r = r * (1 - filterAlpha) + fr * filterAlpha;
+      g = g * (1 - filterAlpha) + fg * filterAlpha;
+      b = b * (1 - filterAlpha) + fb * filterAlpha;
+    }
+
+    data[i] = Math.max(0, Math.min(255, Math.round(r)));
+    data[i + 1] = Math.max(0, Math.min(255, Math.round(g)));
+    data[i + 2] = Math.max(0, Math.min(255, Math.round(b)));
+  }
+}
+
+/* Apply Vignette falloff overlay */
+function applyVignetteOverlay(ctx, w, h, amount) {
+  if (amount === 0) return;
+  const radius = Math.sqrt((w / 2) ** 2 + (h / 2) ** 2);
+  const grad = ctx.createRadialGradient(w / 2, h / 2, radius * 0.4, w / 2, h / 2, radius);
+  const absAmount = Math.abs(amount);
+  const alpha = Math.min(0.85, (absAmount / 100) * 0.85);
+  const color = amount > 0 ? "0,0,0" : "255,255,255";
+  grad.addColorStop(0, `rgba(${color},0)`);
+  grad.addColorStop(1, `rgba(${color},${alpha})`);
+
+  ctx.save();
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+}
+
+/* Sharpness 3x3 unsharp mask convolution & softening */
+function applySharpnessInPlace(imgData, amount) {
+  if (amount === 0) return;
+  const src = new Uint8ClampedArray(imgData.data);
+  const dst = imgData.data;
+  const w = imgData.width;
+  const h = imgData.height;
+
+  if (amount > 0) {
+    const strength = (amount / 100) * 1.5;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = (y * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          const center = src[idx + c];
+          const up = src[((y - 1) * w + x) * 4 + c];
+          const down = src[((y + 1) * w + x) * 4 + c];
+          const left = src[(y * w + (x - 1)) * 4 + c];
+          const right = src[(y * w + (x + 1)) * 4 + c];
+          const laplacian = center * 4 - up - down - left - right;
+          dst[idx + c] = Math.max(0, Math.min(255, center + laplacian * strength));
+        }
+      }
+    }
+  } else {
+    // Negative sharpness: smoothing / softening
+    const t = Math.min(1, Math.abs(amount) / 100) * 0.75;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = (y * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          const center = src[idx + c];
+          const up = src[((y - 1) * w + x) * 4 + c];
+          const down = src[((y + 1) * w + x) * 4 + c];
+          const left = src[(y * w + (x - 1)) * 4 + c];
+          const right = src[(y * w + (x + 1)) * 4 + c];
+          const neighbors = (up + down + left + right) * 0.25;
+          dst[idx + c] = Math.max(0, Math.min(255, center * (1 - t) + neighbors * t));
+        }
+      }
+    }
+  }
+}
+
+/* Render Main Viewport Canvas */
 export function renderQuickEditCanvas() {
   if (!quickEditState.isOpen || !dom.quickEditCanvas || !quickEditState.workingCanvas) return;
 
   const canvas = dom.quickEditCanvas;
   const ctx = canvas.getContext("2d");
   const rot = quickEditState.rotation;
+  const straighten = quickEditState.straighten;
+  const flipH = quickEditState.flipH;
+  const flipV = quickEditState.flipV;
   const srcCanvas = quickEditState.workingCanvas;
 
   const is90or270 = rot === 90 || rot === 270;
@@ -627,6 +1360,7 @@ export function renderQuickEditCanvas() {
   canvas.width = targetW;
   canvas.height = targetH;
 
+  // Comparison view
   if (quickEditState.isComparing && quickEditState.originalImage) {
     canvas.width = quickEditState.originalImage.naturalWidth || quickEditState.originalImage.width;
     canvas.height = quickEditState.originalImage.naturalHeight || quickEditState.originalImage.height;
@@ -634,37 +1368,50 @@ export function renderQuickEditCanvas() {
     return;
   }
 
+  // Draw rotated, straightened, and flipped source
   ctx.save();
   ctx.translate(targetW / 2, targetH / 2);
-  ctx.rotate((rot * Math.PI) / 180);
+  const totalAngleDeg = rot + straighten;
+  ctx.rotate((totalAngleDeg * Math.PI) / 180);
+  const rad = Math.abs((straighten * Math.PI) / 180);
+  const sFactor = straighten !== 0
+    ? Math.cos(rad) + Math.max(targetH / targetW, targetW / targetH) * Math.sin(rad)
+    : 1;
+  ctx.scale((flipH ? -1 : 1) * sFactor, (flipV ? -1 : 1) * sFactor);
   ctx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
   ctx.restore();
 
-  if (quickEditState.smartFixActive) {
-    if (!quickEditState.smartFixLUT) {
-      const sampleCanvas = document.createElement("canvas");
-      const maxDim = 800;
-      let sW = srcCanvas.width;
-      let sH = srcCanvas.height;
-      if (sW > maxDim || sH > maxDim) {
-        if (sW > sH) {
-          sH = Math.round((sH * maxDim) / sW);
-          sW = maxDim;
-        } else {
-          sW = Math.round((sW * maxDim) / sH);
-          sH = maxDim;
-        }
+  // Smart fix LUT preparation if enabled
+  if (quickEditState.smartFixActive && !quickEditState.smartFixLUT) {
+    const sampleCanvas = document.createElement("canvas");
+    const maxDim = 800;
+    let sW = srcCanvas.width;
+    let sH = srcCanvas.height;
+    if (sW > maxDim || sH > maxDim) {
+      if (sW > sH) {
+        sH = Math.round((sH * maxDim) / sW);
+        sW = maxDim;
+      } else {
+        sW = Math.round((sW * maxDim) / sH);
+        sH = maxDim;
       }
-      sampleCanvas.width = sW;
-      sampleCanvas.height = sH;
-      const sCtx = sampleCanvas.getContext("2d");
-      sCtx.drawImage(srcCanvas, 0, 0, sW, sH);
-      const sampleData = sCtx.getImageData(0, 0, sW, sH);
-      quickEditState.smartFixLUT = computeSmartFixLUT(sampleData);
     }
+    sampleCanvas.width = sW;
+    sampleCanvas.height = sH;
+    const sCtx = sampleCanvas.getContext("2d");
+    sCtx.drawImage(srcCanvas, 0, 0, sW, sH);
+    const sampleData = sCtx.getImageData(0, 0, sW, sH);
+    quickEditState.smartFixLUT = computeSmartFixLUT(sampleData);
+  }
 
+  // Check if any pixel adjustments or filters are active
+  const hasAdjustments = Object.values(quickEditState.adjustments).some(v => v !== 0);
+  const hasFilter = quickEditState.filter !== "none";
+  const hasSmartFix = quickEditState.smartFixActive;
+
+  if (hasAdjustments || hasFilter || hasSmartFix) {
+    // For large images, apply on a scaled preview canvas for 60fps interactivity
     if (targetW > MAX_SMART_FIX_PREVIEW_DIM || targetH > MAX_SMART_FIX_PREVIEW_DIM) {
-      // High-resolution image: render smart fix on a scaled preview canvas to prevent main thread blocking
       let pW = targetW;
       let pH = targetH;
       if (pW > pH) {
@@ -687,18 +1434,45 @@ export function renderQuickEditCanvas() {
       prevCtx.drawImage(canvas, 0, 0, pW, pH);
 
       const imgData = prevCtx.getImageData(0, 0, pW, pH);
-      const outData = prevCtx.createImageData(pW, pH);
-      applySmartFixToImageData(imgData, outData, quickEditState.smartFixLUT, quickEditState.smartFixIntensity);
-      prevCtx.putImageData(outData, 0, 0);
+      processImageDataInPlace(imgData);
+      if (quickEditState.adjustments.sharpness !== 0) {
+        applySharpnessInPlace(imgData, quickEditState.adjustments.sharpness);
+      }
+      prevCtx.putImageData(imgData, 0, 0);
 
-      // Blit preview back to main canvas for crisp display
+      const filterDef = FILTERS[quickEditState.filter] || FILTERS.none;
+      const fAdj = filterDef.adjust || {};
+      const filterAlpha = quickEditState.filterIntensity / 100;
+      const filterVignette = (quickEditState.filter !== "none" && fAdj.vignette)
+        ? fAdj.vignette * filterAlpha
+        : 0;
+      const effectiveVignette = Math.max(-100, Math.min(100, quickEditState.adjustments.vignette + filterVignette));
+
+      if (effectiveVignette !== 0) {
+        applyVignetteOverlay(prevCtx, pW, pH, effectiveVignette);
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(prevCanvas, 0, 0, targetW, targetH);
     } else {
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const outData = ctx.createImageData(canvas.width, canvas.height);
-      applySmartFixToImageData(imgData, outData, quickEditState.smartFixLUT, quickEditState.smartFixIntensity);
-      ctx.putImageData(outData, 0, 0);
+      processImageDataInPlace(imgData);
+      if (quickEditState.adjustments.sharpness !== 0) {
+        applySharpnessInPlace(imgData, quickEditState.adjustments.sharpness);
+      }
+      ctx.putImageData(imgData, 0, 0);
+
+      const filterDef = FILTERS[quickEditState.filter] || FILTERS.none;
+      const fAdj = filterDef.adjust || {};
+      const filterAlpha = quickEditState.filterIntensity / 100;
+      const filterVignette = (quickEditState.filter !== "none" && fAdj.vignette)
+        ? fAdj.vignette * filterAlpha
+        : 0;
+      const effectiveVignette = Math.max(-100, Math.min(100, quickEditState.adjustments.vignette + filterVignette));
+
+      if (effectiveVignette !== 0) {
+        applyVignetteOverlay(ctx, canvas.width, canvas.height, effectiveVignette);
+      }
     }
   }
 
@@ -707,8 +1481,12 @@ export function renderQuickEditCanvas() {
   }
 }
 
+/* Full resolution export canvas generation */
 export function getFullResolutionExportCanvas() {
   const rot = quickEditState.rotation;
+  const straighten = quickEditState.straighten;
+  const flipH = quickEditState.flipH;
+  const flipV = quickEditState.flipV;
   const srcCanvas = quickEditState.workingCanvas;
   const is90or270 = rot === 90 || rot === 270;
   const targetW = is90or270 ? srcCanvas.height : srcCanvas.width;
@@ -721,44 +1499,73 @@ export function getFullResolutionExportCanvas() {
 
   expCtx.save();
   expCtx.translate(targetW / 2, targetH / 2);
-  expCtx.rotate((rot * Math.PI) / 180);
+  const totalAngleDeg = rot + straighten;
+  expCtx.rotate((totalAngleDeg * Math.PI) / 180);
+  const rad = Math.abs((straighten * Math.PI) / 180);
+  const sFactor = straighten !== 0
+    ? Math.cos(rad) + Math.max(targetH / targetW, targetW / targetH) * Math.sin(rad)
+    : 1;
+  expCtx.scale((flipH ? -1 : 1) * sFactor, (flipV ? -1 : 1) * sFactor);
   expCtx.drawImage(srcCanvas, -srcCanvas.width / 2, -srcCanvas.height / 2);
   expCtx.restore();
 
-  if (quickEditState.smartFixActive) {
-    if (!quickEditState.smartFixLUT) {
-      const sampleCanvas = document.createElement("canvas");
-      const maxDim = 800;
-      let sW = srcCanvas.width;
-      let sH = srcCanvas.height;
-      if (sW > maxDim || sH > maxDim) {
-        if (sW > sH) {
-          sH = Math.round((sH * maxDim) / sW);
-          sW = maxDim;
-        } else {
-          sW = Math.round((sW * maxDim) / sH);
-          sH = maxDim;
-        }
+  if (quickEditState.smartFixActive && !quickEditState.smartFixLUT) {
+    const sampleCanvas = document.createElement("canvas");
+    const maxDim = 800;
+    let sW = srcCanvas.width;
+    let sH = srcCanvas.height;
+    if (sW > maxDim || sH > maxDim) {
+      if (sW > sH) {
+        sH = Math.round((sH * maxDim) / sW);
+        sW = maxDim;
+      } else {
+        sW = Math.round((sW * maxDim) / sH);
+        sH = maxDim;
       }
-      sampleCanvas.width = sW;
-      sampleCanvas.height = sH;
-      const sCtx = sampleCanvas.getContext("2d");
-      sCtx.drawImage(srcCanvas, 0, 0, sW, sH);
-      const sampleData = sCtx.getImageData(0, 0, sW, sH);
-      quickEditState.smartFixLUT = computeSmartFixLUT(sampleData);
     }
+    sampleCanvas.width = sW;
+    sampleCanvas.height = sH;
+    const sCtx = sampleCanvas.getContext("2d");
+    sCtx.drawImage(srcCanvas, 0, 0, sW, sH);
+    const sampleData = sCtx.getImageData(0, 0, sW, sH);
+    quickEditState.smartFixLUT = computeSmartFixLUT(sampleData);
+  }
 
+  const hasAdjustments = Object.values(quickEditState.adjustments).some(v => v !== 0);
+  const hasFilter = quickEditState.filter !== "none";
+  const hasSmartFix = quickEditState.smartFixActive;
+
+  if (hasAdjustments || hasFilter || hasSmartFix) {
     const imgData = expCtx.getImageData(0, 0, targetW, targetH);
-    const outData = expCtx.createImageData(targetW, targetH);
-    applySmartFixToImageData(imgData, outData, quickEditState.smartFixLUT, quickEditState.smartFixIntensity);
-    expCtx.putImageData(outData, 0, 0);
+    processImageDataInPlace(imgData);
+    if (quickEditState.adjustments.sharpness !== 0) {
+      applySharpnessInPlace(imgData, quickEditState.adjustments.sharpness);
+    }
+    expCtx.putImageData(imgData, 0, 0);
+
+    const filterDef = FILTERS[quickEditState.filter] || FILTERS.none;
+    const fAdj = filterDef.adjust || {};
+    const filterAlpha = quickEditState.filterIntensity / 100;
+    const filterVignette = (quickEditState.filter !== "none" && fAdj.vignette)
+      ? fAdj.vignette * filterAlpha
+      : 0;
+    const effectiveVignette = Math.max(-100, Math.min(100, quickEditState.adjustments.vignette + filterVignette));
+
+    if (effectiveVignette !== 0) {
+      applyVignetteOverlay(expCtx, targetW, targetH, effectiveVignette);
+    }
   }
 
   return exportCanvas;
 }
 
+/* Save Edits (Overwrite or Save Copy) */
 export async function saveEdits(mode = "overwrite") {
   if (!quickEditState.isOpen || !dom.quickEditCanvas) return;
+
+  if (quickEditState.isComparing) {
+    stopCompare();
+  }
 
   const id = quickEditState.photoId;
   const currentItem = state.mediaItems.find(m => m.id === id);
@@ -782,10 +1589,7 @@ export async function saveEdits(mode = "overwrite") {
       throw new Error("Failed to load original image");
     }
 
-    // Use full-resolution export canvas for saving (deferring full-resolution processing to export/save)
-    const canvas = quickEditState.smartFixActive
-      ? getFullResolutionExportCanvas()
-      : dom.quickEditCanvas;
+    const canvas = getFullResolutionExportCanvas();
 
     let res;
     if (typeof canvas.toBlob === "function") {
@@ -894,6 +1698,7 @@ export async function saveEdits(mode = "overwrite") {
   }
 }
 
+/* Update Toolbar UI controls */
 export function updateQuickEditToolbarUI() {
   if (dom.quickEditCropBtn) {
     dom.quickEditCropBtn.classList.toggle("active", quickEditState.cropActive);
@@ -917,8 +1722,52 @@ export function updateQuickEditToolbarUI() {
   if (dom.smartFixIntensityVal) {
     dom.smartFixIntensityVal.textContent = `${quickEditState.smartFixIntensity}%`;
   }
+
+  if (dom.editorFlipHBtn) {
+    dom.editorFlipHBtn.classList.toggle("active", quickEditState.flipH);
+  }
+  if (dom.editorFlipVBtn) {
+    dom.editorFlipVBtn.classList.toggle("active", quickEditState.flipV);
+  }
+  if (dom.editorStraightenSlider) {
+    dom.editorStraightenSlider.value = quickEditState.straighten;
+  }
+  if (dom.editorStraightenVal) {
+    dom.editorStraightenVal.textContent = `${quickEditState.straighten}°`;
+  }
+  if (dom.horizonAngleSlider) {
+    dom.horizonAngleSlider.value = quickEditState.straighten;
+  }
+  if (dom.horizonAngleVal) {
+    dom.horizonAngleVal.textContent = `${quickEditState.straighten}°`;
+  }
+
+  // Adjustments sliders
+  for (const key of Object.keys(quickEditState.adjustments)) {
+    updateAdjustmentUI(key);
+  }
+
+  // Filter chips active state
+  if (dom.editorFiltersStrip) {
+    const chips = dom.editorFiltersStrip.querySelectorAll(".editor-filter-chip");
+    chips.forEach(chip => {
+      chip.classList.toggle("active", chip.dataset.filter === quickEditState.filter);
+    });
+  }
+  if (dom.editorFilterIntensityContainer) {
+    dom.editorFilterIntensityContainer.style.display = quickEditState.filter !== "none" ? "flex" : "none";
+  }
+  if (dom.editorFilterIntensitySlider) {
+    dom.editorFilterIntensitySlider.value = quickEditState.filterIntensity;
+  }
+  if (dom.editorFilterIntensityVal) {
+    dom.editorFilterIntensityVal.textContent = `${quickEditState.filterIntensity}%`;
+  }
+
+  updateUndoRedoUI();
 }
 
+/* Crop pointer / mouse listeners */
 export function setupCropMouseListeners() {
   const onPointerMove = (e) => {
     if (!quickEditState.isOpen || !quickEditState.cropActive || !quickEditState.cropDragMode) return;
@@ -1010,6 +1859,8 @@ export function setupCropMouseListeners() {
       return;
     }
 
+    e.stopPropagation();
+    e.preventDefault();
     quickEditState.cropDragStart = {
       x: e.clientX,
       y: e.clientY,
@@ -1018,8 +1869,15 @@ export function setupCropMouseListeners() {
       boxW: quickEditState.cropBox.w,
       boxH: quickEditState.cropBox.h,
     };
-    e.preventDefault();
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
   });
+
+  if (dom.cropOverlay) {
+    dom.cropOverlay.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("#cropOverlay")) {
+        e.stopPropagation();
+      }
+    });
+  }
 }

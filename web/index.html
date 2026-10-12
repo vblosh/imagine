@@ -72,6 +72,13 @@
     <symbol id="icon-map-marker" viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5.25 8 12 8 12s8-6.75 8-12a8 8 0 0 0-8-8z"/></symbol>
     <symbol id="icon-disc-vertical" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 3v3"/><path d="M12 18v3"/></symbol>
     <symbol id="icon-plus-rect" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></symbol>
+    <symbol id="icon-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></symbol>
+    <symbol id="icon-redo" viewBox="0 0 24 24"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></symbol>
+    <symbol id="icon-flip-h" viewBox="0 0 24 24"><path d="m8 4-6 8 6 8"/><path d="m16 4 6 8-6 8"/><line x1="12" y1="2" x2="12" y2="22" stroke-dasharray="2 2"/></symbol>
+    <symbol id="icon-flip-v" viewBox="0 0 24 24"><path d="m4 8 8-6 8 8"/><path d="m4 16 8 6 8-6"/><line x1="2" y1="12" x2="22" y2="12" stroke-dasharray="2 2"/></symbol>
+    <symbol id="icon-sliders" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
+    <symbol id="icon-filter" viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></symbol>
+    <symbol id="icon-horizon" viewBox="0 0 24 24"><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="5" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="19"/><circle cx="12" cy="12" r="1.5"/><path d="M5 16l2-8"/><path d="M19 8l-2 8"/></symbol>
   </svg>
   <div id="app" class="elements-app">
     <!-- Top Bar -->
@@ -816,6 +823,13 @@
               <svg id="loupeFaceOverlay" class="face-image-overlay face-loupe-overlay" aria-hidden="true" hidden></svg>
             <div class="quick-edit-container" id="quickEditContainer" style="display: none;">
               <canvas id="quickEditCanvas"></canvas>
+              <div class="editor-compare-badge" id="editorCompareBadge" style="display: none;" data-i18n="original_badge">ORIGINAL</div>
+              <div class="straighten-grid-overlay" id="straightenGridOverlay" style="display: none;">
+                <div class="straighten-grid-line h1"></div>
+                <div class="straighten-grid-line h2"></div>
+                <div class="straighten-grid-line v1"></div>
+                <div class="straighten-grid-line v2"></div>
+              </div>
               <div class="crop-overlay" id="cropOverlay" style="display: none;">
                 <div class="crop-scrim scrim-top" id="cropScrimTop"></div>
                 <div class="crop-scrim scrim-bottom" id="cropScrimBottom"></div>
@@ -886,64 +900,309 @@
               <button class="loupe-zoom-value" id="loupeZoomResetBtn" title="Reset Zoom (Z or Ctrl+0)" data-i18n-title="reset_zoom">100%</button>
             </div>
           </div>
-          <!-- Floating Quick Edit Toolbar -->
+          <!-- Google Photos-Style Editor Toolbar & Panels -->
           <div class="quick-edit-toolbar" id="quickEditToolbar" style="display: none;">
-            <div class="quick-edit-group" title="Rotate" data-i18n-title="rotate_left">
-              <button class="quick-edit-btn" id="quickEditRotateLeftBtn" title="Rotate Left 90° (L)" data-i18n-title="rotate_left_title">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-rotate-ccw"></use></svg>
-                <span data-i18n="rotate_left">Rotate Left</span>
-              </button>
-              <button class="quick-edit-btn" id="quickEditRotateRightBtn" title="Rotate Right 90° (R)" data-i18n-title="rotate_right_title">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-rotate-cw"></use></svg>
-                <span data-i18n="rotate_right">Rotate Right</span>
-              </button>
-            </div>
-
-            <div class="quick-edit-divider"></div>
-
-            <div class="quick-edit-group" title="Crop" data-i18n-title="crop">
-              <button class="quick-edit-btn" id="quickEditCropBtn" title="Crop Tool (C)" data-i18n-title="crop_tool_title">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-crop"></use></svg>
-                <span data-i18n="crop">Crop</span>
-              </button>
-              <div class="quick-edit-sub-options" id="cropSubOptions" style="display: none;">
-                <select id="cropAspectRatioSelect" class="quick-edit-select" title="Aspect Ratio" data-i18n-title="aspect_ratio">
-                  <option value="original" data-i18n="aspect_original">Original</option>
-                  <option value="free" data-i18n="aspect_free">Freeform</option>
-                  <option value="1:1" data-i18n="aspect_1_1">1:1 Square</option>
-                  <option value="4:3" data-i18n="aspect_4_3">4:3 Standard</option>
-                  <option value="16:9" data-i18n="aspect_16_9">16:9 Widescreen</option>
-                  <option value="3:2" data-i18n="aspect_3_2">3:2 Classic</option>
-                </select>
-                <button class="btn btn-sm btn-primary" id="quickEditApplyCropBtn" title="Apply Crop (Enter)" data-i18n-title="apply_crop" data-i18n="apply">Apply</button>
-                <button class="btn btn-sm btn-secondary" id="quickEditCancelCropBtn" title="Cancel Crop (Esc)" data-i18n-title="cancel_crop" data-i18n="cancel">Cancel</button>
+            <!-- Main Unified Toolbar Row -->
+            <div class="editor-header-row">
+              <div class="quick-edit-group" title="Rotate" data-i18n-title="rotate">
+                <span class="quick-edit-group-label" data-i18n="rotate">Rotate</span>
+                <button class="quick-edit-btn" id="quickEditRotateLeftBtn" title="Rotate Left 90° (L)" data-i18n-title="rotate_left_title">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-rotate-ccw"></use></svg>
+                </button>
+                <button class="quick-edit-btn" id="quickEditRotateRightBtn" title="Rotate Right 90° (R)" data-i18n-title="rotate_right_title">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-rotate-cw"></use></svg>
+                </button>
+                <button class="quick-edit-btn" id="editorFlipVBtn" title="Flip Vertical" data-i18n-title="flip_vertical">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-v"></use></svg>
+                </button>
               </div>
-            </div>
 
-            <div class="quick-edit-divider"></div>
+              <div class="quick-edit-divider"></div>
 
-            <div class="quick-edit-group" title="Smart Fix" data-i18n-title="smart_fix">
-              <button class="quick-edit-btn" id="quickEditSmartFixBtn" title="Auto Smart Fix (S)" data-i18n-title="smart_fix_title">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-wand"></use></svg>
-                <span data-i18n="smart_fix">Smart Fix</span>
-              </button>
-              <div class="quick-edit-sub-options" id="smartFixSubOptions" style="display: none;">
-                <label class="quick-edit-slider-label" title="Smart Fix Intensity">
-                  <span data-i18n="amount">Amount:</span>
-                  <input type="range" id="smartFixIntensitySlider" min="10" max="100" value="100" class="loupe-zoom-slider" style="width: 70px;">
-                  <span id="smartFixIntensityVal">100%</span>
-                </label>
+              <div class="quick-edit-group" title="Crop" data-i18n-title="crop">
+                <button class="quick-edit-btn" id="quickEditCropBtn" title="Crop Tool (C)" data-i18n-title="crop_tool_title">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-crop"></use></svg>
+                  <span data-i18n="crop">Crop</span>
+                </button>
+                <div class="quick-edit-sub-options" id="cropSubOptions" style="display: none;">
+                  <select id="cropAspectRatioSelect" class="quick-edit-select" title="Aspect Ratio" data-i18n-title="aspect_ratio">
+                    <option value="original" data-i18n="aspect_original">Original</option>
+                    <option value="free" data-i18n="aspect_free">Freeform</option>
+                    <option value="1:1" data-i18n="aspect_1_1">1:1 Square</option>
+                    <option value="4:3" data-i18n="aspect_4_3">4:3 Standard</option>
+                    <option value="16:9" data-i18n="aspect_16_9">16:9 Widescreen</option>
+                    <option value="3:2" data-i18n="aspect_3_2">3:2 Classic</option>
+                    <option value="5:4" data-i18n="aspect_5_4">5:4</option>
+                  </select>
+                  <button class="btn btn-sm btn-primary" id="quickEditApplyCropBtn" title="Apply Crop (Enter)" data-i18n-title="apply_crop" data-i18n="apply">Apply</button>
+                  <button class="btn btn-sm btn-secondary" id="quickEditCancelCropBtn" title="Cancel Crop (Esc)" data-i18n-title="cancel_crop" data-i18n="cancel">Cancel</button>
+                  <button class="quick-edit-btn" id="editorFlipHBtn" title="Flip Horizontal" data-i18n-title="flip_horizontal">
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-h"></use></svg>
+                  </button>
+                  <div class="editor-straighten-control">
+                    <label title="Straighten Angle">
+                      <input type="range" id="editorStraightenSlider" min="-45" max="45" value="0" step="0.5" class="editor-range-slider" style="width: 60px;">
+                      <span id="editorStraightenVal">0°</span>
+                    </label>
+                    <button class="btn btn-sm btn-secondary" id="editorStraightenResetBtn" title="Reset angle" style="padding: 2px 4px; font-size: 10px;">0°</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="quick-edit-divider"></div>
+
+              <div class="quick-edit-group" title="Horizon" data-i18n-title="horizon_correction">
+                <button class="quick-edit-btn" id="quickEditHorizonBtn" title="Horizon Correction (H)" data-i18n-title="horizon_correction_title">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-horizon"></use></svg>
+                  <span data-i18n="horizon">Horizon</span>
+                </button>
+                <div class="quick-edit-sub-options" id="horizonSubOptions" style="display: none;">
+                  <label class="quick-edit-slider-label" title="Horizon Angle">
+                    <span data-i18n="angle">Angle:</span>
+                    <input type="range" id="horizonAngleSlider" min="-45" max="45" value="0" step="0.5" class="loupe-zoom-slider" style="width: 80px;">
+                    <span id="horizonAngleVal">0°</span>
+                  </label>
+                  <button class="btn btn-sm btn-secondary" id="horizonResetBtn" title="Reset angle (0)" style="padding: 2px 5px; font-size: 11px;">0°</button>
+                  <button class="btn btn-sm btn-secondary" id="horizonAutoBtn" title="Auto Horizon Level" data-i18n="auto_level" style="padding: 2px 6px; font-size: 11px;">Auto</button>
+                </div>
+              </div>
+
+              <div class="quick-edit-divider"></div>
+
+              <div class="quick-edit-group" title="Smart Fix" data-i18n-title="smart_fix">
+                <button class="quick-edit-btn" id="quickEditSmartFixBtn" title="Auto Smart Fix (S)" data-i18n-title="smart_fix_title">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-wand"></use></svg>
+                  <span data-i18n="smart_fix">Smart Fix</span>
+                </button>
+                <div class="quick-edit-sub-options" id="smartFixSubOptions" style="display: none;">
+                  <label class="quick-edit-slider-label" title="Smart Fix Intensity">
+                    <span data-i18n="amount">Amount:</span>
+                    <input type="range" id="smartFixIntensitySlider" min="10" max="100" value="100" class="loupe-zoom-slider" style="width: 65px;">
+                    <span id="smartFixIntensityVal">100%</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="quick-edit-divider"></div>
+
+              <!-- Google Photos Tabs -->
+              <div class="editor-tab-bar" id="editorTabBar">
+                <button class="editor-tab-btn" id="editorTabSuggestions" data-tab="suggestions">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-wand"></use></svg>
+                  <span data-i18n="editor_tab_suggestions">Suggestions</span>
+                </button>
+                <button class="editor-tab-btn" id="editorTabCrop" data-tab="crop">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-crop"></use></svg>
+                  <span data-i18n="editor_tab_crop">Crop</span>
+                </button>
+                <button class="editor-tab-btn" id="editorTabAdjust" data-tab="adjust">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-sliders"></use></svg>
+                  <span data-i18n="editor_tab_adjust">Adjust</span>
+                </button>
+                <button class="editor-tab-btn" id="editorTabFilters" data-tab="filters">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-filter"></use></svg>
+                  <span data-i18n="editor_tab_filters">Filters</span>
+                </button>
+              </div>
+
+              <div class="quick-edit-divider"></div>
+
+              <!-- Actions & Save -->
+              <div class="quick-edit-group quick-edit-actions">
+                <button class="btn btn-sm btn-icon" id="editorUndoBtn" title="Undo (Ctrl+Z)" data-i18n-title="undo_title" disabled>
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-undo"></use></svg>
+                </button>
+                <button class="btn btn-sm btn-icon" id="editorRedoBtn" title="Redo (Ctrl+Y)" data-i18n-title="redo_title" disabled>
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-redo"></use></svg>
+                </button>
                 <button class="btn btn-sm btn-secondary" id="quickEditCompareBtn" title="Hold or click to view unedited original" data-i18n-title="compare_title" data-i18n="compare">Compare</button>
+                <button class="btn btn-sm btn-secondary" id="quickEditResetBtn" title="Reset All Edits" data-i18n-title="reset_edits" data-i18n="reset">Reset</button>
+                <button class="btn btn-sm btn-secondary" id="quickEditCancelBtn" title="Cancel & Close (Esc)" data-i18n-title="cancel_close" data-i18n="cancel">Cancel</button>
+                <button class="btn btn-sm btn-secondary" id="quickEditSaveCopyBtn" title="Save as a new copy" data-i18n-title="save_copy_title" data-i18n="save_copy">Save Copy</button>
+                <button class="btn btn-sm btn-primary" id="quickEditSaveBtn" title="Save changes (Ctrl+S)" data-i18n-title="save_changes" data-i18n="save">Save</button>
               </div>
             </div>
 
-            <div class="quick-edit-divider"></div>
+            <!-- Expandable Panel: Suggestions -->
+            <div class="editor-panel" id="editorPanelSuggestions" style="display: none;">
+              <div class="editor-quick-styles">
+                <span style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-right: 4px;" data-i18n="editor_tab_suggestions">Suggestions:</span>
+                <button class="editor-quick-style-btn" id="panelStyleWarmBtn" data-style="warm" title="Warm Glow">
+                  <span class="style-dot warm"></span>
+                  <span data-i18n="style_warm">Warm</span>
+                </button>
+                <button class="editor-quick-style-btn" id="panelStyleCoolBtn" data-style="cool" title="Cool Breeze">
+                  <span class="style-dot cool"></span>
+                  <span data-i18n="style_cool">Cool</span>
+                </button>
+                <button class="editor-quick-style-btn" id="panelStyleBwBtn" data-style="bw_drama" title="B&W Drama">
+                  <span class="style-dot bw"></span>
+                  <span data-i18n="style_bw">B&W</span>
+                </button>
+              </div>
+            </div>
 
-            <div class="quick-edit-group quick-edit-actions">
-              <button class="btn btn-sm btn-secondary" id="quickEditResetBtn" title="Reset All Edits" data-i18n-title="reset_edits" data-i18n="reset">Reset</button>
-              <button class="btn btn-sm btn-secondary" id="quickEditCancelBtn" title="Cancel & Close (Esc)" data-i18n-title="cancel_close" data-i18n="cancel">Cancel</button>
-              <button class="btn btn-sm btn-secondary" id="quickEditSaveCopyBtn" title="Save as a new copy" data-i18n-title="save_copy_title" data-i18n="save_copy">Save Copy</button>
-              <button class="btn btn-sm btn-primary" id="quickEditSaveBtn" title="Save changes (Ctrl+S)" data-i18n-title="save_changes" data-i18n="save">Save</button>
+            <!-- Expandable Panel: Crop & Perspective -->
+            <div class="editor-panel" id="editorPanelCrop" style="display: none;">
+              <div class="editor-crop-controls">
+                <span style="font-size: 11px; font-weight: 600; color: var(--text-secondary);" data-i18n="crop">Crop:</span>
+                <button class="quick-edit-btn" id="panelFlipHBtn" title="Flip Horizontal" data-i18n-title="flip_horizontal">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-h"></use></svg>
+                  <span data-i18n="flip_h">Flip H</span>
+                </button>
+                <button class="quick-edit-btn" id="panelFlipVBtn" title="Flip Vertical" data-i18n-title="flip_vertical">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-v"></use></svg>
+                  <span data-i18n="flip_v">Flip V</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Expandable Panel 1: Adjust (Light, Color, Details) -->
+            <div class="editor-panel" id="editorPanelAdjust" style="display: none;">
+              <div class="editor-adjust-container">
+                <!-- Group 1: Light -->
+                <div class="editor-adjust-group">
+                  <div class="editor-adjust-group-title" data-i18n="adjust_light">Light</div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="brightness">Brightness</span>
+                    <input type="range" id="sliderBrightness" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valBrightness">0</span>
+                  </div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="contrast">Contrast</span>
+                    <input type="range" id="sliderContrast" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valContrast">0</span>
+                  </div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="highlights">Highlights</span>
+                    <input type="range" id="sliderHighlights" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valHighlights">0</span>
+                  </div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="shadows">Shadows</span>
+                    <input type="range" id="sliderShadows" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valShadows">0</span>
+                  </div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="whites">Whites</span>
+                    <input type="range" id="sliderWhites" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valWhites">0</span>
+                  </div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="blacks">Blacks</span>
+                    <input type="range" id="sliderBlacks" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valBlacks">0</span>
+                  </div>
+                </div>
+
+                <!-- Group 2: Color -->
+                <div class="editor-adjust-group">
+                  <div class="editor-adjust-group-title" data-i18n="adjust_color">Color</div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="saturation">Saturation</span>
+                    <input type="range" id="sliderSaturation" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valSaturation">0</span>
+                  </div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="warmth">Warmth</span>
+                    <input type="range" id="sliderWarmth" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valWarmth">0</span>
+                  </div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="tint">Tint</span>
+                    <input type="range" id="sliderTint" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valTint">0</span>
+                  </div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="vibrance">Vibrance</span>
+                    <input type="range" id="sliderVibrance" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valVibrance">0</span>
+                  </div>
+                </div>
+
+                <!-- Group 3: Details -->
+                <div class="editor-adjust-group">
+                  <div class="editor-adjust-group-title" data-i18n="adjust_details">Details</div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="sharpness">Sharpness</span>
+                    <input type="range" id="sliderSharpness" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valSharpness">0</span>
+                  </div>
+                  <div class="editor-slider-row">
+                    <span data-i18n="vignette">Vignette</span>
+                    <input type="range" id="sliderVignette" min="-100" max="100" value="0" class="editor-range-slider">
+                    <span class="editor-slider-val" id="valVignette">0</span>
+                  </div>
+                  <button class="btn btn-sm btn-secondary" id="editorResetAdjustBtn" style="margin-top: 8px;" data-i18n="reset_adjustments">Reset Adjustments</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Expandable Panel 2: Filters -->
+            <div class="editor-panel" id="editorPanelFilters" style="display: none;">
+              <div class="editor-filters-container">
+                <div class="editor-filters-strip" id="editorFiltersStrip">
+                  <div class="editor-filter-chip active" data-filter="none">
+                    <div class="editor-filter-preview" style="background-color: #555;"></div>
+                    <span class="editor-filter-name" data-i18n="filter_none">Original</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="vivid">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #e74c3c, #3498db);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_vivid">Vivid</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="west">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #f39c12, #d35400);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_west">West</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="palma">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #1abc9c, #f1c40f);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_palma">Palma</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="metro">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #34495e, #95a5a6);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_metro">Metro</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="eiffel">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #e67e22, #7f8c8d);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_eiffel">Eiffel</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="modena">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #c0392b, #2c3e50);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_modena">Modena</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="reel">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #27ae60, #2980b9);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_reel">Reel</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="bazaar">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #f39c12, #8e44ad);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_bazaar">Bazaar</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="alpaca">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #bdc3c7, #ecc94b);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_alpaca">Alpaca</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="vista">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #2980b9, #27ae60);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_vista">Vista</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="onyx">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #222222, #888888);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_onyx">Onyx</span>
+                  </div>
+                  <div class="editor-filter-chip" data-filter="blush">
+                    <div class="editor-filter-preview" style="background: linear-gradient(135deg, #fd79a8, #fdcb6e);"></div>
+                    <span class="editor-filter-name" data-i18n="filter_blush">Blush</span>
+                  </div>
+                </div>
+                <div class="editor-filter-intensity" id="editorFilterIntensityContainer" style="display: none;">
+                  <label class="quick-edit-slider-label">
+                    <span data-i18n="intensity">Intensity:</span>
+                    <input type="range" id="editorFilterIntensitySlider" min="0" max="100" value="100" class="editor-range-slider" style="width: 100px;">
+                    <span id="editorFilterIntensityVal">100%</span>
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1218,6 +1477,24 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" id="cancelTagBtn" data-i18n="cancel">Cancel</button>
           <button class="btn btn-primary" id="createTagSubmitBtn" data-i18n="create_tag_btn">Create Tag</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Discard Unsaved Changes Modal Dialog -->
+    <div class="modal" id="discardChangesModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="discardChangesModalTitle">
+      <div class="modal-backdrop" id="discardChangesBackdrop"></div>
+      <div class="modal-dialog discard-changes-dialog" style="max-width: 420px;">
+        <div class="modal-header">
+          <h3 id="discardChangesModalTitle" data-i18n="discard_changes_title">Discard unsaved changes?</h3>
+          <button class="btn-icon-sm" id="closeDiscardChangesModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p style="margin-bottom: 0; font-size: 14px; color: var(--text-normal);" data-i18n="discard_changes_prompt">You have unsaved edits. Are you sure you want to discard them?</p>
+        </div>
+        <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px;">
+          <button class="btn btn-secondary" id="cancelDiscardChangesBtn" data-i18n="keep_editing">Keep Editing</button>
+          <button class="btn btn-danger" id="confirmDiscardChangesBtn" data-i18n="discard_changes">Discard Changes</button>
         </div>
       </div>
     </div>

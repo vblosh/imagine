@@ -57,7 +57,14 @@ import {
   applyCrop,
   cancelCrop,
   toggleSmartFix,
-  saveEdits
+  saveEdits,
+  undo,
+  redo,
+  startCompare,
+  stopCompare,
+  toggleHorizonTool,
+  hideDiscardModal,
+  performCloseQuickEdit
 } from './quick-edit.js';
 import { navigateBackToCategory } from './category-view.js';
 import { isAutoEventOpen, cancelAutoEventReview } from './auto-events.js';
@@ -65,6 +72,11 @@ import { closeSemanticIndexModal } from './semantic-search.js';
 
 export function handleEscapeKey() {
   // 1. Modals (highest priority)
+  if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    hideDiscardModal();
+    return true;
+  }
   if (isAutoEventOpen()) {
     cancelAutoEventReview();
     return true;
@@ -322,6 +334,86 @@ export function setupKeyboardShortcuts() {
       return;
     }
 
+    // Quick Edit mode active (takes priority over button guard so Space, Ctrl+Z etc work reliably)
+    if (state.loupeIndex >= 0 && quickEditState.isOpen) {
+      if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          hideDiscardModal();
+          return;
+        }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          performCloseQuickEdit();
+          return;
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if (e.key === ' ' && !e.repeat) {
+        if (active?.matches('select')) return;
+        e.preventDefault();
+        startCompare();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        saveEdits('overwrite');
+        return;
+      }
+      if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault();
+        closeQuickEdit(true);
+        return;
+      }
+      if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        rotateLeft();
+        return;
+      }
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault();
+        rotateRight();
+        return;
+      }
+      if (e.key === 'c' || e.key === 'C') {
+        e.preventDefault();
+        toggleCrop();
+        return;
+      }
+      if (e.key === 'h' || e.key === 'H') {
+        e.preventDefault();
+        toggleHorizonTool();
+        return;
+      }
+      if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        toggleSmartFix();
+        return;
+      }
+      if (e.key === 'Enter') {
+        if (quickEditState.cropActive) {
+          e.preventDefault();
+          applyCrop();
+          return;
+        }
+      }
+      return;
+    }
+
     // Guard buttons and select elements from unintended mutation and activation shortcuts
     const isButtonOrSelect = active?.matches('button, select');
     const isMutationKey = ['0', '1', '2', '3', '4', '5', 'p', 'P', 'x', 'X', 'u', 'U', 'Delete', 'Backspace', 'Enter', ' '].includes(e.key);
@@ -331,46 +423,6 @@ export function setupKeyboardShortcuts() {
 
     // Loupe mode active
     if (state.loupeIndex >= 0) {
-      if (quickEditState.isOpen) {
-        if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
-          e.preventDefault();
-          saveEdits('overwrite');
-          return;
-        }
-        if (e.key === 'e' || e.key === 'E') {
-          e.preventDefault();
-          closeQuickEdit(true);
-          return;
-        }
-        if (e.key === 'l' || e.key === 'L') {
-          e.preventDefault();
-          rotateLeft();
-          return;
-        }
-        if (e.key === 'r' || e.key === 'R') {
-          e.preventDefault();
-          rotateRight();
-          return;
-        }
-        if (e.key === 'c' || e.key === 'C') {
-          e.preventDefault();
-          toggleCrop();
-          return;
-        }
-        if (e.key === 's' || e.key === 'S') {
-          e.preventDefault();
-          toggleSmartFix();
-          return;
-        }
-        if (e.key === 'Enter') {
-          if (quickEditState.cropActive) {
-            e.preventDefault();
-            applyCrop();
-            return;
-          }
-        }
-        return;
-      }
 
       if (e.key === 'e' || e.key === 'E') {
         e.preventDefault();
@@ -482,6 +534,12 @@ export function setupKeyboardShortcuts() {
         e.preventDefault();
         if (dom.mapSearchInput) dom.mapSearchInput.focus();
       }
+    }
+  });
+
+  window.addEventListener('keyup', (e) => {
+    if (e.key === ' ' && quickEditState.isOpen && quickEditState.isComparing) {
+      stopCompare();
     }
   });
 
