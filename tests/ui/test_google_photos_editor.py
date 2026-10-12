@@ -800,3 +800,76 @@ def test_canvas_pointerdown_crop_handles_no_conflict(server, page: Page):
     is_comparing = page.evaluate("() => window._imagineQuickEdit.quickEditState.isComparing")
     assert is_comparing is False
 
+
+def test_auto_level_horizon_detection(server, page: Page):
+    """Auto Horizon Level detects horizon tilt and applies exact counter-rotation."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    # Open Horizon tool
+    page.locator("#quickEditHorizonBtn").click()
+    expect(page.locator("#horizonSubOptions")).to_be_visible()
+
+    # Replace workingCanvas with a synthetic tilted horizon of +4.0° (sky on top, dark sea below)
+    page.evaluate("""() => {
+        const qe = window._imagineQuickEdit.quickEditState;
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+        const rad = 4.0 * Math.PI / 180;
+        const xc = 320;
+        const yc = 240;
+        for (let y = 0; y < 480; y++) {
+            for (let x = 0; x < 640; x++) {
+                const hy = yc + (x - xc) * Math.tan(rad);
+                ctx.fillStyle = (y < hy) ? '#A0D0FF' : '#1A3320';
+                ctx.fillRect(x, y, 1, 1);
+            }
+        }
+        qe.workingCanvas = canvas;
+        qe.workingCtx = ctx;
+    }""")
+
+    # Click Auto Horizon button
+    page.locator("#horizonAutoBtn").click()
+
+    # With +4.0° tilt, straighten angle must be -4° to level the image
+    expect(page.locator("#horizonAngleVal")).to_have_text("-4°")
+    straighten_val = page.evaluate("() => window._imagineQuickEdit.quickEditState.straighten")
+    assert straighten_val == -4.0
+
+    # Now replace with a synthetic tilted horizon of -6.0°
+    page.evaluate("""() => {
+        const qe = window._imagineQuickEdit.quickEditState;
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+        const rad = -6.0 * Math.PI / 180;
+        const xc = 320;
+        const yc = 240;
+        for (let y = 0; y < 480; y++) {
+            for (let x = 0; x < 640; x++) {
+                const hy = yc + (x - xc) * Math.tan(rad);
+                ctx.fillStyle = (y < hy) ? '#A0D0FF' : '#1A3320';
+                ctx.fillRect(x, y, 1, 1);
+            }
+        }
+        qe.workingCanvas = canvas;
+        qe.workingCtx = ctx;
+    }""")
+
+    # Click Auto Horizon button
+    page.locator("#horizonAutoBtn").click()
+
+    # With -6.0° tilt, straighten angle must be +6° to level the image
+    expect(page.locator("#horizonAngleVal")).to_have_text("6°")
+    straighten_val = page.evaluate("() => window._imagineQuickEdit.quickEditState.straighten")
+    assert straighten_val == 6.0
+
+

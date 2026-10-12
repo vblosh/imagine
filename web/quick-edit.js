@@ -598,48 +598,156 @@ export function toggleHorizonTool() {
 export function autoLevelHorizon() {
   if (!quickEditState.isOpen || !quickEditState.workingCanvas) return;
   pushHistoryState();
+
   const src = quickEditState.workingCanvas;
-  const sampleW = 200;
-  const sampleH = 150;
+  const rot = quickEditState.rotation || 0;
+  const is90or270 = rot === 90 || rot === 270;
+  const origW = is90or270 ? src.height : src.width;
+  const origH = is90or270 ? src.width : src.height;
+
+  const maxDim = 320;
+  let sampleW = origW;
+  let sampleH = origH;
+  if (sampleW > maxDim || sampleH > maxDim) {
+    if (sampleW >= sampleH) {
+      sampleH = Math.max(20, Math.round((sampleH * maxDim) / sampleW));
+      sampleW = maxDim;
+    } else {
+      sampleW = Math.max(20, Math.round((sampleW * maxDim) / sampleH));
+      sampleH = maxDim;
+    }
+  }
+
   const sampleCanvas = document.createElement("canvas");
   sampleCanvas.width = sampleW;
   sampleCanvas.height = sampleH;
   const sCtx = sampleCanvas.getContext("2d");
-  sCtx.drawImage(src, 0, 0, sampleW, sampleH);
+
+  // Render proportional sample canvas with 90° rotation if applied
+  sCtx.save();
+  sCtx.translate(sampleW / 2, sampleH / 2);
+  sCtx.rotate((rot * Math.PI) / 180);
+  const srcSampleW = is90or270 ? sampleH : sampleW;
+  const srcSampleH = is90or270 ? sampleW : sampleH;
+  sCtx.drawImage(src, -srcSampleW / 2, -srcSampleH / 2, srcSampleW, srcSampleH);
+  sCtx.restore();
+
   const imgData = sCtx.getImageData(0, 0, sampleW, sampleH);
   const data = imgData.data;
 
+  // Convert to luminance array
   const gray = new Float32Array(sampleW * sampleH);
   for (let i = 0, j = 0; i < data.length; i += 4, j++) {
     gray[j] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
   }
 
-  let bestAngle = 0;
-  let maxEnergy = -1;
+  const xc = sampleW / 2;
+  const numSectors = 16;
+  const sectorW = sampleW / numSectors;
 
-  for (let deg = -15; deg <= 15; deg += 0.5) {
-    const rad = (deg * Math.PI) / 180;
-    let energy = 0;
-    for (let y = 20; y < sampleH - 20; y += 4) {
-      let prevVal = 0;
-      for (let x = 20; x < sampleW - 20; x += 4) {
-        const sampleX = Math.round(x);
-        const sampleY = Math.round(y + (x - sampleW / 2) * Math.tan(rad));
-        if (sampleY >= 1 && sampleY < sampleH - 1) {
-          const val = gray[sampleY * sampleW + sampleX];
-          energy += Math.abs(val - prevVal);
-          prevVal = val;
+  const edgeXs = [];
+  const edgeYs = [];
+  const edgeMags = [];
+  const edgeSectors = [];
+
+  // Gradient computation & near-horizontal edge extraction
+  function findEdges(gyThresh, gxRatio) {
+    edgeXs.length = 0;
+    edgeYs.length = 0;
+    edgeMags.length = 0;
+    edgeSectors.length = 0;
+    for (let y = 1; y < sampleH - 1; y++) {
+      const rowOffset = y * sampleW;
+      for (let x = 1; x < sampleW - 1; x++) {
+        const idx = rowOffset + x;
+        const gx = (gray[idx + 1] - gray[idx - 1]) * 0.5;
+        const gy = (gray[idx + sampleW] - gray[idx - sampleW]) * 0.5;
+        const absGx = Math.abs(gx);
+        const absGy = Math.abs(gy);
+
+        // Near-horizontal edges: vertical gradient dominates horizontal gradient
+        if (absGy >= gyThresh && absGx <= absGy * gxRatio) {
+          const mag = Math.hypot(gx, gy);
+          const sector = Math.min(numSectors - 1, Math.max(0, Math.floor(x / sectorW)));
+          edgeXs.push(x);
+          edgeYs.push(y);
+          edgeMags.push(mag);
+          edgeSectors.push(sector);
         }
       }
     }
-    if (energy > maxEnergy) {
-      maxEnergy = energy;
-      bestAngle = deg;
+  }
+
+  findEdges(18, 0.5);
+  if (edgeXs.length < 40) {
+    findEdges(10, 0.6);
+  }
+
+  const numEdges = edgeXs.length;
+  if (numEdges < 30) {
+    setStraightenAngle(0);
+    return;
+  }
+
+  const rowWeight = new Float32Array(sampleH);
+  const rowSectors = new Uint16Array(sampleH);
+
+  let bestAngle = 0;
+  let bestScore = 0;
+
+  // Search tilt angles in range -15°..+15° at 0.5° steps
+  for (let deg = -15.0; deg <= 15.05; deg += 0.5) {
+    rowWeight.fill(0);
+    rowSectors.fill(0);
+
+    const rad = (deg * Math.PI) / 180;
+    const tanR = Math.tan(rad);
+
+    for (let i = 0; i < numEdges; i++) {
+      const x = edgeXs[i];
+      const y = edgeYs[i];
+      const y0 = Math.round(y - (x - xc) * tanR);
+
+      if (y0 >= 5 && y0 < sampleH - 5) {
+        rowWeight[y0] += edgeMags[i];
+        rowSectors[y0] |= (1 << edgeSectors[i]);
+      }
+    }
+
+    // Evaluate candidate lines across rows
+    for (let r = 5; r < sampleH - 5; r++) {
+      const mask = rowSectors[r];
+      if (!mask) continue;
+
+      let cov = 0;
+      let m = mask;
+      while (m > 0) {
+        cov += m & 1;
+        m >>= 1;
+      }
+
+      // A dominant horizon must span across significant width (>= 6 sectors out of 16)
+      if (cov >= 6) {
+        const covRatio = cov / numSectors;
+        const score = rowWeight[r] * covRatio * covRatio;
+        if (score > bestScore) {
+          bestScore = score;
+          bestAngle = deg;
+        }
+      }
     }
   }
 
+  // Minimum confidence threshold to prevent false corrections on uniform or non-landscape images
+  const CONFIDENCE_THRESHOLD = 600;
+  if (bestScore < CONFIDENCE_THRESHOLD) {
+    setStraightenAngle(0);
+    return;
+  }
+
   const targetAngle = Math.round(bestAngle * 2) / 2;
-  setStraightenAngle(-targetAngle);
+  const correctionAngle = targetAngle === 0 ? 0 : -targetAngle;
+  setStraightenAngle(correctionAngle);
 }
 
 /* Crop Tool */
