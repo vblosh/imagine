@@ -192,7 +192,7 @@ export function captureStateSnapshot() {
 
 export function pushHistoryState() {
   quickEditState.history.push(captureStateSnapshot());
-  if (quickEditState.history.length > 50) quickEditState.history.shift();
+  if (quickEditState.history.length > 100) quickEditState.history.shift();
   quickEditState.redoStack = [];
   quickEditState.isDirty = true;
   updateUndoRedoUI();
@@ -248,6 +248,14 @@ export function updateUndoRedoUI() {
   if (dom.editorRedoBtn) dom.editorRedoBtn.disabled = quickEditState.redoStack.length === 0;
 }
 
+export function updateStraightenGridOverlay() {
+  if (!dom.straightenGridOverlay) return;
+  const isCropActive = quickEditState.activeTab === "crop" || quickEditState.cropActive;
+  const isHorizonOpen = dom.horizonSubOptions && dom.horizonSubOptions.style.display !== "none";
+  const hasStraighten = quickEditState.straighten !== 0;
+  dom.straightenGridOverlay.style.display = (isCropActive && hasStraighten) || isHorizonOpen ? "block" : "none";
+}
+
 /* Tab Management */
 export function switchTab(tabName) {
   if (!quickEditState.isOpen) return;
@@ -265,7 +273,7 @@ export function switchTab(tabName) {
       if (t.btn) t.btn.classList.remove("active");
       if (t.panel) t.panel.style.display = "none";
     });
-    if (dom.straightenGridOverlay) dom.straightenGridOverlay.style.display = "none";
+    updateStraightenGridOverlay();
     return;
   }
 
@@ -277,10 +285,7 @@ export function switchTab(tabName) {
     if (t.panel) t.panel.style.display = isActive ? "flex" : "none";
   });
 
-  // Toggle straighten grid overlay visibility if in crop tab with active straighten
-  if (dom.straightenGridOverlay) {
-    dom.straightenGridOverlay.style.display = (tabName === "crop" && quickEditState.straighten !== 0) ? "block" : "none";
-  }
+  updateStraightenGridOverlay();
 }
 
 /* Open / Close Quick Edit */
@@ -565,10 +570,7 @@ export function setStraightenAngle(angleDeg) {
   if (dom.editorStraightenVal) dom.editorStraightenVal.textContent = `${quickEditState.straighten}°`;
   if (dom.horizonAngleSlider) dom.horizonAngleSlider.value = quickEditState.straighten;
   if (dom.horizonAngleVal) dom.horizonAngleVal.textContent = `${quickEditState.straighten}°`;
-  if (dom.straightenGridOverlay) {
-    const isHorizonOpen = dom.horizonSubOptions && dom.horizonSubOptions.style.display !== "none";
-    dom.straightenGridOverlay.style.display = (quickEditState.straighten !== 0 || isHorizonOpen) ? "block" : "none";
-  }
+  updateStraightenGridOverlay();
   quickEditState.isDirty = true;
   renderQuickEditCanvas();
 }
@@ -590,9 +592,7 @@ export function toggleHorizonTool() {
   if (dom.quickEditHorizonBtn) {
     dom.quickEditHorizonBtn.classList.toggle("active", isOpening);
   }
-  if (dom.straightenGridOverlay) {
-    dom.straightenGridOverlay.style.display = (isOpening || quickEditState.straighten !== 0) ? "block" : "none";
-  }
+  updateStraightenGridOverlay();
 }
 
 export function autoLevelHorizon() {
@@ -762,6 +762,7 @@ export function toggleCrop() {
   } else {
     if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
   }
+  updateStraightenGridOverlay();
 }
 
 export function setCropAspectRatio(ratio) {
@@ -947,6 +948,7 @@ export function applyCrop() {
   quickEditState.previewCanvas = null;
 
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
+  updateStraightenGridOverlay();
   updateQuickEditToolbarUI();
   renderQuickEditCanvas();
 }
@@ -955,6 +957,7 @@ export function cancelCrop() {
   if (!quickEditState.isOpen) return;
   quickEditState.cropActive = false;
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
+  updateStraightenGridOverlay();
   updateQuickEditToolbarUI();
 }
 
@@ -981,12 +984,10 @@ export function applyQuickStyle(styleName) {
   if (styleName === "warm") {
     quickEditState.adjustments.warmth = 30;
     quickEditState.adjustments.saturation = 10;
-    quickEditState.filter = "none";
   } else if (styleName === "cool") {
     quickEditState.adjustments.warmth = -25;
     quickEditState.adjustments.tint = -5;
     quickEditState.adjustments.vibrance = 15;
-    quickEditState.filter = "none";
   } else if (styleName === "bw_drama") {
     quickEditState.filter = "onyx";
     quickEditState.filterIntensity = 100;
@@ -1087,7 +1088,7 @@ export function resetAllEdits() {
   quickEditState.redoStack = [];
 
   if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
-  if (dom.straightenGridOverlay) dom.straightenGridOverlay.style.display = "none";
+  updateStraightenGridOverlay();
   updateUndoRedoUI();
   updateQuickEditToolbarUI();
   renderQuickEditCanvas();
@@ -1159,6 +1160,9 @@ function processImageDataInPlace(imgData) {
       r = (r - 128) * cFactor + 128 + bOffset;
       g = (g - 128) * cFactor + 128 + bOffset;
       b = (b - 128) * cFactor + 128 + bOffset;
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
     }
 
     // 3. Highlights & Shadows & Whites & Blacks
@@ -1179,6 +1183,9 @@ function processImageDataInPlace(imgData) {
         const factor = (lum / 255) * (whites / 100) * 25;
         r += factor; g += factor; b += factor;
       }
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
     }
 
     // 4. Color: Warmth & Tint
@@ -1193,6 +1200,11 @@ function processImageDataInPlace(imgData) {
       r -= t * 0.5;
       b -= t * 0.5;
     }
+    if (warmth !== 0 || tint !== 0) {
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
+    }
 
     // 5. Saturation & Vibrance
     if (saturation !== 0 || vibrance !== 0) {
@@ -1206,6 +1218,9 @@ function processImageDataInPlace(imgData) {
       r = lum + (r - lum) * totalSatMult;
       g = lum + (g - lum) * totalSatMult;
       b = lum + (b - lum) * totalSatMult;
+      r = Math.max(0, Math.min(255, r));
+      g = Math.max(0, Math.min(255, g));
+      b = Math.max(0, Math.min(255, b));
     }
 
     // 6. Filter Preset
@@ -1548,6 +1563,10 @@ export function getFullResolutionExportCanvas() {
 export async function saveEdits(mode = "overwrite") {
   if (!quickEditState.isOpen || !dom.quickEditCanvas) return;
 
+  if (quickEditState.isComparing) {
+    stopCompare();
+  }
+
   const id = quickEditState.photoId;
   const currentItem = state.mediaItems.find(m => m.id === id);
   if (currentItem && (currentItem.media_type === "video" || currentItem.media_type === "audio")) {
@@ -1570,14 +1589,7 @@ export async function saveEdits(mode = "overwrite") {
       throw new Error("Failed to load original image");
     }
 
-    const hasAnyAdjustments = quickEditState.smartFixActive
-      || quickEditState.filter !== "none"
-      || Object.values(quickEditState.adjustments).some(v => v !== 0)
-      || quickEditState.straighten !== 0;
-
-    const canvas = hasAnyAdjustments
-      ? getFullResolutionExportCanvas()
-      : dom.quickEditCanvas;
+    const canvas = getFullResolutionExportCanvas();
 
     let res;
     if (typeof canvas.toBlob === "function") {

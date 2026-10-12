@@ -1085,10 +1085,6 @@ export function setupEventListeners() {
   if (dom.editorFlipVBtn) dom.editorFlipVBtn.addEventListener('click', toggleFlipV);
   if (dom.editorStraightenSlider) {
     let isDragging = false;
-    dom.editorStraightenSlider.addEventListener('pointerdown', () => {
-      isDragging = true;
-      pushHistoryState();
-    });
     dom.editorStraightenSlider.addEventListener('input', (e) => {
       if (!isDragging) {
         isDragging = true;
@@ -1097,6 +1093,9 @@ export function setupEventListeners() {
       setStraightenAngle(e.target.value);
     });
     dom.editorStraightenSlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+    dom.editorStraightenSlider.addEventListener('blur', () => {
       isDragging = false;
     });
     dom.editorStraightenSlider.addEventListener('keydown', (e) => {
@@ -1117,10 +1116,6 @@ export function setupEventListeners() {
   if (dom.horizonAutoBtn) dom.horizonAutoBtn.addEventListener('click', autoLevelHorizon);
   if (dom.horizonAngleSlider) {
     let isDragging = false;
-    dom.horizonAngleSlider.addEventListener('pointerdown', () => {
-      isDragging = true;
-      pushHistoryState();
-    });
     dom.horizonAngleSlider.addEventListener('input', (e) => {
       if (!isDragging) {
         isDragging = true;
@@ -1129,6 +1124,9 @@ export function setupEventListeners() {
       setStraightenAngle(e.target.value);
     });
     dom.horizonAngleSlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+    dom.horizonAngleSlider.addEventListener('blur', () => {
       isDragging = false;
     });
     dom.horizonAngleSlider.addEventListener('keydown', (e) => {
@@ -1167,10 +1165,6 @@ export function setupEventListeners() {
   if (dom.quickEditSmartFixBtn) dom.quickEditSmartFixBtn.addEventListener('click', toggleSmartFix);
   if (dom.smartFixIntensitySlider) {
     let isDragging = false;
-    dom.smartFixIntensitySlider.addEventListener('pointerdown', () => {
-      isDragging = true;
-      pushHistoryState();
-    });
     dom.smartFixIntensitySlider.addEventListener('input', (e) => {
       if (!isDragging) {
         isDragging = true;
@@ -1179,6 +1173,9 @@ export function setupEventListeners() {
       setSmartFixIntensity(parseInt(e.target.value, 10));
     });
     dom.smartFixIntensitySlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+    dom.smartFixIntensitySlider.addEventListener('blur', () => {
       isDragging = false;
     });
   }
@@ -1194,10 +1191,6 @@ export function setupEventListeners() {
     const valEl = dom[`val${cap}`];
     if (sliderEl) {
       let isDragging = false;
-      sliderEl.addEventListener('pointerdown', () => {
-        isDragging = true;
-        pushHistoryState();
-      });
       sliderEl.addEventListener('input', (e) => {
         if (!isDragging) {
           isDragging = true;
@@ -1206,6 +1199,9 @@ export function setupEventListeners() {
         setAdjustment(k, e.target.value);
       });
       sliderEl.addEventListener('change', () => {
+        isDragging = false;
+      });
+      sliderEl.addEventListener('blur', () => {
         isDragging = false;
       });
       // Requirement 2: pressing '0' resets slider to 0
@@ -1242,10 +1238,6 @@ export function setupEventListeners() {
   }
   if (dom.editorFilterIntensitySlider) {
     let isDragging = false;
-    dom.editorFilterIntensitySlider.addEventListener('pointerdown', () => {
-      isDragging = true;
-      pushHistoryState();
-    });
     dom.editorFilterIntensitySlider.addEventListener('input', (e) => {
       if (!isDragging) {
         isDragging = true;
@@ -1254,6 +1246,9 @@ export function setupEventListeners() {
       setFilterIntensity(e.target.value);
     });
     dom.editorFilterIntensitySlider.addEventListener('change', () => {
+      isDragging = false;
+    });
+    dom.editorFilterIntensitySlider.addEventListener('blur', () => {
       isDragging = false;
     });
   }
@@ -1266,6 +1261,7 @@ export function setupEventListeners() {
   }
   if (dom.quickEditCanvas) {
     dom.quickEditCanvas.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
       if (quickEditState.isOpen && !quickEditState.cropActive && !e.target.closest('#cropOverlay')) {
         startCompare();
       }

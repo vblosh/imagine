@@ -364,6 +364,7 @@ export function setupKeyboardShortcuts() {
         return;
       }
       if (e.key === ' ' && !e.repeat) {
+        if (active?.matches('select')) return;
         e.preventDefault();
         startCompare();
         return;
@@ -537,7 +538,7 @@ export function setupKeyboardShortcuts() {
   });
 
   window.addEventListener('keyup', (e) => {
-    if (e.key === ' ' && quickEditState.isOpen) {
+    if (e.key === ' ' && quickEditState.isOpen && quickEditState.isComparing) {
       stopCompare();
     }
   });
