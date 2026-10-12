@@ -53,16 +53,14 @@ import {
   closeQuickEdit,
   rotateLeft,
   rotateRight,
-  toggleCrop,
-  applyCrop,
-  cancelCrop,
-  toggleSmartFix,
+  activateMode,
+  applyMode,
+  cancelMode,
   saveEdits,
   undo,
   redo,
   startCompare,
   stopCompare,
-  toggleHorizonTool,
   hideDiscardModal,
   performCloseQuickEdit
 } from './quick-edit.js';
@@ -168,8 +166,8 @@ export function handleEscapeKey() {
 
   // 1b. Quick Edit Mode (cancel crop or exit quick edit)
   if (quickEditState.isOpen) {
-    if (quickEditState.cropActive) {
-      cancelCrop();
+    if (quickEditState.activeMode) {
+      cancelMode();
       return true;
     }
     closeQuickEdit(true);
@@ -397,23 +395,23 @@ export function setupKeyboardShortcuts() {
       }
       if (e.key === 'c' || e.key === 'C') {
         e.preventDefault();
-        toggleCrop();
+        activateMode('crop');
         return;
       }
       if (e.key === 'h' || e.key === 'H') {
         e.preventDefault();
-        toggleHorizonTool();
+        activateMode('horizon');
         return;
       }
       if (e.key === 's' || e.key === 'S') {
         e.preventDefault();
-        toggleSmartFix();
+        activateMode('smartfix');
         return;
       }
       if (e.key === 'Enter') {
-        if (quickEditState.cropActive) {
+        if (quickEditState.activeMode) {
           e.preventDefault();
-          applyCrop();
+          applyMode();
           return;
         }
       }

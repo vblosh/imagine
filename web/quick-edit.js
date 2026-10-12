@@ -3,9 +3,10 @@
  * Pure Vanilla JavaScript (Offline-ready, zero external dependencies)
  *
  * Features:
- * - 4 Category Tabs: Suggestions (Auto/Enhance & Styles), Crop & Straighten, Adjust, Filters
+ * - 6 exclusive edit modes (Crop, Horizon, Smart Fix, Suggestions, Adjust, Filters):
+ *   one active at a time, global Apply/Cancel, a single undo step per applied mode
  * - Suggestions: One-tap Auto Enhance (Smart Fix) with intensity slider, Quick style looks (Warm, Cool, B&W Drama)
- * - Crop & Straighten: Aspect ratios, 90° rotate (L/R), Angle straighten (-45°..+45°), Flip H & Flip V, interactive 8-handle crop box
+ * - Crop tools (toolbar): Aspect ratios, 90° rotate (L/R), Angle straighten (-45°..+45°), Flip H & Flip V, interactive 8-handle crop box
  * - Adjust: Light (Brightness, Contrast, Highlights, Shadows, Whites, Blacks),
  *           Color (Saturation, Warmth, Tint, Vibrance),
  *           Details (Sharpness, Vignette)
@@ -79,7 +80,14 @@ export const quickEditState = {
   smartFixIntensity: 100,
   isComparing: false,
   smartFixLUT: null,
-  activeTab: "suggestions",
+  // Mutually exclusive edit mode: null | 'crop' | 'horizon' | 'smartfix' | 'suggestions' | 'adjust' | 'filters'.
+  // While a mode is active, every edit collapses into a single undo step recorded on apply.
+  activeMode: null,
+  modeSessionPushed: false,
+  modeSessionHistoryLen: 0,
+  modeEntrySnapshot: null,
+  modeEntryCropBox: null,
+  modeEntryCropRatio: "original",
   adjustments: { ...DEFAULT_ADJUSTMENTS },
   filter: "none",
   filterIntensity: 100,
@@ -194,8 +202,15 @@ export function captureStateSnapshot() {
 }
 
 export function pushHistoryState() {
+  // While an edit mode is active, the first mutation captures the single
+  // undo entry for the whole session; further pushes are absorbed until apply.
+  if (quickEditState.activeMode && quickEditState.modeSessionPushed) return;
   quickEditState.history.push(captureStateSnapshot());
   if (quickEditState.history.length > 100) quickEditState.history.shift();
+  if (quickEditState.activeMode) {
+    quickEditState.modeSessionPushed = true;
+    quickEditState.modeSessionHistoryLen = quickEditState.history.length;
+  }
   quickEditState.redoStack = [];
   quickEditState.isDirty = true;
   updateUndoRedoUI();
@@ -226,6 +241,9 @@ function applyStateSnapshot(snap) {
 
 export function undo() {
   if (!quickEditState.isOpen || quickEditState.history.length === 0) return;
+  // Undo first applies the open mode as one step, then steps back over it.
+  if (quickEditState.activeMode) applyMode();
+  if (quickEditState.history.length === 0) return;
   const current = captureStateSnapshot();
   quickEditState.redoStack.push(current);
   const prev = quickEditState.history.pop();
@@ -238,6 +256,7 @@ export function undo() {
 
 export function redo() {
   if (!quickEditState.isOpen || quickEditState.redoStack.length === 0) return;
+  if (quickEditState.activeMode) applyMode();
   const current = captureStateSnapshot();
   quickEditState.history.push(current);
   const next = quickEditState.redoStack.pop();
@@ -282,42 +301,143 @@ export function clearQuickStyle() {
 
 export function updateStraightenGridOverlay() {
   if (!dom.straightenGridOverlay) return;
-  const isCropActive = quickEditState.activeTab === "crop" || quickEditState.cropActive;
+  const isCropActive = quickEditState.cropActive;
   const isHorizonOpen = dom.horizonSubOptions && dom.horizonSubOptions.style.display !== "none";
   const hasStraighten = quickEditState.straighten !== 0;
   dom.straightenGridOverlay.style.display = (isCropActive && hasStraighten) || isHorizonOpen ? "block" : "none";
 }
 
-/* Tab Management */
-export function switchTab(tabName) {
-  if (!quickEditState.isOpen) return;
+/* Edit Mode Management: exactly one mode active at a time.
+ * Activating a mode applies the previously active one. Deselecting a mode
+ * (clicking its button again) applies it. Global Apply/Cancel buttons act
+ * on the active mode. History entries are recorded only on apply. */
+export const EDIT_MODES = ["crop", "horizon", "smartfix", "suggestions", "adjust", "filters"];
 
-  const tabs = [
-    { name: "suggestions", btn: dom.editorTabSuggestions, panel: dom.editorPanelSuggestions },
-    { name: "crop", btn: dom.editorTabCrop, panel: dom.editorPanelCrop },
-    { name: "adjust", btn: dom.editorTabAdjust, panel: dom.editorPanelAdjust },
-    { name: "filters", btn: dom.editorTabFilters, panel: dom.editorPanelFilters },
-  ];
+export function getActiveMode() {
+  return quickEditState.activeMode;
+}
 
-  if (quickEditState.activeTab === tabName) {
-    quickEditState.activeTab = null;
-    tabs.forEach(t => {
-      if (t.btn) t.btn.classList.remove("active");
-      if (t.panel) t.panel.style.display = "none";
-    });
-    updateStraightenGridOverlay();
+function captureModeEntry() {
+  quickEditState.modeEntrySnapshot = captureStateSnapshot();
+  quickEditState.modeEntryCropBox = { ...quickEditState.cropBox };
+  quickEditState.modeEntryCropRatio = quickEditState.cropRatio;
+}
+
+function clearModeSession() {
+  quickEditState.activeMode = null;
+  quickEditState.modeSessionPushed = false;
+  quickEditState.modeSessionHistoryLen = 0;
+  quickEditState.modeEntrySnapshot = null;
+  quickEditState.modeEntryCropBox = null;
+  quickEditState.modeEntryCropRatio = "original";
+}
+
+export function activateMode(mode) {
+  if (!quickEditState.isOpen || !EDIT_MODES.includes(mode)) return;
+  if (quickEditState.activeMode === mode) {
+    applyMode();
     return;
   }
-
-  quickEditState.activeTab = tabName;
-
-  tabs.forEach(t => {
-    const isActive = t.name === tabName;
-    if (t.btn) t.btn.classList.toggle("active", isActive);
-    if (t.panel) t.panel.style.display = isActive ? "flex" : "none";
-  });
-
+  if (quickEditState.activeMode) applyMode();
+  quickEditState.activeMode = mode;
+  quickEditState.modeSessionPushed = false;
+  if (mode === "crop" && !quickEditState.cropActive) {
+    quickEditState.cropActive = true;
+    initCropBox();
+    if (dom.cropOverlay) dom.cropOverlay.style.display = "block";
+  }
+  captureModeEntry();
+  updateQuickEditToolbarUI();
   updateStraightenGridOverlay();
+  renderQuickEditCanvas();
+}
+
+function snapshotsEqual(a, b) {
+  if (!a || !b) return false;
+  for (const k of ["rotation", "straighten", "smartFixIntensity", "filterIntensity"]) {
+    if ((a[k] ?? 0) !== (b[k] ?? 0)) return false;
+  }
+  for (const k of ["flipH", "flipV", "hasCropped", "smartFixActive"]) {
+    if (!!a[k] !== !!b[k]) return false;
+  }
+  if ((a.filter || "none") !== (b.filter || "none")) return false;
+  if ((a.quickStyle || null) !== (b.quickStyle || null)) return false;
+  const normCrop = (n) => (n ? [n.rx, n.ry, n.rw, n.rh, n.rotation].join(",") : "");
+  if (normCrop(a.normalizedCrop) !== normCrop(b.normalizedCrop)) return false;
+  const adjA = a.adjustments || {};
+  const adjB = b.adjustments || {};
+  const adjKeys = new Set([...Object.keys(adjA), ...Object.keys(adjB)]);
+  for (const k of adjKeys) {
+    if ((adjA[k] ?? 0) !== (adjB[k] ?? 0)) return false;
+  }
+  return a.workingCanvas === b.workingCanvas;
+}
+
+/* True when the crop session changed anything that must be baked on apply. */
+function cropSessionChanged() {
+  const e = quickEditState.modeEntrySnapshot;
+  if (!e) return true;
+  if (quickEditState.rotation !== (e.rotation || 0)
+      || quickEditState.straighten !== (e.straighten || 0)
+      || !!quickEditState.flipH !== !!e.flipH
+      || !!quickEditState.flipV !== !!e.flipV) return true;
+  if (quickEditState.workingCanvas !== e.workingCanvas) return true;
+  const b = quickEditState.cropBox;
+  const eb = quickEditState.modeEntryCropBox;
+  if (!eb) return true;
+  return b.x !== eb.x || b.y !== eb.y || b.w !== eb.w || b.h !== eb.h;
+}
+
+export function applyMode() {
+  const mode = quickEditState.activeMode;
+  if (!quickEditState.isOpen || !mode) return;
+  if (mode === "crop" && cropSessionChanged()) {
+    // Bake the crop (and any pending transforms); session-aware push keeps one entry.
+    pushHistoryState();
+    bakeCrop();
+  }
+  if (quickEditState.modeSessionPushed
+      && snapshotsEqual(quickEditState.modeEntrySnapshot, captureStateSnapshot())
+      && quickEditState.history.length === quickEditState.modeSessionHistoryLen) {
+    // No net change across the session: drop the no-op entry.
+    quickEditState.history.pop();
+    quickEditState.isDirty = hasAnyEdits();
+    updateUndoRedoUI();
+  }
+  if (mode === "crop") {
+    quickEditState.cropActive = false;
+    if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
+  }
+  clearModeSession();
+  updateQuickEditToolbarUI();
+  updateStraightenGridOverlay();
+  renderQuickEditCanvas();
+}
+
+export function cancelMode() {
+  const mode = quickEditState.activeMode;
+  if (!quickEditState.isOpen || !mode) return;
+  if (quickEditState.modeSessionPushed
+      && quickEditState.history.length === quickEditState.modeSessionHistoryLen) {
+    quickEditState.history.pop();
+    updateUndoRedoUI();
+  }
+  if (quickEditState.modeEntrySnapshot) applyStateSnapshot(quickEditState.modeEntrySnapshot);
+  if (mode === "crop") {
+    if (quickEditState.modeEntryCropBox) quickEditState.cropBox = { ...quickEditState.modeEntryCropBox };
+    if (quickEditState.modeEntryCropRatio) {
+      quickEditState.cropRatio = quickEditState.modeEntryCropRatio;
+      if (dom.cropAspectRatioSelect) dom.cropAspectRatioSelect.value = quickEditState.cropRatio;
+    }
+    updateCropOverlayDOM();
+    quickEditState.cropActive = false;
+    if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
+  }
+  quickEditState.isDirty = hasAnyEdits();
+  clearModeSession();
+  updateQuickEditToolbarUI();
+  updateStraightenGridOverlay();
+  renderQuickEditCanvas();
 }
 
 /* Open / Close Quick Edit */
@@ -341,7 +461,7 @@ export function openQuickEdit() {
   quickEditState.smartFixIntensity = 100;
   quickEditState.isComparing = false;
   quickEditState.smartFixLUT = null;
-  quickEditState.activeTab = null;
+  clearModeSession();
   quickEditState.adjustments = { ...DEFAULT_ADJUSTMENTS };
   quickEditState.filter = "none";
   quickEditState.filterIntensity = 100;
@@ -492,6 +612,9 @@ export function hideDiscardModal() {
 export function closeQuickEdit(promptIfDirty = true) {
   if (!quickEditState.isOpen) return;
 
+  // Closing the editor applies the open mode as one undo step.
+  if (quickEditState.activeMode) applyMode();
+
   if (promptIfDirty && quickEditState.isDirty) {
     showDiscardModal();
     return;
@@ -518,6 +641,7 @@ export function performCloseQuickEdit() {
   quickEditState.imageLoadedPromise = null;
   quickEditState.history = [];
   quickEditState.redoStack = [];
+  clearModeSession();
 
   if (dom.loupeModal) dom.loupeModal.classList.remove("is-quick-editing");
   if (dom.loupeQuickEditBtn) dom.loupeQuickEditBtn.classList.remove("active");
@@ -587,7 +711,6 @@ export function toggleFlipH() {
   pushHistoryState();
   quickEditState.flipH = !quickEditState.flipH;
   if (dom.editorFlipHBtn) dom.editorFlipHBtn.classList.toggle("active", quickEditState.flipH);
-  if (dom.panelFlipHBtn) dom.panelFlipHBtn.classList.toggle("active", quickEditState.flipH);
   clearQuickStyle();
   renderQuickEditCanvas();
 }
@@ -597,7 +720,6 @@ export function toggleFlipV() {
   pushHistoryState();
   quickEditState.flipV = !quickEditState.flipV;
   if (dom.editorFlipVBtn) dom.editorFlipVBtn.classList.toggle("active", quickEditState.flipV);
-  if (dom.panelFlipVBtn) dom.panelFlipVBtn.classList.toggle("active", quickEditState.flipV);
   clearQuickStyle();
   renderQuickEditCanvas();
 }
@@ -623,16 +745,9 @@ export function resetStraighten() {
   }
 }
 
-export function toggleHorizonTool() {
-  if (!quickEditState.isOpen) return;
-  const isOpening = !dom.horizonSubOptions || dom.horizonSubOptions.style.display === "none";
-  if (dom.horizonSubOptions) {
-    dom.horizonSubOptions.style.display = isOpening ? "flex" : "none";
-  }
-  if (dom.quickEditHorizonBtn) {
-    dom.quickEditHorizonBtn.classList.toggle("active", isOpening);
-  }
-  updateStraightenGridOverlay();
+/* True while the Horizon correction sub-panel is open */
+export function isHorizonToolOpen() {
+  return quickEditState.activeMode === "horizon";
 }
 
 export function autoLevelHorizon() {
@@ -791,21 +906,6 @@ export function autoLevelHorizon() {
   setStraightenAngle(correctionAngle);
 }
 
-/* Crop Tool */
-export function toggleCrop() {
-  if (!quickEditState.isOpen) return;
-  quickEditState.cropActive = !quickEditState.cropActive;
-  updateQuickEditToolbarUI();
-
-  if (quickEditState.cropActive) {
-    initCropBox();
-    if (dom.cropOverlay) dom.cropOverlay.style.display = "block";
-  } else {
-    if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
-  }
-  updateStraightenGridOverlay();
-}
-
 export function setCropAspectRatio(ratio) {
   quickEditState.cropRatio = ratio;
   if (dom.cropAspectRatioSelect) {
@@ -923,7 +1023,9 @@ function updateCropOverlayDOM() {
   }
 }
 
-export function applyCrop() {
+/* Bake the pending crop (and transforms) into the working canvas.
+ * Called only from applyMode() after the session history entry was recorded. */
+function bakeCrop() {
   if (!quickEditState.isOpen || !quickEditState.cropActive) return;
 
   const disp = getActiveCanvasDisplayRect();
@@ -938,8 +1040,6 @@ export function applyCrop() {
   const srcH = Math.min(canvas.height - srcY, Math.round(h * scale));
 
   if (srcW <= 10 || srcH <= 10) return;
-
-  pushHistoryState();
 
   const croppedCanvas = document.createElement("canvas");
   croppedCanvas.width = srcW;
@@ -989,18 +1089,7 @@ export function applyCrop() {
   quickEditState.previewCanvas = null;
   clearQuickStyle();
 
-  if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
-  updateStraightenGridOverlay();
-  updateQuickEditToolbarUI();
-  renderQuickEditCanvas();
-}
-
-export function cancelCrop() {
-  if (!quickEditState.isOpen) return;
-  quickEditState.cropActive = false;
-  if (dom.cropOverlay) dom.cropOverlay.style.display = "none";
-  updateStraightenGridOverlay();
-  updateQuickEditToolbarUI();
+  // Overlay/UI sync is handled centrally by applyMode().
 }
 
 /* Suggestions & Smart Fix */
@@ -1119,8 +1208,12 @@ export function resetAllEdits() {
 
   // Only record history when there is actually something to revert to
   if (hasAnyEdits()) {
+    // Reset is a standalone undo step even inside an open mode session.
+    quickEditState.modeSessionPushed = false;
     pushHistoryState();
   }
+  // Reset supersedes any open mode session (no apply/cancel semantics).
+  clearModeSession();
   initWorkingCanvas(quickEditState.originalImage);
   quickEditState.rotation = 0;
   quickEditState.straighten = 0;
@@ -1615,6 +1708,9 @@ export function getFullResolutionExportCanvas() {
 export async function saveEdits(mode = "overwrite") {
   if (!quickEditState.isOpen || !dom.quickEditCanvas) return;
 
+  // Saving applies the open mode as one undo step so nothing is lost.
+  if (quickEditState.activeMode) applyMode();
+
   if (quickEditState.isComparing) {
     stopCompare();
   }
@@ -1752,21 +1848,33 @@ export async function saveEdits(mode = "overwrite") {
 
 /* Update Toolbar UI controls */
 export function updateQuickEditToolbarUI() {
+  const mode = quickEditState.activeMode;
+
+  // Mode buttons & option panels: exactly one mode visible at a time
   if (dom.quickEditCropBtn) {
-    dom.quickEditCropBtn.classList.toggle("active", quickEditState.cropActive);
+    dom.quickEditCropBtn.classList.toggle("active", mode === "crop");
   }
   if (dom.cropSubOptions) {
-    dom.cropSubOptions.style.display = quickEditState.cropActive ? "flex" : "none";
+    dom.cropSubOptions.style.display = mode === "crop" ? "flex" : "none";
+  }
+  if (dom.quickEditHorizonBtn) {
+    dom.quickEditHorizonBtn.classList.toggle("active", mode === "horizon");
+  }
+  if (dom.horizonSubOptions) {
+    dom.horizonSubOptions.style.display = mode === "horizon" ? "flex" : "none";
   }
   if (dom.cropAspectRatioSelect) {
     dom.cropAspectRatioSelect.value = quickEditState.cropRatio;
   }
 
   if (dom.quickEditSmartFixBtn) {
-    dom.quickEditSmartFixBtn.classList.toggle("active", quickEditState.smartFixActive);
+    dom.quickEditSmartFixBtn.classList.toggle("active", mode === "smartfix");
   }
   if (dom.smartFixSubOptions) {
-    dom.smartFixSubOptions.style.display = quickEditState.smartFixActive ? "flex" : "none";
+    dom.smartFixSubOptions.style.display = mode === "smartfix" ? "flex" : "none";
+  }
+  if (dom.smartFixEnabledCheckbox) {
+    dom.smartFixEnabledCheckbox.checked = quickEditState.smartFixActive;
   }
   if (dom.smartFixIntensitySlider) {
     dom.smartFixIntensitySlider.value = quickEditState.smartFixIntensity;
@@ -1775,17 +1883,38 @@ export function updateQuickEditToolbarUI() {
     dom.smartFixIntensityVal.textContent = `${quickEditState.smartFixIntensity}%`;
   }
 
+  if (dom.editorTabSuggestions) {
+    dom.editorTabSuggestions.classList.toggle("active", mode === "suggestions");
+  }
+  if (dom.editorPanelSuggestions) {
+    dom.editorPanelSuggestions.style.display = mode === "suggestions" ? "flex" : "none";
+  }
+  if (dom.editorTabAdjust) {
+    dom.editorTabAdjust.classList.toggle("active", mode === "adjust");
+  }
+  if (dom.editorPanelAdjust) {
+    dom.editorPanelAdjust.style.display = mode === "adjust" ? "flex" : "none";
+  }
+  if (dom.editorTabFilters) {
+    dom.editorTabFilters.classList.toggle("active", mode === "filters");
+  }
+  if (dom.editorPanelFilters) {
+    dom.editorPanelFilters.style.display = mode === "filters" ? "flex" : "none";
+  }
+
+  // Global mode Apply/Cancel: visible only while a mode is active
+  if (dom.modeApplyBtn) {
+    dom.modeApplyBtn.style.display = mode ? "" : "none";
+  }
+  if (dom.modeCancelBtn) {
+    dom.modeCancelBtn.style.display = mode ? "" : "none";
+  }
+
   if (dom.editorFlipHBtn) {
     dom.editorFlipHBtn.classList.toggle("active", quickEditState.flipH);
   }
   if (dom.editorFlipVBtn) {
     dom.editorFlipVBtn.classList.toggle("active", quickEditState.flipV);
-  }
-  if (dom.panelFlipHBtn) {
-    dom.panelFlipHBtn.classList.toggle("active", quickEditState.flipH);
-  }
-  if (dom.panelFlipVBtn) {
-    dom.panelFlipVBtn.classList.toggle("active", quickEditState.flipV);
   }
   if (dom.editorStraightenSlider) {
     dom.editorStraightenSlider.value = quickEditState.straighten;
@@ -1934,12 +2063,4 @@ export function setupCropMouseListeners() {
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
   });
-
-  if (dom.cropOverlay) {
-    dom.cropOverlay.addEventListener("pointerdown", (e) => {
-      if (e.target.closest("#cropOverlay")) {
-        e.stopPropagation();
-      }
-    });
-  }
 }

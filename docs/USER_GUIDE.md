@@ -363,13 +363,21 @@ Imagine includes a comprehensive, browser-native photo editing suite inspired by
 |                                                                                                   |
 |---------------------------------------------------------------------------------------------------|
 | [Undo][Redo] | [Rotate][Flip H][Flip V] | [Horiz.] | [Smart Fix (100%)] [Warm][Cool][B&W] | [Compare] |
-|              | Tabs: [Suggestions] [Crop] [Adjust] [Filters]                                      |
+|  [Apply] [Cancel] (visible while a mode is active)                                          |
+|  Modes (one active at a time): [Crop] [Horizon] [Smart Fix] | Tabs: [Suggestions] [Adjust] [Filters] |
 +---------------------------------------------------------------------------------------------------+
 ```
 
+### Edit Modes, Apply & Cancel
+- The editor has six mutually exclusive modes: **Crop**, **Horizon**, **Smart Fix**, **Suggestions**, **Adjust**, **Filters**.
+  Click a mode button to activate it; only its options are shown.
+- Clicking the active mode button again (deselecting it), switching to another mode, saving, or closing the editor
+  **applies** the mode. The global **Apply** button (<kbd>Enter</kbd>) applies it explicitly, **Cancel** (<kbd>Esc</kbd>) reverts every change made inside the mode.
+- Undo history records a **single step per applied mode**, never one step per slider move — including **Reset**, which restores your previous edits.
+
 ### 1. Suggestions & Smart Fix
 Designed for rapid, one-tap enhancements:
-- **Smart Fix (<kbd>S</kbd>)**: Analyzes the image's dynamic range and 256-bin RGB histograms.
+- **Smart Fix (<kbd>S</kbd>)**: Opens the Smart Fix mode; enable it with the checkbox, then tune intensity. Analyzes the image's dynamic range and 256-bin RGB histograms.
   - Automatically stretches contrast using 0.5% percentile shadow/highlight clipping.
   - Applies adaptive gamma compensation ($\gamma \approx 0.72–1.0$) to lift underexposed shadows without blowing out highlights.
   - Balances channel means to eliminate unnatural indoor tungsten or cold shadow color casts.
@@ -381,6 +389,8 @@ Designed for rapid, one-tap enhancements:
   - **B&W Drama**: Instantly applies the high-contrast *Onyx* monochrome filter preset with deep blacks and punchy whites.
 
 ### 2. Crop, Rotate & Horizon Correction
+- **Crop mode**: Click **Crop** (<kbd>C</kbd>) to activate it. Drag the crop box, pick an aspect ratio, straighten or flip.
+  Deselecting Crop, switching modes, or pressing the global **Apply** bakes the crop; **Cancel** reverts it.
 - **Aspect Ratio Selector**:
   - `Original`: Constrains crop box to original image proportions.
   - `Free`: Unconstrained freeform rectangular crop.

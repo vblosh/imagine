@@ -128,14 +128,10 @@ import {
   toggleFlipV,
   setStraightenAngle,
   resetStraighten,
-  toggleHorizonTool,
   autoLevelHorizon,
   hideDiscardModal,
   performCloseQuickEdit,
-  toggleCrop,
   setCropAspectRatio,
-  applyCrop,
-  cancelCrop,
   toggleSmartFix,
   setSmartFixIntensity,
   applyQuickStyle,
@@ -147,7 +143,9 @@ import {
   stopCompare,
   undo,
   redo,
-  switchTab,
+  activateMode,
+  applyMode,
+  cancelMode,
   pushHistoryState,
   resetAllEdits,
   saveEdits,
@@ -1111,7 +1109,7 @@ export function setupEventListeners() {
   if (dom.editorStraightenResetBtn) dom.editorStraightenResetBtn.addEventListener('click', resetStraighten);
 
   // Horizon correction tool
-  if (dom.quickEditHorizonBtn) dom.quickEditHorizonBtn.addEventListener('click', toggleHorizonTool);
+  if (dom.quickEditHorizonBtn) dom.quickEditHorizonBtn.addEventListener('click', () => activateMode('horizon'));
   if (dom.horizonResetBtn) dom.horizonResetBtn.addEventListener('click', resetStraighten);
   if (dom.horizonAutoBtn) dom.horizonAutoBtn.addEventListener('click', autoLevelHorizon);
   if (dom.horizonAngleSlider) {
@@ -1140,29 +1138,31 @@ export function setupEventListeners() {
     });
   }
 
-  // Tab switching
-  if (dom.editorTabSuggestions) dom.editorTabSuggestions.addEventListener('click', () => switchTab('suggestions'));
-  if (dom.editorTabCrop) dom.editorTabCrop.addEventListener('click', () => switchTab('crop'));
-  if (dom.editorTabAdjust) dom.editorTabAdjust.addEventListener('click', () => switchTab('adjust'));
-  if (dom.editorTabFilters) dom.editorTabFilters.addEventListener('click', () => switchTab('filters'));
+  // Edit modes: exactly one active at a time (deselect applies)
+  if (dom.editorTabSuggestions) dom.editorTabSuggestions.addEventListener('click', () => activateMode('suggestions'));
+  if (dom.editorTabAdjust) dom.editorTabAdjust.addEventListener('click', () => activateMode('adjust'));
+  if (dom.editorTabFilters) dom.editorTabFilters.addEventListener('click', () => activateMode('filters'));
+  if (dom.modeApplyBtn) dom.modeApplyBtn.addEventListener('click', applyMode);
+  if (dom.modeCancelBtn) dom.modeCancelBtn.addEventListener('click', cancelMode);
 
   // Quick styles (Suggestions panel)
   if (dom.panelStyleWarmBtn) dom.panelStyleWarmBtn.addEventListener('click', () => applyQuickStyle('warm'));
   if (dom.panelStyleCoolBtn) dom.panelStyleCoolBtn.addEventListener('click', () => applyQuickStyle('cool'));
   if (dom.panelStyleBwBtn) dom.panelStyleBwBtn.addEventListener('click', () => applyQuickStyle('bw_drama'));
-  if (dom.panelFlipHBtn) dom.panelFlipHBtn.addEventListener('click', toggleFlipH);
-  if (dom.panelFlipVBtn) dom.panelFlipVBtn.addEventListener('click', toggleFlipV);
 
   // Crop controls
-  if (dom.quickEditCropBtn) dom.quickEditCropBtn.addEventListener('click', toggleCrop);
+  if (dom.quickEditCropBtn) dom.quickEditCropBtn.addEventListener('click', () => activateMode('crop'));
   if (dom.cropAspectRatioSelect) {
     dom.cropAspectRatioSelect.addEventListener('change', (e) => setCropAspectRatio(e.target.value));
   }
-  if (dom.quickEditApplyCropBtn) dom.quickEditApplyCropBtn.addEventListener('click', applyCrop);
-  if (dom.quickEditCancelCropBtn) dom.quickEditCancelCropBtn.addEventListener('click', cancelCrop);
 
   // Smart fix controls
-  if (dom.quickEditSmartFixBtn) dom.quickEditSmartFixBtn.addEventListener('click', toggleSmartFix);
+  if (dom.quickEditSmartFixBtn) dom.quickEditSmartFixBtn.addEventListener('click', () => activateMode('smartfix'));
+  if (dom.smartFixEnabledCheckbox) {
+    dom.smartFixEnabledCheckbox.addEventListener('change', (e) => {
+      if (e.target.checked !== quickEditState.smartFixActive) toggleSmartFix();
+    });
+  }
   if (dom.smartFixIntensitySlider) {
     let isDragging = false;
     dom.smartFixIntensitySlider.addEventListener('input', (e) => {

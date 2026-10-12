@@ -512,8 +512,8 @@ def test_crop_undo_redo_restores_canvas(server, page: Page):
     expect(page.locator("#cropOverlay")).to_be_visible()
     page.locator("#cropAspectRatioSelect").select_option("1:1")
 
-    # Apply crop
-    page.locator("#quickEditApplyCropBtn").click()
+    # Apply crop via the global mode Apply button
+    page.locator("#modeApplyBtn").click()
     expect(page.locator("#cropOverlay")).to_be_hidden()
 
     cropped_dims = page.evaluate("""() => {
@@ -588,8 +588,8 @@ def test_crop_with_straighten_and_flip(server, page: Page):
     # Flip horizontal
     page.locator("#editorFlipHBtn").click()
 
-    # Apply crop
-    page.locator("#quickEditApplyCropBtn").click()
+    # Apply crop via the global mode Apply button
+    page.locator("#modeApplyBtn").click()
     expect(page.locator("#cropOverlay")).to_be_hidden()
 
     # Active transforms must be reset to 0 to prevent double-transforms
@@ -610,8 +610,8 @@ def test_crop_with_straighten_and_flip(server, page: Page):
     assert state_after["flipV"] is False
 
 
-def test_suggestions_and_crop_tab_navigation(server, page: Page):
-    """Suggestions and Crop tabs open their panels and trigger quick styles and flips."""
+def test_suggestions_tab_navigation_and_toolbar_flips(server, page: Page):
+    """Suggestions tab opens its panel; toolbar flip buttons toggle state."""
     page.goto(server["url"])
 
     card = page.locator(".photo-card", has_text="mountain.bmp")
@@ -639,15 +639,8 @@ def test_suggestions_and_crop_tab_navigation(server, page: Page):
     filter_val = page.evaluate("() => window._imagineQuickEdit.quickEditState.filter")
     assert filter_val == "onyx"
 
-    # Switch to Crop panel
-    tab_crop = page.locator("#editorTabCrop")
-    panel_crop = page.locator("#editorPanelCrop")
-    tab_crop.click()
-    expect(panel_crop).to_be_visible()
-    expect(panel_suggestions).to_be_hidden()
-
-    # Click panel flip H button
-    page.locator("#panelFlipHBtn").click()
+    # Toggle Flip H from the toolbar (flips live in the toolbar, not in a Crop tab)
+    page.locator("#editorFlipHBtn").click()
     is_flip_h = page.evaluate("() => window._imagineQuickEdit.quickEditState.flipH")
     assert is_flip_h is True
 
@@ -742,14 +735,14 @@ def test_onyx_filter_adjustments_and_parameters(server, page: Page):
 
 
 def test_straighten_reset_recorded_in_history(server, page: Page):
-    """Straightening angle and clicking 0° reset button records previous angle in history for Undo."""
+    """A crop-mode session with no net change (slider moved then reset) records no undo step."""
     page.goto(server["url"])
 
     card = page.locator(".photo-card", has_text="mountain.bmp")
     card.dblclick()
     page.locator("#loupeQuickEditBtn").click()
 
-    # Open crop tool
+    # Open crop mode
     page.locator("#quickEditCropBtn").click()
     expect(page.locator("#cropSubOptions")).to_be_visible()
 
@@ -762,17 +755,14 @@ def test_straighten_reset_recorded_in_history(server, page: Page):
     }""")
     expect(page.locator("#editorStraightenVal")).to_have_text("20°")
 
-    # Click 0° Reset button
+    # Click 0° Reset button (still inside the same mode session)
     page.locator("#editorStraightenResetBtn").click()
     expect(page.locator("#editorStraightenVal")).to_have_text("0°")
 
-    # Undo must restore 20°
-    undo_btn = page.locator("#editorUndoBtn")
-    expect(undo_btn).to_be_enabled()
-    undo_btn.click()
-    expect(page.locator("#editorStraightenVal")).to_have_text("20°")
-    angle_after_undo = page.evaluate("() => window._imagineQuickEdit.quickEditState.straighten")
-    assert angle_after_undo == 20
+    # Apply the mode: no net change means no undo step and a clean editor
+    page.locator("#modeApplyBtn").click()
+    expect(page.locator("#editorUndoBtn")).to_be_disabled()
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.isDirty") is False
 
 
 def test_canvas_pointerdown_crop_handles_no_conflict(server, page: Page):
@@ -987,6 +977,8 @@ def test_quick_style_buttons_reflect_active_state(server, page: Page):
     warm_btn.click()
     expect(warm_btn).to_have_class(re.compile(r"\bactive\b"))
     page.locator("#quickEditSmartFixBtn").click()
+    expect(page.locator("#smartFixSubOptions")).to_be_visible()
+    page.locator("#smartFixEnabledCheckbox").check()
     expect(warm_btn).not_to_have_class(re.compile(r"\bactive\b"))
 
 
@@ -1054,8 +1046,8 @@ def test_undoing_reset_sets_dirty_even_when_history_becomes_empty(server, page: 
     expect(page.locator("#discardChangesModal")).to_be_visible()
 
 
-def test_crop_panel_flip_buttons_update_immediately(server, page: Page):
-    """Clicking panel flip buttons immediately updates active class on both panel and toolbar buttons."""
+def test_toolbar_flip_buttons_update_immediately(server, page: Page):
+    """Clicking toolbar flip buttons immediately updates active class and state."""
     page.goto(server["url"])
 
     card = page.locator(".photo-card", has_text="mountain.bmp")
@@ -1063,41 +1055,31 @@ def test_crop_panel_flip_buttons_update_immediately(server, page: Page):
     page.locator("#loupeQuickEditBtn").click()
     expect(page.locator("#quickEditToolbar")).to_be_visible()
 
-    # Open Crop tab panel
-    page.locator("#editorTabCrop").click()
-    expect(page.locator("#editorPanelCrop")).to_be_visible()
-
-    panel_flip_h = page.locator("#panelFlipHBtn")
-    panel_flip_v = page.locator("#panelFlipVBtn")
     toolbar_flip_h = page.locator("#editorFlipHBtn")
     toolbar_flip_v = page.locator("#editorFlipVBtn")
 
-    expect(panel_flip_h).to_be_visible()
-    expect(panel_flip_v).to_be_visible()
-    expect(panel_flip_h).not_to_have_class(re.compile(r"\bactive\b"))
-    expect(panel_flip_v).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(toolbar_flip_h).to_be_visible()
+    expect(toolbar_flip_v).to_be_visible()
+    expect(toolbar_flip_h).not_to_have_class(re.compile(r"\bactive\b"))
+    expect(toolbar_flip_v).not_to_have_class(re.compile(r"\bactive\b"))
 
-    # 1. Click panel Flip H -> immediately active
-    panel_flip_h.click()
-    expect(panel_flip_h).to_have_class(re.compile(r"\bactive\b"))
+    # 1. Click toolbar Flip H -> immediately active
+    toolbar_flip_h.click()
     expect(toolbar_flip_h).to_have_class(re.compile(r"\bactive\b"))
     assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipH") is True
 
-    # Click panel Flip H again -> immediately inactive
-    panel_flip_h.click()
-    expect(panel_flip_h).not_to_have_class(re.compile(r"\bactive\b"))
+    # Click toolbar Flip H again -> immediately inactive
+    toolbar_flip_h.click()
     expect(toolbar_flip_h).not_to_have_class(re.compile(r"\bactive\b"))
     assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipH") is False
 
-    # 2. Click panel Flip V -> immediately active
-    panel_flip_v.click()
-    expect(panel_flip_v).to_have_class(re.compile(r"\bactive\b"))
+    # 2. Click toolbar Flip V -> immediately active
+    toolbar_flip_v.click()
     expect(toolbar_flip_v).to_have_class(re.compile(r"\bactive\b"))
     assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipV") is True
 
-    # Click panel Flip V again -> immediately inactive
-    panel_flip_v.click()
-    expect(panel_flip_v).not_to_have_class(re.compile(r"\bactive\b"))
+    # Click toolbar Flip V again -> immediately inactive
+    toolbar_flip_v.click()
     expect(toolbar_flip_v).not_to_have_class(re.compile(r"\bactive\b"))
     assert page.evaluate("() => window._imagineQuickEdit.quickEditState.flipV") is False
 
@@ -1214,5 +1196,177 @@ def test_quick_edit_keyboard_guards_focused_button_and_select(server, page: Page
     rot_before = page.evaluate("() => window._imagineQuickEdit.quickEditState.rotation")
     page.keyboard.press("r")
     assert page.evaluate("() => window._imagineQuickEdit.quickEditState.rotation") == rot_before
+
+
+def test_horizon_session_creates_single_undo_step(server, page: Page):
+    """Multiple horizon slider drags collapse into one undo step; no-op open/close stays clean."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    history_len = lambda: page.evaluate("() => window._imagineQuickEdit.quickEditState.history.length")
+
+    # No-op session: open and close Horizon without changes leaves no history and stays clean
+    base_len = history_len()
+    page.locator("#quickEditHorizonBtn").click()
+    expect(page.locator("#horizonSubOptions")).to_be_visible()
+    page.locator("#quickEditHorizonBtn").click()
+    expect(page.locator("#horizonSubOptions")).to_be_hidden()
+    assert history_len() == base_len
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.isDirty") is False
+
+    # Real session: two separate slider drag gestures, then exit Horizon mode
+    page.locator("#quickEditHorizonBtn").click()
+    expect(page.locator("#horizonSubOptions")).to_be_visible()
+    for val in ("10", "-5"):
+        page.evaluate(
+            f"""() => {{
+                const slider = document.getElementById('horizonAngleSlider');
+                slider.value = '{val}';
+                slider.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                slider.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}"""
+        )
+    expect(page.locator("#horizonAngleVal")).to_have_text("-5°")
+    page.locator("#quickEditHorizonBtn").click()
+    expect(page.locator("#horizonSubOptions")).to_be_hidden()
+
+    # Exactly one undo step for the whole session; a single undo restores 0°
+    assert history_len() == base_len + 1
+    page.locator("#editorUndoBtn").click()
+    expect(page.locator("#horizonAngleVal")).to_have_text("0°")
+    assert history_len() == base_len
+
+
+def test_crop_box_handle_drag_resizes_box(server, page: Page):
+    """Dragging the crop box SE handle on the image resizes the crop box."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    page.locator("#quickEditCropBtn").click()
+    expect(page.locator("#cropSubOptions")).to_be_visible()
+    expect(page.locator("#cropBox")).to_be_visible()
+
+    before = page.evaluate("() => ({ ...window._imagineQuickEdit.quickEditState.cropBox })")
+    handle_box = page.locator(".crop-handle[data-handle='se']").bounding_box()
+    assert handle_box is not None
+    cx = handle_box["x"] + handle_box["width"] / 2
+    cy = handle_box["y"] + handle_box["height"] / 2
+    page.mouse.move(cx, cy)
+    page.mouse.down()
+    page.mouse.move(cx + 30, cy + 30, steps=5)
+    page.mouse.up()
+
+    after = page.evaluate("() => ({ ...window._imagineQuickEdit.quickEditState.cropBox })")
+    assert (after["w"], after["h"]) != (before["w"], before["h"])
+
+
+def test_edit_modes_are_mutually_exclusive(server, page: Page):
+    """Activating a mode closes the previous one (applying it) and shows only its options."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    history_len = lambda: page.evaluate("() => window._imagineQuickEdit.quickEditState.history.length")
+    base_len = history_len()
+
+    # Open crop mode and change the straighten angle (unapplied session edit)
+    page.locator("#quickEditCropBtn").click()
+    expect(page.locator("#cropSubOptions")).to_be_visible()
+    expect(page.locator("#modeApplyBtn")).to_be_visible()
+    expect(page.locator("#modeCancelBtn")).to_be_visible()
+    page.evaluate("""() => {
+        const slider = document.getElementById('editorStraightenSlider');
+        slider.value = '12';
+        slider.dispatchEvent(new Event('input'));
+        slider.dispatchEvent(new Event('change'));
+    }""")
+    expect(page.locator("#editorStraightenVal")).to_have_text("12°")
+
+    # Switching to Horizon applies the crop session (bakes the 12°) as one step
+    page.locator("#quickEditHorizonBtn").click()
+    expect(page.locator("#cropSubOptions")).to_be_hidden()
+    expect(page.locator("#horizonSubOptions")).to_be_visible()
+    expect(page.locator("#cropOverlay")).to_be_hidden()
+    assert history_len() == base_len + 1
+
+    # Deselecting Horizon applies it too; global buttons hide with no active mode
+    page.locator("#quickEditHorizonBtn").click()
+    expect(page.locator("#horizonSubOptions")).to_be_hidden()
+    expect(page.locator("#modeApplyBtn")).to_be_hidden()
+    expect(page.locator("#modeCancelBtn")).to_be_hidden()
+
+
+def test_mode_cancel_reverts_session_edits(server, page: Page):
+    """Cancel discards every edit made inside the mode session without recording history."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    history_len = lambda: page.evaluate("() => window._imagineQuickEdit.quickEditState.history.length")
+    base_len = history_len()
+
+    page.locator("#editorTabAdjust").click()
+    expect(page.locator("#editorPanelAdjust")).to_be_visible()
+    page.evaluate("""() => {
+        const slider = document.getElementById('sliderBrightness');
+        slider.value = '45';
+        slider.dispatchEvent(new Event('input'));
+        slider.dispatchEvent(new Event('change'));
+    }""")
+    expect(page.locator("#valBrightness")).to_have_text("+45")
+
+    page.locator("#modeCancelBtn").click()
+    expect(page.locator("#editorPanelAdjust")).to_be_hidden()
+    expect(page.locator("#valBrightness")).to_have_text("0")
+    assert history_len() == base_len
+    assert page.evaluate("() => window._imagineQuickEdit.quickEditState.isDirty") is False
+
+
+def test_mode_apply_records_single_undo_step(server, page: Page):
+    """Several edits inside one mode session collapse into a single undo entry."""
+    page.goto(server["url"])
+
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditToolbar")).to_be_visible()
+
+    history_len = lambda: page.evaluate("() => window._imagineQuickEdit.quickEditState.history.length")
+    base_len = history_len()
+
+    page.locator("#editorTabAdjust").click()
+    for slider_id, val in (("sliderBrightness", "30"), ("sliderContrast", "-20"), ("sliderWarmth", "15")):
+        page.evaluate(
+            f"""() => {{
+                const slider = document.getElementById('{slider_id}');
+                slider.value = '{val}';
+                slider.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                slider.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}"""
+        )
+    expect(page.locator("#valBrightness")).to_have_text("+30")
+
+    page.locator("#modeApplyBtn").click()
+    assert history_len() == base_len + 1
+
+    page.locator("#editorUndoBtn").click()
+    expect(page.locator("#valBrightness")).to_have_text("0")
+    expect(page.locator("#valContrast")).to_have_text("0")
+    expect(page.locator("#valWarmth")).to_have_text("0")
+    assert history_len() == base_len
 
 

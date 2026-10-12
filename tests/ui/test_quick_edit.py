@@ -114,7 +114,7 @@ def test_crop_tool_flow(server, page: Page):
     assert int(w_str) == int(h_str)
 
     # 3. Apply Crop
-    page.locator("#quickEditApplyCropBtn").click()
+    page.locator("#modeApplyBtn").click()
     expect(crop_overlay).to_be_hidden()
     expect(crop_sub_options).to_be_hidden()
 
@@ -464,10 +464,12 @@ def test_smart_fix_high_resolution_scaled_preview_and_deferred_export(server, pa
     page.locator("#loupeQuickEditBtn").click()
     expect(page.locator("#quickEditToolbar")).to_be_visible()
 
-    # Toggle Smart Fix on
+    # Open Smart Fix mode and enable it
     sf_btn = page.locator("#quickEditSmartFixBtn")
     sf_btn.click()
     expect(sf_btn).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#smartFixSubOptions")).to_be_visible()
+    page.locator("#smartFixEnabledCheckbox").check()
 
     # Verify that during active editing, previewCanvas was created and scaled to MAX_SMART_FIX_PREVIEW_DIM (1200x675)
     prev_dim = page.evaluate('''() => {

@@ -915,6 +915,9 @@
                 <button class="quick-edit-btn" id="editorFlipVBtn" title="Flip Vertical" data-i18n-title="flip_vertical">
                   <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-v"></use></svg>
                 </button>
+                <button class="quick-edit-btn" id="editorFlipHBtn" title="Flip Horizontal" data-i18n-title="flip_horizontal">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-h"></use></svg>
+                </button>
               </div>
 
               <div class="quick-edit-divider"></div>
@@ -934,11 +937,6 @@
                     <option value="3:2" data-i18n="aspect_3_2">3:2 Classic</option>
                     <option value="5:4" data-i18n="aspect_5_4">5:4</option>
                   </select>
-                  <button class="btn btn-sm btn-primary" id="quickEditApplyCropBtn" title="Apply Crop (Enter)" data-i18n-title="apply_crop" data-i18n="apply">Apply</button>
-                  <button class="btn btn-sm btn-secondary" id="quickEditCancelCropBtn" title="Cancel Crop (Esc)" data-i18n-title="cancel_crop" data-i18n="cancel">Cancel</button>
-                  <button class="quick-edit-btn" id="editorFlipHBtn" title="Flip Horizontal" data-i18n-title="flip_horizontal">
-                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-h"></use></svg>
-                  </button>
                   <div class="editor-straighten-control">
                     <label title="Straighten Angle">
                       <span data-i18n="straighten">Straighten:</span>
@@ -976,6 +974,10 @@
                   <span data-i18n="smart_fix">Smart Fix</span>
                 </button>
                 <div class="quick-edit-sub-options" id="smartFixSubOptions" style="display: none;">
+                  <label class="quick-edit-slider-label" title="Enable Smart Fix">
+                    <input type="checkbox" id="smartFixEnabledCheckbox">
+                    <span data-i18n="smart_fix">Smart Fix</span>
+                  </label>
                   <label class="quick-edit-slider-label" title="Smart Fix Intensity">
                     <span data-i18n="amount">Amount:</span>
                     <input type="range" id="smartFixIntensitySlider" min="10" max="100" value="100" class="loupe-zoom-slider" style="width: 65px;">
@@ -991,10 +993,6 @@
                 <button class="editor-tab-btn" id="editorTabSuggestions" data-tab="suggestions">
                   <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-wand"></use></svg>
                   <span data-i18n="editor_tab_suggestions">Suggestions</span>
-                </button>
-                <button class="editor-tab-btn" id="editorTabCrop" data-tab="crop">
-                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-crop"></use></svg>
-                  <span data-i18n="editor_tab_crop">Crop</span>
                 </button>
                 <button class="editor-tab-btn" id="editorTabAdjust" data-tab="adjust">
                   <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-sliders"></use></svg>
@@ -1016,6 +1014,8 @@
                 <button class="btn btn-sm btn-icon" id="editorRedoBtn" title="Redo (Ctrl+Y)" data-i18n-title="redo_title" disabled>
                   <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-redo"></use></svg>
                 </button>
+                <button class="btn btn-sm btn-primary" id="modeApplyBtn" title="Apply mode edits (Enter)" data-i18n="apply" style="display: none;">Apply</button>
+                <button class="btn btn-sm btn-secondary" id="modeCancelBtn" title="Cancel mode edits (Esc)" data-i18n="cancel" style="display: none;">Cancel</button>
                 <button class="btn btn-sm btn-secondary" id="quickEditCompareBtn" title="Hold or click to view unedited original" data-i18n-title="compare_title" data-i18n="compare">Compare</button>
                 <button class="btn btn-sm btn-secondary" id="quickEditResetBtn" title="Reset All Edits" data-i18n-title="reset_edits" data-i18n="reset">Reset</button>
                 <button class="btn btn-sm btn-secondary" id="quickEditCancelBtn" title="Cancel & Close (Esc)" data-i18n-title="cancel_close" data-i18n="cancel">Cancel</button>
@@ -1039,21 +1039,6 @@
                 <button class="editor-quick-style-btn" id="panelStyleBwBtn" data-style="bw_drama" title="B&W Drama">
                   <span class="style-dot bw"></span>
                   <span data-i18n="style_bw">B&W</span>
-                </button>
-              </div>
-            </div>
-
-            <!-- Expandable Panel: Crop & Perspective -->
-            <div class="editor-panel" id="editorPanelCrop" style="display: none;">
-              <div class="editor-crop-controls">
-                <span style="font-size: 11px; font-weight: 600; color: var(--text-secondary);" data-i18n="crop">Crop:</span>
-                <button class="quick-edit-btn" id="panelFlipHBtn" title="Flip Horizontal" data-i18n-title="flip_horizontal">
-                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-h"></use></svg>
-                  <span data-i18n="flip_h">Flip H</span>
-                </button>
-                <button class="quick-edit-btn" id="panelFlipVBtn" title="Flip Vertical" data-i18n-title="flip_vertical">
-                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-flip-v"></use></svg>
-                  <span data-i18n="flip_v">Flip V</span>
                 </button>
               </div>
             </div>
