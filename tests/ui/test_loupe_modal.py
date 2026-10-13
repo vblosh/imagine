@@ -70,8 +70,8 @@ def test_loupe_navigation_buttons_and_arrow_keys(server, page: Page):
     expect(page.locator("#loupeIndex")).to_have_text("1 / 6")
 
 
-def test_loupe_arrow_navigation_preserves_original_image_mode(server, page: Page):
-    """When user clicks image to load original, navigating with left/right arrows continues loading originals."""
+def test_loupe_arrow_navigation_resets_original_image_mode(server, page: Page):
+    """When user loads original, navigating with left/right arrows resets back to 1024 thumbnail (REV-06)."""
     page.goto(server["url"])
 
     cards = page.locator(".photo-card")
@@ -88,22 +88,26 @@ def test_loupe_arrow_navigation_preserves_original_image_mode(server, page: Page
     page.locator("#loupeImageViewport").click(position={"x": 10, "y": 10})
     expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
 
-    # 3. Navigate right with ArrowRight -> new image should directly show original
+    # 3. Navigate right with ArrowRight -> new image should reset to 1024 thumbnail (REV-06)
     page.keyboard.press("ArrowRight")
     expect(page.locator("#loupeIndex")).to_have_text("2 / 6")
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
+
+    # 4. Click image to load original on 2nd photo
+    page.locator("#loupeImageViewport").click(position={"x": 10, "y": 10})
     expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
 
-    # 4. Navigate right again with Next button -> 3rd image also shows original
+    # 5. Navigate right again with Next button -> 3rd image resets to 1024 thumbnail
     page.locator("#loupeNextBtn").click()
     expect(page.locator("#loupeIndex")).to_have_text("3 / 6")
-    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
 
-    # 5. Navigate left with ArrowLeft -> previous image also shows original
+    # 6. Navigate left with ArrowLeft -> previous image also resets to 1024 thumbnail
     page.keyboard.press("ArrowLeft")
     expect(page.locator("#loupeIndex")).to_have_text("2 / 6")
-    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/photos/\d+/original"))
+    expect(loupe_img).to_have_attribute("src", re.compile(r"/api/thumbnails/.+/1024"))
 
-    # 6. Close loupe and re-open on photo 1 -> should reset back to 1024 thumbnail default
+    # 7. Close loupe and re-open on photo 1 -> should be 1024 thumbnail default
     page.keyboard.press("Escape")
     expect(loupe).to_be_hidden()
 

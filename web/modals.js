@@ -19,10 +19,14 @@ import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { loadMetadata, loadMedia, updateBatchBar, batchUpdateDates, renderGrid, expandTagCategory } from './media-grid.js';
 import { updateInspector } from './inspector.js';
-import { closeLoupe } from './loupe.js';
 import { t } from './i18n.js';
 import { checkSemanticStatus } from './semantic-status.js';
 import { refreshFaceStatus } from './face-analysis.js';
+
+let modalCloseLoupeHandler = null;
+export function setModalCloseLoupeHandler(fn) {
+  modalCloseLoupeHandler = fn;
+}
 
 // Internal pending state
 let pendingAddToAlbumIds = [];
@@ -290,15 +294,15 @@ export async function pollImportProgress() {
     if (prog.is_running && total === 0) {
       if (dom.importProgressBar) dom.importProgressBar.style.width = '10%';
       if (dom.importStatusCounts) {
-        dom.importStatusCounts.textContent = 'Scanning folders...';
+        dom.importStatusCounts.textContent = t('scanning_folders');
       }
       if (dom.importCurrentFile) {
-        dom.importCurrentFile.textContent = prog.current_file || 'Scanning folders...';
+        dom.importCurrentFile.textContent = prog.current_file || t('scanning_folders');
       }
     } else {
       if (dom.importStatusCounts) {
         dom.importStatusCounts.textContent =
-          `Processed: ${processed} / ${total} (Imported: ${imported}, Skipped: ${skipped}, Failed: ${failed})`;
+          t('import_progress_counts', { processed, total, imported, skipped, failed });
       }
       if (dom.importCurrentFile) {
         dom.importCurrentFile.textContent = prog.current_file || '';
@@ -312,8 +316,8 @@ export async function pollImportProgress() {
       state.isImporting = false;
       if (dom.importProgressBar) dom.importProgressBar.style.width = '100%';
       const summaryMsg = (total === 0 && imported === 0 && skipped === 0)
-        ? 'Import finished: no new photos found.'
-        : `Completed! ${imported} imported, ${skipped} skipped.`;
+        ? t('import_finished_empty')
+        : t('import_completed_summary', { imported, skipped });
       if (dom.importStatusCounts) dom.importStatusCounts.textContent = summaryMsg;
       if (dom.startImportBtn) dom.startImportBtn.disabled = false;
       setTimeout(() => {
@@ -351,7 +355,8 @@ export async function triggerImport(path, recursive) {
 
   } catch (err) {
     state.isImporting = false;
-    alert(`Import error: ${err.message}`);
+    showToast(t('toast_import_error', { error: err.message }), 'error');
+    try { alert(`Import error: ${err.message}`); } catch (_) {}
     if (dom.startImportBtn) dom.startImportBtn.disabled = false;
     if (dom.importProgressBox) dom.importProgressBox.style.display = 'none';
   }
@@ -374,7 +379,8 @@ export function closeAlbumModal() {
 export async function submitCreateAlbum() {
   const name = dom.albumNameInput ? dom.albumNameInput.value.trim() : '';
   if (!name) {
-    alert('Album name is required');
+    showToast(t('album_name_required'), 'error');
+    try { alert('Album name is required'); } catch (_) {}
     return;
   }
   try {
@@ -385,7 +391,7 @@ export async function submitCreateAlbum() {
     closeAlbumModal();
     loadMetadata();
   } catch (err) {
-    alert(`Failed to create album: ${err.message}`);
+    showToast(t('toast_failed_create_album', { error: err.message }), 'error');
   }
 }
 
@@ -445,7 +451,7 @@ export async function submitAddToAlbum() {
       await loadMedia();
     }
   } catch (err) {
-    alert(`Failed to add photos to album: ${err.message}`);
+    showToast(t('toast_failed_add_to_album', { error: err.message }), 'error');
   }
 }
 
@@ -696,10 +702,10 @@ export function getCategoryColor(category) {
 
 export function getCategoryDisplayName(category) {
   switch ((category || '').toLowerCase()) {
-    case 'people': return 'People';
-    case 'events': return 'Events';
-    case 'places': return 'Places';
-    default: return 'Keyword';
+    case 'people': return t('cat_people');
+    case 'events': return t('cat_events');
+    case 'places': return t('cat_places');
+    default: return t('cat_keyword');
   }
 }
 
@@ -780,7 +786,12 @@ export function renderModalSearchHelp() {
     }
 
     if (!exactMatch) {
-      html += `<div class="tag-help-create-prompt">Press Enter or click <strong>${dom.createTagSubmitBtn ? dom.createTagSubmitBtn.textContent : 'Create Tag'}</strong> to add "<strong>${escapeHtml(dom.tagNameInput.value.trim())}</strong>" to <em>${getCategoryDisplayName(currentCat)}</em></div>`;
+      const buttonLabel = dom.createTagSubmitBtn ? dom.createTagSubmitBtn.textContent : t('create_tag_btn');
+      html += `<div class="tag-help-create-prompt">${t('tag_help_create_prompt_html', {
+        button: buttonLabel,
+        name: escapeHtml(dom.tagNameInput.value.trim()),
+        category: getCategoryDisplayName(currentCat)
+      })}</div>`;
     }
 
     dom.tagSearchHelpChips.innerHTML = html;
@@ -810,7 +821,8 @@ export async function submitCreateTag() {
   }
   const name = dom.tagNameInput ? dom.tagNameInput.value.trim() : '';
   if (!name) {
-    alert('Tag name is required');
+    showToast(t('tag_name_required'), 'error');
+    try { alert('Tag name is required'); } catch (_) {}
     return;
   }
   const category = dom.tagCategorySelect ? dom.tagCategorySelect.value : 'keyword';
@@ -820,6 +832,8 @@ export async function submitCreateTag() {
       await api.post('/api/media/batch-tags', { ids: pendingTagTargetMediaIds, name, category });
     } catch (e) {
       console.warn('Failed to batch attach tag to photos:', e);
+      showToast(t('toast_failed_batch_tags', { error: e.message || 'Server error' }), 'error');
+      return;
     }
   } else {
     try {
@@ -830,6 +844,8 @@ export async function submitCreateTag() {
     } catch (err) {
       if (!err.message || !err.message.includes('already exists')) {
         console.warn('Create tag API notice:', err);
+        showToast(t('toast_failed_create_tag', { error: err.message || 'Server error' }), 'error');
+        return;
       }
     }
   }
@@ -951,7 +967,11 @@ export async function submitDeleteMedia() {
   if (state.loupeIndex >= 0) {
     const loupeItem = state.mediaItems[state.loupeIndex];
     if (loupeItem && actuallyDeletedIds.includes(loupeItem.id)) {
-      closeLoupe();
+      if (modalCloseLoupeHandler) {
+        modalCloseLoupeHandler();
+      } else if (window.imagineUI?.closeLoupe) {
+        window.imagineUI.closeLoupe();
+      }
     }
   }
 

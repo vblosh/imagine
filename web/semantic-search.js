@@ -22,12 +22,12 @@ export async function performSemanticSearch(query, limit = 100, options = {}) {
     
     // Semantic search results are ranked strictly by probability across the catalog;
     // secondary filters are only sent if explicitly provided in options.filters
-    const filters = options.filters || {};
+    const { filters = {}, ...fetchOptions } = options;
     
     try {
         const result = await api.post('/api/semantic/search', {
             query, limit, filters
-        }, options);
+        }, fetchOptions);
         return result;
     } catch (e) {
         if (e.name === 'AbortError') throw e;
@@ -39,8 +39,9 @@ export async function performSemanticSearch(query, limit = 100, options = {}) {
 
 export async function findSimilarMedia(mediaId, limit = 50, options = {}) {
     if (!mediaId || !state.semanticSearchAvailable) return null;
+    const { ...fetchOptions } = options;
     try {
-        const result = await api.post(`/api/semantic/similar/${mediaId}`, { limit }, options);
+        const result = await api.post(`/api/semantic/similar/${encodeURIComponent(mediaId)}`, { limit }, fetchOptions);
         return result;
     } catch (e) {
         if (e.name === 'AbortError') throw e;
@@ -58,14 +59,17 @@ let semanticDialogSelectedIds = [];
 let semanticJobPollTimer = null;
 let semanticJobPollInFlight = false;
 let semanticSubmissionError = '';
+let semanticCancelError = '';
 
 function selectedPhotoIds() {
+    const mediaMap = new Map((state.mediaItems || []).map(item => [Number(item.id), item]));
     return Array.from(state.selectedIds)
         .map(Number)
         .filter(id => Number.isInteger(id) && id > 0)
         .filter(id => {
-            const item = (state.mediaItems || []).find(media => Number(media.id) === id);
-            return item && (!item.media_type || item.media_type === 'photo');
+            const item = mediaMap.get(id);
+            if (!item) return true;
+            return !item.media_type || item.media_type === 'photo';
         });
 }
 
@@ -92,7 +96,9 @@ export function renderSemanticJobState() {
 
     if (notice) {
         let noticeMsg = '';
-        if (!state.semanticBuilt) {
+        if (state.semanticConnectionError) {
+            noticeMsg = t('semantic_status_connection_error') || 'Status: Could not connect to semantic search service';
+        } else if (!state.semanticBuilt) {
             noticeMsg = t('semantic_engine_not_built') || 'Status: Semantic search engine not built in this binary';
         } else if (!state.semanticSearchAvailable) {
             noticeMsg = t('semantic_models_missing_notice') || 'CLIP models are not installed. Download models to the models directory to enable semantic search.';
@@ -127,7 +133,7 @@ export function renderSemanticJobState() {
         if (counts) counts.textContent = t('semantic_job_counts', { processed, skipped, failed, remaining, total });
     }
 
-    const errorMessage = semanticSubmissionError || (hasJob && currentSemanticJob.error ? String(currentSemanticJob.error) : '');
+    const errorMessage = semanticSubmissionError || semanticCancelError || (hasJob && currentSemanticJob.error ? String(currentSemanticJob.error) : '');
     if (error) {
         error.textContent = errorMessage;
         error.hidden = !errorMessage;
@@ -161,6 +167,7 @@ export function openSemanticIndexModal() {
     semanticDialogSelectedIds = selectedPhotoIds();
     currentSemanticJob = null;
     semanticSubmissionError = '';
+    semanticCancelError = '';
     const scope = dom.semanticScanScope;
     if (scope) scope.value = semanticDialogSelectedIds.length ? 'selected' : 'catalog';
     currentSemanticRequest = semanticDialogSelectedIds.length
@@ -168,7 +175,7 @@ export function openSemanticIndexModal() {
         : { scope: 'catalog', media_ids: [] };
     if (dom.semanticForceReindex) dom.semanticForceReindex.checked = false;
     renderSemanticJobState();
-    const defaultFocus = (currentSemanticJob ? dom.closeSemanticIndexModalBtn : dom.semanticScanScope) || dom.cancelSemanticJobBtn;
+    const defaultFocus = dom.semanticScanScope || dom.cancelSemanticJobBtn;
     showModal(dom.semanticIndexModal, defaultFocus);
 }
 
@@ -190,39 +197,58 @@ export async function startSemanticScan() {
     await submitSemanticJob(request);
 }
 
-export async function submitSemanticJob(request) {
-    currentSemanticRequest = request;
-    semanticSubmissionError = '';
-    const body = { scope: request.scope, force: request.force === true };
-    if (request.scope === 'selected') body.media_ids = request.media_ids;
-
-    setJobButton(dom.semanticJobStartBtn, true, true);
-    if (dom.semanticJobError) {
-        dom.semanticJobError.textContent = '';
-        dom.semanticJobError.hidden = true;
-    }
+export async function startSemanticIndexing(scope = 'catalog', mediaIds = [], force = false) {
     try {
+        const body = { scope, force: Boolean(force) };
+        if (scope === 'selected' || (Array.isArray(mediaIds) && mediaIds.length > 0)) {
+            body.media_ids = mediaIds;
+        }
         const result = await api.post('/api/semantic/jobs', body);
-        if (!result || !result.job_id) throw new Error(result?.error || 'Failed to start indexing job');
+        if (!result || !result.job_id) {
+            throw new Error(result?.error || 'Failed to start indexing job');
+        }
+        currentSemanticRequest = { scope, media_ids: mediaIds, force: Boolean(force) };
         currentSemanticJob = {
             id: result.job_id,
             state: 'running',
-            scope: request.scope,
+            scope,
             total: 0,
             processed: 0,
             skipped: 0,
             failed: 0,
             remaining: 0
         };
+        semanticSubmissionError = '';
+        semanticCancelError = '';
+        semanticJobPollErrorCount = 0;
         renderSemanticJobState();
         scheduleJobPoll(0);
-    } catch (err) {
-        semanticSubmissionError = t('semantic_job_start_error', { error: err.message });
+        return result.job_id;
+    } catch (e) {
+        semanticSubmissionError = t('semantic_job_start_error', { error: e.message || e });
         renderSemanticJobState();
+        showToast(t('toast_failed_start_indexing', { error: e.message || e }), 'error');
+        return null;
     }
 }
 
-function scheduleJobPoll(delay = 1000) {
+export async function submitSemanticJob(request) {
+    setJobButton(dom.semanticJobStartBtn, true, true);
+    if (dom.semanticJobError) {
+        dom.semanticJobError.textContent = '';
+        dom.semanticJobError.hidden = true;
+    }
+    return await startSemanticIndexing(request.scope, request.media_ids || [], request.force === true);
+}
+
+const MAX_SEMANTIC_POLL_ERRORS = 5;
+const BASE_POLL_DELAY_MS = 1000;
+const BASE_ERROR_DELAY_MS = 2000;
+const MAX_POLL_DELAY_MS = 30000;
+
+let semanticJobPollErrorCount = 0;
+
+function scheduleJobPoll(delay = BASE_POLL_DELAY_MS) {
     if (semanticJobPollTimer) window.clearTimeout(semanticJobPollTimer);
     if (!currentSemanticJob || TERMINAL_JOB_STATES.has(currentSemanticJob.state)) return;
     semanticJobPollTimer = window.setTimeout(pollSemanticJob, delay);
@@ -234,6 +260,7 @@ async function pollSemanticJob() {
     try {
         const result = await api.get(`/api/semantic/jobs/${encodeURIComponent(currentSemanticJob.id)}`);
         if (result && result.id) {
+            semanticJobPollErrorCount = 0;
             currentSemanticJob = result;
             renderSemanticJobState();
             if (TERMINAL_JOB_STATES.has(currentSemanticJob.state)) {
@@ -243,40 +270,78 @@ async function pollSemanticJob() {
                 }
                 await checkSemanticStatus();
             } else {
-                scheduleJobPoll();
+                scheduleJobPoll(BASE_POLL_DELAY_MS);
             }
         } else {
-            scheduleJobPoll(2000);
+            semanticJobPollErrorCount++;
+            if (semanticJobPollErrorCount >= MAX_SEMANTIC_POLL_ERRORS) {
+                const errMsg = t('semantic_job_poll_failed', { error: 'Job not found or invalid response' });
+                if (dom.semanticJobError) {
+                    dom.semanticJobError.textContent = errMsg;
+                    dom.semanticJobError.hidden = false;
+                }
+                showToast(errMsg, 'error');
+                return;
+            }
+            const delay = Math.min(MAX_POLL_DELAY_MS, BASE_ERROR_DELAY_MS * Math.pow(2, semanticJobPollErrorCount - 1));
+            scheduleJobPoll(delay);
         }
     } catch (err) {
+        semanticJobPollErrorCount++;
+        const errMsg = semanticJobPollErrorCount >= MAX_SEMANTIC_POLL_ERRORS
+            ? (t('semantic_job_poll_failed', { error: err.message }) || err.message)
+            : err.message;
         if (dom.semanticJobError) {
-            dom.semanticJobError.textContent = err.message;
+            dom.semanticJobError.textContent = errMsg;
             dom.semanticJobError.hidden = false;
         }
-        scheduleJobPoll(3000);
+        if (semanticJobPollErrorCount >= MAX_SEMANTIC_POLL_ERRORS) {
+            showToast(errMsg, 'error');
+            return;
+        }
+        const delay = Math.min(MAX_POLL_DELAY_MS, BASE_ERROR_DELAY_MS * Math.pow(2, semanticJobPollErrorCount - 1));
+        scheduleJobPoll(delay);
     } finally {
         semanticJobPollInFlight = false;
     }
 }
 
-export async function cancelSemanticScan() {
-    if (!currentSemanticJob || TERMINAL_JOB_STATES.has(currentSemanticJob.state)) return;
-    setJobButton(dom.semanticJobStopBtn, true, true);
+export async function cancelSemanticJob(jobId) {
+    if (!jobId) return false;
+    const isCurrent = currentSemanticJob && String(currentSemanticJob.id) === String(jobId);
+    if (isCurrent) {
+        setJobButton(dom.semanticJobStopBtn, true, true);
+    }
     try {
-        await api.post(`/api/semantic/jobs/${encodeURIComponent(currentSemanticJob.id)}/cancel`, {});
-        currentSemanticJob = { ...currentSemanticJob, state: 'cancelling' };
-        renderSemanticJobState();
-        scheduleJobPoll(0);
-    } catch (err) {
-        if (dom.semanticJobError) {
-            dom.semanticJobError.textContent = t('semantic_job_cancel_error', { error: err.message });
-            dom.semanticJobError.hidden = false;
+        await api.post(`/api/semantic/jobs/${encodeURIComponent(jobId)}/cancel`, {});
+        if (isCurrent) {
+            semanticCancelError = '';
+            currentSemanticJob = { ...currentSemanticJob, state: 'cancelling' };
+            renderSemanticJobState();
+            semanticJobPollErrorCount = 0;
+            scheduleJobPoll(0);
         }
-        renderSemanticJobState();
+        return true;
+    } catch (err) {
+        if (isCurrent) {
+            semanticCancelError = t('semantic_job_cancel_error', { error: err.message });
+            renderSemanticJobState();
+        }
+        showToast(t('semantic_job_cancel_error', { error: err.message }), 'error');
+        return false;
     }
 }
 
+export async function cancelSemanticScan() {
+    if (!currentSemanticJob || TERMINAL_JOB_STATES.has(currentSemanticJob.state)) return true;
+    return await cancelSemanticJob(currentSemanticJob.id);
+}
+
 export async function runSemanticIndexing(force = false) {
+    if (currentSemanticJob && !TERMINAL_JOB_STATES.has(currentSemanticJob.state)) {
+        openSemanticIndexModal();
+        return;
+    }
     openSemanticIndexModal();
     if (dom.semanticForceReindex) dom.semanticForceReindex.checked = Boolean(force);
     if (state.semanticSearchAvailable) {
@@ -285,37 +350,30 @@ export async function runSemanticIndexing(force = false) {
 }
 
 export async function cancelCurrentSemanticJob() {
-    await cancelSemanticScan();
-    closeSemanticIndexModal();
-}
-
-export async function startSemanticIndexing(scope = 'catalog', mediaIds = [], force = false) {
-    try {
-        const result = await api.post('/api/semantic/jobs', {
-            scope, media_ids: mediaIds, force
-        });
-        if (result && result.job_id) {
-            return result.job_id;
-        }
-        return null;
-    } catch (e) {
-        showToast(t('toast_failed_start_indexing', { error: e.message || e }), 'error');
-        return null;
+    const success = await cancelSemanticScan();
+    if (success) {
+        closeSemanticIndexModal();
     }
 }
 
 export async function getSemanticJobProgress(jobId) {
+    if (!jobId) return null;
     try {
-        return await api.get(`/api/semantic/jobs/${jobId}`);
+        const result = await api.get(`/api/semantic/jobs/${encodeURIComponent(jobId)}`);
+        if (result && currentSemanticJob && String(currentSemanticJob.id) === String(jobId)) {
+            currentSemanticJob = result;
+            renderSemanticJobState();
+        }
+        return result;
     } catch (e) {
         return null;
     }
 }
 
-export async function cancelSemanticJob(jobId) {
-    try {
-        await api.post(`/api/semantic/jobs/${jobId}/cancel`);
-    } catch (e) {
-        showToast(t('toast_failed_cancel_job', { error: e.message || e }), 'error');
-    }
+export function getCurrentSemanticJob() {
+    return currentSemanticJob;
+}
+
+export function getSemanticJobPollErrorCount() {
+    return semanticJobPollErrorCount;
 }

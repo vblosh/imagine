@@ -82,6 +82,7 @@ import {
 import {
   updateInspector,
   updateInspectorAlbumActions,
+  updateInspectorMiniMap,
   openInspector,
   renderStarWidget,
   setupResizablePanels,
@@ -129,6 +130,7 @@ import {
   setStraightenAngle,
   resetStraighten,
   autoLevelHorizon,
+  showDiscardModal,
   hideDiscardModal,
   performCloseQuickEdit,
   setCropAspectRatio,
@@ -215,6 +217,10 @@ import {
   cancelSemanticScan,
   renderSemanticJobState,
   onSemanticScopeChange,
+  startSemanticIndexing,
+  getSemanticJobProgress,
+  cancelSemanticJob,
+  getCurrentSemanticJob,
   SEMANTIC_SEARCH_DEBOUNCE_MS
 } from './semantic-search.js';
 
@@ -1882,7 +1888,17 @@ const imagineQuickEdit = {
   quickEditState,
   FILTERS,
   MAX_SMART_FIX_PREVIEW_DIM,
-  getFullResolutionExportCanvas
+  getFullResolutionExportCanvas,
+  openQuickEdit,
+  closeQuickEdit,
+  performCloseQuickEdit,
+  showDiscardModal,
+  hideDiscardModal,
+  setAdjustment,
+  setStraightenAngle,
+  setSmartFixIntensity,
+  setFilterIntensity,
+  applyQuickStyle
 };
 
 export const imagineUI = {
@@ -1912,6 +1928,8 @@ export const imagineUI = {
   updateItemFlag,
   batchUpdateRatings,
   batchUpdateFlags,
+  toggleFlagsForIds,
+  updateInspectorMiniMap,
   openBatchMoveModal,
   closeBatchMoveModal,
   submitBatchMove,
@@ -1956,6 +1974,10 @@ export const imagineUI = {
   cancelSemanticScan,
   renderSemanticJobState,
   onSemanticScopeChange,
+  startSemanticIndexing,
+  getSemanticJobProgress,
+  cancelSemanticJob,
+  getCurrentSemanticJob,
   openFaceAnalysisDialog,
   refreshFaceStatus,
   updateSettingsFaceStatus,

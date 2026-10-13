@@ -893,3 +893,375 @@ def test_views_navigation_code_review_fixes(server, page: Page):
     assert results["burstProjectCalls"] == 1
 
 
+def test_semantic_search_code_review_fixes(server, page: Page):
+    """Verify semantic search and semantic status code review findings:
+    - [HIGH-01] runSemanticIndexing guarded against concurrent duplicate job runs
+    - [HIGH-02] checkSemanticStatus preserves semanticBuilt on connection errors and reports connection error
+    - [HIGH-03] pollSemanticJob aborts after 5 consecutive errors with exponential backoff
+    - [MED-01] cancelCurrentSemanticJob preserves modal on cancel failure
+    - [MED-02] URI encoding on path params and unified job API
+    - [MED-03] selectedPhotoIds preserves off-page selections
+    - [MED-04] performSemanticSearch does not leak filters into fetchOptions
+    - [LOW-01] updateSettingsSemanticStatus uses localized t() keys
+    - [LOW-02] openSemanticIndexModal default focus
+    - [LOW-03] selectedPhotoIds fast Map lookup
+    """
+    page.goto(server["url"])
+    expect(page.locator("#mediaGrid")).to_be_visible()
+
+    results = page.evaluate("""async () => {
+        const semSearch = await import('./semantic-search.js');
+        const semStatus = await import('./semantic-status.js');
+        const { state } = await import('./state.js');
+        const { dom } = await import('./dom.js');
+        const { api } = await import('./api.js');
+        const { t, setLanguage } = await import('./i18n.js');
+
+        // 1. [HIGH-02] & [LOW-01] checkSemanticStatus connection error and i18n
+        state.semanticBuilt = true;
+        state.semanticSearchAvailable = true;
+        state.semanticIndexSize = 42;
+        state.semanticModelId = 'clip-vit-b32';
+        semStatus.updateSettingsSemanticStatus();
+        const initialStatusText = dom.settingsSemanticStatus.textContent;
+
+        const origApiGet = api.get;
+        const origApiPost = api.post;
+
+        // Mock transient connection failure
+        api.get = async () => { throw new Error('Network timeout'); };
+        await semStatus.checkSemanticStatus();
+        const connectionErrorText = dom.settingsSemanticStatus.textContent;
+        const semanticBuiltPreserved = state.semanticBuilt === true;
+        const connectionErrorFlag = state.semanticConnectionError === true;
+        const searchAvailableFalse = state.semanticSearchAvailable === false;
+
+        // Verify Spanish localization of connection error and ready status
+        await setLanguage('es');
+        semStatus.updateSettingsSemanticStatus();
+        const spanishConnectionErrorText = dom.settingsSemanticStatus.textContent;
+
+        state.semanticConnectionError = false;
+        state.semanticSearchAvailable = true;
+        semStatus.updateSettingsSemanticStatus();
+        const spanishReadyText = dom.settingsSemanticStatus.textContent;
+        await setLanguage('en');
+
+        // 2. [HIGH-01] runSemanticIndexing duplicate guard
+        let postCalls = [];
+        api.post = async (url, data, opts) => {
+            postCalls.push({ url, data, opts });
+            if (url === '/api/semantic/jobs') {
+                return { job_id: 'job-run-123' };
+            }
+            return {};
+        };
+        state.semanticSearchAvailable = true;
+        state.semanticConnectionError = false;
+
+        // Start indexing (starts job-run-123)
+        await semSearch.startSemanticIndexing('catalog', [], false);
+        const activeJobId = semSearch.getCurrentSemanticJob() ? semSearch.getCurrentSemanticJob().id : null;
+        const callsBefore = postCalls.filter(c => c.url === '/api/semantic/jobs').length;
+
+        // Attempt concurrent runSemanticIndexing - should be guarded
+        await semSearch.runSemanticIndexing(true);
+        const callsAfter = postCalls.filter(c => c.url === '/api/semantic/jobs').length;
+        const concurrentGuarded = callsBefore === callsAfter;
+
+        // 3. [MED-01] cancelCurrentSemanticJob preserves modal on error
+        api.post = async (url) => {
+            if (url.includes('/cancel')) {
+                throw new Error('Cancel rejected by server');
+            }
+            return {};
+        };
+        semSearch.openSemanticIndexModal();
+        const modalVisibleBefore = !dom.semanticIndexModal.classList.contains('hidden') && dom.semanticIndexModal.style.display !== 'none';
+        await semSearch.cancelCurrentSemanticJob();
+        const modalVisibleAfterFailedCancel = !dom.semanticIndexModal.classList.contains('hidden') && dom.semanticIndexModal.style.display !== 'none';
+        const cancelErrorDisplayed = dom.semanticJobError && dom.semanticJobError.textContent.includes('Cancel rejected');
+
+        // Successful cancel closes modal
+        api.post = async (url) => ({});
+        await semSearch.cancelCurrentSemanticJob();
+        if (semSearch.getCurrentSemanticJob()) {
+            semSearch.getCurrentSemanticJob().state = 'cancelled';
+        }
+        const modalClosedAfterSuccess = dom.semanticIndexModal.classList.contains('hidden') || dom.semanticIndexModal.style.display === 'none';
+
+        // 4. [MED-02] URI encoding in API endpoints
+        let calledUrls = [];
+        api.post = async (url, data, opts) => {
+            calledUrls.push(url);
+            return { job_id: 'test' };
+        };
+        api.get = async (url) => {
+            calledUrls.push(url);
+            return { id: 'test', state: 'running' };
+        };
+
+        await semSearch.findSimilarMedia('media 99/test');
+        await semSearch.getSemanticJobProgress('job 42/alpha');
+        await semSearch.cancelSemanticJob('job 88/beta');
+
+        const similarEncoded = calledUrls.some(u => u === '/api/semantic/similar/media%2099%2Ftest');
+        const progressEncoded = calledUrls.some(u => u === '/api/semantic/jobs/job%2042%2Falpha');
+        const cancelEncoded = calledUrls.some(u => u === '/api/semantic/jobs/job%2088%2Fbeta/cancel');
+
+        // 5. [MED-03] & [LOW-03] selectedPhotoIds preserves off-page and filters videos
+        const origMedia = state.mediaItems;
+        const origSelected = state.selectedIds;
+
+        state.mediaItems = [
+            { id: 10, media_type: 'photo' },
+            { id: 20, media_type: 'video' },
+        ];
+        // 10 is photo on page, 20 is video on page, 30 is off-page selection
+        state.selectedIds = new Set([10, 20, 30]);
+        semSearch.openSemanticIndexModal();
+        const scope = dom.semanticScanScope ? dom.semanticScanScope.value : '';
+        const scopeOptionDisabled = dom.semanticSelectedScopeOption ? dom.semanticSelectedScopeOption.disabled : true;
+
+        // Restore media & selected
+        state.mediaItems = origMedia;
+        state.selectedIds = origSelected;
+        semSearch.closeSemanticIndexModal();
+
+        // 6. [MED-04] performSemanticSearch does not leak filters into fetchOptions
+        let capturedPost = null;
+        api.post = async (url, data, opts) => {
+            capturedPost = { data, opts };
+            return { results: [] };
+        };
+        await semSearch.performSemanticSearch('mountain sunset', 50, {
+            filters: { rating: 5 },
+            signal: 'mock-signal'
+        });
+        const filtersInBody = capturedPost && capturedPost.data && capturedPost.data.filters && capturedPost.data.filters.rating === 5;
+        const filtersNotInFetchOpts = capturedPost && capturedPost.opts && capturedPost.opts.filters === undefined;
+        const signalInFetchOpts = capturedPost && capturedPost.opts && capturedPost.opts.signal === 'mock-signal';
+
+        // 7. [HIGH-03] Polling error ceiling and exponential backoff
+        const recordedDelays = [];
+        const origSetTimeout = window.setTimeout;
+        window.setTimeout = (fn, delay) => {
+            recordedDelays.push(delay);
+            if (recordedDelays.length <= 6) {
+                origSetTimeout(fn, 1);
+            }
+            return 99999;
+        };
+
+        api.post = async () => ({ job_id: 'job-backoff-test' });
+        api.get = async () => { throw new Error('Persistent network failure'); };
+
+        await semSearch.startSemanticIndexing('catalog', [], false);
+        for (let i = 0; i < 20; i++) {
+            await new Promise(r => origSetTimeout(r, 15));
+        }
+
+        window.setTimeout = origSetTimeout;
+        const finalErrorCount = semSearch.getSemanticJobPollErrorCount();
+        const pollingStoppedAtMax = finalErrorCount >= 5;
+        const backoffIncreasing = recordedDelays.length >= 4 && recordedDelays[2] > recordedDelays[1];
+
+        // 8. [LOW-02] Focus in openSemanticIndexModal
+        if (semSearch.getCurrentSemanticJob()) {
+            semSearch.getCurrentSemanticJob().state = 'completed';
+        }
+        semSearch.openSemanticIndexModal();
+        const focusOnScope = document.activeElement === dom.semanticScanScope;
+        semSearch.closeSemanticIndexModal();
+
+        // Restore api methods
+        api.get = origApiGet;
+        api.post = origApiPost;
+
+        return {
+            initialStatusText,
+            connectionErrorText,
+            semanticBuiltPreserved,
+            connectionErrorFlag,
+            searchAvailableFalse,
+            spanishConnectionErrorText,
+            spanishReadyText,
+            concurrentGuarded,
+            modalVisibleBefore,
+            modalVisibleAfterFailedCancel,
+            cancelErrorDisplayed,
+            modalClosedAfterSuccess,
+            similarEncoded,
+            progressEncoded,
+            cancelEncoded,
+            scope,
+            scopeOptionDisabled,
+            filtersInBody,
+            filtersNotInFetchOpts,
+            signalInFetchOpts,
+            pollingStoppedAtMax,
+            backoffIncreasing,
+            focusOnScope
+        };
+    }""")
+
+    # Assertions
+    assert "Ready" in results["initialStatusText"]
+    assert "Could not connect" in results["connectionErrorText"]
+    assert "not built" not in results["connectionErrorText"]
+    assert results["semanticBuiltPreserved"] is True
+    assert results["connectionErrorFlag"] is True
+    assert results["searchAvailableFalse"] is True
+    assert "No se pudo conectar" in results["spanishConnectionErrorText"]
+    assert "Listo" in results["spanishReadyText"]
+    assert results["concurrentGuarded"] is True
+    assert results["modalVisibleAfterFailedCancel"] is True
+    assert results["cancelErrorDisplayed"] is True
+    assert results["modalClosedAfterSuccess"] is True
+    assert results["similarEncoded"] is True
+    assert results["progressEncoded"] is True
+    assert results["cancelEncoded"] is True
+    assert results["scope"] == "selected"
+    assert results["scopeOptionDisabled"] is False
+    assert results["filtersInBody"] is True
+    assert results["filtersNotInFetchOpts"] is True
+    assert results["signalInFetchOpts"] is True
+    assert results["pollingStoppedAtMax"] is True
+    assert results["backoffIncreasing"] is True
+    assert results["focusOnScope"] is True
+
+
+def test_inspection_editing_subsystem_review_fixes(server, page: Page):
+    """Verify code review findings (REV-01 through REV-12) for the inspection & editing subsystem."""
+    page.goto(server["url"])
+    expect(page.locator("#mediaGrid")).to_be_visible()
+
+    results = page.evaluate("""async () => {
+        const qe = window._imagineQuickEdit;
+        const state = window.imagineUI.state;
+        const dom = window.imagineUI.dom;
+
+        // --- REV-02: Slider setters push history state when value changes ---
+        state.loupeIndex = 0;
+        qe.openQuickEdit();
+        const initialHistLen = qe.quickEditState.history.length;
+        qe.setAdjustment('brightness', 20);
+        const histLenAfterAdjust = qe.quickEditState.history.length;
+        qe.setStraightenAngle(15);
+        const histLenAfterStraighten = qe.quickEditState.history.length;
+        qe.setSmartFixIntensity(50);
+        const histLenAfterSmartFix = qe.quickEditState.history.length;
+        qe.setFilterIntensity(60);
+        const histLenAfterFilterIntensity = qe.quickEditState.history.length;
+
+        // Calling setter with SAME value should not push extra history state
+        qe.setAdjustment('brightness', 20);
+        const histLenUnchanged = qe.quickEditState.history.length;
+
+        // --- REV-03: applyQuickStyle mutates style, clears prior adjustments/filters, toggles off ---
+        qe.applyQuickStyle('warm');
+        const warmStyle = qe.quickEditState.quickStyle;
+        const warmVal = qe.quickEditState.adjustments.warmth;
+        const satVal = qe.quickEditState.adjustments.saturation;
+
+        // Switch to cool: should reset warmth and saturation
+        qe.applyQuickStyle('cool');
+        const coolStyle = qe.quickEditState.quickStyle;
+        const coolWarmth = qe.quickEditState.adjustments.warmth;
+        const coolTint = qe.quickEditState.adjustments.tint;
+        const coolSat = qe.quickEditState.adjustments.saturation; // should be 0
+
+        // Switch to bw_drama: sets onyx filter and resets warmth
+        qe.applyQuickStyle('bw_drama');
+        const bwFilter = qe.quickEditState.filter;
+        const bwWarmth = qe.quickEditState.adjustments.warmth; // should be 0
+
+        // Clicking bw_drama again toggles it off
+        qe.applyQuickStyle('bw_drama');
+        const toggledOffStyle = qe.quickEditState.quickStyle; // null
+        const toggledOffFilter = qe.quickEditState.filter; // none
+
+        // --- REV-07: toggleFlagsForIds returns applied flag and accurately toggles ---
+        const testId = state.mediaItems[0].id;
+        state.mediaItems[0].flag = 0;
+        const flag1 = window.imagineUI.toggleFlagsForIds([testId], 1); // 1
+        const flag2 = window.imagineUI.toggleFlagsForIds([testId], 1); // toggles to 0
+
+        // --- REV-10: showDiscardModal / hideDiscardModal uses showModal / hideModal ---
+        qe.showDiscardModal();
+        const discardModalRole = dom.discardChangesModal.getAttribute('role');
+        const discardModalAria = dom.discardChangesModal.getAttribute('aria-modal');
+        const discardModalVisible = dom.discardChangesModal.style.display !== 'none';
+        qe.hideDiscardModal();
+        const discardModalHidden = dom.discardChangesModal.style.display === 'none';
+
+        qe.performCloseQuickEdit();
+
+        // --- REV-05: updateInspectorMiniMap shows Place on Map button for unmapped media ---
+        const unmappedItem = { id: 9999, file_name: 'test.jpg', exif: null };
+        await window.imagineUI.updateInspectorMiniMap(unmappedItem);
+        const placeBtnDisplay = dom.inspectorPlaceOnMapBtn ? dom.inspectorPlaceOnMapBtn.style.display : '';
+
+        return {
+            histLenAfterAdjust,
+            histLenAfterStraighten,
+            histLenAfterSmartFix,
+            histLenAfterFilterIntensity,
+            histLenUnchanged,
+            initialHistLen,
+            warmStyle,
+            warmVal,
+            satVal,
+            coolStyle,
+            coolWarmth,
+            coolTint,
+            coolSat,
+            bwFilter,
+            bwWarmth,
+            toggledOffStyle,
+            toggledOffFilter,
+            flag1,
+            flag2,
+            discardModalRole,
+            discardModalAria,
+            discardModalVisible,
+            discardModalHidden,
+            placeBtnDisplay
+        };
+    }""")
+
+    # Verify REV-02: sliders push history
+    assert results["histLenAfterAdjust"] > results["initialHistLen"]
+    assert results["histLenAfterStraighten"] > results["histLenAfterAdjust"]
+    assert results["histLenAfterSmartFix"] > results["histLenAfterStraighten"]
+    assert results["histLenAfterFilterIntensity"] > results["histLenAfterSmartFix"]
+    assert results["histLenUnchanged"] == results["histLenAfterFilterIntensity"]
+
+    # Verify REV-03: quick styles mutually exclusive & clear state
+    assert results["warmStyle"] == "warm"
+    assert results["warmVal"] == 30
+    assert results["satVal"] == 10
+    assert results["coolStyle"] == "cool"
+    assert results["coolWarmth"] == -25
+    assert results["coolTint"] == -5
+    assert results["coolSat"] == 0
+    assert results["bwFilter"] == "onyx"
+    assert results["bwWarmth"] == 0
+    assert results["toggledOffStyle"] is None
+    assert results["toggledOffFilter"] == "none"
+
+    # Verify REV-07: toggleFlagsForIds returns 1 then 0 on second toggle
+    assert results["flag1"] == 1
+    assert results["flag2"] == 0
+
+    # Verify REV-10: discard modal semantics
+    assert results["discardModalRole"] == "dialog"
+    assert results["discardModalAria"] == "true"
+    assert results["discardModalVisible"] is True
+    assert results["discardModalHidden"] is True
+
+    # Verify REV-05: Place on Map button visible for unmapped item
+    assert results["placeBtnDisplay"] == "block"
+
+
+

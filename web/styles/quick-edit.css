@@ -288,6 +288,7 @@
   width: 90px;
   height: 4px;
   -webkit-appearance: none;
+  appearance: none;
   background: #3e3e3e;
   border-radius: 2px;
   outline: none;
@@ -305,6 +306,22 @@
 }
 
 .editor-slider-row .editor-range-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  background: var(--accent-color);
+}
+
+.editor-slider-row .editor-range-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: none;
+  background: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  transition: transform 0.1s ease;
+}
+
+.editor-slider-row .editor-range-slider::-moz-range-thumb:hover {
   transform: scale(1.15);
   background: var(--accent-color);
 }

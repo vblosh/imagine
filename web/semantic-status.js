@@ -11,6 +11,7 @@ import { t } from './i18n.js';
 export async function checkSemanticStatus() {
   try {
     const status = await api.get('/api/semantic/status');
+    state.semanticConnectionError = false;
     state.semanticSearchAvailable = Boolean(status.ready);
     state.semanticIndexSize = status.indexSize || 0;
     state.semanticModelId = status.modelId || '';
@@ -19,8 +20,9 @@ export async function checkSemanticStatus() {
     updateSettingsSemanticStatus();
     return status;
   } catch (_e) {
+    state.semanticConnectionError = true;
     state.semanticSearchAvailable = false;
-    state.semanticBuilt = false;
+    // Preserve state.semanticBuilt on connection failures to avoid false diagnostic attribution
     updateSemanticToggleVisibility();
     updateSettingsSemanticStatus();
     return null;
@@ -51,12 +53,14 @@ export function updateSemanticToggleVisibility() {
 
 export function updateSettingsSemanticStatus() {
   if (dom.settingsSemanticStatus) {
-    if (!state.semanticBuilt) {
-      dom.settingsSemanticStatus.textContent = 'Status: Semantic search engine not built in this binary';
+    if (state.semanticConnectionError) {
+      dom.settingsSemanticStatus.textContent = t('semantic_status_connection_error') || 'Status: Could not connect to semantic search service';
+    } else if (!state.semanticBuilt) {
+      dom.settingsSemanticStatus.textContent = t('semantic_engine_not_built') || 'Status: Semantic search engine not built in this binary';
     } else if (!state.semanticSearchAvailable) {
-      dom.settingsSemanticStatus.textContent = `Status: Model unavailable or offline (${state.semanticIndexSize} vectors indexed)`;
+      dom.settingsSemanticStatus.textContent = t('semantic_status_offline', { count: state.semanticIndexSize }) || `Status: Model unavailable or offline (${state.semanticIndexSize} vectors indexed)`;
     } else {
-      dom.settingsSemanticStatus.textContent = `Status: Ready (${state.semanticIndexSize} vectors indexed, model: ${state.semanticModelId})`;
+      dom.settingsSemanticStatus.textContent = t('semantic_status_ready', { count: state.semanticIndexSize, model: state.semanticModelId }) || `Status: Ready (${state.semanticIndexSize} vectors indexed, model: ${state.semanticModelId})`;
     }
   }
 }

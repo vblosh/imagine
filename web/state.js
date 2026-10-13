@@ -109,6 +109,7 @@ export const state = {
   semanticBuilt: false,
   semanticIndexSize: 0,
   semanticModelId: '',
+  semanticConnectionError: false,
   semanticSearchActive: false,
   semanticSearchQuery: '',
   semanticSearchSnapshot: null,

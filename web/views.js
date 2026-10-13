@@ -18,7 +18,7 @@ import {
   updateMapMarkerSelections,
   setMapViewActionHooks,
 } from './map-view.js';
-import { openLoupeForMedia, updateLoupeControls } from './loupe.js';
+import { openLoupeForMedia, updateLoupeControls, closeLoupe } from './loupe.js';
 import {
   renderCategoryView,
   setCategoryViewActionHooks,
@@ -29,6 +29,7 @@ import {
   openDeleteTagModal,
   openTagModal,
   openAlbumModal,
+  setModalCloseLoupeHandler,
 } from './modals.js';
 import {
   renderGrid,
@@ -204,6 +205,7 @@ export function initViews() {
   });
 
   setGridOpenLoupeHandler(openLoupeForMedia);
+  setModalCloseLoupeHandler(closeLoupe);
 
   setMapViewActionHooks({
     loadMoreMedia,

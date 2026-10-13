@@ -162,10 +162,12 @@ export function toggleItemFlag(id, targetFlag) {
 }
 
 export function toggleFlagsForIds(ids, targetFlag) {
-  if (!ids || ids.length === 0) return;
+  if (!ids || ids.length === 0) return 0;
   const items = ids.map(id => state.mediaItems.find(m => m.id === id)).filter(Boolean);
   const allHave = items.length > 0 && items.every(m => m.flag === targetFlag);
-  return batchUpdateFlags(ids, allHave ? 0 : targetFlag);
+  const nextFlag = allHave ? 0 : targetFlag;
+  batchUpdateFlags(ids, nextFlag);
+  return nextFlag;
 }
 
 export async function batchUpdateDates(updates) {

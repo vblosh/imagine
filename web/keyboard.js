@@ -260,21 +260,6 @@ export function setupKeyboardShortcuts() {
       return;
     }
 
-    if (isAutoEventOpen() && dom.autoEventModal && dom.autoEventModal.style.display === 'flex' && e.key === 'Tab') {
-      const focusable = Array.from(dom.autoEventModal.querySelectorAll(
-        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
-      )).filter(el => el.offsetParent !== null || el.offsetWidth > 0 || el.offsetHeight > 0);
-      if (focusable.length) {
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-        if ((!e.shiftKey && document.activeElement === last) || (e.shiftKey && document.activeElement === first) || !dom.autoEventModal.contains(document.activeElement)) {
-          e.preventDefault();
-          (e.shiftKey ? last : first).focus();
-        }
-      }
-      return;
-    }
-
     const active = document.activeElement;
 
     // Delete Media Modal shortcuts (Space toggles "Also delete from disk", Enter performs deletion)
@@ -295,32 +280,6 @@ export function setupKeyboardShortcuts() {
           dom.closeDeleteMediaModalBtn.click();
         } else if (dom.confirmDeleteMediaBtn) {
           dom.confirmDeleteMediaBtn.click();
-        }
-        return;
-      }
-      if (e.key === 'Tab') {
-        const focusable = Array.from(
-          dom.deleteMediaModal.querySelectorAll(
-            'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
-          )
-        ).filter(el => el.offsetParent !== null || el.offsetWidth > 0 || el.offsetHeight > 0);
-
-        if (focusable.length > 0) {
-          const firstEl = focusable[0];
-          const lastEl = focusable[focusable.length - 1];
-          if (e.shiftKey) {
-            if (document.activeElement === firstEl || !dom.deleteMediaModal.contains(document.activeElement)) {
-              e.preventDefault();
-              lastEl.focus();
-            }
-          } else {
-            if (document.activeElement === lastEl || !dom.deleteMediaModal.contains(document.activeElement)) {
-              e.preventDefault();
-              firstEl.focus();
-            }
-          }
-        } else {
-          e.preventDefault();
         }
         return;
       }
@@ -513,8 +472,8 @@ export function setupKeyboardShortcuts() {
         }
       } else if (e.key === 'p' || e.key === 'P') {
         if (state.selectedIds.size > 0) {
-          toggleFlagsForIds(Array.from(state.selectedIds), 1);
-          showToast(t('toast_flag_pick'), 'info');
+          const nextFlag = toggleFlagsForIds(Array.from(state.selectedIds), 1);
+          showToast(nextFlag === 1 ? t('toast_flag_pick') : t('toast_flag_cleared'), 'info');
         }
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (state.selectedIds.size > 0) {
@@ -522,8 +481,8 @@ export function setupKeyboardShortcuts() {
         }
       } else if (e.key === 'x' || e.key === 'X') {
         if (state.selectedIds.size > 0) {
-          toggleFlagsForIds(Array.from(state.selectedIds), -1);
-          showToast(t('toast_flag_reject'), 'info');
+          const nextFlag = toggleFlagsForIds(Array.from(state.selectedIds), -1);
+          showToast(nextFlag === -1 ? t('toast_flag_reject') : t('toast_flag_cleared'), 'info');
         }
       } else if (e.key === 'u' || e.key === 'U') {
         if (state.selectedIds.size > 0) {
@@ -544,18 +503,6 @@ export function setupKeyboardShortcuts() {
   window.addEventListener('keyup', (e) => {
     if (e.key === ' ' && quickEditState.isOpen && quickEditState.isComparing) {
       stopCompare();
-    }
-  });
-
-  document.addEventListener('focusin', (e) => {
-    if (dom.deleteMediaModal && (dom.deleteMediaModal.style.display === 'flex' || (dom.deleteMediaModal.style.display !== 'none' && dom.deleteMediaModal.style.display !== ''))) {
-      if (!dom.deleteMediaModal.contains(e.target)) {
-        if (dom.deleteFromDiskCheckbox) {
-          dom.deleteFromDiskCheckbox.focus();
-        } else if (dom.confirmDeleteMediaBtn) {
-          dom.confirmDeleteMediaBtn.focus();
-        }
-      }
     }
   });
 }

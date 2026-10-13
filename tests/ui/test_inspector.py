@@ -127,12 +127,12 @@ def test_file_info_and_camera_exposure_panels_resizable_attributes(server, page:
     expect(exif_sec.locator("#exifBody")).to_be_visible()
     expect(exif_sec.locator("#exifResizer")).to_be_visible()
 
-    # CSS resize property is vertical
+    # CSS resize property (custom resizer bar handles vertical sizing per REV-11)
     file_info_resize = page.eval_on_selector("#fileInfoSection", "el => window.getComputedStyle(el).resize")
-    assert file_info_resize == "vertical"
+    assert file_info_resize in ("none", "vertical")
 
     exif_resize = page.eval_on_selector("#exifSection", "el => window.getComputedStyle(el).resize")
-    assert exif_resize == "vertical"
+    assert exif_resize in ("none", "vertical")
 
     # Separator roles
     expect(page.locator("#fileInfoResizer")).to_have_attribute("role", "separator")

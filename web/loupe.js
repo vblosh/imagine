@@ -124,7 +124,7 @@ export function updateLoupeView() {
       dom.loupeAudioTitle.textContent = item.audio_title || item.file_name;
     }
     if (dom.loupeAudioArtist) {
-      const artist = item.audio_artist || 'Unknown Artist';
+      const artist = item.audio_artist || t('unknown_artist');
       const album = item.audio_album ? ` - ${item.audio_album}` : '';
       dom.loupeAudioArtist.textContent = `${artist}${album}`;
     }
@@ -179,7 +179,7 @@ export function updateLoupeView() {
       const formatted = t('rank_loupe_format', { rank, total: state.mediaItems.length });
       dom.loupeIndex.textContent = `${formatted}${queryStr}`;
     } else if (state.totalCount > state.mediaItems.length) {
-      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length} (${state.totalCount} total)`;
+      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length} (${state.totalCount} ${t('total')})`;
     } else {
       dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length}`;
     }
@@ -287,7 +287,7 @@ export function updateLoupeZoomUI() {
   const percent = Math.round(state.loupeZoom * 100);
   if (dom.loupeZoomResetBtn) {
     dom.loupeZoomResetBtn.textContent = `${percent}%`;
-    dom.loupeZoomResetBtn.title = state.loupeZoom > 1.0 ? 'Reset Zoom (Z or Ctrl+0)' : 'Zoom to 200% (Z)';
+    dom.loupeZoomResetBtn.title = state.loupeZoom > 1.0 ? t('reset_zoom') : t('zoom_to_200');
   }
   if (dom.loupeZoomSlider) {
     dom.loupeZoomSlider.value = percent;
@@ -350,6 +350,7 @@ export function updateLoupeControls() {
 
 export async function loupeNext() {
   if (state.mediaItems.length === 0) return;
+  state.loupeShowOriginal = false;
   if (state.loupeIndex === state.mediaItems.length - 1 && state.mediaItems.length < state.totalCount && !state.isLoadingMore) {
     const prevLen = state.mediaItems.length;
     await (window.imagineUI?.loadMoreMedia ? window.imagineUI.loadMoreMedia() : loadMoreMedia());
@@ -365,6 +366,7 @@ export async function loupeNext() {
 
 export function loupePrev() {
   if (state.mediaItems.length === 0) return;
+  state.loupeShowOriginal = false;
   state.loupeIndex = (state.loupeIndex - 1 + state.mediaItems.length) % state.mediaItems.length;
   updateLoupeView();
 }

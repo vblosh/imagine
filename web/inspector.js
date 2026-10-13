@@ -8,7 +8,6 @@ import {
   escapeHtml,
   formatBytes,
   formatDateTime,
-  formatDate,
   formatDuration,
   formatExposureTime,
   numeric,
@@ -166,7 +165,7 @@ export function renderInspectorContent(item) {
       if (dom.infoBitrate) dom.infoBitrate.textContent = item.bitrate > 0 ? `${Math.round(item.bitrate / 1000)} kbps` : '-';
       if (dom.infoAudioDetails) {
         const details = [];
-        if (item.channels > 0) details.push(item.channels === 1 ? 'Mono' : item.channels === 2 ? 'Stereo' : `${item.channels} ch`);
+        if (item.channels > 0) details.push(item.channels === 1 ? t('audio_mono') : item.channels === 2 ? t('audio_stereo') : `${item.channels} ch`);
         if (item.sample_rate > 0) details.push(`${(item.sample_rate / 1000).toFixed(1)} kHz`);
         dom.infoAudioDetails.textContent = details.length > 0 ? details.join(', ') : '-';
       }
@@ -255,6 +254,8 @@ export async function updateInspector() {
   }
 
   const fetchId = ++currentInspectorFetchId;
+  const initialRating = item ? item.rating : undefined;
+  const initialFlag = item ? item.flag : undefined;
   try {
     // Fetch fresh details from API
     const freshRaw = await api.get(`/api/media/${selectedId}`, {}, { signal });
@@ -265,9 +266,11 @@ export async function updateInspector() {
     const idx = state.mediaItems.findIndex(m => m.id === selectedId);
     if (idx !== -1) {
       const currentItem = state.mediaItems[idx];
+      const ratingChangedLocally = currentItem.rating !== initialRating;
+      const flagChangedLocally = currentItem.flag !== initialFlag;
       const merged = Object.assign({}, freshItem, {
-        rating: (currentItem.rating !== undefined && currentItem.rating !== null) ? currentItem.rating : freshItem.rating,
-        flag: (currentItem.flag !== undefined && currentItem.flag !== null) ? currentItem.flag : freshItem.flag
+        rating: ratingChangedLocally ? currentItem.rating : (freshItem.rating ?? currentItem.rating),
+        flag: flagChangedLocally ? currentItem.flag : (freshItem.flag ?? currentItem.flag)
       });
       state.mediaItems[idx] = merged;
       renderInspectorContent(merged);
@@ -296,7 +299,7 @@ export function renderInspectorTags(item) {
     badge.className = 'tag-badge';
     const cat = (tag.category || 'keyword').toLowerCase();
     badge.dataset.category = cat;
-    badge.title = `Category: ${tag.category || 'keyword'}`;
+    badge.title = `${t('category_label')} ${tag.category || 'keyword'}`;
     const removeLabel = t('remove_tag') || 'Remove tag';
     badge.innerHTML = `
       <span>${escapeHtml(tag.name)}</span>
@@ -319,9 +322,15 @@ export { renderStarWidget };
 
 export async function updateInspectorMiniMap(item) {
   if (!dom.inspectorMiniMap) return;
-  if (!item || !hasValidGps(item)) {
+  if (!item) {
     if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'none';
     if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'none';
+    dom.inspectorMiniMap.style.display = 'none';
+    return;
+  }
+  if (!hasValidGps(item)) {
+    if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'none';
+    if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'block';
     dom.inspectorMiniMap.style.display = 'none';
     return;
   }
@@ -330,42 +339,36 @@ export async function updateInspectorMiniMap(item) {
   if (!window.L) return;
 
   const exif = item.exif || {};
-  if (hasValidGps(item)) {
-    if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'flex';
-    if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'none';
-    dom.inspectorMiniMap.style.display = 'block';
+  if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'flex';
+  if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'none';
+  dom.inspectorMiniMap.style.display = 'block';
 
-    const lat = exif.latitude;
-    const lon = exif.longitude;
+  const lat = exif.latitude;
+  const lon = exif.longitude;
 
-    if (!state.inspectorMiniMapInstance) {
-      state.inspectorMiniMapInstance = L.map(dom.inspectorMiniMap, {
-        center: [lat, lon],
-        zoom: 12,
-        zoomControl: false,
-        attributionControl: false,
-        dragging: false,
-        scrollWheelZoom: false,
-        doubleClickZoom: false
-      });
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19
-      }).addTo(state.inspectorMiniMapInstance);
-      state.inspectorMiniMarker = L.marker([lat, lon]).addTo(state.inspectorMiniMapInstance);
-      setTimeout(() => {
-        if (state.inspectorMiniMapInstance) state.inspectorMiniMapInstance.invalidateSize();
-      }, 50);
-    } else {
-      state.inspectorMiniMapInstance.setView([lat, lon], 12);
-      state.inspectorMiniMarker.setLatLng([lat, lon]);
-      setTimeout(() => {
-        if (state.inspectorMiniMapInstance) state.inspectorMiniMapInstance.invalidateSize();
-      }, 50);
-    }
+  if (!state.inspectorMiniMapInstance) {
+    state.inspectorMiniMapInstance = L.map(dom.inspectorMiniMap, {
+      center: [lat, lon],
+      zoom: 12,
+      zoomControl: false,
+      attributionControl: false,
+      dragging: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false
+    });
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(state.inspectorMiniMapInstance);
+    state.inspectorMiniMarker = L.marker([lat, lon]).addTo(state.inspectorMiniMapInstance);
+    setTimeout(() => {
+      if (state.inspectorMiniMapInstance) state.inspectorMiniMapInstance.invalidateSize();
+    }, 50);
   } else {
-    if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'none';
-    if (dom.inspectorPlaceOnMapBtn) dom.inspectorPlaceOnMapBtn.style.display = 'block';
-    dom.inspectorMiniMap.style.display = 'none';
+    state.inspectorMiniMapInstance.setView([lat, lon], 12);
+    state.inspectorMiniMarker.setLatLng([lat, lon]);
+    setTimeout(() => {
+      if (state.inspectorMiniMapInstance) state.inspectorMiniMapInstance.invalidateSize();
+    }, 50);
   }
 }
 
