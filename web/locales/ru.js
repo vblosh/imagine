@@ -706,6 +706,16 @@ export default {
     toast_failed_cancel_job: 'Не удалось отменить задание: {error}',
     toast_album_deleted_named: 'Альбом "{name}" удален.',
     toast_failed_delete_album: 'Не удалось удалить альбом: {error}',
+    delete_album_title: 'Удалить альбом',
+    delete_album_prompt: 'Вы действительно хотите удалить альбом «{name}»?',
+    view_loupe: 'Открыть лупу',
+    clear_pin: 'Удалить метку',
+    counter_of: '{current} из {total}',
+    filter_or: 'Фильтр (ИЛИ)',
+    filter_semantic: 'Семантический',
+    filter_search: 'Поиск',
+    custom_gps_coordinates: 'Пользовательские координаты GPS',
+    in_catalog: 'В каталоге',
     // Months
     months: [
       'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',

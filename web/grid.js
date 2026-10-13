@@ -55,8 +55,8 @@ export function renderLoadMore(container, onLoadMore = loadMoreMedia) {
     total: state.totalCount,
   });
   moreWrap.innerHTML = `
-    <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">${showingText}</div>
-    <button class="btn btn-secondary btn-sm" id="gridLoadMoreBtn">${t('load_more')}</button>
+    <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">${escapeHtml(showingText)}</div>
+    <button class="btn btn-secondary btn-sm" id="gridLoadMoreBtn">${escapeHtml(t('load_more'))}</button>
   `;
   const btn = moreWrap.querySelector('#gridLoadMoreBtn');
   if (btn) btn.onclick = () => onLoadMore();
@@ -104,6 +104,9 @@ export function renderGrid() {
     });
     dom.mediaGrid.innerHTML = '';
     dom.mediaGrid.appendChild(cardsWrap);
+    renderLoadMore(dom.mediaGrid);
+    initGridAccessibility();
+    updateRovingTabindex();
     return;
   }
 
@@ -130,8 +133,8 @@ export function renderGrid() {
     headerEl.className = 'date-header';
     const itemNoun = groups[groupTitle].length === 1 ? t('item_singular') : t('item_plural');
     headerEl.innerHTML = `
-      <span>${groupTitle}</span>
-      <span class="group-count">${groups[groupTitle].length} ${itemNoun}</span>
+      <span>${escapeHtml(groupTitle)}</span>
+      <span class="group-count">${groups[groupTitle].length} ${escapeHtml(itemNoun)}</span>
     `;
     groupEl.appendChild(headerEl);
 
@@ -159,7 +162,7 @@ export function renderGrid() {
 export function appendMediaToGrid(newItems) {
   if (!dom.mediaGrid) return;
 
-  if (state.semanticSearchActive || isAlbumOrderMode()) {
+  if (state.semanticSearchActive) {
     renderGrid();
     return;
   }
@@ -170,6 +173,22 @@ export function appendMediaToGrid(newItems) {
 
   if (!newItems || newItems.length === 0) {
     renderLoadMore(dom.mediaGrid);
+    return;
+  }
+
+  if (isAlbumOrderMode()) {
+    let cardsWrap = dom.mediaGrid.querySelector('.album-order-grid');
+    if (!cardsWrap) {
+      renderGrid();
+      return;
+    }
+    newItems.forEach(item => {
+      const card = createPhotoCard(item);
+      cardMap.set(item.id, card);
+      cardsWrap.appendChild(card);
+    });
+    renderLoadMore(dom.mediaGrid);
+    updateRovingTabindex();
     return;
   }
 
@@ -212,8 +231,8 @@ export function appendMediaToGrid(newItems) {
       headerEl.className = 'date-header';
       const itemNoun = groups[groupTitle].length === 1 ? t('item_singular') : t('item_plural');
       headerEl.innerHTML = `
-        <span>${groupTitle}</span>
-        <span class="group-count">${groups[groupTitle].length} ${itemNoun}</span>
+        <span>${escapeHtml(groupTitle)}</span>
+        <span class="group-count">${groups[groupTitle].length} ${escapeHtml(itemNoun)}</span>
       `;
       groupEl.appendChild(headerEl);
 
@@ -334,14 +353,14 @@ export function updateFilterLabel() {
       const shortName = folderParts[folderParts.length - 1] || folder;
       orLabels.push(shortName);
     });
-    parts.push(`Filter (OR): ${orLabels.join(', ')}`);
+    parts.push(`${t('filter_or')}: ${orLabels.join(', ')}`);
   }
 
   if (state.searchText) {
     if (state.semanticSearchEnabled && state.semanticSearchAvailable) {
-      parts.push(`Semantic: "${state.searchText}"`);
+      parts.push(`${t('filter_semantic')}: "${state.searchText}"`);
     } else {
-      parts.push(`Search: "${state.searchText}"`);
+      parts.push(`${t('filter_search')}: "${state.searchText}"`);
     }
   }
 

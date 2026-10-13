@@ -706,6 +706,16 @@ export default {
     toast_failed_cancel_job: 'Fehler beim Abbrechen des Auftrags: {error}',
     toast_album_deleted_named: 'Album "{name}" gelöscht.',
     toast_failed_delete_album: 'Fehler beim Löschen des Albums: {error}',
+    delete_album_title: 'Album löschen',
+    delete_album_prompt: 'Möchten Sie das Album „{name}“ wirklich löschen?',
+    view_loupe: 'Lupe anzeigen',
+    clear_pin: 'Stecknadel entfernen',
+    counter_of: '{current} von {total}',
+    filter_or: 'Filter (ODER)',
+    filter_semantic: 'Semantisch',
+    filter_search: 'Suche',
+    custom_gps_coordinates: 'Benutzerdefinierte GPS-Koordinaten',
+    in_catalog: 'Im Katalog',
     // Months
     months: [
       'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',

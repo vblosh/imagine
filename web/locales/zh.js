@@ -706,6 +706,16 @@ export default {
     toast_failed_cancel_job: '取消任务失败: {error}',
     toast_album_deleted_named: '相册 "{name}" 已删除。',
     toast_failed_delete_album: '删除相册失败: {error}',
+    delete_album_title: '删除相册',
+    delete_album_prompt: '确定要删除相册“{name}”吗？',
+    view_loupe: '查看放大镜',
+    clear_pin: '移除大头针',
+    counter_of: '{current} / {total}',
+    filter_or: '筛选 (或)',
+    filter_semantic: '语义',
+    filter_search: '搜索',
+    custom_gps_coordinates: '自定义 GPS 坐标',
+    in_catalog: '在目录中',
     // Months
     months: [
       '一月', '二月', '三月', '四月', '五月', '六月',

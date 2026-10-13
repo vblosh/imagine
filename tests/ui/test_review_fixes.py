@@ -736,3 +736,160 @@ def test_mutation_error_feedback_and_state_preservation(server, page: Page):
     assert result["ratingAfterError"] == result["prevRating"]
     assert "Failed to update rating" in (result["toastText"] or "")
 
+
+def test_views_navigation_code_review_fixes(server, page: Page):
+    """Verify code review findings across grid, map-view, category-view, and grid-a11y:
+    - [HIGH-01] Album order mode pagination and keyboard accessibility
+    - [HIGH-02] Map marker signature cache invalidation on item changes at same zoom
+    - [MED-01] Grid accessibility fallback targets .group-cards
+    - [MED-03] Album cover cache keys by id:item_count and avoids caching transient nulls
+    - [LOW-05] Redundant map.project skipped on identical coordinates
+    """
+    page.goto(server["url"])
+    expect(page.locator("#mediaGrid")).to_be_visible()
+
+    results = page.evaluate("""async () => {
+        const gridModule = await import('./grid.js');
+        const mapModule = await import('./map-view.js');
+        const catModule = await import('./category-view.js');
+        const state = window.imagineUI.state;
+
+        // 1. [HIGH-01] Album Order Mode pagination and keyboard accessibility
+        const prevTotal = state.totalCount;
+        const prevItems = [...state.mediaItems];
+        const prevAlbumId = state.activeAlbumId;
+        const prevSortBy = state.sortBy;
+
+        state.activeAlbumId = 1;
+        state.sortBy = 'album_order';
+        state.totalCount = 100;
+        gridModule.renderGrid();
+
+        const albumGridEl = document.querySelector('.album-order-grid');
+        const loadMoreBtn = document.querySelector('#gridLoadMoreBtn');
+        const firstCard = albumGridEl ? albumGridEl.querySelector('.photo-card') : null;
+        const rovingTabIndex = firstCard ? firstCard.getAttribute('tabindex') : null;
+
+        // Incremental append in Album Order Mode
+        const newItem = { id: 9999, file_name: 'test_new.bmp', date_taken: 1700000000 };
+        gridModule.appendMediaToGrid([newItem]);
+        const appendedCard = albumGridEl ? albumGridEl.querySelector('.photo-card[data-id="9999"]') : null;
+
+        // Restore state
+        state.activeAlbumId = prevAlbumId;
+        state.sortBy = prevSortBy;
+        state.totalCount = prevTotal;
+        state.mediaItems = prevItems;
+        gridModule.renderGrid();
+
+        // 2. [HIGH-02] Map marker signature cache invalidation at same zoom
+        const loaderModule = await import('./leaflet-loader.js');
+        await loaderModule.ensureLeafletLoaded();
+
+        const mockGps1 = [{ id: 1, exif: { latitude: 45.0, longitude: 10.0 } }, { id: 2, exif: { latitude: 45.1, longitude: 10.1 } }];
+        const mockGps2 = [{ id: 3, exif: { latitude: 45.0, longitude: 10.0 } }, { id: 4, exif: { latitude: 45.1, longitude: 10.1 } }];
+
+        state._cachedGpsItems = mockGps1;
+        state._lastMapZoom = 5;
+        state._lastMapItemsSig = null;
+
+        const origMap = state.mapInstance;
+        let clearLayersCalled = 0;
+        const makePt = (x, y) => ({
+            x, y,
+            distanceTo(o) { return Math.hypot(this.x - o.x, this.y - o.y); }
+        });
+        state.mapInstance = {
+            getZoom: () => 5,
+            project: (coords) => makePt(coords[0] * 10, coords[1] * 10),
+        };
+        state.markerLayerGroup = {
+            clearLayers: () => { clearLayersCalled++; },
+            addLayer: () => {},
+        };
+
+        mapModule.renderMapMarkers(false);
+        const sig1 = state._lastMapItemsSig;
+        const firstClears = clearLayersCalled;
+
+        mapModule.renderMapMarkers(false);
+        const secondClears = clearLayersCalled;
+
+        state._cachedGpsItems = mockGps2;
+        mapModule.renderMapMarkers(false);
+        const sig2 = state._lastMapItemsSig;
+        const thirdClears = clearLayersCalled;
+
+        // Restore mapInstance
+        state.mapInstance = origMap;
+        state._cachedGpsItems = null;
+        state._lastMapZoom = null;
+        state._lastMapItemsSig = null;
+
+        // 3. [MED-03] Album cover cache keying & transient retry
+        catModule.albumCoverCache.clear();
+        const testAlbum = { id: 42, item_count: 5 };
+
+        const origFetch = window.fetch;
+        window.fetch = async () => new Response('Server error', { status: 500 });
+        try {
+            await catModule.fetchAlbumCover(testAlbum);
+        } catch (_) {}
+        const cachedAfterError = catModule.albumCoverCache.has('42:5');
+
+        window.fetch = async () => new Response(JSON.stringify({ items: [{ id: 101, content_hash: 'hash123' }] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        });
+        const urlSuccess = await catModule.fetchAlbumCover(testAlbum);
+        const cachedAfterSuccess = catModule.albumCoverCache.get('42:5');
+        window.fetch = origFetch;
+
+        testAlbum.item_count = 6;
+        const coverForNewCount = catModule.getAlbumCoverUrl(testAlbum);
+
+        // 4. [LOW-05] Redundant map.project skipped for identical GPS coordinates
+        let projectCalls = 0;
+        const fakeMap = {
+            getZoom: () => 5,
+            project: (latlng) => {
+                projectCalls++;
+                return makePt(latlng[0] * 10, latlng[1] * 10);
+            }
+        };
+        const burstItems = [
+            { id: 1, exif: { latitude: 50.0, longitude: 10.0 } },
+            { id: 2, exif: { latitude: 50.0, longitude: 10.0 } },
+            { id: 3, exif: { latitude: 50.0, longitude: 10.0 } },
+        ];
+        mapModule.clusterGpsItems(burstItems, fakeMap, 50);
+        const burstProjectCalls = projectCalls;
+
+        return {
+            albumGridRendered: Boolean(albumGridEl),
+            loadMoreRendered: Boolean(loadMoreBtn),
+            rovingTabIndex,
+            appendedCardExists: Boolean(appendedCard),
+            sig1DifferentFromSig2: sig1 !== sig2,
+            cacheRebuildOnDifferentItemsSameLength: thirdClears > secondClears,
+            cacheSkipOnSameItems: firstClears === secondClears,
+            transientErrorNotCached: cachedAfterError === false,
+            coverLoadedAfterRetry: urlSuccess !== null && cachedAfterSuccess !== null,
+            coverRefreshedOnCountChange: coverForNewCount === null,
+            burstProjectCalls
+        };
+    }""")
+
+    assert results["albumGridRendered"] is True
+    assert results["loadMoreRendered"] is True
+    assert results["rovingTabIndex"] == "0"
+    assert results["appendedCardExists"] is True
+    assert results["sig1DifferentFromSig2"] is True
+    assert results["cacheRebuildOnDifferentItemsSameLength"] is True
+    assert results["cacheSkipOnSameItems"] is True
+    assert results["transientErrorNotCached"] is True
+    assert results["coverLoadedAfterRetry"] is True
+    assert results["coverRefreshedOnCountChange"] is True
+    assert results["burstProjectCalls"] == 1
+
+

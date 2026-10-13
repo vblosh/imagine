@@ -9,10 +9,19 @@ import { escapeHtml, api } from './api.js';
 import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { enterAlbumOrderMode, clearTimelineSelection } from './media-params.js';
-import { updateSidebarActive } from './sidebar.js';
-import { loadMedia, updateFilterLabel } from './grid.js';
-import { openTagModal, openAlbumModal } from './modals.js';
 import { saveActiveTagIdsPreference } from './persistence.js';
+
+let categoryActionHooks = {
+  updateSidebarActive: () => {},
+  loadMedia: () => {},
+  updateFilterLabel: () => {},
+  openTagModal: () => {},
+  openAlbumModal: () => {},
+};
+
+export function setCategoryViewActionHooks(hooks) {
+  categoryActionHooks = { ...categoryActionHooks, ...hooks };
+}
 
 export function getCategoryConfig(cat) {
   const c = (cat || 'people').toLowerCase();
@@ -95,6 +104,13 @@ export function getTagCoverUrl(tag) {
 
 export const albumCoverCache = new Map();
 
+function getAlbumCoverKey(album) {
+  if (typeof album === 'object' && album !== null) {
+    return `${album.id}:${album.item_count || 0}`;
+  }
+  return String(album);
+}
+
 export function getAlbumCoverUrl(album) {
   if (album.cover_hash) {
     return `/api/thumbnails/${encodeURIComponent(album.cover_hash)}/256`;
@@ -102,15 +118,18 @@ export function getAlbumCoverUrl(album) {
   if (album.cover_media_id) {
     return `/api/photos/${album.cover_media_id}/original`;
   }
-  if (albumCoverCache.has(album.id)) {
-    return albumCoverCache.get(album.id);
+  const cacheKey = getAlbumCoverKey(album);
+  if (albumCoverCache.has(cacheKey)) {
+    return albumCoverCache.get(cacheKey);
   }
   return null;
 }
 
-export async function fetchAlbumCover(albumId) {
-  if (albumCoverCache.has(albumId)) {
-    return albumCoverCache.get(albumId);
+export async function fetchAlbumCover(album) {
+  const albumId = typeof album === 'object' && album !== null ? album.id : album;
+  const cacheKey = getAlbumCoverKey(album);
+  if (albumCoverCache.has(cacheKey)) {
+    return albumCoverCache.get(cacheKey);
   }
   try {
     const res = await api.get(`/api/media?album_id=${albumId}&limit=1`);
@@ -120,12 +139,12 @@ export async function fetchAlbumCover(albumId) {
       const url = item.content_hash
         ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
         : `/api/photos/${item.id}/original`;
-      albumCoverCache.set(albumId, url);
+      albumCoverCache.set(cacheKey, url);
       return url;
     }
-    albumCoverCache.set(albumId, null);
+    albumCoverCache.set(cacheKey, null);
   } catch (_) {
-    albumCoverCache.set(albumId, null);
+    // Transient failure: do not cache null so it can be retried
   }
   return null;
 }
@@ -408,7 +427,7 @@ export function renderCategoryView(category) {
 
     // Dynamic cover loading for albums without explicit cover
     if (isAlbum && count > 0 && !coverUrl) {
-      fetchAlbumCover(item.id).then(url => {
+      fetchAlbumCover(item).then(url => {
         if (!url || card.dataset.id !== String(item.id)) return;
         const placeholder = card.querySelector('.category-card-placeholder');
         let cardImg = card.querySelector('.category-card-thumb');
@@ -460,8 +479,8 @@ export function selectCategoryAlbum(album) {
 
   state.activeAlbumId = album.id;
   enterAlbumOrderMode();
-  state.activeTagId = null;
-  state.activeFolder = null;
+  state.activeTagIds.clear();
+  state.activeFolders.clear();
   clearTimelineSelection();
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
@@ -482,16 +501,17 @@ export function selectCategoryAlbum(album) {
   }
   if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
 
-  updateSidebarActive();
-  updateFilterLabel();
-  loadMedia();
+  categoryActionHooks.updateSidebarActive();
+  categoryActionHooks.updateFilterLabel();
+  categoryActionHooks.loadMedia();
 }
 
 export function selectCategoryItem(tag) {
   if (!tag) return;
 
-  state.activeTagId = tag.id;
-  state.activeFolder = null;
+  state.activeTagIds.clear();
+  state.activeTagIds.add(Number(tag.id));
+  state.activeFolders.clear();
   clearTimelineSelection();
   state.activeAlbumId = null;
   state.activeMediaType = 'all';
@@ -514,19 +534,20 @@ export function selectCategoryItem(tag) {
   }
   if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
 
-  updateSidebarActive();
-  updateFilterLabel();
-  loadMedia();
+  categoryActionHooks.updateSidebarActive();
+  categoryActionHooks.updateFilterLabel();
+  categoryActionHooks.loadMedia();
 }
 
 export function navigateBackToCategory() {
-  state.activeTagId = null;
+  state.activeTagIds.clear();
+  state.activeFolders.clear();
   state.activeAlbumId = null;
   saveActiveTagIdsPreference(state.activeTagIds);
   if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
   if (dom.emptyState) dom.emptyState.style.display = 'none';
-  updateSidebarActive();
-  updateFilterLabel();
+  categoryActionHooks.updateSidebarActive();
+  categoryActionHooks.updateFilterLabel();
   renderCategoryView();
 }
 
@@ -540,9 +561,9 @@ export function initCategoryView() {
   if (dom.categoryAddBtn) {
     dom.categoryAddBtn.addEventListener('click', () => {
       if (state.activeTab === 'albums') {
-        openAlbumModal();
+        categoryActionHooks.openAlbumModal();
       } else {
-        openTagModal();
+        categoryActionHooks.openTagModal();
       }
     });
   }
@@ -550,9 +571,9 @@ export function initCategoryView() {
   if (dom.categoryEmptyActionBtn) {
     dom.categoryEmptyActionBtn.addEventListener('click', () => {
       if (state.activeTab === 'albums') {
-        openAlbumModal();
+        categoryActionHooks.openAlbumModal();
       } else {
-        openTagModal();
+        categoryActionHooks.openTagModal();
       }
     });
   }

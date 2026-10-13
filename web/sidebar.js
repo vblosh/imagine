@@ -350,7 +350,7 @@ export function renderSidebarTags() {
       li.innerHTML = `
       <span class="tag-name">${safeTagName}</span>
       <span class="count-badge">${tag.media_count || 0}</span>
-      <button class="delete-tag-btn" title="Delete tag">&times;</button>
+      <button class="delete-tag-btn" title="${escapeHtml(t('delete_tag_title'))}">&times;</button>
     `;
       li.addEventListener('click', (e) => {
         handleSidebarItemClick('tag', tag.id, e);
@@ -398,7 +398,7 @@ export function renderSidebarAlbums() {
       ${icon('book', { width: 14, height: 14 })}
       <span class="album-name">${safeAlbumName}</span>
       <span class="count-badge">${album.item_count || 0}</span>
-      <button class="delete-album-btn" title="Delete album">&times;</button>
+      <button class="delete-album-btn" title="${escapeHtml(t('delete_album_title'))}">&times;</button>
     `;
     li.addEventListener('click', () => {
       if (state.activeAlbumId === album.id) {
@@ -418,7 +418,7 @@ export function renderSidebarAlbums() {
     if (delBtn) {
       delBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!window.confirm(`Are you sure you want to delete album "${album.name}"?`)) {
+        if (!window.confirm(t('delete_album_prompt', { name: album.name }))) {
           return;
         }
         try {
@@ -631,7 +631,7 @@ export function bindSidebarHandlers() {
   if (dom.navLastImported) {
     dom.navLastImported.addEventListener('click', () => {
       state.activeLastImported = !state.activeLastImported;
-      state.activeFolder = null;
+      state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
       persistenceHooks.saveActiveFoldersPreference(state.activeFolders);
@@ -643,7 +643,7 @@ export function bindSidebarHandlers() {
   if (dom.navPhotos) {
     dom.navPhotos.addEventListener('click', () => {
       state.activeMediaType = state.activeMediaType === 'photos' ? 'all' : 'photos';
-      state.activeFolder = null;
+      state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
       persistenceHooks.saveActiveFoldersPreference(state.activeFolders);
@@ -655,7 +655,7 @@ export function bindSidebarHandlers() {
   if (dom.navVideos) {
     dom.navVideos.addEventListener('click', () => {
       state.activeMediaType = state.activeMediaType === 'videos' ? 'all' : 'videos';
-      state.activeFolder = null;
+      state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
       persistenceHooks.saveActiveFoldersPreference(state.activeFolders);
@@ -667,7 +667,7 @@ export function bindSidebarHandlers() {
   if (dom.navAudio) {
     dom.navAudio.addEventListener('click', () => {
       state.activeMediaType = state.activeMediaType === 'audio' ? 'all' : 'audio';
-      state.activeFolder = null;
+      state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
       persistenceHooks.saveActiveFoldersPreference(state.activeFolders);
@@ -679,7 +679,7 @@ export function bindSidebarHandlers() {
   if (dom.navPicks) {
     dom.navPicks.addEventListener('click', () => {
       state.activeStatusFilter = state.activeStatusFilter === 'picks' ? null : 'picks';
-      state.activeFolder = null;
+      state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
       persistenceHooks.saveActiveFoldersPreference(state.activeFolders);
@@ -691,7 +691,7 @@ export function bindSidebarHandlers() {
   if (dom.navRejects) {
     dom.navRejects.addEventListener('click', () => {
       state.activeStatusFilter = state.activeStatusFilter === 'rejects' ? null : 'rejects';
-      state.activeFolder = null;
+      state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
       persistenceHooks.saveActiveFoldersPreference(state.activeFolders);
@@ -703,7 +703,7 @@ export function bindSidebarHandlers() {
   if (dom.navNotRejects) {
     dom.navNotRejects.addEventListener('click', () => {
       state.activeStatusFilter = state.activeStatusFilter === 'not_rejects' ? null : 'not_rejects';
-      state.activeFolder = null;
+      state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
       persistenceHooks.saveActiveFoldersPreference(state.activeFolders);
@@ -715,7 +715,7 @@ export function bindSidebarHandlers() {
   if (dom.navUnrated) {
     dom.navUnrated.addEventListener('click', () => {
       state.activeStatusFilter = state.activeStatusFilter === 'unrated' ? null : 'unrated';
-      state.activeFolder = null;
+      state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
       persistenceHooks.saveActiveFoldersPreference(state.activeFolders);

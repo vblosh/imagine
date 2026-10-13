@@ -17,13 +17,22 @@ import { state, getGpsMediaItems, invalidateGpsCache } from './state.js';
 import { dom, showToast } from './dom.js';
 import { handleCardSelection } from './media-selection.js';
 import { updateItemRating, updateItemFlag } from './rating-flag.js';
-import { loadMoreMedia, renderGrid } from './grid.js';
-import { updateInspector, openInspector } from './inspector.js';
-import { openLoupeForMedia } from './loupe.js';
 import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { saveViewModePreference } from './persistence.js';
 import { ensureLeafletLoaded } from './leaflet-loader.js';
+
+let mapActionHooks = {
+  loadMoreMedia: () => {},
+  renderGrid: () => {},
+  updateInspector: () => {},
+  openInspector: () => {},
+  openLoupeForMedia: () => {},
+};
+
+export function setMapViewActionHooks(hooks) {
+  mapActionHooks = { ...mapActionHooks, ...hooks };
+}
 
 let mapSearchAbortController = null;
 const geocodeCache = new Map();
@@ -42,6 +51,7 @@ export async function switchViewMode(mode) {
     if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
     if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
     await initMap();
+    if (state.viewMode !== 'map') return;
     if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
     if (state.mapInstance) {
       state.mapInstance.invalidateSize();
@@ -79,7 +89,7 @@ export async function switchViewMode(mode) {
       if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
       if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
       if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
-      renderGrid();
+      mapActionHooks.renderGrid();
     }
   }
 }
@@ -154,10 +164,19 @@ export function clusterGpsItems(gpsItems, map, radius = 50) {
   const clusters = [];
   const grid = new Map();
 
+  let lastLat = null;
+  let lastLng = null;
+  let lastPt = null;
+
   for (const item of sortedItems) {
     const lat = item.exif.latitude;
     const lng = item.exif.longitude;
-    const pt = map.project([lat, lng], zoom);
+    const pt = (lat === lastLat && lng === lastLng && lastPt)
+      ? lastPt
+      : map.project([lat, lng], zoom);
+    lastLat = lat;
+    lastLng = lng;
+    lastPt = pt;
 
     const cx = Math.floor(pt.x / radius);
     const cy = Math.floor(pt.y / radius);
@@ -183,22 +202,24 @@ export function clusterGpsItems(gpsItems, map, radius = 50) {
     if (closestCluster) {
       closestCluster.items.push(item);
       const n = closestCluster.items.length;
-      closestCluster.lat = (closestCluster.lat * (n - 1) + lat) / n;
-      closestCluster.lng = (closestCluster.lng * (n - 1) + lng) / n;
-      closestCluster.centerPt = map.project([closestCluster.lat, closestCluster.lng], zoom);
+      if (lat !== closestCluster.lat || lng !== closestCluster.lng) {
+        closestCluster.lat = (closestCluster.lat * (n - 1) + lat) / n;
+        closestCluster.lng = (closestCluster.lng * (n - 1) + lng) / n;
+        closestCluster.centerPt = map.project([closestCluster.lat, closestCluster.lng], zoom);
 
-      const newCx = Math.floor(closestCluster.centerPt.x / radius);
-      const newCy = Math.floor(closestCluster.centerPt.y / radius);
-      const newKey = `${newCx},${newCy}`;
-      if (newKey !== closestCluster.gridKey) {
-        const oldBucket = grid.get(closestCluster.gridKey);
-        if (oldBucket) {
-          const idx = oldBucket.indexOf(closestCluster);
-          if (idx !== -1) oldBucket.splice(idx, 1);
+        const newCx = Math.floor(closestCluster.centerPt.x / radius);
+        const newCy = Math.floor(closestCluster.centerPt.y / radius);
+        const newKey = `${newCx},${newCy}`;
+        if (newKey !== closestCluster.gridKey) {
+          const oldBucket = grid.get(closestCluster.gridKey);
+          if (oldBucket) {
+            const idx = oldBucket.indexOf(closestCluster);
+            if (idx !== -1) oldBucket.splice(idx, 1);
+          }
+          closestCluster.gridKey = newKey;
+          if (!grid.has(newKey)) grid.set(newKey, []);
+          grid.get(newKey).push(closestCluster);
         }
-        closestCluster.gridKey = newKey;
-        if (!grid.has(newKey)) grid.set(newKey, []);
-        grid.get(newKey).push(closestCluster);
       }
     } else {
       const newCluster = {
@@ -217,6 +238,18 @@ export function clusterGpsItems(gpsItems, map, radius = 50) {
   }
 
   return clusters;
+}
+
+function computeGpsItemsSignature(gpsItems) {
+  if (!gpsItems || gpsItems.length === 0) return '0';
+  const first = gpsItems[0];
+  const last = gpsItems[gpsItems.length - 1];
+  let hash = gpsItems.length;
+  for (let i = 0; i < gpsItems.length; i++) {
+    const it = gpsItems[i];
+    hash = ((hash << 5) - hash + Number(it.id || 0)) | 0;
+  }
+  return `${gpsItems.length}:${hash}:${first.id}:${last.id}`;
 }
 
 export function renderMapMarkers(force = false) {
@@ -260,9 +293,10 @@ export function renderMapMarkers(force = false) {
   }
 
   const currentZoom = state.mapInstance.getZoom();
+  const currentItemsSig = computeGpsItemsSignature(gpsItems);
 
   // Avoid expensive map marker rebuild if zoom and items haven't changed
-  if (!force && state._lastMapZoom === currentZoom && state._lastMapItemsSig !== null) {
+  if (!force && state._lastMapZoom === currentZoom && state._lastMapItemsSig === currentItemsSig) {
     updateMapMarkerSelections();
     if (openMediaId) {
       const targetMarker = state.mapMarkers.find(m => m.clusterItems && m.clusterItems.some(i => i.id === openMediaId));
@@ -276,7 +310,7 @@ export function renderMapMarkers(force = false) {
   }
 
   state._lastMapZoom = currentZoom;
-  state._lastMapItemsSig = gpsItems.length;
+  state._lastMapItemsSig = currentItemsSig;
 
   if (state.markerLayerGroup) {
     state.markerLayerGroup.clearLayers();
@@ -431,9 +465,9 @@ export function createMapPopupElement(items, initialItemId) {
       const nav = document.createElement('div');
       nav.className = 'map-popup-nav';
       nav.innerHTML = `
-        <button class="btn-icon-sm" id="popPrevBtn" title="Previous photo">&lt;</button>
-        <span>${activeIndex + 1} of ${items.length}</span>
-        <button class="btn-icon-sm" id="popNextBtn" title="Next photo">&gt;</button>
+        <button class="btn-icon-sm" id="popPrevBtn" title="${escapeHtml(t('prev_photo'))}">&lt;</button>
+        <span>${t('counter_of', { current: activeIndex + 1, total: items.length })}</span>
+        <button class="btn-icon-sm" id="popNextBtn" title="${escapeHtml(t('next_photo'))}">&gt;</button>
       `;
       nav.querySelector('#popPrevBtn').onclick = (e) => {
         e.stopPropagation();
@@ -466,10 +500,10 @@ export function createMapPopupElement(items, initialItemId) {
     thumbWrap.className = 'map-popup-thumb-wrap';
     thumbWrap.innerHTML = `
       <img src="${thumbUrl}" alt="${safeFileName}" class="map-popup-thumb">
-      <div class="loupe-hint">🔍 View Loupe</div>
+      <div class="loupe-hint">🔍 ${escapeHtml(t('view_loupe'))}</div>
     `;
     thumbWrap.onclick = () => {
-      openLoupeForMedia(item.id);
+      mapActionHooks.openLoupeForMedia(item.id);
     };
     container.appendChild(thumbWrap);
 
@@ -496,7 +530,7 @@ export function createMapPopupElement(items, initialItemId) {
       }
       placePhotoBtnHtml = `
         <button class="btn btn-xs btn-primary place-here-btn" id="popPlaceHereBtn" style="width: 100%; margin-top: 6px;" title="${t('place_here')}" data-action="place-here">
-          📍 ${label}<span style="display:none">Place here place hier</span>
+          📍 ${label}
         </button>
       `;
     }
@@ -513,8 +547,8 @@ export function createMapPopupElement(items, initialItemId) {
           ${starsHtml}
         </div>
         <div class="map-popup-btns">
-          <button class="btn btn-xs ${item.flag === 1 ? 'btn-primary' : 'btn-secondary'}" id="popPickBtn" title="Pick">✔</button>
-          <button class="btn btn-xs ${item.flag === -1 ? 'btn-danger' : 'btn-secondary'}" id="popRejectBtn" title="Reject">✖</button>
+          <button class="btn btn-xs ${item.flag === 1 ? 'btn-primary' : 'btn-secondary'}" id="popPickBtn" title="${escapeHtml(t('pick'))}">✔</button>
+          <button class="btn btn-xs ${item.flag === -1 ? 'btn-danger' : 'btn-secondary'}" id="popRejectBtn" title="${escapeHtml(t('reject'))}">✖</button>
         </div>
       </div>
     `;
@@ -594,7 +628,7 @@ export function patchOpenMapPopup(id) {
   if (!popupCard) {
     popupCard = document.querySelector('.map-popup-card:not(.search-result-popup)');
   }
-  if (popupCard && popupCard.dataset.mediaId == id && typeof popupCard.renderActive === 'function') {
+  if (popupCard && String(popupCard.dataset.mediaId) === String(id) && typeof popupCard.renderActive === 'function') {
     popupCard.renderActive();
   }
 }
@@ -707,12 +741,12 @@ export function handleUnmappedChipClick(id, event, unmappedList) {
   }
 
   if (state.selectedIds.has(id)) {
-    openInspector();
+    mapActionHooks.openInspector();
   }
 
   updatePlacementModeState();
   renderUnmappedTray();
-  updateInspector();
+  mapActionHooks.updateInspector();
   updateMapMarkerSelections();
 }
 
@@ -780,11 +814,11 @@ export function renderUnmappedTray() {
     const moreChip = document.createElement('div');
     moreChip.className = 'unmapped-chip unmapped-load-more';
     moreChip.id = 'unmappedLoadMoreChip';
-    moreChip.title = 'Load more photos into catalog';
+    moreChip.title = t('load_next_page');
     moreChip.innerHTML = `<div class="chip-name">+ ${escapeHtml(t('load_more'))} (${state.mediaItems.length}/${state.totalCount})</div>`;
     moreChip.onclick = (e) => {
       e.stopPropagation();
-      loadMoreMedia();
+      mapActionHooks.loadMoreMedia();
     };
     dom.unmappedPhotosList.appendChild(moreChip);
   }
@@ -856,10 +890,10 @@ export function enterPlacementMode(mediaId) {
   state.selectedIds.clear();
   state.selectedIds.add(mediaId);
   state.lastSelectedId = mediaId;
-  openInspector();
+  mapActionHooks.openInspector();
   updatePlacementModeState();
   renderUnmappedTray();
-  updateInspector();
+  mapActionHooks.updateInspector();
 }
 
 export function exitPlacementMode() {
@@ -899,7 +933,7 @@ export async function applyGeotagBatch(ids, lat, lon, alt = 0.0) {
     invalidateGpsCache();
     renderMapMarkers(true);
     renderUnmappedTray();
-    updateInspector();
+    mapActionHooks.updateInspector();
   } catch (err) {
     console.error('Failed to batch geotag media:', err);
     showToast(t('toast_failed_geotag', { error: err.message || 'Server error' }), 'error');
@@ -924,7 +958,7 @@ export async function clearGeotag(mediaId) {
     invalidateGpsCache();
     renderMapMarkers(true);
     renderUnmappedTray();
-    updateInspector();
+    mapActionHooks.updateInspector();
   } catch (err) {
     console.error('Failed to clear geotag:', err);
     showToast(t('toast_failed_clear_geotag', { error: err.message || 'Server error' }), 'error');
@@ -1028,7 +1062,7 @@ export function createSearchPopupElement(title, subtitle, lat, lng) {
     ${subtitle ? `<div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${safeSubtitle}</div>` : ''}
     <div class="map-popup-coords">${latStr}, ${lngStr}</div>
     ${placePhotoBtnHtml}
-    <button class="btn btn-xs btn-secondary clear-pin-btn" style="width: 100%; margin-top: 6px;">Remove Pin</button>
+    <button class="btn btn-xs btn-secondary clear-pin-btn" style="width: 100%; margin-top: 6px;">${escapeHtml(t('clear_pin'))}</button>
   `;
 
   const placeBtn = container.querySelector('.place-here-btn');
@@ -1089,7 +1123,7 @@ export async function performMapPlaceSearch(rawQuery) {
     if (lat !== null && lng !== null && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
       results.push({
         title: `Coordinates: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
-        subtitle: 'Custom GPS Coordinates',
+        subtitle: t('custom_gps_coordinates'),
         lat: lat,
         lng: lng,
         type: 'coords',
@@ -1112,7 +1146,7 @@ export async function performMapPlaceSearch(rawQuery) {
       const lng = numeric(item.exif.longitude);
       results.push({
         title: fileName,
-        subtitle: `In Catalog · ${lat !== null ? lat.toFixed(4) : '-' }, ${lng !== null ? lng.toFixed(4) : '-' }`,
+        subtitle: `${t('in_catalog')} · ${lat !== null ? lat.toFixed(4) : '-' }, ${lng !== null ? lng.toFixed(4) : '-' }`,
         lat: lat !== null ? lat : item.exif.latitude,
         lng: lng !== null ? lng : item.exif.longitude,
         type: 'catalog',

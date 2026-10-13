@@ -6,19 +6,29 @@
 
 import { state } from './state.js';
 import { dom } from './dom.js';
-import { updateInspector, patchInspectorRatingAndFlag } from './inspector.js';
+import {
+  openInspector,
+  updateInspector,
+  patchInspectorRatingAndFlag,
+} from './inspector.js';
 import {
   renderMapMarkers,
   renderUnmappedTray,
   patchOpenMapPopup,
   updateMapMarkerSelections,
+  setMapViewActionHooks,
 } from './map-view.js';
 import { openLoupeForMedia, updateLoupeControls } from './loupe.js';
-import { renderCategoryView } from './category-view.js';
+import {
+  renderCategoryView,
+  setCategoryViewActionHooks,
+} from './category-view.js';
 import {
   updateModalTagSuggestions,
   renderModalSearchHelp,
   openDeleteTagModal,
+  openTagModal,
+  openAlbumModal,
 } from './modals.js';
 import {
   renderGrid,
@@ -194,6 +204,22 @@ export function initViews() {
   });
 
   setGridOpenLoupeHandler(openLoupeForMedia);
+
+  setMapViewActionHooks({
+    loadMoreMedia,
+    renderGrid,
+    updateInspector,
+    openInspector,
+    openLoupeForMedia,
+  });
+
+  setCategoryViewActionHooks({
+    updateSidebarActive,
+    loadMedia,
+    updateFilterLabel,
+    openTagModal,
+    openAlbumModal,
+  });
 
   setAlbumOrderHooks({
     clearFilterPreferences,

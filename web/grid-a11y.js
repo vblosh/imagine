@@ -42,9 +42,10 @@ function findCardInNextRow(currentCard, cards, currentIndex) {
     return bestIndex;
   }
 
-  const gridComputed = window.getComputedStyle ? window.getComputedStyle(dom.mediaGrid) : null;
+  const gridEl = (currentCard && typeof currentCard.closest === 'function' ? currentCard.closest('.group-cards') : null) || dom.mediaGrid;
+  const gridComputed = window.getComputedStyle && gridEl ? window.getComputedStyle(gridEl) : null;
   const colsTemplate = gridComputed ? gridComputed.getPropertyValue('grid-template-columns') : '';
-  const colCount = colsTemplate ? colsTemplate.trim().split(/\s+/).length : 4;
+  const colCount = colsTemplate && colsTemplate !== 'none' ? colsTemplate.trim().split(/\s+/).length : 4;
   return Math.min(cards.length - 1, currentIndex + colCount);
 }
 
@@ -82,9 +83,10 @@ function findCardInPreviousRow(currentCard, cards, currentIndex) {
     return bestIndex;
   }
 
-  const gridComputed = window.getComputedStyle ? window.getComputedStyle(dom.mediaGrid) : null;
+  const gridEl = (currentCard && typeof currentCard.closest === 'function' ? currentCard.closest('.group-cards') : null) || dom.mediaGrid;
+  const gridComputed = window.getComputedStyle && gridEl ? window.getComputedStyle(gridEl) : null;
   const colsTemplate = gridComputed ? gridComputed.getPropertyValue('grid-template-columns') : '';
-  const colCount = colsTemplate ? colsTemplate.trim().split(/\s+/).length : 4;
+  const colCount = colsTemplate && colsTemplate !== 'none' ? colsTemplate.trim().split(/\s+/).length : 4;
   return Math.max(0, currentIndex - colCount);
 }
 
