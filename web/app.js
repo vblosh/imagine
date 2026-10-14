@@ -1534,6 +1534,7 @@ export function setupEventListeners() {
       const path = dom.importPathInput ? dom.importPathInput.value.trim() : '';
       if (!path) {
         showToast('Please provide a directory path', 'error');
+        try { alert('Please provide a directory path'); } catch (_) {}
         return;
       }
       triggerImport(path, dom.importRecursiveCheck ? dom.importRecursiveCheck.checked : false);

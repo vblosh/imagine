@@ -1911,6 +1911,9 @@ export async function saveEdits(mode = "overwrite") {
   } catch (err) {
     if (err.message !== "Quick edit cancelled" && quickEditState.isOpen) {
       showToast(t("toast_failed_save_edits", { error: err.message }), "error");
+      try {
+        alert(`Error saving edits: ${err.message}`);
+      } catch (_) {}
     }
   } finally {
     if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = false;

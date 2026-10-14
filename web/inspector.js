@@ -748,8 +748,10 @@ export async function handleSaveRename() {
     finalName += ext;
   }
 
+  const targetItemId = currentInspectorItem.id;
   try {
     const res = await api.post(`/api/media/${targetId}/rename`, { name: finalName });
+    if (currentInspectorItem?.id !== targetItemId) return;
     if (res && res.file_name) {
       targetItem.file_name = res.file_name;
       if (res.file_path) targetItem.file_path = res.file_path;
@@ -854,13 +856,15 @@ export async function handleSaveDateTaken() {
   const sec = timeParts[2] || 0;
   const ts = Math.floor(Date.UTC(y, m - 1, d, hh, min, sec) / 1000);
 
-  if (isNaN(ts) || ts === 0) {
+  if (isNaN(ts)) {
     showToast(t('toast_invalid_datetime'), 'error');
     return;
   }
 
+  const targetItemId = currentInspectorItem.id;
   try {
     const res = await api.post(`/api/media/${targetId}/date`, { date_taken: ts });
+    if (currentInspectorItem?.id !== targetItemId) return;
     if (res && res.date_taken !== undefined) {
       targetItem.date_taken = res.date_taken;
       if (targetItem.exif) {
@@ -950,8 +954,10 @@ export async function handleSaveCaption() {
   const targetId = targetItem.id;
   const newCaption = dom.editCaptionInput.value.trim();
 
+  const targetItemId = currentInspectorItem.id;
   try {
     const res = await api.post(`/api/media/${targetId}/caption`, { caption: newCaption });
+    if (currentInspectorItem?.id !== targetItemId) return;
     if (res) {
       targetItem.caption = newCaption;
 
