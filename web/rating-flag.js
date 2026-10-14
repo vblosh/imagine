@@ -11,6 +11,8 @@ import { patchCardRating, patchCardFlag } from './media-cards.js';
 
 const ratingFlagListeners = new Set();
 let metadataReloadCallback = () => {};
+const ratingMutationId = new Map();
+const flagMutationId = new Map();
 
 export function addRatingFlagListener(fn) {
   ratingFlagListeners.add(fn);
@@ -39,12 +41,25 @@ export function renderStarWidget(container, currentRating, onSetRating) {
   const stars = container.querySelectorAll('span');
   stars.forEach(s => {
     const starVal = parseInt(s.dataset.star, 10);
-    s.classList.toggle('active', starVal <= currentRating);
+    const isActive = starVal <= currentRating;
+    s.classList.toggle('active', isActive);
+    s.setAttribute('role', 'radio');
+    s.setAttribute('aria-checked', isActive ? 'true' : 'false');
+    s.setAttribute('aria-label', `${starVal} star${starVal !== 1 ? 's' : ''}`);
+    if (!s.hasAttribute('tabindex')) s.setAttribute('tabindex', '0');
 
     s.onclick = (e) => {
       e.stopPropagation();
       const newRating = starVal === currentRating ? 0 : starVal;
       onSetRating(newRating);
+    };
+    s.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        const newRating = starVal === currentRating ? 0 : starVal;
+        onSetRating(newRating);
+      }
     };
   });
 }
@@ -52,6 +67,8 @@ export function renderStarWidget(container, currentRating, onSetRating) {
 export async function updateItemRating(id, rating) {
   const item = state.mediaItems.find(m => m.id === id);
   const prevRating = item ? (item.rating || 0) : 0;
+  const mutId = (ratingMutationId.get(id) || 0) + 1;
+  ratingMutationId.set(id, mutId);
   if (item) {
     item.rating = rating;
     patchCardRating(id, rating);
@@ -62,7 +79,7 @@ export async function updateItemRating(id, rating) {
     metadataReloadCallback();
   } catch (err) {
     console.error('Failed to update rating:', err);
-    if (item) {
+    if (item && ratingMutationId.get(id) === mutId) {
       item.rating = prevRating;
       patchCardRating(id, prevRating);
       notifyRatingFlagChange(item, id);
@@ -74,6 +91,8 @@ export async function updateItemRating(id, rating) {
 export async function updateItemFlag(id, flag) {
   const item = state.mediaItems.find(m => m.id === id);
   const prevFlag = item ? (item.flag || 0) : 0;
+  const mutId = (flagMutationId.get(id) || 0) + 1;
+  flagMutationId.set(id, mutId);
   if (item) {
     item.flag = flag;
     patchCardFlag(id, flag);
@@ -84,7 +103,7 @@ export async function updateItemFlag(id, flag) {
     metadataReloadCallback();
   } catch (err) {
     console.error('Failed to update flag:', err);
-    if (item) {
+    if (item && flagMutationId.get(id) === mutId) {
       item.flag = prevFlag;
       patchCardFlag(id, prevFlag);
       notifyRatingFlagChange(item, id);
@@ -204,5 +223,6 @@ export async function batchUpdateDates(updates) {
       }
     });
     showToast(t('toast_failed_batch_dates', { error: err.message || 'Server error' }), 'error');
+    throw err;
   }
 }

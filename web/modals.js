@@ -39,6 +39,7 @@ let pendingBatchMoveIds = [];
 
 // --- Modal Dialog Semantics & Focus Trapping ---
 const modalReturnFocusMap = new WeakMap();
+const openModalStack = [];
 
 const FOCUSABLE_SELECTOR = [
   'button:not([disabled]):not([hidden]):not([tabindex="-1"])',
@@ -57,10 +58,9 @@ export function getFocusableElements(container) {
 }
 
 export function getActiveModal() {
-  const modals = Array.from(document.querySelectorAll('.modal, [role="dialog"]'));
-  for (let i = modals.length - 1; i >= 0; i--) {
-    const modal = modals[i];
-    if (modal.style.display !== 'none' && modal.style.display !== '' && !modal.hidden) {
+  for (let i = openModalStack.length - 1; i >= 0; i--) {
+    const modal = openModalStack[i];
+    if (modal && modal.style.display !== 'none' && modal.style.display !== '' && !modal.hidden) {
       return modal;
     }
   }
@@ -93,6 +93,10 @@ export function showModal(modalEl, defaultFocusEl = null) {
 
   modalEl.style.display = 'flex';
 
+  const stackIdx = openModalStack.indexOf(modalEl);
+  if (stackIdx !== -1) openModalStack.splice(stackIdx, 1);
+  openModalStack.push(modalEl);
+
   const target = (defaultFocusEl && typeof defaultFocusEl.focus === 'function' && modalEl.contains(defaultFocusEl))
     ? defaultFocusEl
     : null;
@@ -107,6 +111,9 @@ export function showModal(modalEl, defaultFocusEl = null) {
 export function hideModal(modalEl) {
   if (!modalEl) return;
   modalEl.style.display = 'none';
+
+  const stackIdx = openModalStack.indexOf(modalEl);
+  if (stackIdx !== -1) openModalStack.splice(stackIdx, 1);
 
   let returnEl = modalReturnFocusMap.get(modalEl);
   modalReturnFocusMap.delete(modalEl);
@@ -262,7 +269,7 @@ export async function cancelImport() {
   if (state.isImporting) {
     try {
       if (dom.importStatusCounts) {
-        dom.importStatusCounts.textContent = 'Cancelling import...';
+        dom.importStatusCounts.textContent = t('cancelling_import');
       }
       await api.post('/api/import/cancel');
     } catch (err) {
@@ -577,7 +584,7 @@ export function openTagModal(targetMediaIds = null, mode = 'add') {
                 .map(t => `<span class="tag-badge" data-category="${escapeHtml((t.category || 'keyword').toLowerCase())}">${escapeHtml(t.name)}</span>`)
                 .join('');
             } else {
-              dom.tagModalPhotoCurrentTags.innerHTML = `<span class="tag-target-no-tags">${t('tag_target_no_tags_yet')}</span>`;
+              dom.tagModalPhotoCurrentTags.innerHTML = `<span class="tag-target-no-tags">${escapeHtml(t('tag_target_no_tags_yet'))}</span>`;
             }
           }
         }
@@ -788,9 +795,9 @@ export function renderModalSearchHelp() {
     if (!exactMatch) {
       const buttonLabel = dom.createTagSubmitBtn ? dom.createTagSubmitBtn.textContent : t('create_tag_btn');
       html += `<div class="tag-help-create-prompt">${t('tag_help_create_prompt_html', {
-        button: buttonLabel,
+        button: escapeHtml(buttonLabel),
         name: escapeHtml(dom.tagNameInput.value.trim()),
-        category: getCategoryDisplayName(currentCat)
+        category: escapeHtml(getCategoryDisplayName(currentCat))
       })}</div>`;
     }
 
@@ -934,7 +941,6 @@ export async function submitDeleteMedia() {
   }
 
   const idsToDelete = [...pendingDeleteMediaIds];
-  pendingDeleteMediaIds = [];
   const deleteFromDisk = !!(dom.deleteFromDiskCheckbox && dom.deleteFromDiskCheckbox.checked);
   const failedIds = [];
   try {
@@ -943,6 +949,7 @@ export async function submitDeleteMedia() {
     if (idsToDelete.length > 25) {
       console.error('Batch delete failed:', e);
       showToast(t('toast_batch_delete_failed', { error: e.message || 'Server error' }), 'error');
+      pendingDeleteMediaIds = idsToDelete;
       return;
     }
     for (const id of idsToDelete) {
@@ -954,6 +961,8 @@ export async function submitDeleteMedia() {
       }
     }
   }
+
+  pendingDeleteMediaIds = [];
 
   if (failedIds.length > 0) {
     showToast(t('toast_photos_not_deleted', { count: failedIds.length }), 'error');
@@ -1039,9 +1048,9 @@ let pendingBatchDateIds = [];
 let batchDateRefTs = null;
 
 export function formatUtcToDatetimeLocal(timestamp) {
-  if (!timestamp || timestamp <= 0) return '';
+  if (timestamp === null || timestamp === undefined || isNaN(timestamp)) return '';
   const d = new Date(timestamp * 1000);
-  const yyyy = d.getUTCFullYear();
+  const yyyy = String(d.getUTCFullYear()).padStart(4, '0');
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(d.getUTCDate()).padStart(2, '0');
   const hh = String(d.getUTCHours()).padStart(2, '0');
@@ -1236,7 +1245,7 @@ export async function submitBatchDateChange() {
   const shiftSeconds = Math.round(shiftHours * 3600);
 
   const inputTs = dom.batchDateInput ? parseDatetimeLocalToUtc(dom.batchDateInput.value) : null;
-  if (inputTs === null || inputTs <= 0) {
+  if (inputTs === null || isNaN(inputTs)) {
     showToast(t('toast_specify_valid_datetime'), 'error');
     return;
   }
@@ -1249,7 +1258,7 @@ export async function submitBatchDateChange() {
       const item = state.mediaItems.find(m => m.id === id);
       let targetTs = inputTs;
       if (isShiftMode) {
-        if (item && item.date_taken && item.date_taken > 0) {
+        if (item && item.date_taken !== null && item.date_taken !== undefined && !isNaN(item.date_taken)) {
           targetTs = item.date_taken + shiftSeconds;
         } else {
           targetTs = inputTs;

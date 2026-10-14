@@ -209,10 +209,15 @@ export function restoreLayoutPreferences() {
   // 5. Main grid sort
   const savedSort = safeGetItem(STORAGE_KEYS.MAIN_SORT);
   if (savedSort && dom.sortSelect) {
-    dom.sortSelect.value = savedSort;
     const [field, dir] = savedSort.split('-');
-    state.sortBy = field || 'date_taken';
-    state.sortDesc = (dir === 'desc');
+    const hasValidOption = Array.from(dom.sortSelect.options || []).some(
+      opt => opt.value === savedSort && !opt.hidden
+    );
+    if (hasValidOption && field && field !== 'album_order') {
+      dom.sortSelect.value = savedSort;
+      state.sortBy = field;
+      state.sortDesc = (dir === 'desc');
+    }
   }
 
   // 6. Inspector collapsed state

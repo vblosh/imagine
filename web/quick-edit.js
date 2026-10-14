@@ -504,7 +504,7 @@ export function openQuickEdit() {
   const initialCtx = initialCanvas.getContext("2d");
 
   const cardImg = document.querySelector(`.photo-card[data-id="${item.id}"] img`);
-  if (dom.loupeImg && dom.loupeImg.complete && dom.loupeImg.naturalWidth > 0 && dom.loupeImg.src.includes(`/api/photos/${item.id}/original`)) {
+  if (dom.loupeImg && dom.loupeImg.complete && dom.loupeImg.naturalWidth > 0) {
     initialCtx.drawImage(dom.loupeImg, 0, 0, w, h);
   } else if (cardImg && cardImg.complete && cardImg.naturalWidth > 0) {
     initialCtx.drawImage(cardImg, 0, 0, w, h);
@@ -1865,11 +1865,18 @@ export async function saveEdits(mode = "overwrite") {
         dom.loupeImg.dataset.isOriginal = "true";
       }
       const cardImg = document.querySelector(`.photo-card[data-id="${id}"] img`);
-      if (cardImg) cardImg.src = `/api/thumbnails/${updatedItem.content_hash}/256${cacheBuster}`;
+      if (cardImg && updatedItem.content_hash) {
+        cardImg.src = `/api/thumbnails/${encodeURIComponent(updatedItem.content_hash)}/256${cacheBuster}`;
+      }
       if (dom.inspectorImg && state.selectedIds.has(id)) {
         dom.inspectorImg.src = newOriginalUrl;
       }
       showToast(t("quick_edit_saved"));
+      if (state.selectedIds && state.selectedIds.has(id)) {
+        if (window.imagineUI?.updateInspector) {
+          window.imagineUI.updateInspector();
+        }
+      }
     } else {
       state.mediaItems.unshift(updatedItem);
       state.totalCount++;
@@ -1894,6 +1901,9 @@ export async function saveEdits(mode = "overwrite") {
         window.imagineUI.renderCurrentView();
       }
       showToast(t("quick_edit_saved_copy", { name: updatedItem.file_name }));
+      if (window.imagineUI?.loadMetadata) {
+        window.imagineUI.loadMetadata();
+      }
     }
 
     quickEditState.isDirty = false;
@@ -1901,9 +1911,6 @@ export async function saveEdits(mode = "overwrite") {
   } catch (err) {
     if (err.message !== "Quick edit cancelled" && quickEditState.isOpen) {
       showToast(t("toast_failed_save_edits", { error: err.message }), "error");
-      try {
-        alert(`Error saving edits: ${err.message}`);
-      } catch (_) {}
     }
   } finally {
     if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = false;
@@ -2094,6 +2101,14 @@ export function setupCropMouseListeners() {
       if (newY < disp.top) { newH -= (disp.top - newY); newY = disp.top; }
       if (newX + newW > disp.left + disp.width) newW = disp.left + disp.width - newX;
       if (newY + newH > disp.top + disp.height) newH = disp.top + disp.height - newY;
+
+      if (ratio !== null) {
+        if (newW / newH > ratio) {
+          newW = newH * ratio;
+        } else {
+          newH = newW / ratio;
+        }
+      }
     }
 
     quickEditState.cropBox = {

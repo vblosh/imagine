@@ -29,12 +29,17 @@ export function openLoupeForMedia(id) {
 
 export function closeLoupe() {
   if (quickEditState.isOpen) {
+    if (quickEditState.isDirty) {
+      closeQuickEdit(true);
+      return;
+    }
     closeQuickEdit(false);
   }
   state.loupeIndex = -1;
   state.loupeShowOriginal = false;
   resetLoupeZoomToFit();
   if (dom.loupeImg) {
+    dom.loupeImg.onerror = null;
     dom.loupeImg.removeAttribute('src');
     delete dom.loupeImg.dataset.originalUrl;
     delete dom.loupeImg.dataset.isOriginal;
@@ -71,6 +76,10 @@ export function loadLoupeOriginal() {
 
 export function updateLoupeView() {
   if (quickEditState.isOpen) {
+    if (quickEditState.isDirty) {
+      closeQuickEdit(true);
+      return;
+    }
     closeQuickEdit(false);
   }
   if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return;
@@ -150,14 +159,15 @@ export function updateLoupeView() {
     if (dom.loupeImg) {
       dom.loupeImg.dataset.originalUrl = originalUrl;
       dom.loupeImg.dataset.isOriginal = (targetUrl === originalUrl) ? 'true' : 'false';
-      dom.loupeImg.src = targetUrl;
-      dom.loupeImg.style.display = 'block';
       dom.loupeImg.onerror = () => {
-        if (dom.loupeImg.src !== originalUrl) {
+        if (dom.loupeImg.dataset.isOriginal !== 'true') {
+          dom.loupeImg.onerror = null;
           dom.loupeImg.src = originalUrl;
           dom.loupeImg.dataset.isOriginal = 'true';
         }
       };
+      dom.loupeImg.src = targetUrl;
+      dom.loupeImg.style.display = 'block';
     }
     if (dom.loupeZoomControls) {
       dom.loupeZoomControls.style.display = 'flex';
@@ -349,11 +359,17 @@ export function updateLoupeControls() {
 }
 
 export async function loupeNext() {
+  if (quickEditState.isOpen && quickEditState.isDirty) {
+    closeQuickEdit(true);
+    return;
+  }
   if (state.mediaItems.length === 0) return;
   state.loupeShowOriginal = false;
   if (state.loupeIndex === state.mediaItems.length - 1 && state.mediaItems.length < state.totalCount && !state.isLoadingMore) {
     const prevLen = state.mediaItems.length;
+    const prevIndex = state.loupeIndex;
     await (window.imagineUI?.loadMoreMedia ? window.imagineUI.loadMoreMedia() : loadMoreMedia());
+    if (state.loupeIndex < 0 || state.loupeIndex !== prevIndex) return;
     if (state.mediaItems.length > prevLen) {
       state.loupeIndex = prevLen;
       updateLoupeView();
@@ -365,6 +381,10 @@ export async function loupeNext() {
 }
 
 export function loupePrev() {
+  if (quickEditState.isOpen && quickEditState.isDirty) {
+    closeQuickEdit(true);
+    return;
+  }
   if (state.mediaItems.length === 0) return;
   state.loupeShowOriginal = false;
   state.loupeIndex = (state.loupeIndex - 1 + state.mediaItems.length) % state.mediaItems.length;

@@ -27,8 +27,18 @@ import { ensureLeafletLoaded } from './leaflet-loader.js';
 let currentInspectorFetchId = 0;
 let inspectorAbortController = null;
 let activeResizeObservers = [];
+let resizablePanelsAbortController = null;
+let resizablePanelsInitialized = false;
 let currentInspectorItem = null;
 let inlineEditingInitialized = false;
+
+export function getActiveInspectorMediaId() {
+  if (state.selectedIds.size === 0) return null;
+  if (state.lastSelectedId && state.selectedIds.has(state.lastSelectedId)) {
+    return state.lastSelectedId;
+  }
+  return Array.from(state.selectedIds)[0];
+}
 
 export function openInspector() {
   if (dom.rightInspector && dom.rightInspector.classList.contains('collapsed')) {
@@ -39,9 +49,7 @@ export function openInspector() {
 
 export function patchInspectorRatingAndFlag(item) {
   if (state.selectedIds.size === 0) return;
-  const selectedId = (state.lastSelectedId && state.selectedIds.has(state.lastSelectedId))
-    ? state.lastSelectedId
-    : Array.from(state.selectedIds)[0];
+  const selectedId = getActiveInspectorMediaId();
   if (selectedId !== item.id) return;
   if (dom.inspectorRating) {
     dom.inspectorRating.querySelectorAll('span').forEach(span => {
@@ -243,9 +251,7 @@ export async function updateInspector() {
   const signal = inspectorAbortController.signal;
 
   // Pick first selected ID (prefer lastSelectedId if valid)
-  const selectedId = (state.lastSelectedId && state.selectedIds.has(state.lastSelectedId))
-    ? state.lastSelectedId
-    : Array.from(state.selectedIds)[0];
+  const selectedId = getActiveInspectorMediaId();
   let item = state.mediaItems.find(m => m.id === selectedId);
 
   // Render immediately from memory to eliminate lag
@@ -312,6 +318,7 @@ export function renderInspectorTags(item) {
         loadMetadata();
       } catch (err) {
         console.error('Failed to remove tag:', err);
+        showToast(t('toast_failed_remove_tag', { error: err.message || 'Error' }), 'error');
       }
     });
     dom.inspectorTags.appendChild(badge);
@@ -337,6 +344,7 @@ export async function updateInspectorMiniMap(item) {
 
   await ensureLeafletLoaded();
   if (!window.L) return;
+  if (!currentInspectorItem || currentInspectorItem.id !== item.id) return;
 
   const exif = item.exif || {};
   if (dom.inspectorGpsActions) dom.inspectorGpsActions.style.display = 'flex';
@@ -373,8 +381,16 @@ export async function updateInspectorMiniMap(item) {
 }
 
 export function setupResizablePanels() {
+  if (resizablePanelsInitialized) return;
+  resizablePanelsInitialized = true;
+
   activeResizeObservers.forEach(ro => ro.disconnect());
   activeResizeObservers = [];
+  if (resizablePanelsAbortController) {
+    resizablePanelsAbortController.abort();
+  }
+  resizablePanelsAbortController = new AbortController();
+  const { signal } = resizablePanelsAbortController;
 
   // 1. Vertical resizing for File Information and Camera & Exposure (EXIF) panels
   const panelResizers = document.querySelectorAll('.panel-resizer');
@@ -434,7 +450,7 @@ export function setupResizablePanels() {
       resizer.addEventListener('pointermove', onPointerMove);
       resizer.addEventListener('pointerup', onPointerUp);
       resizer.addEventListener('pointercancel', onPointerUp);
-    });
+    }, { signal });
 
     // Double-click to reset height to auto
     resizer.addEventListener('dblclick', () => {
@@ -442,7 +458,7 @@ export function setupResizablePanels() {
       try {
         localStorage.removeItem(`imagine_${targetId}_height`);
       } catch (_) {}
-    });
+    }, { signal });
 
     // Keyboard support
     resizer.addEventListener('keydown', (e) => {
@@ -463,7 +479,7 @@ export function setupResizablePanels() {
         target.style.height = '';
         try { localStorage.removeItem(`imagine_${targetId}_height`); } catch (_) {}
       }
-    });
+    }, { signal });
 
     // ResizeObserver to detect native CSS resize corner or programmatic resize
     if (window.ResizeObserver) {
@@ -543,7 +559,7 @@ export function setupResizablePanels() {
       inspectorResizer.addEventListener('pointermove', onPointerMove);
       inspectorResizer.addEventListener('pointerup', onPointerUp);
       inspectorResizer.addEventListener('pointercancel', onPointerUp);
-    });
+    }, { signal });
 
     // Double-click resets inspector width
     inspectorResizer.addEventListener('dblclick', () => {
@@ -551,7 +567,7 @@ export function setupResizablePanels() {
       try {
         localStorage.removeItem('imagine_inspector_width');
       } catch (_) {}
-    });
+    }, { signal });
 
     // Keyboard support
     inspectorResizer.addEventListener('keydown', (e) => {
@@ -572,7 +588,7 @@ export function setupResizablePanels() {
         dom.rightInspector.style.width = '';
         try { localStorage.removeItem('imagine_inspector_width'); } catch (_) {}
       }
-    });
+    }, { signal });
   }
 
   // 3. Horizontal resizing for Left Sidebar Panel
@@ -629,7 +645,7 @@ export function setupResizablePanels() {
       sidebarResizer.addEventListener('pointermove', onPointerMove);
       sidebarResizer.addEventListener('pointerup', onPointerUp);
       sidebarResizer.addEventListener('pointercancel', onPointerUp);
-    });
+    }, { signal });
 
     // Double-click resets sidebar width
     sidebarResizer.addEventListener('dblclick', () => {
@@ -637,7 +653,7 @@ export function setupResizablePanels() {
       try {
         localStorage.removeItem('imagine_sidebar_width');
       } catch (_) {}
-    });
+    }, { signal });
 
     // Keyboard support
     sidebarResizer.addEventListener('keydown', (e) => {
@@ -658,7 +674,7 @@ export function setupResizablePanels() {
         leftSidebar.style.width = '';
         try { localStorage.removeItem('imagine_sidebar_width'); } catch (_) {}
       }
-    });
+    }, { signal });
   }
 }
 
@@ -710,12 +726,14 @@ export function openRenameForm() {
 
 export async function handleSaveRename() {
   if (!currentInspectorItem || !dom.renameFileInput) return;
+  const targetItem = currentInspectorItem;
+  const targetId = targetItem.id;
   const rawInput = dom.renameFileInput.value.trim();
   if (!rawInput) {
     showToast(t('toast_file_name_empty'), 'error');
     return;
   }
-  if (rawInput === currentInspectorItem.file_name) {
+  if (rawInput === targetItem.file_name) {
     closeRenameForm();
     return;
   }
@@ -725,29 +743,31 @@ export async function handleSaveRename() {
   }
 
   let finalName = rawInput;
-  if (!finalName.includes('.') && currentInspectorItem.file_name && currentInspectorItem.file_name.includes('.')) {
-    const ext = currentInspectorItem.file_name.substring(currentInspectorItem.file_name.lastIndexOf('.'));
+  if (!finalName.includes('.') && targetItem.file_name && targetItem.file_name.includes('.')) {
+    const ext = targetItem.file_name.substring(targetItem.file_name.lastIndexOf('.'));
     finalName += ext;
   }
 
   try {
-    const res = await api.post(`/api/media/${currentInspectorItem.id}/rename`, { name: finalName });
+    const res = await api.post(`/api/media/${targetId}/rename`, { name: finalName });
     if (res && res.file_name) {
-      currentInspectorItem.file_name = res.file_name;
-      if (res.file_path) currentInspectorItem.file_path = res.file_path;
+      targetItem.file_name = res.file_name;
+      if (res.file_path) targetItem.file_path = res.file_path;
 
-      const idx = state.mediaItems.findIndex(m => m.id === currentInspectorItem.id);
+      const idx = state.mediaItems.findIndex(m => m.id === targetId);
       if (idx !== -1) {
         state.mediaItems[idx].file_name = res.file_name;
         if (res.file_path) state.mediaItems[idx].file_path = res.file_path;
       }
 
-      if (dom.infoFileName) dom.infoFileName.textContent = res.file_name;
-      if (dom.infoFilePath) dom.infoFilePath.textContent = res.file_path || currentInspectorItem.file_path || '-';
+      if (currentInspectorItem && currentInspectorItem.id === targetId) {
+        if (dom.infoFileName) dom.infoFileName.textContent = res.file_name;
+        if (dom.infoFilePath) dom.infoFilePath.textContent = res.file_path || targetItem.file_path || '-';
+      }
 
       const grid = dom.mediaGrid || document.getElementById('mediaGrid');
       if (grid) {
-        const card = grid.querySelector(`.photo-card[data-id="${CSS.escape(String(currentInspectorItem.id))}"]`);
+        const card = grid.querySelector(`.photo-card[data-id="${CSS.escape(String(targetId))}"]`);
         if (card) {
           const fnEl = card.querySelector('.card-filename');
           if (fnEl) {
@@ -773,7 +793,9 @@ export async function handleSaveRename() {
         if (dom.gridScrollContainer) dom.gridScrollContainer.scrollTop = prevScroll;
       }
 
-      closeRenameForm();
+      if (currentInspectorItem && currentInspectorItem.id === targetId) {
+        closeRenameForm();
+      }
       showToast(t('toast_file_renamed_to', { name: res.file_name }), 'success');
     }
   } catch (err) {
@@ -791,9 +813,9 @@ export function openDateTakenForm() {
   if (dom.editDateTakenForm) {
     dom.editDateTakenForm.style.display = 'flex';
     if (dom.editDateTakenInput) {
-      if (currentInspectorItem.date_taken && currentInspectorItem.date_taken > 0) {
+      if (currentInspectorItem.date_taken !== null && currentInspectorItem.date_taken !== undefined && !isNaN(currentInspectorItem.date_taken)) {
         const d = new Date(currentInspectorItem.date_taken * 1000);
-        const yyyy = d.getUTCFullYear();
+        const yyyy = String(d.getUTCFullYear()).padStart(4, '0');
         const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
         const dd = String(d.getUTCDate()).padStart(2, '0');
         const hh = String(d.getUTCHours()).padStart(2, '0');
@@ -809,6 +831,8 @@ export function openDateTakenForm() {
 
 export async function handleSaveDateTaken() {
   if (!currentInspectorItem || !dom.editDateTakenInput) return;
+  const targetItem = currentInspectorItem;
+  const targetId = targetItem.id;
   const val = dom.editDateTakenInput.value;
   if (!val) {
     showToast(t('toast_enter_datetime'), 'error');
@@ -830,21 +854,21 @@ export async function handleSaveDateTaken() {
   const sec = timeParts[2] || 0;
   const ts = Math.floor(Date.UTC(y, m - 1, d, hh, min, sec) / 1000);
 
-  if (isNaN(ts) || ts <= 0) {
+  if (isNaN(ts) || ts === 0) {
     showToast(t('toast_invalid_datetime'), 'error');
     return;
   }
 
   try {
-    const res = await api.post(`/api/media/${currentInspectorItem.id}/date`, { date_taken: ts });
+    const res = await api.post(`/api/media/${targetId}/date`, { date_taken: ts });
     if (res && res.date_taken !== undefined) {
-      currentInspectorItem.date_taken = res.date_taken;
-      if (currentInspectorItem.exif) {
-        currentInspectorItem.exif.date_taken = res.date_taken;
-        if (res.date_taken_str) currentInspectorItem.exif.date_taken_str = res.date_taken_str;
+      targetItem.date_taken = res.date_taken;
+      if (targetItem.exif) {
+        targetItem.exif.date_taken = res.date_taken;
+        if (res.date_taken_str) targetItem.exif.date_taken_str = res.date_taken_str;
       }
 
-      const idx = state.mediaItems.findIndex(m => m.id === currentInspectorItem.id);
+      const idx = state.mediaItems.findIndex(m => m.id === targetId);
       if (idx !== -1) {
         state.mediaItems[idx].date_taken = res.date_taken;
         if (state.mediaItems[idx].exif) {
@@ -853,15 +877,18 @@ export async function handleSaveDateTaken() {
         }
       }
 
-      if (dom.infoDateTaken) dom.infoDateTaken.textContent = formatDateTime(res.date_taken);
+      if (currentInspectorItem && currentInspectorItem.id === targetId) {
+        if (dom.infoDateTaken) dom.infoDateTaken.textContent = formatDateTime(res.date_taken);
+      }
 
       // If active timeline filter is set and item moved outside the period, reload media
       if (state.activeTimelinePeriod) {
         if (!timelinePeriodContainsTimestamp(state.activeTimelinePeriod, res.date_taken)) {
-          closeDateTakenForm();
+          if (currentInspectorItem && currentInspectorItem.id === targetId) {
+            closeDateTakenForm();
+          }
           showToast(t('toast_date_updated_short'), 'success');
-          await loadMedia();
-          await loadMetadata();
+          await Promise.all([loadMedia(), loadMetadata()]);
           return;
         }
       }
@@ -880,8 +907,8 @@ export async function handleSaveDateTaken() {
         });
       }
 
-      if (state.loupeIndex >= 0 && currentInspectorItem) {
-        state.loupeIndex = state.mediaItems.findIndex(m => m.id === currentInspectorItem.id);
+      if (state.loupeIndex >= 0) {
+        state.loupeIndex = state.mediaItems.findIndex(m => m.id === targetId);
       }
 
       const prevScroll = dom.gridScrollContainer ? dom.gridScrollContainer.scrollTop : 0;
@@ -890,7 +917,9 @@ export async function handleSaveDateTaken() {
 
       loadMetadata();
 
-      closeDateTakenForm();
+      if (currentInspectorItem && currentInspectorItem.id === targetId) {
+        closeDateTakenForm();
+      }
       showToast(t('toast_date_updated_short'), 'success');
     }
   } catch (err) {
@@ -917,21 +946,24 @@ export function openCaptionForm() {
 
 export async function handleSaveCaption() {
   if (!currentInspectorItem || !dom.editCaptionInput) return;
+  const targetItem = currentInspectorItem;
+  const targetId = targetItem.id;
   const newCaption = dom.editCaptionInput.value.trim();
 
   try {
-    const res = await api.post(`/api/media/${currentInspectorItem.id}/caption`, { caption: newCaption });
+    const res = await api.post(`/api/media/${targetId}/caption`, { caption: newCaption });
     if (res) {
-      currentInspectorItem.caption = newCaption;
+      targetItem.caption = newCaption;
 
-      const idx = state.mediaItems.findIndex(m => m.id === currentInspectorItem.id);
+      const idx = state.mediaItems.findIndex(m => m.id === targetId);
       if (idx !== -1) {
         state.mediaItems[idx].caption = newCaption;
       }
 
-      if (dom.infoCaption) dom.infoCaption.textContent = newCaption || '-';
-
-      closeCaptionForm();
+      if (currentInspectorItem && currentInspectorItem.id === targetId) {
+        if (dom.infoCaption) dom.infoCaption.textContent = newCaption || '-';
+        closeCaptionForm();
+      }
       showToast(t('toast_caption_saved'), 'success');
     }
   } catch (err) {

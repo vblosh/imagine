@@ -38,6 +38,13 @@ export function getAuthHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+async function parseJsonResponse(res) {
+  if (res.status === 204) return null;
+  const text = await res.text();
+  if (!text) return null;
+  return JSON.parse(text);
+}
+
 export const api = {
   async get(endpoint, params = {}, options = {}) {
     const url = new URL(endpoint, window.location.origin);
@@ -64,7 +71,7 @@ export const api = {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || 'Request failed');
     }
-    return res.json();
+    return parseJsonResponse(res);
   },
 
   async post(endpoint, data = {}, options = {}) {
@@ -81,7 +88,7 @@ export const api = {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || 'Request failed');
     }
-    return res.json();
+    return parseJsonResponse(res);
   },
 
   async del(endpoint, data = null) {
@@ -95,7 +102,7 @@ export const api = {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || 'Delete failed');
     }
-    return res.json();
+    return parseJsonResponse(res);
   }
 };
 
@@ -128,7 +135,7 @@ export function formatBytes(bytes) {
 
 export function formatDate(timestamp) {
   const ts = numeric(timestamp);
-  if (ts === null || ts <= 0) return t('unknown_date');
+  if (ts === null || ts === 0) return t('unknown_date');
   const d = new Date(ts * 1000);
   return d.toLocaleDateString(getLocaleCode(), {
     timeZone: 'UTC',
@@ -140,7 +147,7 @@ export function formatDate(timestamp) {
 
 export function formatDateTime(timestamp) {
   const ts = numeric(timestamp);
-  if (ts === null || ts <= 0) return t('unknown_date');
+  if (ts === null || ts === 0) return t('unknown_date');
   const d = new Date(ts * 1000);
   return d.toLocaleString(getLocaleCode(), {
     timeZone: 'UTC',
@@ -184,12 +191,7 @@ export function hasValidGps(item) {
   if (!item || !item.exif || !item.exif.has_gps) return false;
   const lat = numeric(item.exif.latitude);
   const lon = numeric(item.exif.longitude);
-  if (lat !== null && lon !== null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) {
-    item.exif.latitude = lat;
-    item.exif.longitude = lon;
-    return true;
-  }
-  return false;
+  return lat !== null && lon !== null && lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180;
 }
 
 // --- Response Schema Validation & Normalization ---
@@ -197,9 +199,13 @@ export function normalizeExif(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return {};
   }
+  const lat = numeric(raw.latitude);
+  const lon = numeric(raw.longitude);
   return {
     ...raw,
-    has_gps: Boolean(raw.has_gps)
+    has_gps: Boolean(raw.has_gps),
+    ...(lat !== null ? { latitude: lat } : {}),
+    ...(lon !== null ? { longitude: lon } : {})
   };
 }
 

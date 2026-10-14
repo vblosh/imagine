@@ -24,6 +24,7 @@ export {
 export {
   previousSelectedIds,
   clearCardSelections,
+  syncSelectionDOM,
   handleCardSelection,
   updateBatchBar,
   addSelectionListener,

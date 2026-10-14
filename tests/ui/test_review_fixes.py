@@ -1264,4 +1264,149 @@ def test_inspection_editing_subsystem_review_fixes(server, page: Page):
     assert results["placeBtnDisplay"] == "block"
 
 
+def test_pre_1970_dates_and_api_fixes(server, page: Page):
+    """Verify HIGH-01, MED-03, MED-04: pre-1970 negative timestamps, hasValidGps purity, normalizeExif coordinates."""
+    page.goto(server["url"])
+    expect(page.locator("#mediaGrid")).to_be_visible()
+
+    results = page.evaluate("""async () => {
+        const { formatDate, formatDateTime, hasValidGps, normalizeExif } = await import('./api.js');
+
+        // HIGH-01: negative timestamp (pre-1970)
+        // 1950-06-15T12:00:00Z -> -616852800
+        const pre1970Ts = Math.floor(Date.UTC(1950, 5, 15, 12, 0, 0) / 1000);
+        const formattedDate = formatDate(pre1970Ts);
+        const formattedDateTime = formatDateTime(pre1970Ts);
+        const unknownDate0 = formatDate(0);
+        const unknownDateNull = formatDate(null);
+
+        // MED-04: hasValidGps pure predicate
+        const rawGpsItem = {
+            exif: {
+                has_gps: true,
+                latitude: '48.8584',
+                longitude: '2.2945'
+            }
+        };
+        const isValid = hasValidGps(rawGpsItem);
+        // Ensure hasValidGps did NOT mutate string coordinates to numbers on rawGpsItem.exif
+        const latTypeBeforeNormalize = typeof rawGpsItem.exif.latitude;
+
+        // normalizeExif coerces coordinates
+        const normalized = normalizeExif(rawGpsItem.exif);
+
+        return {
+            formattedDate,
+            formattedDateTime,
+            unknownDate0,
+            unknownDateNull,
+            isValid,
+            latTypeBeforeNormalize,
+            normalizedLat: normalized.latitude,
+            normalizedLon: normalized.longitude,
+            normalizedLatType: typeof normalized.latitude
+        };
+    }""")
+
+    assert "1950" in results["formattedDate"]
+    assert "1950" in results["formattedDateTime"]
+    assert results["unknownDate0"] == "Unknown Date"
+    assert results["unknownDateNull"] == "Unknown Date"
+    assert results["isValid"] is True
+    assert results["latTypeBeforeNormalize"] == "string"
+    assert results["normalizedLat"] == 48.8584
+    assert results["normalizedLon"] == 2.2945
+    assert results["normalizedLatType"] == "number"
+
+
+def test_toast_border_colors_and_key_heuristics(server, page: Page):
+    """Verify MED-05: distinct toast border colors for success/warning/error/info and strict key regex."""
+    page.goto(server["url"])
+    expect(page.locator("#mediaGrid")).to_be_visible()
+
+    results = page.evaluate("""() => {
+        const { showToast } = window.imagineUI;
+
+        showToast('Success msg', 'success');
+        showToast('Warning msg', 'warning');
+        showToast('Error msg', 'error');
+        showToast('Info msg', 'info');
+
+        // Single word lowercase message shouldn't match key heuristic (requires underscore)
+        showToast('saved', 'info');
+
+        const toasts = Array.from(document.querySelectorAll('.toast'));
+        return toasts.map(t => ({
+            text: t.textContent,
+            className: t.className,
+            borderLeft: t.style.borderLeft
+        }));
+    }""")
+
+    success_toast = next(t for t in results if "Success msg" in t["text"])
+    assert "2ecc71" in success_toast["borderLeft"] or "rgb(46, 204, 113)" in success_toast["borderLeft"]
+
+    warning_toast = next(t for t in results if "Warning msg" in t["text"])
+    assert "f39c12" in warning_toast["borderLeft"] or "rgb(243, 156, 18)" in warning_toast["borderLeft"]
+
+    error_toast = next(t for t in results if "Error msg" in t["text"])
+    assert "e74c3c" in error_toast["borderLeft"] or "rgb(231, 76, 60)" in error_toast["borderLeft"]
+
+    info_toast = next(t for t in results if "Info msg" in t["text"])
+    assert "3498db" in info_toast["borderLeft"] or "rgb(52, 152, 219)" in info_toast["borderLeft"]
+
+    saved_toast = next(t for t in results if t["text"] == "saved")
+    assert saved_toast["text"] == "saved"
+
+
+def test_active_inspector_media_id_and_persistence_validation(server, page: Page):
+    """Verify LOW-02, LOW-03: getActiveInspectorMediaId preference and persistence sort validation."""
+    page.goto(server["url"])
+    expect(page.locator("#mediaGrid")).to_be_visible()
+
+    results = page.evaluate("""() => {
+        const { state, getActiveInspectorMediaId } = window.imagineUI;
+
+        // Empty selection
+        state.selectedIds.clear();
+        state.lastSelectedId = null;
+        const emptyId = getActiveInspectorMediaId();
+
+        // Multiple selection with lastSelectedId
+        state.selectedIds.add(101);
+        state.selectedIds.add(202);
+        state.lastSelectedId = 202;
+        const preferredId = getActiveInspectorMediaId();
+
+        // Stale lastSelectedId not in set
+        state.lastSelectedId = 999;
+        const fallbackId = getActiveInspectorMediaId();
+
+        // Test LOW-03: invalid sort validation in restoreLayoutPreferences
+        localStorage.setItem('imagine_main_sort', 'nonexistent_field-desc');
+        window.imagineUI.persistence.restoreLayoutPreferences();
+        const sortSelectVal = document.getElementById('sortSelect').value;
+
+        // Test album_order not restored without album
+        localStorage.setItem('imagine_main_sort', 'album_order-asc');
+        window.imagineUI.persistence.restoreLayoutPreferences();
+        const sortSelectAfterAlbumOrder = document.getElementById('sortSelect').value;
+
+        return {
+            emptyId,
+            preferredId,
+            fallbackId,
+            sortSelectVal,
+            sortSelectAfterAlbumOrder
+        };
+    }""")
+
+    assert results["emptyId"] is None
+    assert results["preferredId"] == 202
+    assert results["fallbackId"] == 101
+    assert results["sortSelectVal"] != "nonexistent_field-desc"
+    assert results["sortSelectAfterAlbumOrder"] != "album_order-asc"
+
+
+
 

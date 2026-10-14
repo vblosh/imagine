@@ -19,7 +19,10 @@ export function setCardsRenderGridCallback(fn) {
 
 export function getCardElement(id) {
   let card = cardMap.get(id);
-  if (card && card.isConnected) return card;
+  if (card) {
+    if (card.isConnected) return card;
+    cardMap.delete(id);
+  }
   if (!dom.mediaGrid) return null;
   card = dom.mediaGrid.querySelector(`.photo-card[data-id="${CSS.escape(String(id))}"]`);
   if (card) cardMap.set(id, card);
@@ -49,13 +52,13 @@ export function patchCardFlag(id, flag) {
   if (flag === 1) {
     const badge = document.createElement('span');
     badge.className = 'flag-badge pick';
-    badge.title = 'Pick';
+    badge.title = t('pick');
     badge.textContent = '✔';
     badgesContainer.appendChild(badge);
   } else if (flag === -1) {
     const badge = document.createElement('span');
     badge.className = 'flag-badge reject';
-    badge.title = 'Reject';
+    badge.title = t('reject');
     badge.textContent = '✖';
     badgesContainer.appendChild(badge);
   }
@@ -164,11 +167,6 @@ export function createPhotoCard(item) {
   const thumbUrl = item.content_hash
     ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
     : originalMediaUrl;
-  const fallbackAttr =
-    item.content_hash && thumbUrl !== originalMediaUrl
-      ? `onerror="this.onerror=null;this.src='${escapeHtml(originalMediaUrl)}';"`
-      : `onerror="this.onerror=null;"`;
-
   const rankBadge =
     state.semanticSearchActive && item.rank
       ? `<span class="similarity-rank-badge" title="Rank #${item.rank}${item.similarity_score != null ? ` (${Math.round(item.similarity_score * 100)}%)` : ''}">#${item.rank}</span>`
@@ -176,9 +174,9 @@ export function createPhotoCard(item) {
 
   const flagBadge =
     item.flag === 1
-      ? '<span class="flag-badge pick" title="Pick">✔</span>'
+      ? `<span class="flag-badge pick" title="${escapeHtml(t('pick'))}">✔</span>`
       : item.flag === -1
-        ? '<span class="flag-badge reject" title="Reject">✖</span>'
+        ? `<span class="flag-badge reject" title="${escapeHtml(t('reject'))}">✖</span>`
         : '';
 
   let mediaBadge = '';
@@ -200,7 +198,7 @@ export function createPhotoCard(item) {
   const safeFileName = escapeHtml(item.file_name);
   card.innerHTML = `
     <div class="photo-thumb-wrap">
-      <img src="${escapeHtml(thumbUrl)}" alt="${safeFileName}" loading="lazy" draggable="false" ${fallbackAttr}>
+      <img src="${escapeHtml(thumbUrl)}" alt="${safeFileName}" loading="lazy" draggable="false">
       <div class="card-badges">
         ${rankBadge}
         ${flagBadge}
@@ -217,6 +215,16 @@ export function createPhotoCard(item) {
       </div>
     </div>
   `;
+
+  const img = card.querySelector('.photo-thumb-wrap img');
+  if (img) {
+    img.onerror = () => {
+      img.onerror = null;
+      if (item.content_hash && thumbUrl !== originalMediaUrl) {
+        img.src = originalMediaUrl;
+      }
+    };
+  }
 
   return card;
 }

@@ -512,12 +512,19 @@ export function showToast(messageOrKey, type = 'info', params = {}) {
     container.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
     document.body.appendChild(container);
   }
-  const text = (typeof messageOrKey === 'string' && /^[a-z0-9_]+$/.test(messageOrKey))
+  const text = (typeof messageOrKey === 'string' && /^[a-z0-9]+_[a-z0-9_]+$/.test(messageOrKey))
     ? t(messageOrKey, params)
     : messageOrKey;
+  const borderColors = {
+    error: '#e74c3c',
+    success: '#2ecc71',
+    warning: '#f39c12',
+    info: '#3498db'
+  };
+  const borderColor = borderColors[type] || borderColors.info;
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.style.cssText = 'background:rgba(30,30,30,0.95);color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.3);pointer-events:auto;border-left:4px solid ' + (type === 'error' ? '#e74c3c' : '#3498db');
+  toast.style.cssText = `background:rgba(30,30,30,0.95);color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.3);pointer-events:auto;border-left:4px solid ${borderColor}`;
   toast.textContent = text;
   container.appendChild(toast);
   setTimeout(() => {

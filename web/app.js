@@ -27,6 +27,7 @@ import {
   cardMap,
   getCardElement,
   clearCardSelections,
+  syncSelectionDOM,
   buildMediaParams,
   loadMedia,
   loadMoreMedia,
@@ -80,6 +81,7 @@ import {
   getSavedViewMode
 } from './persistence.js';
 import {
+  getActiveInspectorMediaId,
   updateInspector,
   updateInspectorAlbumActions,
   updateInspectorMiniMap,
@@ -234,8 +236,7 @@ async function removeSelectedFromActiveAlbum() {
   try {
     await api.del(`/api/albums/${albumId}/media`, { media_ids: mediaIds });
     clearCardSelections();
-    await loadMetadata();
-    await loadMedia();
+    await Promise.all([loadMetadata(), loadMedia()]);
     showToast(t('toast_removed_from_album'), 'success');
   } catch (err) {
     showToast(`${t('remove_from_album_failed')}: ${err.message}`, 'error');
@@ -416,8 +417,8 @@ export function setupEventListeners() {
 
   if (dom.inspectorFindSimilarBtn) {
     dom.inspectorFindSimilarBtn.addEventListener('click', async () => {
-      if (state.selectedIds.size === 0) return;
-      const id = Array.from(state.selectedIds)[0];
+      const id = getActiveInspectorMediaId();
+      if (id === null) return;
       const simRes = await findSimilarMedia(id);
       if (simRes && Array.isArray(simRes.media_items)) {
         if (state.searchDebounceTimer) {
@@ -495,8 +496,7 @@ export function setupEventListeners() {
   // Refresh button
   if (dom.refreshBtn) {
     dom.refreshBtn.addEventListener('click', () => {
-      loadMetadata();
-      loadMedia();
+      Promise.all([loadMetadata(), loadMedia()]);
     });
   }
 
@@ -565,6 +565,7 @@ export function setupEventListeners() {
       }
       if (dom.unmappedDeselectAllBtn) dom.unmappedDeselectAllBtn.style.display = 'inline-block';
       if (unmapped.length > 0) openInspector();
+      syncSelectionDOM({ notify: false });
       renderUnmappedTray();
       updateInspector();
     });
@@ -609,6 +610,7 @@ export function setupEventListeners() {
       exitPlacementMode();
       state.selectedIds.clear();
       state.lastSelectedId = null;
+      syncSelectionDOM({ notify: false });
       renderUnmappedTray();
       updateInspector();
     });
@@ -689,8 +691,8 @@ export function setupEventListeners() {
   // Inspector Map Actions
   if (dom.inspectorShowOnMapBtn) {
     dom.inspectorShowOnMapBtn.addEventListener('click', async () => {
-      if (state.selectedIds.size === 0) return;
-      const id = Array.from(state.selectedIds)[0];
+      const id = getActiveInspectorMediaId();
+      if (id === null) return;
       const item = state.mediaItems.find(i => i.id === id);
       if (!item || !item.exif || !item.exif.has_gps) return;
       await switchViewMode('map');
@@ -712,15 +714,15 @@ export function setupEventListeners() {
   }
   if (dom.inspectorClearGpsBtn) {
     dom.inspectorClearGpsBtn.addEventListener('click', () => {
-      if (state.selectedIds.size === 0) return;
-      const id = Array.from(state.selectedIds)[0];
+      const id = getActiveInspectorMediaId();
+      if (id === null) return;
       clearGeotag(id);
     });
   }
   if (dom.inspectorPlaceOnMapBtn) {
     dom.inspectorPlaceOnMapBtn.addEventListener('click', async () => {
-      if (state.selectedIds.size === 0) return;
-      const id = Array.from(state.selectedIds)[0];
+      const id = getActiveInspectorMediaId();
+      if (id === null) return;
       await switchViewMode('map');
       state.unmappedTrayOpen = true;
       if (dom.unmappedTray) dom.unmappedTray.style.display = 'flex';
@@ -859,8 +861,9 @@ export function setupEventListeners() {
   }
   if (dom.openLoupeFromInspector) {
     dom.openLoupeFromInspector.addEventListener('click', () => {
-      if (state.selectedIds.size > 0) {
-        openLoupeForMedia(Array.from(state.selectedIds)[0]);
+      const id = getActiveInspectorMediaId();
+      if (id !== null) {
+        openLoupeForMedia(id);
       }
     });
   }
@@ -871,14 +874,16 @@ export function setupEventListeners() {
     const inspectorRejectBtn = dom.inspectorFlag.querySelector('.flag-reject');
     if (inspectorPickBtn) {
       inspectorPickBtn.addEventListener('click', () => {
-        if (state.selectedIds.size === 0) return;
-        toggleItemFlag(Array.from(state.selectedIds)[0], 1);
+        const id = getActiveInspectorMediaId();
+        if (id === null) return;
+        toggleItemFlag(id, 1);
       });
     }
     if (inspectorRejectBtn) {
       inspectorRejectBtn.addEventListener('click', () => {
-        if (state.selectedIds.size === 0) return;
-        toggleItemFlag(Array.from(state.selectedIds)[0], -1);
+        const id = getActiveInspectorMediaId();
+        if (id === null) return;
+        toggleItemFlag(id, -1);
       });
     }
   }
@@ -887,8 +892,8 @@ export function setupEventListeners() {
   async function handleAddTagInline() {
     if (!dom.addTagInput) return;
     const tagName = dom.addTagInput.value.trim();
-    if (!tagName || state.selectedIds.size === 0) return;
-    const id = Array.from(state.selectedIds)[0];
+    const id = getActiveInspectorMediaId();
+    if (!tagName || id === null) return;
     const category = dom.addTagCategorySelect ? dom.addTagCategorySelect.value : 'keyword';
 
     try {
@@ -898,7 +903,7 @@ export function setupEventListeners() {
       loadMetadata();
       expandTagCategory(category);
     } catch (err) {
-      alert(`Failed to add tag: ${err.message}`);
+      showToast(`Failed to add tag: ${err.message}`, 'error');
     }
   }
   if (dom.addTagBtn) {
@@ -1528,7 +1533,7 @@ export function setupEventListeners() {
     dom.startImportBtn.addEventListener('click', () => {
       const path = dom.importPathInput ? dom.importPathInput.value.trim() : '';
       if (!path) {
-        alert('Please provide a directory path');
+        showToast('Please provide a directory path', 'error');
         return;
       }
       triggerImport(path, dom.importRecursiveCheck ? dom.importRecursiveCheck.checked : false);
@@ -1853,8 +1858,7 @@ export async function init() {
     await switchViewMode('map');
   }
 
-  await loadMetadata();
-  await loadMedia();
+  await Promise.all([loadMetadata(), loadMedia()]);
 }
 
 // Start app when DOM ready
@@ -1930,6 +1934,8 @@ export const imagineUI = {
   batchUpdateFlags,
   toggleFlagsForIds,
   updateInspectorMiniMap,
+  getActiveInspectorMediaId,
+  syncSelectionDOM,
   openBatchMoveModal,
   closeBatchMoveModal,
   submitBatchMove,

@@ -77,6 +77,10 @@ export function handleCardSelection(id, event) {
     state.lastSelectedId = id;
   }
 
+  syncSelectionDOM();
+}
+
+export function syncSelectionDOM({ notify = true } = {}) {
   // Update selection classes in DOM only for changed items
   for (const oldId of previousSelectedIds) {
     if (!state.selectedIds.has(oldId)) {
@@ -99,7 +103,9 @@ export function handleCardSelection(id, event) {
   previousSelectedIds = new Set(state.selectedIds);
 
   updateBatchBar();
-  notifySelectionChanged();
+  if (notify) {
+    notifySelectionChanged();
+  }
 }
 
 export function updateBatchBar() {
