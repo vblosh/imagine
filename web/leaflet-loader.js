@@ -30,10 +30,17 @@ export function ensureLeafletLoaded() {
     script.src = 'vendor/leaflet/leaflet.js';
     script.async = true;
     script.onload = () => {
-      resolve(window.L);
+      if (window.L) {
+        resolve(window.L);
+      } else {
+        leafletPromise = null;
+        script.remove();
+        reject(new Error('Leaflet script loaded but window.L is undefined'));
+      }
     };
     script.onerror = () => {
       leafletPromise = null;
+      script.remove();
       reject(new Error('Failed to load Leaflet vendor script'));
     };
     document.head.appendChild(script);

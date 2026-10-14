@@ -1,12 +1,14 @@
 /**
  * IMAGINE Photo Organizer - Keyboard Handling & Shortcuts
  * Pure Vanilla JavaScript (Offline-ready, no dependencies)
+ * Functions alongside views.js and app.js as a top-level input router and shortcut
+ * dispatcher, orchestrating actions across modals, loupe, quick-edit, map, and grid views.
  */
 
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { t } from './i18n.js';
-import { clearCardSelections, updateBatchBar } from './media-selection.js';
+import { clearCardSelections, selectAllMediaCards } from './media-selection.js';
 import {
   updateItemRating,
   updateItemFlag,
@@ -16,10 +18,8 @@ import {
   batchUpdateFlags,
 } from './rating-flag.js';
 import { closeSemanticSearch } from './grid.js';
-import { updateInspector } from './inspector.js';
 import { saveInspectorCollapsedState } from './persistence.js';
 import {
-  updateMapMarkerSelections,
   switchViewMode,
   clearMapSearch,
   exitPlacementMode
@@ -250,7 +250,73 @@ export function handleEscapeKey() {
   return false;
 }
 
+export function isAnyBlockingModalOpen() {
+  if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
+    return true;
+  }
+  if (isAutoEventOpen()) {
+    return true;
+  }
+  if (dom.deleteTagModal && dom.deleteTagModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.deleteMediaModal && (dom.deleteMediaModal.style.display === 'flex' || (dom.deleteMediaModal.style.display !== 'none' && dom.deleteMediaModal.style.display !== ''))) {
+    return true;
+  }
+  if (dom.importModal && dom.importModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.newAlbumModal && dom.newAlbumModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.newTagModal && dom.newTagModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.addToAlbumModal && dom.addToAlbumModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.batchDateModal && dom.batchDateModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.batchMoveModal && dom.batchMoveModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.settingsModal && dom.settingsModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.semanticIndexModal && dom.semanticIndexModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.iosInstallModal && dom.iosInstallModal.style.display === 'flex') {
+    return true;
+  }
+  const faceForceModal = document.getElementById('faceForceWarningModal');
+  if (faceForceModal && faceForceModal.style.display === 'flex') {
+    return true;
+  }
+  const faceScanModal = document.getElementById('faceScanBusyModal');
+  if (faceScanModal && faceScanModal.style.display === 'flex') {
+    return true;
+  }
+  const faceJobModal = document.getElementById('faceJobModal');
+  if (faceJobModal && faceJobModal.style.display === 'flex') {
+    return true;
+  }
+  const faceGridModal = document.getElementById('faceGridModal');
+  if (faceGridModal && faceGridModal.style.display === 'flex') {
+    return true;
+  }
+  return false;
+}
+
+let shortcutsInitialized = false;
+
 export function setupKeyboardShortcuts() {
+  if (shortcutsInitialized) {
+    return;
+  }
+  shortcutsInitialized = true;
+
   window.addEventListener('keydown', (e) => {
     // Centralized Escape handler across all modes & overlays
     if (e.key === 'Escape') {
@@ -260,11 +326,12 @@ export function setupKeyboardShortcuts() {
       return;
     }
 
+    const hasModifier = e.ctrlKey || e.metaKey || e.altKey;
     const active = document.activeElement;
 
     // Delete Media Modal shortcuts (Space toggles "Also delete from disk", Enter performs deletion)
     if (dom.deleteMediaModal && (dom.deleteMediaModal.style.display === 'flex' || (dom.deleteMediaModal.style.display !== 'none' && dom.deleteMediaModal.style.display !== ''))) {
-      if (e.key === ' ' || e.key === 'Spacebar' || e.code === 'Space') {
+      if (!hasModifier && (e.key === ' ' || e.key === 'Spacebar' || e.code === 'Space')) {
         e.preventDefault();
         if (dom.deleteFromDiskCheckbox) {
           dom.deleteFromDiskCheckbox.checked = !dom.deleteFromDiskCheckbox.checked;
@@ -272,7 +339,7 @@ export function setupKeyboardShortcuts() {
         }
         return;
       }
-      if (e.key === 'Enter') {
+      if (!hasModifier && e.key === 'Enter') {
         e.preventDefault();
         if (active === dom.cancelDeleteMediaBtn) {
           dom.cancelDeleteMediaBtn.click();
@@ -286,6 +353,27 @@ export function setupKeyboardShortcuts() {
       return;
     }
 
+    // Discard Changes Modal shortcuts (Enter confirms or cancels depending on focus)
+    if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
+      if (!hasModifier && e.key === 'Enter') {
+        e.preventDefault();
+        if (active === dom.cancelDiscardChangesBtn || active === dom.closeDiscardChangesModalBtn) {
+          hideDiscardModal();
+        } else if (active?.matches('button') && active !== dom.confirmDiscardChangesBtn) {
+          active.click();
+        } else {
+          performCloseQuickEdit();
+        }
+        return;
+      }
+      return;
+    }
+
+    // Suppress shortcuts behind any open modal dialog
+    if (isAnyBlockingModalOpen()) {
+      return;
+    }
+
     // If typing in input, textarea, or contenteditable, ignore shortcuts
     if (active?.matches('input, textarea, [contenteditable="true"]')) {
       return;
@@ -293,20 +381,7 @@ export function setupKeyboardShortcuts() {
 
     // Quick Edit mode active (takes priority over button guard so Space, Ctrl+Z etc work reliably)
     if (state.loupeIndex >= 0 && quickEditState.isOpen) {
-      if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          hideDiscardModal();
-          return;
-        }
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          performCloseQuickEdit();
-          return;
-        }
-        return;
-      }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
         e.preventDefault();
         if (e.shiftKey) {
           redo();
@@ -315,12 +390,12 @@ export function setupKeyboardShortcuts() {
         }
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'y' || e.key === 'Y')) {
         e.preventDefault();
         redo();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         saveEdits('overwrite');
         return;
@@ -328,7 +403,7 @@ export function setupKeyboardShortcuts() {
 
       const isButtonOrSelect = active?.matches('button, select');
 
-      if (e.key === ' ' && !e.repeat) {
+      if (!hasModifier && e.key === ' ' && !e.repeat) {
         if (isButtonOrSelect) return;
         e.preventDefault();
         startCompare();
@@ -337,37 +412,37 @@ export function setupKeyboardShortcuts() {
       if (isButtonOrSelect) {
         return;
       }
-      if (e.key === 'e' || e.key === 'E') {
+      if (!hasModifier && (e.key === 'e' || e.key === 'E')) {
         e.preventDefault();
         closeQuickEdit(true);
         return;
       }
-      if (e.key === 'l' || e.key === 'L') {
+      if (!hasModifier && (e.key === 'l' || e.key === 'L')) {
         e.preventDefault();
         rotateLeft();
         return;
       }
-      if (e.key === 'r' || e.key === 'R') {
+      if (!hasModifier && (e.key === 'r' || e.key === 'R')) {
         e.preventDefault();
         rotateRight();
         return;
       }
-      if (e.key === 'c' || e.key === 'C') {
+      if (!hasModifier && (e.key === 'c' || e.key === 'C')) {
         e.preventDefault();
         activateMode('crop');
         return;
       }
-      if (e.key === 'h' || e.key === 'H') {
+      if (!hasModifier && (e.key === 'h' || e.key === 'H')) {
         e.preventDefault();
         activateMode('horizon');
         return;
       }
-      if (e.key === 's' || e.key === 'S') {
+      if (!hasModifier && (e.key === 's' || e.key === 'S')) {
         e.preventDefault();
         activateMode('smartfix');
         return;
       }
-      if (e.key === 'Enter') {
+      if (!hasModifier && e.key === 'Enter') {
         if (quickEditState.activeMode) {
           e.preventDefault();
           applyMode();
@@ -386,8 +461,7 @@ export function setupKeyboardShortcuts() {
 
     // Loupe mode active
     if (state.loupeIndex >= 0) {
-
-      if (e.key === 'e' || e.key === 'E') {
+      if (!hasModifier && (e.key === 'e' || e.key === 'E')) {
         e.preventDefault();
         const item = state.mediaItems[state.loupeIndex];
         if (item && item.media_type !== 'video' && item.media_type !== 'audio') {
@@ -396,51 +470,51 @@ export function setupKeyboardShortcuts() {
         return;
       }
 
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+      if (!hasModifier && (e.key === 'ArrowRight' || e.key === 'PageDown')) {
         loupeNext();
-      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      } else if (!hasModifier && (e.key === 'ArrowLeft' || e.key === 'PageUp')) {
         loupePrev();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === '0') {
         e.preventDefault();
         setLoupeZoom(1.0);
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === '=' || e.key === '+')) {
         e.preventDefault();
         loupeZoomIn();
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === '-' || e.key === '_')) {
+      } else if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === '-' || e.key === '_')) {
         e.preventDefault();
         loupeZoomOut();
-      } else if (e.key === '+' || e.key === '=') {
+      } else if (!hasModifier && (e.key === '+' || e.key === '=')) {
         loupeZoomIn();
-      } else if (e.key === '-' || e.key === '_') {
+      } else if (!hasModifier && (e.key === '-' || e.key === '_')) {
         loupeZoomOut();
-      } else if (e.key === 'z' || e.key === 'Z') {
+      } else if (!hasModifier && (e.key === 'z' || e.key === 'Z')) {
         resetLoupeZoom();
-      } else if (e.key === ' ') {
+      } else if (!hasModifier && e.key === ' ') {
         e.preventDefault();
         toggleLoupePlayback();
-      } else if (e.key >= '0' && e.key <= '5') {
+      } else if (!hasModifier && e.key >= '0' && e.key <= '5') {
         const item = state.mediaItems[state.loupeIndex];
         if (item) {
           const rating = parseInt(e.key, 10);
           updateItemRating(item.id, rating);
           showToast(rating === 0 ? t('toast_rating_cleared') : t('toast_rating_value', { rating }), 'info');
         }
-      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      } else if (!hasModifier && (e.key === 'Delete' || e.key === 'Backspace')) {
         const item = state.mediaItems[state.loupeIndex];
         if (item) openDeleteMediaModal([item.id]);
-      } else if (e.key === 'x' || e.key === 'X') {
+      } else if (!hasModifier && (e.key === 'x' || e.key === 'X')) {
         const item = state.mediaItems[state.loupeIndex];
         if (item) {
           toggleItemFlag(item.id, -1);
           showToast(item.flag === -1 ? t('toast_flag_reject') : t('toast_flag_cleared'), 'info');
         }
-      } else if (e.key === 'p' || e.key === 'P') {
+      } else if (!hasModifier && (e.key === 'p' || e.key === 'P')) {
         const item = state.mediaItems[state.loupeIndex];
         if (item) {
           toggleItemFlag(item.id, 1);
           showToast(item.flag === 1 ? t('toast_flag_pick') : t('toast_flag_cleared'), 'info');
         }
-      } else if (e.key === 'u' || e.key === 'U') {
+      } else if (!hasModifier && (e.key === 'u' || e.key === 'U')) {
         const item = state.mediaItems[state.loupeIndex];
         if (item) {
           updateItemFlag(item.id, 0);
@@ -448,52 +522,50 @@ export function setupKeyboardShortcuts() {
         }
       }
     } else {
+      // Suppress grid shortcuts when category overview is active
+      if (dom.categoryViewContainer && dom.categoryViewContainer.style.display !== 'none') {
+        return;
+      }
+
       // Grid mode shortcuts
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault();
-        state.selectedIds.clear();
-        state.mediaItems.forEach(item => state.selectedIds.add(item.id));
-        if (dom.mediaGrid) {
-          dom.mediaGrid.querySelectorAll('.photo-card').forEach(c => c.classList.add('selected'));
-        }
-        updateBatchBar();
-        updateInspector();
-        updateMapMarkerSelections();
-      } else if (e.key === ' ' || e.key === 'Enter') {
+        selectAllMediaCards();
+      } else if (!hasModifier && (e.key === ' ' || e.key === 'Enter')) {
         if (state.selectedIds.size > 0) {
           e.preventDefault();
           openLoupeForMedia(Array.from(state.selectedIds)[0]);
         }
-      } else if (e.key >= '0' && e.key <= '5') {
+      } else if (!hasModifier && e.key >= '0' && e.key <= '5') {
         const rating = parseInt(e.key, 10);
         if (state.selectedIds.size > 0) {
           batchUpdateRatings(Array.from(state.selectedIds), rating);
           showToast(rating === 0 ? t('toast_rating_cleared') : t('toast_rating_value', { rating }), 'info');
         }
-      } else if (e.key === 'p' || e.key === 'P') {
+      } else if (!hasModifier && (e.key === 'p' || e.key === 'P')) {
         if (state.selectedIds.size > 0) {
           const nextFlag = toggleFlagsForIds(Array.from(state.selectedIds), 1);
           showToast(nextFlag === 1 ? t('toast_flag_pick') : t('toast_flag_cleared'), 'info');
         }
-      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+      } else if (!hasModifier && (e.key === 'Delete' || e.key === 'Backspace')) {
         if (state.selectedIds.size > 0) {
           openDeleteMediaModal(Array.from(state.selectedIds));
         }
-      } else if (e.key === 'x' || e.key === 'X') {
+      } else if (!hasModifier && (e.key === 'x' || e.key === 'X')) {
         if (state.selectedIds.size > 0) {
           const nextFlag = toggleFlagsForIds(Array.from(state.selectedIds), -1);
           showToast(nextFlag === -1 ? t('toast_flag_reject') : t('toast_flag_cleared'), 'info');
         }
-      } else if (e.key === 'u' || e.key === 'U') {
+      } else if (!hasModifier && (e.key === 'u' || e.key === 'U')) {
         if (state.selectedIds.size > 0) {
           batchUpdateFlags(Array.from(state.selectedIds), 0);
           showToast(t('toast_flag_cleared'), 'info');
         }
-      } else if (e.key === 'm' || e.key === 'M') {
+      } else if (!hasModifier && (e.key === 'm' || e.key === 'M')) {
         switchViewMode('map');
-      } else if (e.key === 'g' || e.key === 'G') {
+      } else if (!hasModifier && (e.key === 'g' || e.key === 'G')) {
         switchViewMode('grid');
-      } else if (state.viewMode === 'map' && e.key === '/') {
+      } else if (!hasModifier && state.viewMode === 'map' && e.key === '/') {
         e.preventDefault();
         if (dom.mapSearchInput) dom.mapSearchInput.focus();
       }
@@ -502,6 +574,12 @@ export function setupKeyboardShortcuts() {
 
   window.addEventListener('keyup', (e) => {
     if (e.key === ' ' && quickEditState.isOpen && quickEditState.isComparing) {
+      stopCompare();
+    }
+  });
+
+  window.addEventListener('blur', () => {
+    if (quickEditState.isOpen && quickEditState.isComparing) {
       stopCompare();
     }
   });

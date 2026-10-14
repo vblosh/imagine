@@ -45,7 +45,10 @@ export async function loadLocale(lang) {
 }
 
 let currentLanguage = 'en';
-const languageChangeListeners = [];
+const languageChangeListeners = new Set();
+let languageRequestSerial = 0;
+let pendingLanguageRequests = 0;
+let i18nInitialized = false;
 
 export function getCurrentLanguage() {
   return currentLanguage;
@@ -57,8 +60,10 @@ export function getLocaleCode(lang = currentLanguage) {
 
 export function onLanguageChange(callback) {
   if (typeof callback === 'function') {
-    languageChangeListeners.push(callback);
+    languageChangeListeners.add(callback);
+    return () => languageChangeListeners.delete(callback);
   }
+  return () => {};
 }
 
 export function t(key, params = {}) {
@@ -81,15 +86,17 @@ export function t(key, params = {}) {
 export function getMonthName(monthNum, lang = currentLanguage) {
   const dict = translations[lang] || translations.en;
   const list = dict.months || translations.en.months;
-  const idx = (Number(monthNum) - 1) % 12;
-  return list[idx] || '';
+  const m = Number(monthNum);
+  if (!Number.isInteger(m) || m < 1 || m > 12 || !Array.isArray(list)) return '';
+  return list[m - 1] || '';
 }
 
 export function getShortMonthName(monthNum, lang = currentLanguage) {
   const dict = translations[lang] || translations.en;
   const list = dict.months_short || translations.en.months_short;
-  const idx = (Number(monthNum) - 1) % 12;
-  return list[idx] || '';
+  const m = Number(monthNum);
+  if (!Number.isInteger(m) || m < 1 || m > 12 || !Array.isArray(list)) return '';
+  return list[m - 1] || '';
 }
 
 export function applyTranslationsToDom() {
@@ -154,11 +161,27 @@ export async function setLanguage(lang) {
     localStorage.setItem('imagine_language', lang);
   } catch (_) {}
 
+  const currentSerial = ++languageRequestSerial;
+  pendingLanguageRequests++;
   document.documentElement.setAttribute('data-i18n-loading', 'true');
+
   try {
     await loadLocale(lang);
   } finally {
-    document.documentElement.removeAttribute('data-i18n-loading');
+    pendingLanguageRequests--;
+    if (pendingLanguageRequests === 0 || currentSerial === languageRequestSerial) {
+      document.documentElement.removeAttribute('data-i18n-loading');
+    }
+  }
+
+  // If a newer request was initiated, abort this stale request
+  if (currentSerial !== languageRequestSerial) {
+    return;
+  }
+
+  // If loading failed and the requested locale is not loaded, fallback to 'en'
+  if (!loadedLocales.has(lang)) {
+    lang = 'en';
   }
 
   currentLanguage = lang;
@@ -196,9 +219,11 @@ export async function initI18n() {
   const langSelect = document.getElementById('langSelect');
   if (langSelect) {
     langSelect.value = currentLanguage;
-    langSelect.addEventListener('change', async (e) => {
-      await setLanguage(e.target.value);
-    });
+    if (!i18nInitialized) {
+      langSelect.addEventListener('change', async (e) => {
+        await setLanguage(e.target.value);
+      });
+    }
   }
 
   if (initial !== 'en') {
@@ -208,7 +233,11 @@ export async function initI18n() {
     } finally {
       document.documentElement.removeAttribute('data-i18n-loading');
     }
+    if (!loadedLocales.has(initial)) {
+      currentLanguage = 'en';
+    }
   }
 
+  i18nInitialized = true;
   applyTranslationsToDom();
 }

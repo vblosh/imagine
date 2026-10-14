@@ -1,7 +1,8 @@
 /**
  * IMAGINE Photo Organizer - Top-Level Views Orchestrator
  * Pure Vanilla JavaScript (Offline-ready, no dependencies)
- * The ONLY module allowed to import inspector, map-view, loupe, category-view, modals.
+ * Along with keyboard.js (top-level input router) and app.js (application entry point),
+ * this module orchestrates inspector, map-view, loupe, category-view, and modals.
  */
 
 import { state } from './state.js';

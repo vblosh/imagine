@@ -45,6 +45,16 @@ export function clearCardSelections() {
   notifySelectionChanged();
 }
 
+export function selectAllMediaCards() {
+  if (!state.mediaItems || state.mediaItems.length === 0) return;
+  state.selectedIds.clear();
+  for (const item of state.mediaItems) {
+    state.selectedIds.add(item.id);
+  }
+  state.lastSelectedId = state.mediaItems[state.mediaItems.length - 1].id;
+  syncSelectionDOM();
+}
+
 export function handleCardSelection(id, event) {
   if (event.ctrlKey || event.metaKey) {
     // Toggle single item
