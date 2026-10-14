@@ -742,6 +742,86 @@ def test_map_place_search_enter_and_clear_cancels_debounce(server, page: Page):
     assert page.evaluate("() => window.imagineUI.state.mapSearchDebounceTimer") is None
 
 
+def test_map_shown_when_changing_people_places_events(server, page: Page):
+    """When Map View is chosen in People, Places, or Events, changing category items must keep Map View shown."""
+    page.goto(server["url"])
+
+    category_view = page.locator("#categoryViewContainer")
+    map_container = page.locator("#mapViewContainer")
+    grid_container = page.locator("#gridScrollContainer")
+    back_btn = page.locator("#categoryBackBtn")
+    map_btn = page.locator("#viewMapBtn")
+    grid_btn = page.locator("#viewGridBtn")
+
+    # 1. Open People tab and click Alice
+    page.locator('.tab-btn[data-tab="people"]').click()
+    expect(category_view).to_be_visible()
+    alice_card = page.locator('.category-card-item', has_text="Alice")
+    alice_card.click()
+    expect(category_view).to_be_hidden()
+
+    # Choose Map View
+    map_btn.click()
+    expect(map_container).to_be_visible()
+    expect(grid_container).to_be_hidden()
+    expect(map_btn).to_have_class(re.compile(r"\bactive\b"))
+
+    # Change Person: Click Back to People, then select Bob
+    back_btn.click()
+    expect(category_view).to_be_visible()
+    expect(map_container).to_be_hidden()
+
+    bob_card = page.locator('.category-card-item', has_text="Bob")
+    bob_card.click()
+    expect(category_view).to_be_hidden()
+    # Map must be visible because map mode was chosen
+    expect(map_container).to_be_visible()
+    expect(grid_container).to_be_hidden()
+    expect(map_btn).to_have_class(re.compile(r"\bactive\b"))
+
+    # 2. Change to Places tab and select Alps
+    page.locator('.tab-btn[data-tab="places"]').click()
+    expect(category_view).to_be_visible()
+    expect(map_container).to_be_hidden()
+
+    alps_card = page.locator('.category-card-item', has_text="Alps")
+    alps_card.click()
+    expect(category_view).to_be_hidden()
+    # Map must be visible for Alps
+    expect(map_container).to_be_visible()
+    expect(grid_container).to_be_hidden()
+    expect(map_btn).to_have_class(re.compile(r"\bactive\b"))
+    # Alps has 1 photo with GPS coordinates
+    expect(page.locator("#mapPhotoCount")).to_have_text("1")
+
+    # Change Place: Click Back to Places, then select Beach
+    back_btn.click()
+    expect(category_view).to_be_visible()
+    expect(map_container).to_be_hidden()
+
+    beach_card = page.locator('.category-card-item', has_text="Beach")
+    beach_card.click()
+    expect(category_view).to_be_hidden()
+    # Map must be visible for Beach
+    expect(map_container).to_be_visible()
+    expect(grid_container).to_be_hidden()
+    expect(map_btn).to_have_class(re.compile(r"\bactive\b"))
+
+    # 3. Change to Events tab and select Birthday 2026
+    page.locator('.tab-btn[data-tab="events"]').click()
+    expect(category_view).to_be_visible()
+    expect(map_container).to_be_hidden()
+
+    bday_card = page.locator('.category-card-item', has_text="Birthday 2026")
+    bday_card.click()
+    expect(category_view).to_be_hidden()
+    # Map must be visible for Birthday 2026
+    expect(map_container).to_be_visible()
+    expect(grid_container).to_be_hidden()
+    expect(map_btn).to_have_class(re.compile(r"\bactive\b"))
+
+
+
 
 
 

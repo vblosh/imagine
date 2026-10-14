@@ -490,16 +490,21 @@ export function selectCategoryAlbum(album) {
   if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
   if (dom.emptyState) dom.emptyState.style.display = 'none';
 
-  // Transition from category view to photo grid
+  // Transition from category view to photo grid / map
   if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
-  if (dom.gridScrollContainer) {
-    dom.gridScrollContainer.style.display = 'block';
-    dom.gridScrollContainer.scrollTop = 0;
-    dom.gridScrollContainer.scrollLeft = 0;
+  if (state.viewMode === 'map') {
+    if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+    if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
+  } else {
+    if (dom.gridScrollContainer) {
+      dom.gridScrollContainer.style.display = 'block';
+      dom.gridScrollContainer.scrollTop = 0;
+      dom.gridScrollContainer.scrollLeft = 0;
+    }
+    if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
   }
-  if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
 
   categoryActionHooks.updateSidebarActive();
   categoryActionHooks.updateFilterLabel();
@@ -523,16 +528,21 @@ export function selectCategoryItem(tag) {
   if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
   if (dom.emptyState) dom.emptyState.style.display = 'none';
 
-  // Transition from category view to photo grid
+  // Transition from category view to photo grid / map
   if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
-  if (dom.gridScrollContainer) {
-    dom.gridScrollContainer.style.display = 'block';
-    dom.gridScrollContainer.scrollTop = 0;
-    dom.gridScrollContainer.scrollLeft = 0;
+  if (state.viewMode === 'map') {
+    if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+    if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
+  } else {
+    if (dom.gridScrollContainer) {
+      dom.gridScrollContainer.style.display = 'block';
+      dom.gridScrollContainer.scrollTop = 0;
+      dom.gridScrollContainer.scrollLeft = 0;
+    }
+    if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
   }
-  if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
 
   categoryActionHooks.updateSidebarActive();
   categoryActionHooks.updateFilterLabel();

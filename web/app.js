@@ -754,7 +754,13 @@ export function setupEventListeners() {
           if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
           if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
           if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
-          if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
+          if (state.viewMode === 'map') {
+            if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+            if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
+          } else {
+            if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+            if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
+          }
           loadMedia();
         } else {
           if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';

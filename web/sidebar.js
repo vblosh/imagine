@@ -86,7 +86,13 @@ export function handleSidebarItemClick(itemType, itemValue, e) {
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
   if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
-  if (dom.gridScrollContainer && state.viewMode !== 'map') dom.gridScrollContainer.style.display = 'block';
+  if (state.viewMode === 'map') {
+    if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+    if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
+  } else {
+    if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+    if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
+  }
   if (dom.gridScrollContainer) {
     dom.gridScrollContainer.scrollTop = 0;
     dom.gridScrollContainer.scrollLeft = 0;
@@ -408,6 +414,16 @@ export function renderSidebarAlbums() {
         enterAlbumOrderMode();
         state.activeFolders.clear();
         clearTimelineSelection();
+      }
+      if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+      if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
+      if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
+      if (state.viewMode === 'map') {
+        if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+        if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
+      } else {
+        if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+        if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
       }
       updateSidebarActive();
       actionHooks.renderTimeline();

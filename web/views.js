@@ -13,6 +13,8 @@ import {
   patchInspectorRatingAndFlag,
 } from './inspector.js';
 import {
+  initMap,
+  fitMapToBounds,
   renderMapMarkers,
   renderUnmappedTray,
   patchOpenMapPopup,
@@ -66,14 +68,57 @@ import { clearFilterPreferences } from './persistence.js';
 const LAST_IMPORTED_TAG_NAME = 'Last Imported';
 const LAST_IMPORTED_TAG_CATEGORY = 'keyword';
 
+export function syncViewModeDisplay({ shouldPreserveScroll = false } = {}) {
+  if (state.viewMode === 'map') {
+    if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+    if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'flex';
+    if (dom.viewGridBtn) dom.viewGridBtn.classList.remove('active');
+    if (dom.viewMapBtn) dom.viewMapBtn.classList.add('active');
+    if (!state.mapInstance) {
+      initMap().then(() => {
+        if (state.viewMode === 'map' && state.mapInstance) {
+          state.mapInstance.invalidateSize();
+          renderMapMarkers();
+          renderUnmappedTray();
+          fitMapToBounds();
+        }
+      });
+    } else {
+      state.mapInstance.invalidateSize();
+      setTimeout(() => {
+        if (state.viewMode === 'map' && state.mapInstance) {
+          state.mapInstance.invalidateSize();
+        }
+      }, 50);
+      renderMapMarkers();
+      renderUnmappedTray();
+      fitMapToBounds();
+    }
+  } else {
+    if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'block';
+    if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
+    if (dom.viewGridBtn) dom.viewGridBtn.classList.add('active');
+    if (dom.viewMapBtn) dom.viewMapBtn.classList.remove('active');
+    renderGrid();
+    if (!shouldPreserveScroll && dom.gridScrollContainer) {
+      dom.gridScrollContainer.scrollTop = 0;
+      dom.gridScrollContainer.scrollLeft = 0;
+    }
+    if (state.mapInstance) {
+      renderMapMarkers();
+      renderUnmappedTray();
+    }
+  }
+}
+
 export function renderCurrentView() {
   if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId && !state.activeAlbumId) {
     renderCategoryView(state.activeTab);
-  } else if (state.viewMode === 'map') {
-    renderMapMarkers();
-    renderUnmappedTray();
   } else {
-    renderGrid();
+    if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
+    if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
+    if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
+    syncViewModeDisplay();
   }
   updateFilterLabel();
 }
@@ -88,21 +133,8 @@ export function refreshAfterMediaLoad({ shouldPreserveScroll = false } = {}) {
   if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
-  if (dom.gridScrollContainer && state.viewMode !== 'map') {
-    dom.gridScrollContainer.style.display = 'block';
-  }
 
-  if (state.viewMode !== 'map') {
-    renderGrid();
-    if (!shouldPreserveScroll && dom.gridScrollContainer) {
-      dom.gridScrollContainer.scrollTop = 0;
-      dom.gridScrollContainer.scrollLeft = 0;
-    }
-  }
-  if (state.viewMode === 'map' || state.mapInstance) {
-    renderMapMarkers();
-    renderUnmappedTray();
-  }
+  syncViewModeDisplay({ shouldPreserveScroll });
   renderSidebarFolders();
   updateFilterLabel();
   updateBatchBar();
