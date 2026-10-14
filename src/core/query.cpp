@@ -1,6 +1,10 @@
 #include "imagine/core/query.hpp"
 #include "imagine/core/import_tags.hpp"
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <locale>
+#include <sstream>
 
 namespace imagine::core {
 
@@ -16,6 +20,48 @@ std::string escapeLike(std::string_view s) {
         escaped.push_back(c);
     }
     return escaped;
+}
+
+std::string formatDoubleParam(double val) {
+    std::ostringstream oss;
+    oss.imbue(std::locale::classic());
+    oss.precision(std::numeric_limits<double>::max_digits10);
+    oss << val;
+    return oss.str();
+}
+
+void appendFolderClause(
+    const std::string& rawFolder,
+    std::vector<std::string>& clauses,
+    std::vector<std::string>& params
+) {
+    if (rawFolder.empty()) return;
+    std::string folder = rawFolder;
+    std::replace(folder.begin(), folder.end(), '\\', '/');
+    while (folder.size() > 1 && folder.back() == '/') {
+        folder.pop_back();
+    }
+    if (folder.empty() || folder == "/") return;
+    if (folder == ".") {
+        clauses.push_back("(file_path NOT LIKE '%/%' AND file_path NOT LIKE '%\\%')");
+        return;
+    }
+    std::string relFolder = folder;
+    while (!relFolder.empty() && relFolder.front() == '/') {
+        relFolder.erase(0, 1);
+    }
+    if (relFolder.empty()) return;
+
+    std::string absFolder = "/" + relFolder;
+    std::string winRel = relFolder;
+    std::replace(winRel.begin(), winRel.end(), '/', '\\');
+    std::string winAbs = "\\" + winRel;
+
+    clauses.push_back("(file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!')");
+    params.push_back(escapeLike(relFolder) + "/%");
+    params.push_back(escapeLike(absFolder) + "/%");
+    params.push_back(escapeLike(winRel) + "\\%");
+    params.push_back(escapeLike(winAbs) + "\\%");
 }
 
 } // namespace
@@ -84,6 +130,7 @@ void to_json(nlohmann::json& j, const QueryCriteria& c) {
 }
 
 void from_json(const nlohmann::json& j, QueryCriteria& c) {
+    c = QueryCriteria{};
     if (j.contains("camera_make") && j["camera_make"].is_string()) {
         c.camera_make = j["camera_make"].get<std::string>();
     }
@@ -299,6 +346,11 @@ QueryBuilder& QueryBuilder::mediaType(std::string type) {
     return *this;
 }
 
+QueryBuilder& QueryBuilder::lastImported(bool enabled) {
+    criteria_.last_imported = enabled;
+    return *this;
+}
+
 std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() const {
     std::vector<std::string> clauses;
     std::vector<std::string> params;
@@ -354,14 +406,7 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
         }
 
         for (const auto& f : allFolders) {
-            if (f.empty()) continue;
-            std::string folder = f;
-            while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\')) {
-                folder.pop_back();
-            }
-            orClauses.push_back("(file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!')");
-            orParams.push_back(escapeLike(folder) + "/%");
-            orParams.push_back(escapeLike(folder) + "\\%");
+            appendFolderClause(f, orClauses, orParams);
         }
 
         if (!orClauses.empty()) {
@@ -387,14 +432,7 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
         std::vector<std::string> folderOrClauses;
         std::vector<std::string> folderOrParams;
         for (const auto& f : allFolders) {
-            if (f.empty()) continue;
-            std::string folder = f;
-            while (!folder.empty() && (folder.back() == '/' || folder.back() == '\\')) {
-                folder.pop_back();
-            }
-            folderOrClauses.push_back("(file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!')");
-            folderOrParams.push_back(escapeLike(folder) + "/%");
-            folderOrParams.push_back(escapeLike(folder) + "\\%");
+            appendFolderClause(f, folderOrClauses, folderOrParams);
         }
         if (!folderOrClauses.empty()) {
             std::string combinedFolders;
@@ -437,32 +475,36 @@ std::pair<std::string, std::vector<std::string>> QueryBuilder::buildWhere() cons
         params.push_back(*criteria_.has_gps ? "1" : "0");
     }
 
-    if (criteria_.min_lat.has_value() && criteria_.max_lat.has_value()) {
+    const bool hasMinLat = criteria_.min_lat.has_value() && std::isfinite(*criteria_.min_lat);
+    const bool hasMaxLat = criteria_.max_lat.has_value() && std::isfinite(*criteria_.max_lat);
+    if (hasMinLat && hasMaxLat) {
         clauses.push_back("latitude >= ? AND latitude <= ?");
-        params.push_back(std::to_string(*criteria_.min_lat));
-        params.push_back(std::to_string(*criteria_.max_lat));
-    } else if (criteria_.min_lat.has_value()) {
+        params.push_back(formatDoubleParam(*criteria_.min_lat));
+        params.push_back(formatDoubleParam(*criteria_.max_lat));
+    } else if (hasMinLat) {
         clauses.push_back("latitude >= ?");
-        params.push_back(std::to_string(*criteria_.min_lat));
-    } else if (criteria_.max_lat.has_value()) {
+        params.push_back(formatDoubleParam(*criteria_.min_lat));
+    } else if (hasMaxLat) {
         clauses.push_back("latitude <= ?");
-        params.push_back(std::to_string(*criteria_.max_lat));
+        params.push_back(formatDoubleParam(*criteria_.max_lat));
     }
 
-    if (criteria_.min_lon.has_value() && criteria_.max_lon.has_value()) {
+    const bool hasMinLon = criteria_.min_lon.has_value() && std::isfinite(*criteria_.min_lon);
+    const bool hasMaxLon = criteria_.max_lon.has_value() && std::isfinite(*criteria_.max_lon);
+    if (hasMinLon && hasMaxLon) {
         if (*criteria_.min_lon <= *criteria_.max_lon) {
             clauses.push_back("longitude >= ? AND longitude <= ?");
         } else {
             clauses.push_back("(longitude >= ? OR longitude <= ?)");
         }
-        params.push_back(std::to_string(*criteria_.min_lon));
-        params.push_back(std::to_string(*criteria_.max_lon));
-    } else if (criteria_.min_lon.has_value()) {
+        params.push_back(formatDoubleParam(*criteria_.min_lon));
+        params.push_back(formatDoubleParam(*criteria_.max_lon));
+    } else if (hasMinLon) {
         clauses.push_back("longitude >= ?");
-        params.push_back(std::to_string(*criteria_.min_lon));
-    } else if (criteria_.max_lon.has_value()) {
+        params.push_back(formatDoubleParam(*criteria_.min_lon));
+    } else if (hasMaxLon) {
         clauses.push_back("longitude <= ?");
-        params.push_back(std::to_string(*criteria_.max_lon));
+        params.push_back(formatDoubleParam(*criteria_.max_lon));
     }
 
     if (!criteria_.search_text.empty()) {

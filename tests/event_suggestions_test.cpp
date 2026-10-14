@@ -75,3 +75,29 @@ TEST(EventSuggestionTest, SkipsNonPhotosAndInvalidDates) {
     EXPECT_EQ(result.skipped[0].reason, "not_photo");
     EXPECT_EQ(result.skipped[1].reason, "invalid_date");
 }
+
+TEST(EventSuggestionTest, FiltersLastImportedTagFromKeywords) {
+    auto a = photo(1, 1700000000);
+    auto b = photo(2, 1700000100);
+    a.tags.push_back({1, "Last Imported", "keyword"});
+    a.tags.push_back({2, "Sunset", "keyword"});
+    b.tags.push_back({1, "Last Imported", "keyword"});
+    b.tags.push_back({2, "Sunset", "keyword"});
+
+    const auto result = EventSuggestionEngine::suggest({a, b});
+    ASSERT_EQ(result.groups.size(), 1u);
+    EXPECT_EQ(result.groups[0].keywords.size(), 1u);
+    EXPECT_EQ(result.groups[0].keywords[0], "Sunset");
+}
+
+TEST(EventSuggestionTest, CommonParentFolderHandlesWindowsBackslashes) {
+    auto a = photo(1, 1700000000);
+    auto b = photo(2, 1700000100);
+    a.file_path = "Vacation\\Summer\\img1.jpg";
+    b.file_path = "Vacation\\Summer\\img2.jpg";
+
+    const auto result = EventSuggestionEngine::suggest({a, b});
+    ASSERT_EQ(result.groups.size(), 1u);
+    EXPECT_EQ(result.groups[0].name_source, EventSuggestionNameSource::Folder);
+    EXPECT_EQ(result.groups[0].name_value, "Summer");
+}

@@ -63,8 +63,8 @@ bool Importer::isInsideRootDir(const std::filesystem::path& target, const std::f
     auto canTarget = stripExtendedPrefix(target).lexically_normal();
     auto canRoot = stripExtendedPrefix(rootDir).lexically_normal();
 
-    auto rel = std::filesystem::relative(canTarget, canRoot, ec);
-    if (!ec && !rel.empty()) {
+    auto rel = canTarget.lexically_relative(canRoot);
+    if (!rel.empty()) {
         std::string relStr = pathToUtf8(rel);
         std::replace(relStr.begin(), relStr.end(), '\\', '/');
         if (!relStr.empty() && relStr != "." && relStr != ".." && relStr.rfind("../", 0) != 0) {
@@ -120,8 +120,8 @@ std::string Importer::toRelativePath(const std::filesystem::path& fullPath, cons
     auto canTarget = stripExtendedPrefix(fullPath).lexically_normal();
     auto canRoot = stripExtendedPrefix(baseDir).lexically_normal();
 
-    auto rel = std::filesystem::relative(canTarget, canRoot, ec);
-    if (!ec && !rel.empty()) {
+    auto rel = canTarget.lexically_relative(canRoot);
+    if (!rel.empty()) {
         std::string relStr = pathToUtf8(rel);
         std::replace(relStr.begin(), relStr.end(), '\\', '/');
         if (relStr != ".." && relStr.rfind("../", 0) != 0) {
@@ -364,7 +364,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
 
     // Date taken fallback
     int64_t dateTaken = exif.date_taken;
-    if (dateTaken <= 0) {
+    if (dateTaken == 0) {
         dateTaken = modifiedTime;
     }
 
@@ -399,8 +399,8 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         item.duration = 0.0;
         item.date_taken = dateTaken;
         item.exif = exif;
-        item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize);
-        item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize);
+        item.thumb_small = !thumbSmall.empty() ? thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize) : "";
+        item.thumb_large = !thumbLarge.empty() ? thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize) : "";
     } else {
         // Video or Audio file processing (streamed hashing, parser metadata, procedural/embedded thumbnail)
         auto hashRes = metadata::Hasher::computeFileSha256(filePath);
@@ -426,7 +426,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         }
 
         int64_t dateTaken = mediaInfo.date_taken;
-        if (dateTaken <= 0) {
+        if (dateTaken == 0) {
             dateTaken = modifiedTime;
         }
 
@@ -448,8 +448,9 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         }
 
         // Try video frame extraction if ffmpeg is available
-        if (thumbSmall.empty() && mediaType == "video" && metadata::FfmpegHelper::isAvailable()) {
-            std::string tmpThumb = cache_.cacheDir() + "/tmp_" + hash + ".jpg";
+        if (thumbSmall.empty() && mediaType == "video" && !cache_.cacheDir().empty() && metadata::FfmpegHelper::isAvailable()) {
+            static std::atomic<uint64_t> tmpCounter{0};
+            std::string tmpThumb = cache_.cacheDir() + "/tmp_" + hash + "_" + std::to_string(++tmpCounter) + ".jpg";
             double captureTime = std::min(1.0, mediaInfo.duration > 0 ? mediaInfo.duration / 2.0 : 0.0);
             auto ffRes = metadata::FfmpegHelper::extractVideoFrame(filePath, captureTime, tmpThumb);
             if (ffRes.isOk()) {
@@ -458,8 +459,8 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
                     thumbSmall = dualRes.value().first;
                     thumbLarge = dualRes.value().second;
                 }
-                std::filesystem::remove(tmpThumb, ec);
             }
+            std::filesystem::remove(pathFromUtf8(tmpThumb), ec);
         }
 
         // Fall back to procedural thumbnail
@@ -500,10 +501,15 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
             item.exif.latitude = mediaInfo.latitude;
             item.exif.longitude = mediaInfo.longitude;
             item.exif.altitude = mediaInfo.altitude;
+        } else {
+            item.exif.has_gps = false;
+            item.exif.latitude = 0.0;
+            item.exif.longitude = 0.0;
+            item.exif.altitude = 0.0;
         }
         item.exif.orientation = mediaInfo.orientation;
-        item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize);
-        item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize);
+        item.thumb_small = !thumbSmall.empty() ? thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize) : "";
+        item.thumb_large = !thumbLarge.empty() ? thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize) : "";
     }
 
     // Database persistence: if commitToDb is true, persist immediately.
@@ -534,22 +540,29 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
 }
 
 Result<MediaItem> Importer::importFile(const std::string& filePath) {
+    if (running_.load()) {
+        return Status::alreadyExists("Importer is already running");
+    }
     if (!isSupportedExtension(filePath)) {
         return Status::invalidArgument("Unsupported media extension: " + filePath);
     }
     std::string normPath = normalizePath(filePath);
     std::string currentPhotosDir = photosDir();
+    bool autoAssignedRoot = false;
     if (currentPhotosDir.empty()) {
         setPhotosDir(pathToUtf8(pathFromUtf8(normPath).parent_path()));
         currentPhotosDir = photosDir();
+        autoAssignedRoot = true;
     }
     if (!isInsideRootDir(normPath, currentPhotosDir)) {
-
         return Status::invalidArgument("File is outside photos root directory (" + currentPhotosDir + "): " + filePath);
     }
     MediaItem item;
     ProcessStatus st = processFileInternal(filePath, &item, true);
     if (st == ProcessStatus::Failed) {
+        if (autoAssignedRoot) {
+            setPhotosDir("");
+        }
         return Status::internal("Failed to import media file: " + filePath);
     }
     return item;

@@ -591,3 +591,52 @@ TEST_F(QueryTest, Pre1970TimestampsQueryable) {
     EXPECT_EQ(resHist.value().total_count, 1);
     EXPECT_EQ(resHist.value().items[0].file_name, "vintage_1935.jpg");
 }
+
+TEST_F(QueryTest, FluentBuilderLastImported) {
+    QueryBuilder qb;
+    qb.lastImported(true);
+    EXPECT_TRUE(qb.criteria().last_imported);
+    qb.lastImported(false);
+    EXPECT_FALSE(qb.criteria().last_imported);
+}
+
+TEST_F(QueryTest, FromJsonResetsPriorFields) {
+    QueryCriteria c;
+    c.camera_make = "Canon";
+    c.min_rating = 4;
+    c.last_imported = true;
+
+    nlohmann::json j = {{"camera_make", "Nikon"}};
+    from_json(j, c);
+
+    EXPECT_EQ(c.camera_make, "Nikon");
+    EXPECT_FALSE(c.min_rating.has_value());
+    EXPECT_FALSE(c.last_imported);
+}
+
+TEST_F(QueryTest, DotFolderMatchesRootFiles) {
+    MediaItem rootItem;
+    rootItem.file_path = "root_photo.jpg";
+    rootItem.file_name = "root_photo.jpg";
+    rootItem.file_size = 1000;
+    rootItem.file_modified_time = 1000;
+    rootItem.content_hash = "h_root";
+    rootItem.date_taken = 1000;
+    db.insertMedia(rootItem);
+
+    QueryCriteria crit;
+    crit.folder = ".";
+    auto res = QueryBuilder::execute(db, crit);
+    ASSERT_TRUE(res.isOk());
+    EXPECT_EQ(res.value().total_count, 1);
+    EXPECT_EQ(res.value().items[0].file_name, "root_photo.jpg");
+}
+
+TEST_F(QueryTest, BoundingBoxWithNaNIgnored) {
+    QueryBuilder qb;
+    qb.boundingBox(std::numeric_limits<double>::quiet_NaN(), 50.0, 10.0, 20.0);
+    auto [whereClause, params] = qb.buildWhere();
+    // latitude min was NaN, so only max_lat should be included
+    EXPECT_NE(whereClause.find("latitude <="), std::string::npos);
+    EXPECT_EQ(whereClause.find("latitude >="), std::string::npos);
+}

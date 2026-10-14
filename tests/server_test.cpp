@@ -3965,6 +3965,7 @@ TEST_F(ServerTest, ServeRelocatedPhotosAndThumbnails) {
 }
 
 TEST_F(ServerTest, DeleteMediaSingleAndBatchWithDiskOption) {
+    catalog_->setPhotosDir(testDir_.string());
     httplib::Client client("127.0.0.1", port_);
 
     // 1. Create test files on disk

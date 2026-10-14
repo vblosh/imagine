@@ -83,6 +83,7 @@ public:
     QueryBuilder& hasGps(bool hasGps = true);
     QueryBuilder& boundingBox(double minLat, double maxLat, double minLon, double maxLon);
     QueryBuilder& mediaType(std::string type);
+    QueryBuilder& lastImported(bool enabled = true);
 
     std::pair<std::string, std::vector<std::string>> buildWhere() const;
     std::string buildOrderBy() const;
