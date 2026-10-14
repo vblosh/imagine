@@ -23,6 +23,8 @@ let currentRequest = null;
 let submissionError = '';
 let jobPollTimer = null;
 let jobPollInFlight = false;
+let jobPollErrorCount = 0;
+const MAX_JOB_POLL_ERRORS = 5;
 
 function isScanRunning() {
   return Boolean(currentJob && !TERMINAL_JOB_STATES.has(currentJob.state));
@@ -94,7 +96,7 @@ function faceJobNeedsRetry(job = currentJob) {
 
 function faceSetupMessage() {
   if (!faceStatus) return t('face_status_unavailable');
-  if (faceStatus.built !== true) return t('face_unavailable');
+  if (faceStatus.built !== true) return String(faceStatus.error || t('face_unavailable'));
   if (faceStatus.ready !== true) {
     return String(faceStatus.error || t('face_unavailable'));
   }
@@ -133,7 +135,7 @@ export async function refreshFaceStatus(options = {}) {
   try {
     faceStatus = await api.get('/api/faces/status');
   } catch (_) {
-    faceStatus = { built: false, ready: false, error: t('face_status_unavailable') };
+    faceStatus = { built: Boolean(state.faceAnalysisBuilt), ready: false, error: t('face_status_unavailable') };
   }
   if (faceStatus && faceStatus.built) {
     if (faceStatus.indexSize == null && faceStatus.index_size == null) {
@@ -288,6 +290,7 @@ function renderJobState() {
   const hasJob = Boolean(currentJob);
   const initial = !hasJob && Boolean(currentRequest);
   const running = hasJob && !TERMINAL_JOB_STATES.has(currentJob.state);
+  const canRetry = hasJob && !running && faceJobNeedsRetry(currentJob) && Boolean(currentRequest);
   const stateNode = byId('faceJobState');
   const progressWrap = byId('faceJobProgressWrap');
   const progress = byId('faceJobProgress');
@@ -332,17 +335,18 @@ function renderJobState() {
   }
 
   setJobButton(byId('faceViewFacesBtn'), true);
-  setJobButton(byId('faceJobStartBtn'), initial, !isFaceReady());
+  setJobButton(byId('faceJobStartBtn'), initial || canRetry, !isFaceReady());
   setJobButton(byId('faceJobStopBtn'), running, currentJob && currentJob.state === 'cancelling');
   setJobButton(byId('faceJobDoneBtn'), true);
 }
 
 function selectedPhotoIds() {
+  const mediaById = new Map((state.mediaItems || []).map(media => [Number(media.id), media]));
   return Array.from(state.selectedIds)
     .map(Number)
     .filter(id => Number.isInteger(id) && id > 0)
     .filter(id => {
-      const item = (state.mediaItems || []).find(media => Number(media.id) === id);
+      const item = mediaById.get(id);
       return item && (!item.media_type || item.media_type === 'photo');
     });
 }
@@ -398,6 +402,7 @@ async function submitFaceJob(request) {
     const result = await api.post('/api/faces/jobs', body);
     currentJob = result && result.job ? result.job : result;
     if (!currentJob || !currentJob.id) throw new Error(t('face_status_unavailable'));
+    jobPollErrorCount = 0;
     saveJobRequest(currentJob.id, request);
     clearDismissedJob(currentJob.id);
     renderJobState();
@@ -447,6 +452,7 @@ async function pollFaceJob() {
   try {
     const result = await api.get(`/api/faces/jobs/${encodeURIComponent(currentJob.id)}`);
     currentJob = result && result.job ? result.job : result;
+    jobPollErrorCount = 0;
     renderJobState();
     if (TERMINAL_JOB_STATES.has(currentJob.state)) {
       if (currentJob.state === 'completed') handleCompletedJob(currentJob);
@@ -455,12 +461,16 @@ async function pollFaceJob() {
       scheduleJobPoll();
     }
   } catch (err) {
+    jobPollErrorCount += 1;
     const error = byId('faceJobError');
     if (error) {
       error.textContent = err.message;
       error.hidden = false;
     }
-    scheduleJobPoll(3000);
+    if (jobPollErrorCount < MAX_JOB_POLL_ERRORS) {
+      const backoff = Math.min(30000, 3000 * Math.pow(2, jobPollErrorCount - 1));
+      scheduleJobPoll(backoff);
+    }
   } finally {
     jobPollInFlight = false;
   }
@@ -564,11 +574,14 @@ function updateFaceOverlayGeometry(svg) {
 function scheduleFaceOverlayGeometry(svg, followTransform = false) {
   const tracker = faceOverlayTrackers.get(svg);
   updateFaceOverlayGeometry(svg);
-  if (!tracker || tracker.frame) return;
-  const started = performance.now();
+  if (!tracker) return;
+  if (followTransform) {
+    tracker.followUntil = performance.now() + 240;
+  }
+  if (tracker.frame) return;
   const tick = now => {
     updateFaceOverlayGeometry(svg);
-    if (followTransform && now - started < 240) {
+    if (now < (tracker.followUntil || 0)) {
       tracker.frame = requestAnimationFrame(tick);
     } else {
       tracker.frame = 0;
@@ -588,14 +601,25 @@ function ensureFaceOverlayTracking(svg, image, wrapper, followTransform = false)
   }
   const previous = faceOverlayTrackers.get(svg);
   if (previous && previous.image === image && previous.wrapper === wrapper) return;
+  if (previous?.frame) cancelAnimationFrame(previous.frame);
+  previous?.abortController?.abort();
   previous?.resizeObserver?.disconnect();
   previous?.mutationObserver?.disconnect();
-  const tracker = { image, wrapper, frame: 0, resizeObserver: null, mutationObserver: null };
+  const abortController = new AbortController();
+  const tracker = {
+    image,
+    wrapper,
+    frame: 0,
+    followUntil: 0,
+    abortController,
+    resizeObserver: null,
+    mutationObserver: null
+  };
   const onLoad = () => scheduleFaceOverlayGeometry(svg, followTransform);
-  image.addEventListener('load', onLoad);
+  image.addEventListener('load', onLoad, { signal: abortController.signal });
   image.addEventListener('transitionend', event => {
     if (event.propertyName === 'transform') scheduleFaceOverlayGeometry(svg);
-  });
+  }, { signal: abortController.signal });
   if (typeof ResizeObserver !== 'undefined') {
     tracker.resizeObserver = new ResizeObserver(() => scheduleFaceOverlayGeometry(svg));
     tracker.resizeObserver.observe(image);
@@ -750,16 +774,6 @@ function faceGridGroupInfo(face) {
     return { key: `person:${tagId}`, type: 'person', title: title || t('face_person_unknown'), tagId };
   }
   return { key: 'unnamed', type: 'unnamed', title: t('face_grid_group_unnamed') };
-}
-
-function eligibleSuggestionFaces(faces, tagId) {
-  return (faces || []).filter(face => !face.dismissed
-    && face.person_tag_id == null
-    && Number(face.suggestions?.[0]?.tag_id) === Number(tagId));
-}
-
-function distinctMediaCount(faces) {
-  return new Set((faces || []).map(face => Number(face.media_id)).filter(id => id > 0)).size;
 }
 
 function faceGridCardMarkup(face, groupKey, index = null) {
@@ -989,6 +1003,27 @@ function renderFaceGrid(schedulePages = true) {
     gridFaces = windowFaces;
     for (const face of windowFaces) {
       gridLoadedFaces.set(String(face.id), face);
+    }
+    if (group.type === 'dismissed') {
+      const header = list.querySelector('.face-grid-group-header');
+      const existingRestoreBtn = header?.querySelector('[data-face-group-restore="dismissed"]');
+      const dismissedCount = windowFaces.filter(face => face.dismissed).length;
+      if (header) {
+        if (dismissedCount > 0) {
+          const label = t('face_grid_restore_visible', { count: dismissedCount });
+          if (existingRestoreBtn) {
+            existingRestoreBtn.textContent = label;
+            existingRestoreBtn.disabled = Boolean(gridIsLoading || gridActionBusy);
+          } else {
+            header.insertAdjacentHTML(
+              'beforeend',
+              `<button type="button" class="btn btn-secondary btn-sm" data-face-group-restore="dismissed" ${disabled}>${escapeHtml(label)}</button>`
+            );
+          }
+        } else if (existingRestoreBtn) {
+          existingRestoreBtn.remove();
+        }
+      }
     }
   }
   if (empty) {
@@ -1638,6 +1673,7 @@ async function handleGridSelectionChange(event) {
   if (gridIsLoading || gridActionBusy) return;
   const checkbox = event.target.closest('.face-grid-select');
   if (!checkbox) return;
+  const isChecked = Boolean(checkbox.checked);
   const card = checkbox.closest('.face-grid-card');
   const id = String(checkbox.value);
   const face = gridLoadedFaces.get(id) || (gridFaceIndexById.has(id) ? gridPageFaceAt(gridFaceIndexById.get(id)) : null);
@@ -1681,7 +1717,7 @@ async function handleGridSelectionChange(event) {
       const rangeFace = gridPageFaceAt(index);
       if (!rangeFace || !faceMatchesGridFilters(rangeFace)) continue;
       const rangeId = String(rangeFace.id);
-      if (checkbox.checked) {
+      if (isChecked) {
         gridSelection.add(rangeId);
         gridSelectedFaceById.set(rangeId, rangeFace);
       } else {
@@ -1689,7 +1725,7 @@ async function handleGridSelectionChange(event) {
         gridSelectedFaceById.delete(rangeId);
       }
     }
-  } else if (checkbox.checked && face) {
+  } else if (isChecked && face) {
     gridSelection.add(id);
     gridSelectedFaceById.set(id, face);
   } else {
@@ -1907,7 +1943,8 @@ async function acceptSuggestionGroup(groupKey) {
   gridActionBusy = true;
   updateGridSelectionUi();
   const stateNode = byId('faceGridState');
-  if (stateNode) stateNode.textContent = t('face_grid_applying', { count: Number(group.suggestion_faces_count) || 0 });
+  const applyingMessage = t('face_grid_applying', { count: Number(group.suggestion_faces_count) || 0 });
+  if (stateNode) stateNode.textContent = applyingMessage;
   try {
     const result = await api.post('/api/faces/groups/accept', { snapshot: actionSnapshot, key: group.key });
     const updatedCount = Math.max(0, Number(result.updated_count) || 0);
@@ -1943,7 +1980,7 @@ async function acceptSuggestionGroup(groupKey) {
       await loadFaceGroups({ jobId: actionJobId, preserveSelection: true, preserveGroupKey: group.key, preserveGroupIndex: true });
     }
   } finally {
-    if (stateNode && stateNode.textContent.startsWith(t('face_grid_applying', { count: Number(group.suggestion_faces_count) || 0 }).split('{')[0])) {
+    if (stateNode && stateNode.textContent === applyingMessage) {
       stateNode.textContent = '';
     }
     gridActionBusy = false;
@@ -2086,7 +2123,13 @@ function bindFaceActions() {
   byId('faceForceReanalysis')?.addEventListener('change', renderJobState);
   byId('faceJobCloseBtn')?.addEventListener('click', closeJobModal);
   byId('faceJobBackdrop')?.addEventListener('click', closeJobModal);
-  byId('faceJobStartBtn')?.addEventListener('click', () => startFaceJob(false));
+  byId('faceJobStartBtn')?.addEventListener('click', () => {
+    if (currentJob && TERMINAL_JOB_STATES.has(currentJob.state) && faceJobNeedsRetry(currentJob)) {
+      retryFaceJob();
+    } else {
+      startFaceJob(false);
+    }
+  });
   byId('faceJobStopBtn')?.addEventListener('click', cancelFaceJob);
   byId('faceJobDoneBtn')?.addEventListener('click', closeJobModal);
   byId('faceForceCancelBtn')?.addEventListener('click', closeForceWarningModal);

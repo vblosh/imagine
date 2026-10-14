@@ -4,8 +4,8 @@ import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { t, getLocaleCode, onLanguageChange } from './i18n.js';
 import { loadMedia, loadMetadata } from './grid.js';
-import { updateInspector } from './inspector.js';
 
+const utf8Encoder = new TextEncoder();
 let requestSerial = 0;
 let opener = null;
 let review = null;
@@ -35,7 +35,7 @@ function sourceLabel(source) {
 }
 
 function byteLength(value) {
-  return new TextEncoder().encode(value).length;
+  return utf8Encoder.encode(value).length;
 }
 
 function truncateUtf8(value, maxBytes) {
@@ -121,6 +121,14 @@ function focusDescriptor(element) {
   const group = element.closest('.auto-event-group');
   if (!group) return null;
   const index = group.dataset.groupIndex;
+  if (element.matches('.auto-event-name')) {
+    return {
+      type: 'name',
+      index,
+      selectionStart: element.selectionStart,
+      selectionEnd: element.selectionEnd
+    };
+  }
   if (element.matches('.auto-event-group-checkbox')) return { type: 'group', index };
   if (element.matches('.auto-event-toggle-photos')) return { type: 'toggle', index };
   if (element.matches('.auto-event-photo-checkbox')) {
@@ -134,10 +142,17 @@ function restoreFocus(descriptor) {
   const group = dom.autoEventGroups.querySelector(`.auto-event-group[data-group-index="${descriptor.index}"]`);
   if (!group) return;
   let target = null;
+  if (descriptor.type === 'name') target = group.querySelector('.auto-event-name');
   if (descriptor.type === 'group') target = group.querySelector('.auto-event-group-checkbox');
   if (descriptor.type === 'toggle') target = group.querySelector('.auto-event-toggle-photos');
   if (descriptor.type === 'photo') target = group.querySelector(`.auto-event-photo-checkbox[data-media-id="${descriptor.mediaId}"]`);
   target?.focus();
+  if (descriptor.type === 'name' && target && typeof target.setSelectionRange === 'function' &&
+      descriptor.selectionStart != null && descriptor.selectionEnd != null) {
+    try {
+      target.setSelectionRange(descriptor.selectionStart, descriptor.selectionEnd);
+    } catch (_) {}
+  }
 }
 
 function rerenderReview(focusSource = null) {
@@ -148,8 +163,8 @@ function rerenderReview(focusSource = null) {
 }
 
 function updateApplyButton(groups = review ? review.groups : []) {
-  const pending = groups.some(group => groupPhotoIds(group).length > 0);
-  const partial = groups.some(group => group.completedIds.size > 0 && groupPhotoIds(group).length > 0);
+  const pending = groups.some(group => group.enabled && groupPhotoIds(group).length > 0);
+  const partial = groups.some(group => group.enabled && group.completedIds.size > 0 && groupPhotoIds(group).length > 0);
   dom.applyAutoEventsBtn.style.display = pending && !partial ? 'inline-flex' : 'none';
   dom.applyAutoEventsBtn.disabled = !pending || groups.some(group => {
     const idsForGroup = groupPhotoIds(group);
@@ -167,7 +182,15 @@ function bindReviewEvents() {
     const group = review.groups[index];
     const groupCheckbox = element.querySelector('.auto-event-group-checkbox');
     const nameInput = element.querySelector('.auto-event-name');
-    groupCheckbox?.addEventListener('change', () => { group.enabled = groupCheckbox.checked; rerenderReview(groupCheckbox); });
+    groupCheckbox?.addEventListener('change', () => {
+      group.enabled = groupCheckbox.checked;
+      if (group.enabled && groupPhotoIds(group).length === 0) {
+        group.photos.forEach(photo => {
+          if (!group.completedIds.has(Number(photo.id))) photo.included = true;
+        });
+      }
+      rerenderReview(groupCheckbox);
+    });
     nameInput?.addEventListener('input', () => {
       group.name = nameInput.value;
       nameInput.classList.toggle('invalid', byteLength(group.name.trim()) === 0 || byteLength(group.name.trim()) > 100);
@@ -204,16 +227,12 @@ async function applyGroups() {
     }
     if (failures.length) {
       if (review.groups.some(group => group.completedIds.size > 0)) {
-        await loadMetadata();
-        await loadMedia();
-        updateInspector();
+        await Promise.all([loadMetadata(), loadMedia()]);
       }
       showToast(`${t('auto_event_retry')}: ${failures.join(', ')}`, 'error');
       rerenderReview();
     } else {
-      await loadMetadata();
-      await loadMedia();
-      updateInspector();
+      await Promise.all([loadMetadata(), loadMedia()]);
       showToast(t('auto_event_applied'), 'success');
       closeReview();
     }
@@ -259,7 +278,32 @@ export async function openAutoEventForIds(ids, button = null) {
   }
 }
 
+function trapAutoEventModalFocus(event) {
+  if (!review || !dom.autoEventModal || dom.autoEventModal.style.display === 'none') return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!review.applying) closeReview();
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = Array.from(
+    dom.autoEventModal.querySelectorAll('button:not([hidden]):not(:disabled), input:not([hidden]):not(:disabled), [tabindex="0"]')
+  ).filter(el => el.getClientRects().length > 0);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 export function setupAutoEventListeners() {
+  dom.autoEventModal?.addEventListener('keydown', trapAutoEventModalFocus);
   dom.batchAutoEventBtn?.addEventListener('click', event => openAutoEventForIds([...state.selectedIds], event.currentTarget));
   dom.inspectorAutoEventBtn?.addEventListener('click', event => {
     const ids = state.selectedIds.size ? [...state.selectedIds] : (state.lastSelectedId ? [state.lastSelectedId] : []);
