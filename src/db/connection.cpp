@@ -1,5 +1,7 @@
 #include "imagine/db/connection.hpp"
+#include "imagine/common/types.hpp"
 #include <filesystem>
+#include <limits>
 
 namespace imagine::db {
 
@@ -58,7 +60,11 @@ Status Statement::bind(int index, double val) {
 
 Status Statement::bind(int index, std::string_view val) {
     if (!stmt_) return Status::databaseError("Invalid statement handle");
-    int rc = sqlite3_bind_text(stmt_, index, val.data(), static_cast<int>(val.size()), SQLITE_TRANSIENT);
+    if (val.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return Status::invalidArgument("String value exceeds maximum SQLite bind size");
+    }
+    const char* ptr = val.data() ? val.data() : "";
+    int rc = sqlite3_bind_text(stmt_, index, ptr, static_cast<int>(val.size()), SQLITE_TRANSIENT);
     if (rc != SQLITE_OK) {
         return Status::databaseError("Failed to bind text: " + std::string(sqlite3_errstr(rc)));
     }
@@ -72,7 +78,11 @@ Status Statement::bind(int index, const char* val) {
 
 Status Statement::bindBlob(int index, const void* data, size_t size) {
     if (!stmt_) return Status::databaseError("Invalid statement handle");
-    int rc = sqlite3_bind_blob(stmt_, index, data, static_cast<int>(size), SQLITE_TRANSIENT);
+    if (size > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return Status::invalidArgument("Blob value exceeds maximum SQLite bind size");
+    }
+    const void* ptr = (data || size > 0) ? data : "";
+    int rc = sqlite3_bind_blob(stmt_, index, ptr, static_cast<int>(size), SQLITE_TRANSIENT);
     if (rc != SQLITE_OK) {
         return Status::databaseError("Failed to bind blob: " + std::string(sqlite3_errstr(rc)));
     }
@@ -172,15 +182,19 @@ Connection::~Connection() {
     close();
 }
 
-Connection::Connection(Connection&& other) noexcept : db_(other.db_) {
+Connection::Connection(Connection&& other) noexcept
+    : db_(other.db_), savepointCounter_(other.savepointCounter_) {
     other.db_ = nullptr;
+    other.savepointCounter_ = 0;
 }
 
 Connection& Connection::operator=(Connection&& other) noexcept {
     if (this != &other) {
         close();
         db_ = other.db_;
+        savepointCounter_ = other.savepointCounter_;
         other.db_ = nullptr;
+        other.savepointCounter_ = 0;
     }
     return *this;
 }
@@ -189,7 +203,7 @@ Status Connection::open(const std::string& dbPath) {
     close();
 
     if (dbPath != ":memory:") {
-        std::filesystem::path p(dbPath);
+        std::filesystem::path p = pathFromUtf8(dbPath);
         if (p.has_parent_path()) {
             std::error_code ec;
             std::filesystem::create_directories(p.parent_path(), ec);
@@ -204,13 +218,19 @@ Status Connection::open(const std::string& dbPath) {
         return Status::databaseError("Failed to open database '" + dbPath + "': " + err);
     }
 
+    // Set busy timeout first so subsequent pragmas (like WAL) wait on transient lock contention
+    sqlite3_busy_timeout(db_, 5000);
+
     // Configure SQLite performance pragmas
     execute("PRAGMA journal_mode = WAL;");
     execute("PRAGMA synchronous = NORMAL;");
-    execute("PRAGMA foreign_keys = ON;");
+    Status fkStatus = execute("PRAGMA foreign_keys = ON;");
+    if (!fkStatus.isOk()) {
+        close();
+        return fkStatus;
+    }
     execute("PRAGMA temp_store = MEMORY;");
     execute("PRAGMA cache_size = -64000;"); // 64MB cache
-    execute("PRAGMA busy_timeout = 5000;"); // 5s timeout on lock contention
 
     return Status::ok();
 }
@@ -236,6 +256,9 @@ Status Connection::execute(const std::string& sql) {
 
 Result<Statement> Connection::prepare(const std::string& sql) {
     if (!db_) return Status::databaseError("Database is not open");
+    if (sql.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+        return Status::invalidArgument("SQL statement exceeds maximum length");
+    }
     sqlite3_stmt* stmt = nullptr;
     int rc = sqlite3_prepare_v2(db_, sql.c_str(), static_cast<int>(sql.size()), &stmt, nullptr);
     if (rc != SQLITE_OK) {

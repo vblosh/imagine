@@ -1,7 +1,9 @@
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/db/schema.hpp"
 #include "imagine/common/logger.hpp"
+#include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <set>
 #include <unordered_set>
 
@@ -200,6 +202,9 @@ Result<size_t> CatalogDb::insertMediaBatch(std::vector<MediaItem>& items) {
     )SQL";
 
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
 
     auto stmtRes = conn_.prepare(sql);
     if (!stmtRes.isOk()) return stmtRes.status();
@@ -273,6 +278,9 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
     auto geometryChangedRes = mediaFaceGeometryChanged(conn_, item);
     if (!geometryChangedRes.isOk()) return geometryChangedRes.status();
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
     const char* sql = R"SQL(
         UPDATE media_items SET
             file_path = ?, file_name = ?, file_size = ?, file_modified_time = ?, content_hash = ?,
@@ -363,6 +371,9 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
     )SQL";
 
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
 
     auto geomStmtRes = conn_.prepare("SELECT content_hash,width,height,orientation,media_type FROM media_items WHERE id=?;");
     if (!geomStmtRes.isOk()) return geomStmtRes.status();
@@ -698,8 +709,8 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
         SELECT t.id, t.name, t.category, t.parent_id, COUNT(mt.media_id) AS media_count,
                tc.cover_media_id,
                cov.content_hash AS cover_hash,
-               MIN(CASE WHEN m.date_taken > 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS first_date,
-               MAX(CASE WHEN m.date_taken > 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS last_date
+               MIN(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS first_date,
+               MAX(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS last_date
         FROM tags t
         LEFT JOIN tag_covers tc ON t.id = tc.tag_id
         LEFT JOIN media_items cov ON tc.cover_media_id = cov.id
@@ -714,7 +725,8 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
     auto stmt = std::move(stmtRes.value());
 
     std::vector<Tag> tags;
-    while (stmt.step() == StepResult::Row) {
+    StepResult stepRes = StepResult::Done;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
         Tag t;
         t.id = stmt.getInt64(0);
         t.name = stmt.getString(1);
@@ -737,6 +749,9 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
         }
         tags.push_back(std::move(t));
     }
+    if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to read tags: " + conn_.lastErrorMessage());
+    }
     return tags;
 }
 
@@ -756,7 +771,8 @@ Result<std::vector<Tag>> CatalogDb::getTagsForMedia(MediaId id) {
     stmt.bind(1, id);
 
     std::vector<Tag> tags;
-    while (stmt.step() == StepResult::Row) {
+    StepResult stepRes = StepResult::Done;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
         Tag t;
         t.id = stmt.getInt64(0);
         t.name = stmt.getString(1);
@@ -765,6 +781,9 @@ Result<std::vector<Tag>> CatalogDb::getTagsForMedia(MediaId id) {
             t.parent_id = stmt.getInt64(3);
         }
         tags.push_back(std::move(t));
+    }
+    if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to read tags for media: " + conn_.lastErrorMessage());
     }
     return tags;
 }
@@ -802,7 +821,8 @@ Result<std::unordered_map<MediaId, std::vector<Tag>>> CatalogDb::getTagsForMedia
             stmt.bind(static_cast<int>(i + 1), mediaIds[chunkStart + i]);
         }
 
-        while (stmt.step() == StepResult::Row) {
+        StepResult stepRes = StepResult::Done;
+        while ((stepRes = stmt.step()) == StepResult::Row) {
             MediaId mid = stmt.getInt64(0);
             Tag t;
             t.id = stmt.getInt64(1);
@@ -813,6 +833,9 @@ Result<std::unordered_map<MediaId, std::vector<Tag>>> CatalogDb::getTagsForMedia
             }
             result[mid].push_back(std::move(t));
         }
+        if (stepRes == StepResult::Error) {
+            return Status::databaseError("Failed to read batch tags: " + conn_.lastErrorMessage());
+        }
     }
     return result;
 }
@@ -820,6 +843,9 @@ Result<std::unordered_map<MediaId, std::vector<Tag>>> CatalogDb::getTagsForMedia
 Status CatalogDb::addTagToMedia(MediaId mediaId, TagId tagId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
     auto stmtRes = conn_.prepare("INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?);");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -844,6 +870,9 @@ Status CatalogDb::addTagToMedia(MediaId mediaId, TagId tagId) {
 Status CatalogDb::removeTagFromMedia(MediaId mediaId, TagId tagId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
     auto categoryRes = conn_.prepare("SELECT category FROM tags WHERE id=?;");
     if (!categoryRes.isOk()) return categoryRes.status();
     auto categoryStmt = std::move(categoryRes.value()); categoryStmt.bind(1, tagId);
@@ -906,6 +935,12 @@ static Status invalidateFaceAnalysis(Connection& conn, MediaId mediaId) {
     provenance.bind(1, mediaId);
     if (provenance.step() != StepResult::Done) return Status::databaseError("Failed to remove stale face tag ownership: " + conn.lastErrorMessage());
 
+    auto semanticRes = conn.prepare("DELETE FROM semantic_index_state WHERE media_id = ?;");
+    if (!semanticRes.isOk()) return semanticRes.status();
+    auto semantic = std::move(semanticRes.value());
+    semantic.bind(1, mediaId);
+    if (semantic.step() != StepResult::Done) return Status::databaseError("Failed to invalidate semantic index state: " + conn.lastErrorMessage());
+
     return Status::ok();
 }
 
@@ -926,59 +961,110 @@ Result<TagId> CatalogDb::replaceTagAssignments(
 ) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
 
     auto tagRes = createOrGetTag(name, category);
     if (!tagRes.isOk()) return tagRes.status();
     TagId tagId = tagRes.value();
 
-    if (category == "people") {
-        auto rejectRes = conn_.prepare(R"SQL(
-            INSERT OR IGNORE INTO face_rejections(face_id,tag_id,rejected_at)
-            SELECT id,?,? FROM faces WHERE person_tag_id=?;
-        )SQL");
-        if (!rejectRes.isOk()) return rejectRes.status();
-        auto reject = std::move(rejectRes.value());
-        reject.bind(1, tagId);
-        reject.bind(2, currentUnixTime());
-        reject.bind(3, tagId);
-        if (reject.step() != StepResult::Done) {
-            return Status::databaseError("Failed to record removed people identities: " + conn_.lastErrorMessage());
-        }
-
-        auto clearRes = conn_.prepare("UPDATE faces SET person_tag_id=NULL,revision=revision+1,updated_at=? WHERE person_tag_id=?;");
-        if (!clearRes.isOk()) return clearRes.status();
-        auto clear = std::move(clearRes.value());
-        clear.bind(1, currentUnixTime());
-        clear.bind(2, tagId);
-        if (clear.step() != StepResult::Done) {
-            return Status::databaseError("Failed to clear removed people identities: " + conn_.lastErrorMessage());
-        }
-    }
-
-    auto deleteRes = conn_.prepare("DELETE FROM media_tags WHERE tag_id = ?;");
-    if (!deleteRes.isOk()) return deleteRes.status();
-    auto deleteStmt = std::move(deleteRes.value());
-    deleteStmt.bind(1, tagId);
-    if (deleteStmt.step() != StepResult::Done) {
-        return Status::databaseError("Failed to clear tag assignments: " + conn_.lastErrorMessage());
-    }
-
-    auto clearProvenanceRes = conn_.prepare("DELETE FROM media_tag_provenance WHERE tag_id=?;");
-    if (!clearProvenanceRes.isOk()) return clearProvenanceRes.status();
-    auto clearProvenance = std::move(clearProvenanceRes.value()); clearProvenance.bind(1, tagId);
-    if (clearProvenance.step() != StepResult::Done) return Status::databaseError("Failed to clear tag assignment provenance: " + conn_.lastErrorMessage());
-
     std::unordered_set<MediaId> uniqueMediaIds(mediaIds.begin(), mediaIds.end());
 
-    auto insertRes = conn_.prepare("INSERT INTO media_tags (media_id, tag_id) VALUES (?, ?);");
+    std::unordered_set<MediaId> existingMediaIds;
+    {
+        auto existingRes = conn_.prepare("SELECT media_id FROM media_tags WHERE tag_id = ?;");
+        if (!existingRes.isOk()) return existingRes.status();
+        auto existingStmt = std::move(existingRes.value());
+        existingStmt.bind(1, tagId);
+        StepResult stepRes = StepResult::Done;
+        while ((stepRes = existingStmt.step()) == StepResult::Row) {
+            existingMediaIds.insert(existingStmt.getInt64(0));
+        }
+        if (stepRes == StepResult::Error) {
+            return Status::databaseError("Failed to query existing tag assignments: " + conn_.lastErrorMessage());
+        }
+    }
+
+    std::vector<MediaId> removedMediaIds;
+    for (MediaId oldId : existingMediaIds) {
+        if (!uniqueMediaIds.contains(oldId)) {
+            removedMediaIds.push_back(oldId);
+        }
+    }
+
+    if (!removedMediaIds.empty()) {
+        const int64_t now = currentUnixTime();
+        if (category == "people") {
+            auto rejectRes = conn_.prepare(R"SQL(
+                INSERT OR IGNORE INTO face_rejections(face_id,tag_id,rejected_at)
+                SELECT id,?,? FROM faces WHERE media_id=? AND person_tag_id=?;
+            )SQL");
+            if (!rejectRes.isOk()) return rejectRes.status();
+            auto reject = std::move(rejectRes.value());
+
+            auto clearRes = conn_.prepare(
+                "UPDATE faces SET person_tag_id=NULL,revision=revision+1,updated_at=? WHERE media_id=? AND person_tag_id=?;");
+            if (!clearRes.isOk()) return clearRes.status();
+            auto clear = std::move(clearRes.value());
+
+            for (MediaId remId : removedMediaIds) {
+                reject.reset();
+                reject.bind(1, tagId);
+                reject.bind(2, now);
+                reject.bind(3, remId);
+                reject.bind(4, tagId);
+                if (reject.step() != StepResult::Done) {
+                    return Status::databaseError("Failed to record removed people identities: " + conn_.lastErrorMessage());
+                }
+
+                clear.reset();
+                clear.bind(1, now);
+                clear.bind(2, remId);
+                clear.bind(3, tagId);
+                if (clear.step() != StepResult::Done) {
+                    return Status::databaseError("Failed to clear removed people identities: " + conn_.lastErrorMessage());
+                }
+            }
+        }
+
+        auto deleteRes = conn_.prepare("DELETE FROM media_tags WHERE media_id = ? AND tag_id = ?;");
+        if (!deleteRes.isOk()) return deleteRes.status();
+        auto deleteStmt = std::move(deleteRes.value());
+
+        auto clearProvenanceRes = conn_.prepare("DELETE FROM media_tag_provenance WHERE media_id = ? AND tag_id = ?;");
+        if (!clearProvenanceRes.isOk()) return clearProvenanceRes.status();
+        auto clearProvenance = std::move(clearProvenanceRes.value());
+
+        for (MediaId remId : removedMediaIds) {
+            deleteStmt.reset();
+            deleteStmt.bind(1, remId);
+            deleteStmt.bind(2, tagId);
+            if (deleteStmt.step() != StepResult::Done) {
+                return Status::databaseError("Failed to remove tag assignment: " + conn_.lastErrorMessage());
+            }
+
+            clearProvenance.reset();
+            clearProvenance.bind(1, remId);
+            clearProvenance.bind(2, tagId);
+            if (clearProvenance.step() != StepResult::Done) {
+                return Status::databaseError("Failed to clear tag assignment provenance: " + conn_.lastErrorMessage());
+            }
+        }
+    }
+
+    auto insertRes = conn_.prepare("INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?);");
     if (!insertRes.isOk()) return insertRes.status();
     auto insertStmt = std::move(insertRes.value());
 
-    auto provenanceRes = conn_.prepare("INSERT INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,1);");
+    auto provenanceRes = conn_.prepare("INSERT OR IGNORE INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,1);");
     if (!provenanceRes.isOk()) return provenanceRes.status();
     auto provenance = std::move(provenanceRes.value());
 
     for (MediaId mediaId : uniqueMediaIds) {
+        if (existingMediaIds.contains(mediaId)) {
+            continue;
+        }
         insertStmt.reset();
         insertStmt.bind(1, mediaId);
         insertStmt.bind(2, tagId);
@@ -1002,6 +1088,9 @@ Result<TagId> CatalogDb::replaceTagAssignments(
 Status CatalogDb::deleteTag(TagId tagId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
     auto clearFacesRes = conn_.prepare("UPDATE faces SET person_tag_id=NULL,revision=revision+1,updated_at=? WHERE person_tag_id=?;");
     if (!clearFacesRes.isOk()) return clearFacesRes.status();
     auto clearFaces = std::move(clearFacesRes.value()); clearFaces.bind(1, currentUnixTime()); clearFaces.bind(2, tagId);
@@ -1056,7 +1145,8 @@ Result<std::vector<Album>> CatalogDb::getAllAlbums() {
     auto stmt = std::move(stmtRes.value());
 
     std::vector<Album> albums;
-    while (stmt.step() == StepResult::Row) {
+    StepResult stepRes = StepResult::Done;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
         Album a;
         a.id = stmt.getInt64(0);
         a.name = stmt.getString(1);
@@ -1069,6 +1159,9 @@ Result<std::vector<Album>> CatalogDb::getAllAlbums() {
         a.created_at = stmt.getInt64(6);
         a.item_count = stmt.getInt64(7);
         albums.push_back(std::move(a));
+    }
+    if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to read albums: " + conn_.lastErrorMessage());
     }
     return albums;
 }
@@ -1109,6 +1202,9 @@ Result<Album> CatalogDb::getAlbumById(AlbumId id) {
 Status CatalogDb::deleteAlbum(AlbumId id) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
     auto s1 = conn_.prepare("DELETE FROM album_media WHERE album_id = ?;");
     if (!s1.isOk()) return s1.status();
     auto stmt1 = std::move(s1.value());
@@ -1149,6 +1245,9 @@ Status CatalogDb::addMediaToAlbum(AlbumId albumId, MediaId mediaId, int position
 Status CatalogDb::reorderAlbumMedia(AlbumId albumId, const std::vector<MediaId>& mediaIds) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
 
     auto albumStmtRes = conn_.prepare("SELECT 1 FROM albums WHERE id = ?;");
     if (!albumStmtRes.isOk()) return albumStmtRes.status();
@@ -1171,8 +1270,12 @@ Status CatalogDb::reorderAlbumMedia(AlbumId albumId, const std::vector<MediaId>&
     auto membersStmt = std::move(membersStmtRes.value());
     membersStmt.bind(1, albumId);
     std::unordered_set<MediaId> memberIds;
-    while (membersStmt.step() == StepResult::Row) {
+    StepResult stepRes = StepResult::Done;
+    while ((stepRes = membersStmt.step()) == StepResult::Row) {
         memberIds.insert(membersStmt.getInt64(0));
+    }
+    if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to read album media members: " + conn_.lastErrorMessage());
     }
     if (requestedIds != memberIds) {
         return Status::invalidArgument("Album order must contain every album media ID exactly once");
@@ -1230,6 +1333,9 @@ Status CatalogDb::setAlbumCover(AlbumId albumId, MediaId mediaId) {
 Status CatalogDb::removeMediaFromAlbum(AlbumId albumId, MediaId mediaId) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
 
     auto clearCoverRes = conn_.prepare(
         "UPDATE albums SET cover_media_id = NULL WHERE id = ? AND cover_media_id = ?;");
@@ -1264,8 +1370,12 @@ Result<std::vector<MediaItem>> CatalogDb::getMediaInAlbum(AlbumId albumId) {
     stmt.bind(1, albumId);
 
     std::vector<MediaItem> items;
-    while (stmt.step() == StepResult::Row) {
+    StepResult stepRes = StepResult::Done;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
         items.push_back(extractMediaItem(stmt));
+    }
+    if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to read media in album: " + conn_.lastErrorMessage());
     }
     return items;
 }
@@ -1280,7 +1390,7 @@ Result<std::vector<TimelineEntry>> CatalogDb::getTimeline() {
                CAST(strftime('%m', date_taken, 'unixepoch') AS INTEGER) AS m,
                COUNT(*) AS cnt
         FROM media_items
-        WHERE date_taken > 0
+        WHERE date_taken != 0
         GROUP BY y, m
         ORDER BY y DESC, m DESC;
     )SQL";
@@ -1290,12 +1400,16 @@ Result<std::vector<TimelineEntry>> CatalogDb::getTimeline() {
     auto stmt = std::move(stmtRes.value());
 
     std::vector<TimelineEntry> timeline;
-    while (stmt.step() == StepResult::Row) {
+    StepResult stepRes = StepResult::Done;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
         TimelineEntry entry;
         entry.year = stmt.getInt(0);
         entry.month = stmt.getInt(1);
         entry.count = stmt.getInt64(2);
         timeline.push_back(entry);
+    }
+    if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to read timeline: " + conn_.lastErrorMessage());
     }
     return timeline;
 }
@@ -1308,8 +1422,8 @@ Result<CatalogStats> CatalogDb::getStats() {
         SELECT
             COUNT(*),
             COALESCE(SUM(file_size), 0),
-            COALESCE(MIN(CASE WHEN date_taken > 0 THEN date_taken END), 0),
-            COALESCE(MAX(date_taken), 0),
+            COALESCE(MIN(CASE WHEN date_taken != 0 THEN date_taken END), 0),
+            COALESCE(MAX(CASE WHEN date_taken != 0 THEN date_taken END), 0),
             COUNT(CASE WHEN media_type = 'video' THEN 1 END),
             COUNT(CASE WHEN media_type = 'audio' THEN 1 END),
             COUNT(CASE WHEN media_type NOT IN ('video', 'audio') THEN 1 END),
@@ -1369,12 +1483,17 @@ Result<std::vector<std::string>> CatalogDb::getAllFolders() {
     auto stmt = std::move(stmtRes.value());
 
     std::set<std::string> folders;
-    while (stmt.step() == StepResult::Row) {
+    StepResult stepRes = StepResult::Done;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
         std::string path = stmt.getString(0);
-        size_t lastSlash = path.find_last_of("/\\");
+        std::replace(path.begin(), path.end(), '\\', '/');
+        size_t lastSlash = path.find_last_of('/');
         if (lastSlash != std::string::npos && lastSlash > 0) {
             folders.insert(path.substr(0, lastSlash));
         }
+    }
+    if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to read folders: " + conn_.lastErrorMessage());
     }
     return std::vector<std::string>(folders.begin(), folders.end());
 }
@@ -1408,12 +1527,17 @@ Result<std::vector<MediaItem>> CatalogDb::queryMedia(
     auto stmt = std::move(stmtRes.value());
 
     for (size_t i = 0; i < params.size(); ++i) {
-        stmt.bind(static_cast<int>(i + 1), params[i]);
+        Status bs = stmt.bind(static_cast<int>(i + 1), params[i]);
+        if (!bs.isOk()) return bs;
     }
 
     std::vector<MediaItem> items;
-    while (stmt.step() == StepResult::Row) {
+    StepResult stepRes = StepResult::Done;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
         items.push_back(extractMediaItem(stmt));
+    }
+    if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to query media: " + conn_.lastErrorMessage());
     }
     return items;
 }
@@ -1433,11 +1557,15 @@ Result<int64_t> CatalogDb::countMedia(
     auto stmt = std::move(stmtRes.value());
 
     for (size_t i = 0; i < params.size(); ++i) {
-        stmt.bind(static_cast<int>(i + 1), params[i]);
+        Status bs = stmt.bind(static_cast<int>(i + 1), params[i]);
+        if (!bs.isOk()) return bs;
     }
 
-    if (stmt.step() == StepResult::Row) {
+    StepResult stepRes = stmt.step();
+    if (stepRes == StepResult::Row) {
         return stmt.getInt64(0);
+    } else if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to count media: " + conn_.lastErrorMessage());
     }
     return 0;
 }
@@ -1448,17 +1576,16 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
         return Status::internal("Database not open");
     }
 
-    std::error_code ec;
     std::filesystem::path normPhotos;
     if (!photosDir.empty()) {
-        normPhotos = std::filesystem::weakly_canonical(photosDir, ec);
-        if (ec) normPhotos = std::filesystem::path(photosDir).lexically_normal();
+        auto photosFs = pathFromUtf8(photosDir);
+        normPhotos = photosFs.lexically_normal();
     }
 
     std::filesystem::path normThumbs;
     if (!thumbsDir.empty()) {
-        normThumbs = std::filesystem::weakly_canonical(thumbsDir, ec);
-        if (ec) normThumbs = std::filesystem::path(thumbsDir).lexically_normal();
+        auto thumbsFs = pathFromUtf8(thumbsDir);
+        normThumbs = thumbsFs.lexically_normal();
     }
 
     auto stmtRes = conn_.prepare("SELECT id, file_path, thumb_small, thumb_large FROM media_items;");
@@ -1472,20 +1599,42 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
         std::string thumb_large;
     };
     std::vector<RowUpdate> updates;
+    std::unordered_set<std::string> knownFilePaths;
 
     auto makeRelativePath = [&](const std::string& origPath, const std::filesystem::path& normBase) -> std::pair<std::string, bool> {
         if (origPath.empty()) {
             return {"", false};
         }
-        std::filesystem::path p(origPath);
+        std::filesystem::path p = pathFromUtf8(origPath);
         std::string pathStr = origPath;
         bool changed = false;
 
-        if (!normBase.empty()) {
+        bool isAbs = p.is_absolute() || p.has_root_directory();
+        if (!normBase.empty() && isAbs) {
             auto normalP = p.lexically_normal();
-            auto rel = std::filesystem::relative(normalP, normBase, ec);
-            if (!ec && !rel.empty()) {
-                std::string relStr = rel.generic_string();
+            auto rel = normalP.lexically_relative(normBase);
+            bool validRel = !rel.empty();
+            if (validRel) {
+                std::string relStr = pathToUtf8(rel);
+                std::replace(relStr.begin(), relStr.end(), '\\', '/');
+                if (relStr == ".." || relStr.rfind("../", 0) == 0 || relStr == ".") {
+                    validRel = false;
+                }
+            }
+            if (!validRel) {
+                std::error_code ec;
+                auto canonP = std::filesystem::weakly_canonical(normalP, ec);
+                if (!ec) {
+                    auto canonBase = std::filesystem::weakly_canonical(normBase, ec);
+                    if (!ec) {
+                        rel = canonP.lexically_relative(canonBase);
+                        validRel = !rel.empty();
+                    }
+                }
+            }
+            if (validRel) {
+                std::string relStr = pathToUtf8(rel);
+                std::replace(relStr.begin(), relStr.end(), '\\', '/');
                 if (relStr != ".." && relStr.rfind("../", 0) != 0 && relStr != ".") {
                     if (relStr != pathStr) {
                         pathStr = relStr;
@@ -1494,7 +1643,8 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
                 }
             }
         }
-        std::string genericPath = std::filesystem::path(pathStr).generic_string();
+        std::string genericPath = pathStr;
+        std::replace(genericPath.begin(), genericPath.end(), '\\', '/');
         if (genericPath != pathStr) {
             pathStr = genericPath;
             changed = true;
@@ -1502,7 +1652,8 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
         return {pathStr, changed};
     };
 
-    while (stmt.step() == StepResult::Row) {
+    StepResult stepRes = StepResult::Done;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
         int64_t id = stmt.getInt64(0);
         std::string filePath = stmt.getString(1);
         std::string thumbSmall = stmt.getString(2);
@@ -1512,9 +1663,19 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
         auto [newThumbSmall, tsChanged] = makeRelativePath(thumbSmall, normThumbs);
         auto [newThumbLarge, tlChanged] = makeRelativePath(thumbLarge, normThumbs);
 
+        if (fpChanged && !knownFilePaths.insert(newFilePath).second) {
+            newFilePath = filePath;
+            fpChanged = false;
+        } else {
+            knownFilePaths.insert(newFilePath);
+        }
+
         if (fpChanged || tsChanged || tlChanged) {
             updates.push_back({id, newFilePath, newThumbSmall, newThumbLarge});
         }
+    }
+    if (stepRes == StepResult::Error) {
+        return Status::databaseError("Failed to read media paths: " + conn_.lastErrorMessage());
     }
 
     if (updates.empty()) {
@@ -1522,7 +1683,10 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
     }
 
     Transaction tx(conn_);
-    auto updateStmtRes = conn_.prepare("UPDATE media_items SET file_path = ?, thumb_small = ?, thumb_large = ?, updated_at = ? WHERE id = ?;");
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
+    auto updateStmtRes = conn_.prepare("UPDATE OR IGNORE media_items SET file_path = ?, thumb_small = ?, thumb_large = ?, updated_at = ? WHERE id = ?;");
     if (!updateStmtRes.isOk()) return updateStmtRes.status();
     auto updateStmt = std::move(updateStmtRes.value());
 
@@ -1549,6 +1713,9 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
 Status CatalogDb::runInTransaction(std::function<Status()> fn) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
     Status s = fn();
     if (!s.isOk()) {
         tx.rollback();
