@@ -1,12 +1,13 @@
 /* Fullscreen Loupe Modal */
 .loupe-modal {
   position: fixed;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100vw;
   height: 100vh;
   height: 100dvh;
-  z-index: 1000;
+  z-index: 1500;
+  isolation: isolate;
+  overscroll-behavior: contain;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -14,22 +15,26 @@
 
 .loupe-backdrop {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
   background: rgba(10, 10, 10, 0.95);
+  touch-action: none;
 }
 
 .loupe-content {
   position: relative;
-  z-index: 1001;
+  z-index: 1;
   width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px;
+  padding:
+    calc(20px + env(safe-area-inset-top, 0px))
+    calc(20px + env(safe-area-inset-right, 0px))
+    calc(20px + env(safe-area-inset-bottom, 0px))
+    calc(20px + env(safe-area-inset-left, 0px));
   pointer-events: none;
 }
 
@@ -41,6 +46,7 @@
   position: relative;
   flex: 1;
   height: 100%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -53,11 +59,13 @@
   flex: 1;
   width: 100%;
   height: calc(100% - 64px);
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   user-select: none;
+  touch-action: none;
   cursor: zoom-in;
 }
 
@@ -69,14 +77,18 @@
   cursor: grabbing;
 }
 
-.loupe-image-container img,
+.loupe-image-viewport > img,
+#loupeImg,
 .loupe-image-viewport img {
+  display: block;
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
   border-radius: 2px;
   transform-origin: center center;
+  will-change: transform;
+  backface-visibility: hidden;
   transition: transform 0.15s ease-out;
   pointer-events: auto;
   user-select: none;
@@ -90,14 +102,17 @@
 .loupe-toolbar {
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 16px;
   margin-top: 10px;
   background: rgba(30, 30, 30, 0.85);
+  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
   border: 1px solid var(--border-color);
   padding: 8px 18px;
   border-radius: 20px;
-  z-index: 1002;
+  z-index: 2;
   flex-shrink: 0;
   max-width: calc(100vw - 32px);
   box-sizing: border-box;
@@ -125,7 +140,7 @@
   align-items: center;
   justify-content: center;
   line-height: 1;
-  transition: all 0.15s;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .loupe-zoom-btn:hover:not(:disabled) {
@@ -148,6 +163,7 @@
   border-radius: 2px;
   outline: none;
   cursor: pointer;
+  touch-action: pan-y;
 }
 
 .loupe-zoom-slider::-webkit-slider-thumb {
@@ -180,7 +196,7 @@
   cursor: pointer;
   min-width: 46px;
   text-align: center;
-  transition: all 0.15s;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .loupe-zoom-value:hover {
@@ -225,8 +241,8 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.15s;
-  z-index: 1002;
+  transition: background-color 0.15s ease;
+  z-index: 2;
 }
 
 .loupe-btn:hover {
@@ -235,17 +251,22 @@
 
 .loupe-close {
   position: absolute;
-  top: 20px;
-  right: 20px;
+  top: calc(20px + env(safe-area-inset-top, 0px));
+  right: calc(20px + env(safe-area-inset-right, 0px));
   background: rgba(40, 40, 40, 0.7);
   border: 1px solid var(--border-color);
   color: #ffffff;
   font-size: 24px;
+  line-height: 1;
+  padding: 0;
   width: 36px;
   height: 36px;
   border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  z-index: 1002;
+  z-index: 3;
 }
 
 .loupe-close:hover {
@@ -270,7 +291,7 @@
   color: var(--text-primary);
   border: 1px solid var(--border-color);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .loupe-quick-edit-btn:hover,
@@ -313,7 +334,7 @@
   padding: 5px 10px;
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   user-select: none;
 }
 
@@ -385,6 +406,7 @@
   position: absolute;
   background: rgba(0, 0, 0, 0.65);
   pointer-events: auto;
+  touch-action: none;
 }
 
 .crop-box {
@@ -393,6 +415,7 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
   cursor: move;
   pointer-events: auto;
+  touch-action: none;
   box-sizing: border-box;
 }
 
@@ -427,6 +450,7 @@
   padding: 2px 6px;
   border-radius: 3px;
   pointer-events: none;
+  -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
 }
 
@@ -440,6 +464,17 @@
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
   z-index: 10;
   pointer-events: auto;
+  touch-action: none;
+}
+
+.crop-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 36px;
+  height: 36px;
+  transform: translate(-50%, -50%);
 }
 
 .handle-nw { top: -6px; left: -6px; cursor: nwse-resize; }
@@ -493,7 +528,7 @@
   margin: 0 0 6px 0;
   font-size: 18px;
   font-weight: 600;
-  color: var(--text-color, #fff);
+  color: var(--text-primary, #fff);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -502,8 +537,58 @@
 .loupe-audio-meta p {
   margin: 0;
   font-size: 13px;
-  color: var(--text-muted, #aaa);
+  color: var(--text-secondary, #aaa);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.loupe-zoom-btn:focus-visible,
+.loupe-zoom-value:focus-visible,
+.loupe-btn:focus-visible,
+.loupe-close:focus-visible,
+.loupe-quick-edit-btn:focus-visible,
+.quick-edit-btn:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+.loupe-zoom-slider:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 3px;
+}
+
+@media (pointer: coarse), (max-width: 768px) {
+  .crop-handle {
+    width: 16px;
+    height: 16px;
+  }
+  .crop-handle::after {
+    width: 44px;
+    height: 44px;
+  }
+  .handle-nw { top: -8px; left: -8px; }
+  .handle-n  { top: -8px; left: calc(50% - 8px); }
+  .handle-ne { top: -8px; right: -8px; }
+  .handle-e  { top: calc(50% - 8px); right: -8px; }
+  .handle-se { bottom: -8px; right: -8px; }
+  .handle-s  { bottom: -8px; left: calc(50% - 8px); }
+  .handle-sw { bottom: -8px; left: -8px; }
+  .handle-w  { top: calc(50% - 8px); left: -8px; }
+  .loupe-zoom-slider::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
+  }
+  .loupe-zoom-slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loupe-image-viewport > img,
+  #loupeImg,
+  .loupe-image-viewport img {
+    transition: none;
+  }
 }

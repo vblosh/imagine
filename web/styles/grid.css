@@ -22,17 +22,20 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .date-header .group-count {
   font-size: 11px;
   font-weight: 400;
   color: var(--text-secondary);
+  flex-shrink: 0;
 }
 
 .group-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(var(--thumb-size), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--thumb-size, 180px), 100%), 1fr));
   gap: 12px;
 }
 
@@ -56,6 +59,8 @@
   transition: transform 0.1s, border-color 0.15s, background-color 0.15s;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  contain: layout style;
 }
 
 .photo-card:hover {
@@ -105,6 +110,8 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 4px;
+  min-width: 0;
   pointer-events: none;
 }
 
@@ -165,6 +172,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
   background-color: inherit;
 }
 
@@ -181,13 +189,23 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
   font-size: 10px;
   color: var(--text-dim);
+}
+
+.card-footer > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Star Rating */
 .star-rating {
   display: inline-flex;
+  flex-shrink: 0;
   cursor: pointer;
   color: var(--gold-star-dim);
   font-size: 14px;

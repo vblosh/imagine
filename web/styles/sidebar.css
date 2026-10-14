@@ -163,6 +163,10 @@
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .section-action-btn {
@@ -172,10 +176,17 @@
   font-size: 15px;
   cursor: pointer;
   padding: 0 4px;
+  flex-shrink: 0;
 }
 
-.section-action-btn:hover {
+.section-action-btn:hover,
+.section-action-btn:focus-visible {
   color: var(--accent-color);
+}
+
+.section-action-btn:focus-visible {
+  outline: 1px solid var(--accent-color);
+  border-radius: 3px;
 }
 
 .sidebar-menu {
@@ -192,7 +203,8 @@
   transition: background 0.1s, color 0.1s;
 }
 
-.menu-item:hover {
+.menu-item:hover,
+.menu-item:focus-visible {
   background-color: #333333;
   color: var(--text-primary);
 }
@@ -219,6 +231,7 @@
 
 .count-badge {
   margin-left: auto;
+  flex-shrink: 0;
   font-size: 11px;
   background-color: #3a3a3a;
   color: var(--text-secondary);
@@ -229,6 +242,7 @@
 .delete-album-btn,
 .delete-tag-btn {
   margin-left: 6px;
+  flex-shrink: 0;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -242,7 +256,9 @@
 }
 
 .delete-album-btn:hover,
-.delete-tag-btn:hover {
+.delete-tag-btn:hover,
+.delete-album-btn:focus-visible,
+.delete-tag-btn:focus-visible {
   opacity: 1;
   color: #ff5555;
 }
@@ -266,6 +282,10 @@
   font-weight: 600;
   cursor: pointer;
   text-transform: uppercase;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .category-header:hover {
@@ -286,14 +306,26 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
   padding: 4px 8px;
   border-radius: 3px;
   color: var(--text-secondary);
   cursor: pointer;
   font-size: 12px;
+  min-width: 0;
 }
 
-.tag-item:hover {
+.tag-item .tag-name,
+.tag-item > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-item:hover,
+.tag-item:focus-visible {
   background-color: #333333;
   color: var(--text-primary);
 }
@@ -338,7 +370,8 @@
   white-space: nowrap;
 }
 
-.folder-item:hover {
+.folder-item:hover,
+.folder-item:focus-visible {
   background-color: #333333;
   color: var(--text-primary);
 }

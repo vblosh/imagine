@@ -15,6 +15,8 @@
   font-weight: 700;
   text-transform: uppercase;
   color: var(--text-secondary);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .timeline-container {
@@ -123,6 +125,7 @@
 
 .timeline-year-select {
   max-width: 104px;
+  flex-shrink: 0;
   background-color: #1a1a1a;
   border: 1px solid var(--border-color);
   color: var(--text-primary);
@@ -134,8 +137,13 @@
 }
 
 .timeline-year-select:hover,
-.timeline-year-select:focus {
+.timeline-year-select:focus,
+.timeline-year-select:focus-visible {
   border-color: var(--accent-color);
+}
+
+.timeline-year-select:focus-visible {
+  box-shadow: 0 0 0 1px var(--accent-color);
 }
 
 .timeline-year-select:disabled {

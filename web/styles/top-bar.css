@@ -16,6 +16,7 @@
   display: flex;
   align-items: center;
   gap: 20px;
+  flex-shrink: 0;
 }
 
 .logo {
@@ -41,7 +42,7 @@
 /* View Tabs */
 .view-tabs {
   display: flex;
-  background-color: #1a1a1a;
+  background-color: var(--bg-input);
   border-radius: 4px;
   padding: 2px;
   border: 1px solid var(--border-color);
@@ -59,11 +60,17 @@
   padding: 4px 12px;
   border-radius: 3px;
   cursor: pointer;
+  white-space: nowrap;
   transition: all 0.15s ease;
 }
 
 .tab-btn:hover {
   color: var(--text-primary);
+}
+
+.tab-btn:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
 }
 
 .tab-btn.active {
@@ -113,6 +120,10 @@
   border-color: var(--accent-color);
 }
 
+.search-box input:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
 .clear-search {
   position: absolute;
   right: 8px;
@@ -124,6 +135,12 @@
   display: none;
 }
 
+.clear-search:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
 .search-box input:not(:placeholder-shown) ~ .clear-search {
   display: block;
 }
@@ -133,6 +150,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .zoom-control {
@@ -151,6 +169,16 @@
   border-radius: 2px;
   outline: none;
   cursor: pointer;
+}
+
+.zoom-control input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 3px;
+}
+
+.zoom-control input[type="range"]:focus-visible::-webkit-slider-thumb {
+  background: var(--accent-hover);
+  box-shadow: var(--focus-ring);
 }
 
 .zoom-control input[type="range"]::-webkit-slider-thumb {
@@ -181,7 +209,7 @@
 
 .lang-select,
 .lang-selector select {
-  background-color: #1a1a1a;
+  background-color: var(--bg-input);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
   border-radius: 3px;
@@ -200,6 +228,11 @@
 .lang-select:focus,
 .lang-selector select:focus {
   border-color: var(--accent-color);
+}
+
+.lang-select:focus-visible,
+.lang-selector select:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
 .lang-select option {

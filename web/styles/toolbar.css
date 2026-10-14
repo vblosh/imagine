@@ -17,6 +17,10 @@
   gap: 10px;
   font-size: 12px;
   color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .filter-indicator strong {
@@ -42,7 +46,7 @@
 
 .sort-selector select,
 .category-sort-selector select {
-  background-color: #1a1a1a;
+  background-color: var(--bg-input);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
   border-radius: 3px;
@@ -63,12 +67,17 @@
   border-color: var(--accent-color);
 }
 
+.sort-selector select:focus-visible,
+.category-sort-selector select:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
 /* Batch Action Bar */
 .batch-action-bar {
   display: flex;
   align-items: center;
   gap: 8px;
-  background-color: #1a1a1a;
+  background-color: var(--bg-input);
   padding: 3px 10px;
   border-radius: 4px;
   border: 1px solid var(--border-light);
@@ -104,6 +113,10 @@
 
 .batch-rate-flag-select:focus {
   border-color: var(--accent-color);
+}
+
+.batch-rate-flag-select:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
 .batch-rate-flag-select optgroup {
@@ -189,7 +202,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(14, 165, 233, 0.9);
+  background: color-mix(in srgb, var(--accent-color) 90%, transparent);
   color: #ffffff;
   font-size: 10px;
   font-weight: 700;

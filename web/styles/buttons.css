@@ -27,6 +27,10 @@
   background-color: var(--accent-hover);
 }
 
+.btn-primary:active {
+  background-color: var(--accent-active);
+}
+
 .btn-secondary {
   background-color: #333333;
   color: var(--text-primary);
@@ -44,7 +48,7 @@
 }
 
 .btn-danger:hover {
-  background-color: #c0392b;
+  background-color: var(--reject-hover);
 }
 
 .btn-danger-outline {
@@ -102,4 +106,13 @@
 
 .btn-link:hover {
   color: var(--accent-hover);
+}
+
+.btn:focus-visible,
+.btn-icon:focus-visible,
+.btn-icon-sm:focus-visible,
+.btn-link:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+  box-shadow: var(--focus-ring);
 }

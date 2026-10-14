@@ -406,8 +406,14 @@ body.resizing-horizontal * {
   justify-content: center;
 }
 
-.flag-btn:hover {
+.flag-btn:hover,
+.flag-btn:focus-visible {
   color: #ffffff;
+}
+
+.flag-btn:focus-visible {
+  outline: 1px solid var(--accent-color);
+  outline-offset: 1px;
 }
 
 .flag-btn.flag-pick.active {
@@ -426,17 +432,25 @@ body.resizing-horizontal * {
 .prop-list {
   display: grid;
   grid-template-columns: 80px 1fr;
+  column-gap: 8px;
   row-gap: 6px;
   font-size: 11px;
+  min-width: 0;
 }
 
 .prop-list dt {
   color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .prop-list dd {
+  margin: 0;
+  min-width: 0;
   color: var(--text-primary);
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 
 .break-all {
@@ -570,11 +584,16 @@ body.resizing-horizontal * {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  max-width: 100%;
+  min-width: 0;
   background-color: #333333;
   color: var(--text-primary);
   border-radius: 12px;
   padding: 2px 8px;
   font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tag-badge .remove-tag {
@@ -584,9 +603,11 @@ body.resizing-horizontal * {
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
+  flex-shrink: 0;
 }
 
-.tag-badge .remove-tag:hover {
+.tag-badge .remove-tag:hover,
+.tag-badge .remove-tag:focus-visible {
   color: var(--reject-color);
 }
 
