@@ -364,7 +364,6 @@ export async function loupeNext() {
     return;
   }
   if (state.mediaItems.length === 0) return;
-  state.loupeShowOriginal = false;
   if (state.loupeIndex === state.mediaItems.length - 1 && state.mediaItems.length < state.totalCount && !state.isLoadingMore) {
     const prevLen = state.mediaItems.length;
     const prevIndex = state.loupeIndex;
@@ -386,7 +385,6 @@ export function loupePrev() {
     return;
   }
   if (state.mediaItems.length === 0) return;
-  state.loupeShowOriginal = false;
   state.loupeIndex = (state.loupeIndex - 1 + state.mediaItems.length) % state.mediaItems.length;
   updateLoupeView();
 }
