@@ -339,6 +339,17 @@ TEST_F(ServerTest, MediaItemCrudAndRatings) {
     ASSERT_TRUE(dateRes);
     EXPECT_EQ(dateRes->status, 200);
 
+    // POST /api/media/:id/date with pre-1970 date string
+    nlohmann::json pre1970Body = {{"date_taken", "1920-05-15 12:30:00"}};
+    auto pre1970Res = client.Post("/api/media/" + std::to_string(mid) + "/date", pre1970Body.dump(), "application/json");
+    ASSERT_TRUE(pre1970Res);
+    EXPECT_EQ(pre1970Res->status, 200);
+    auto pre1970Json = nlohmann::json::parse(pre1970Res->body);
+    EXPECT_LT(pre1970Json["date_taken"].get<int64_t>(), 0);
+
+    // Restore date for subsequent assertions
+    client.Post("/api/media/" + std::to_string(mid) + "/date", dateBody.dump(), "application/json");
+
     // POST /api/media/:id/rename (invalid name)
     nlohmann::json badRenameBody = {{"name", "sub/folder/bad.jpg"}};
     auto badRenameRes = client.Post("/api/media/" + std::to_string(mid) + "/rename", badRenameBody.dump(), "application/json");
@@ -577,6 +588,13 @@ TEST_F(ServerTest, BatchRatingFlagTagsGps) {
     get2 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id2))->body);
     EXPECT_EQ(get1["date_taken"].get<int64_t>(), 1700010000);
     EXPECT_EQ(get2["date_taken"].get<int64_t>(), 1700020000);
+
+    // Oversized batch returns 400
+    std::vector<int64_t> hugeBatch(1001, id1);
+    nlohmann::json hugeBody = {{"ids", hugeBatch}, {"rating", 5}};
+    auto hugeRes = client.Post("/api/media/batch-rating", hugeBody.dump(), "application/json");
+    ASSERT_TRUE(hugeRes);
+    EXPECT_EQ(hugeRes->status, 400);
 }
 
 TEST_F(ServerTest, MoveMediaSingleAndBatch) {
@@ -1183,6 +1201,12 @@ TEST_F(ServerTest, GpsCoordinatesEndpointAndQuery) {
     ASSERT_TRUE(errRes);
     EXPECT_EQ(errRes->status, 400);
 
+    // 4b. Non-finite latitude (NaN) returns 400
+    nlohmann::json nanLat = {{"has_gps", true}, {"latitude", "nan"}, {"longitude", 10.0}};
+    auto nanRes = client.Post("/api/media/" + std::to_string(mid) + "/gps", nanLat.dump(), "application/json");
+    ASSERT_TRUE(nanRes);
+    EXPECT_EQ(nanRes->status, 400);
+
     // 5. Clear GPS
     nlohmann::json clearGps = {{"has_gps", false}};
     auto clearRes = client.Post("/api/media/" + std::to_string(mid) + "/gps", clearGps.dump(), "application/json");
@@ -1410,6 +1434,12 @@ TEST_F(ServerTest, ApiTokenAuthentication) {
     auto keyRes = client.Post("/api/tags", apiKeyHeaders, tag2.dump(), "application/json");
     ASSERT_TRUE(keyRes);
     EXPECT_EQ(keyRes->status, 201);
+
+    // 6. POST with query parameter ?api_token=secret123 returns 201
+    nlohmann::json tag3 = {{"name", "QueryTag"}};
+    auto queryTokenRes = client.Post("/api/tags?api_token=secret123", tag3.dump(), "application/json");
+    ASSERT_TRUE(queryTokenRes);
+    EXPECT_EQ(queryTokenRes->status, 201);
 
     // Reset token for subsequent tests
     server_->setApiToken("");

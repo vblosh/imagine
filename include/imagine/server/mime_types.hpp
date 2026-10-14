@@ -22,6 +22,9 @@ inline std::string getMimeType(std::string_view path) {
     if (ext == ".png") return "image/png";
     if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
     if (ext == ".webp") return "image/webp";
+    if (ext == ".avif") return "image/avif";
+    if (ext == ".heic") return "image/heic";
+    if (ext == ".heif") return "image/heif";
     if (ext == ".gif") return "image/gif";
     if (ext == ".bmp") return "image/bmp";
     if (ext == ".tiff" || ext == ".tif") return "image/tiff";
@@ -40,6 +43,7 @@ inline std::string getMimeType(std::string_view path) {
     if (ext == ".wav") return "audio/wav";
     if (ext == ".flac") return "audio/flac";
     if (ext == ".ogg") return "audio/ogg";
+    if (ext == ".opus") return "audio/opus";
     if (ext == ".m4a") return "audio/mp4";
     if (ext == ".aac") return "audio/aac";
     if (ext == ".wma") return "audio/x-ms-wma";

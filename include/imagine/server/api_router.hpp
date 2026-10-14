@@ -42,10 +42,10 @@ public:
     std::string resolvePhotoPath(const std::string& recordedPath) const;
 
     void setApiToken(std::string token);
-    const std::string& apiToken() const { return apiToken_; }
+    std::string apiToken() const;
 
     void setAllowedOrigin(std::string origin);
-    const std::string& allowedOrigin() const { return allowedOrigin_; }
+    std::string allowedOrigin() const;
 
 private:
     void registerCorsHandler(httplib::Server& server);
@@ -74,9 +74,11 @@ private:
 
     std::jthread importThread_;
     mutable std::mutex importThreadMutex_;
+    std::atomic<bool> isImporting_{false};
     std::atomic<bool> cancelFallbackImport_{false};
     struct FallbackImportState;
     std::unique_ptr<FallbackImportState> fallbackImportState_;
+    mutable std::mutex configMutex_;
     std::string apiToken_;
     std::string allowedOrigin_{"*"};
 };

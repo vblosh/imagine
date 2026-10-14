@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cctype>
+#include <cmath>
 
 namespace imagine::server {
 
@@ -69,6 +70,37 @@ std::vector<uint8_t> base64Decode(const std::string& input) {
     return out;
 }
 
+int64_t daysFromCivil(int y, int m, int d) noexcept {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + static_cast<unsigned>(d) - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
+void civilFromDays(int64_t z, int& y, int& m, int& d) noexcept {
+    z += 719468;
+    const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const unsigned doe = static_cast<unsigned>(z - era * 146097);
+    const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    y = static_cast<int>(yoe) + static_cast<int>(era * 400);
+    const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    const unsigned mp = (5 * doy + 2) / 153;
+    d = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
+    m = static_cast<int>(mp + (mp < 10 ? 3 : -9));
+    y += (m <= 2);
+}
+
+bool constantTimeEquals(std::string_view a, std::string_view b) noexcept {
+    if (a.size() != b.size()) return false;
+    unsigned char diff = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+    }
+    return diff == 0;
+}
+
 int64_t parseDateStringToTimestamp(const std::string& dateStr) {
     if (dateStr.empty()) return 0;
     int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
@@ -82,39 +114,34 @@ int64_t parseDateStringToTimestamp(const std::string& dateStr) {
         return 0;
     }
 
-    if (year < 1970 || month < 1 || month > 12 || day < 1 || day > 31) {
+    if (year < 1800 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour < 0 || hour > 23 || min < 0 || min > 59 || sec < 0 || sec > 60) {
         return 0;
     }
 
-    std::tm tm{};
-    tm.tm_year = year - 1900;
-    tm.tm_mon = month - 1;
-    tm.tm_mday = day;
-    tm.tm_hour = hour;
-    tm.tm_min = min;
-    tm.tm_sec = sec;
-    tm.tm_isdst = 0;
-#if defined(_WIN32)
-    time_t t = _mkgmtime(&tm);
-#else
-    time_t t = timegm(&tm);
-#endif
-    return t < 0 ? 0 : static_cast<int64_t>(t);
+    const int64_t days = daysFromCivil(year, month, day);
+    return days * 86400 + static_cast<int64_t>(hour) * 3600 +
+           static_cast<int64_t>(min) * 60 + static_cast<int64_t>(sec);
 }
 
 std::string formatTimestampToDateString(int64_t timestamp) {
-    if (timestamp <= 0) return "";
-    std::time_t tt = static_cast<std::time_t>(timestamp);
-    std::tm tm{};
-#if defined(_WIN32)
-    gmtime_s(&tm, &tt);
-#else
-    gmtime_r(&tt, &tm);
-#endif
+    if (timestamp == 0) return "";
+    int64_t days = timestamp / 86400;
+    int64_t rem = timestamp % 86400;
+    if (rem < 0) {
+        rem += 86400;
+        --days;
+    }
+    int year = 0, month = 0, day = 0;
+    civilFromDays(days, year, month, day);
+    const int hour = static_cast<int>(rem / 3600);
+    rem %= 3600;
+    const int min = static_cast<int>(rem / 60);
+    const int sec = static_cast<int>(rem % 60);
+
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%04d:%02d:%02d %02d:%02d:%02d",
-                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                  tm.tm_hour, tm.tm_min, tm.tm_sec);
+                  year, month, day, hour, min, sec);
     return std::string(buf);
 }
 
@@ -147,7 +174,7 @@ bool parseDouble(const std::string& str, double& out) {
     try {
         size_t idx = 0;
         double v = std::stod(str, &idx);
-        if (idx != str.size()) return false;
+        if (idx != str.size() || !std::isfinite(v)) return false;
         out = v;
         return true;
     } catch (...) {
@@ -392,6 +419,7 @@ struct ApiRouter::FallbackImportState {
 };
 
 void ApiRouter::initFromEnvironment() {
+    std::lock_guard<std::mutex> lock(configMutex_);
     const char* envToken = std::getenv("IMAGINE_API_TOKEN");
     if (envToken && *envToken) {
         apiToken_ = envToken;
@@ -427,29 +455,47 @@ ApiRouter::~ApiRouter() {
 }
 
 void ApiRouter::setApiToken(std::string token) {
+    std::lock_guard<std::mutex> lock(configMutex_);
     apiToken_ = std::move(token);
 }
 
+std::string ApiRouter::apiToken() const {
+    std::lock_guard<std::mutex> lock(configMutex_);
+    return apiToken_;
+}
+
 void ApiRouter::setAllowedOrigin(std::string origin) {
+    std::lock_guard<std::mutex> lock(configMutex_);
     allowedOrigin_ = std::move(origin);
 }
 
+std::string ApiRouter::allowedOrigin() const {
+    std::lock_guard<std::mutex> lock(configMutex_);
+    return allowedOrigin_;
+}
+
 void ApiRouter::stopImport() {
-    if (catalog_) {
-        catalog_->cancelImport();
-    }
     cancelFallbackImport_.store(true);
     std::lock_guard<std::mutex> lock(importThreadMutex_);
     if (importThread_.joinable()) {
         importThread_.request_stop();
+    }
+    if (catalog_) {
+        catalog_->cancelImport();
+    }
+    if (importThread_.joinable()) {
         importThread_.join();
     }
+    isImporting_.store(false);
     if (fallbackImportState_) {
         fallbackImportState_->isImporting.store(false);
     }
 }
 
 bool ApiRouter::isImportRunning() const {
+    if (isImporting_.load()) {
+        return true;
+    }
     if (catalog_) {
         return catalog_->importer().isRunning();
     }
@@ -457,16 +503,26 @@ bool ApiRouter::isImportRunning() const {
 }
 
 bool ApiRouter::checkAuth(const httplib::Request& req, httplib::Response& res) const {
-    if (apiToken_.empty()) {
+    const std::string expectedToken = apiToken();
+    if (expectedToken.empty()) {
         return true;
     }
     if (req.has_header("Authorization")) {
         auto auth = req.get_header_value("Authorization");
-        if (auth == ("Bearer " + apiToken_)) return true;
+        constexpr std::string_view kBearerPrefix = "Bearer ";
+        if (auth.size() > kBearerPrefix.size() &&
+            std::string_view(auth).substr(0, kBearerPrefix.size()) == kBearerPrefix &&
+            constantTimeEquals(std::string_view(auth).substr(kBearerPrefix.size()), expectedToken)) {
+            return true;
+        }
     }
     if (req.has_header("X-API-Key")) {
         auto key = req.get_header_value("X-API-Key");
-        if (key == apiToken_) return true;
+        if (constantTimeEquals(key, expectedToken)) return true;
+    }
+    if (req.has_param("api_token")) {
+        auto key = req.get_param_value("api_token");
+        if (constantTimeEquals(key, expectedToken)) return true;
     }
     IMAGINE_LOG_WARN("Authentication failed for " + req.method + " " + req.path +
                      " from " + req.remote_addr);
@@ -523,15 +579,24 @@ void ApiRouter::registerCorsHandler(httplib::Server& server) {
         res.set_header("X-Internal-Start-Ns",
             std::to_string(requestStart.time_since_epoch().count()));
 
+        static std::atomic<uint64_t> s_reqCounter{0};
         std::string requestId;
         if (req.has_header("X-Request-ID")) {
-            requestId = req.get_header_value("X-Request-ID");
-        } else {
-            requestId = "req-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+            std::string candidate = req.get_header_value("X-Request-ID");
+            if (!candidate.empty() && candidate.size() <= 128 &&
+                std::all_of(candidate.begin(), candidate.end(), [](unsigned char c) {
+                    return c >= 0x20 && c <= 0x7E;
+                })) {
+                requestId = std::move(candidate);
+            }
+        }
+        if (requestId.empty()) {
+            requestId = "req-" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) +
+                        "-" + std::to_string(++s_reqCounter);
         }
         res.set_header("X-Request-ID", requestId);
 
-        std::string origin = allowedOrigin_;
+        std::string origin = allowedOrigin();
         if (origin != "*" && req.has_header("Origin")) {
             std::string reqOrigin = req.get_header_value("Origin");
             if (reqOrigin == origin) {
@@ -1148,6 +1213,19 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 return;
             }
 
+            std::error_code ec;
+            auto destFsPath = pathFromUtf8(destPath);
+            auto canonicalDest = stripExtendedPrefix(std::filesystem::weakly_canonical(destFsPath, ec));
+            if (ec) {
+                sendError(res, "Invalid destination path: " + ec.message(), 400);
+                return;
+            }
+            std::string rootErr;
+            if (!isWithinAllowedRoots(canonicalDest, rootErr)) {
+                sendError(res, rootErr, 403);
+                return;
+            }
+
             std::string newPath;
             Status s = moveMedia(id, destPath, &newPath);
             if (!s.isOk()) {
@@ -1188,13 +1266,13 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 std::string customStr = body["date_taken_str"].get<std::string>();
                 if (!customStr.empty()) {
                     dateTakenStr = customStr;
-                    if (dateTaken <= 0) {
+                    if (dateTaken == 0) {
                         dateTaken = parseDateStringToTimestamp(dateTakenStr);
                     }
                 }
             }
 
-            if (dateTakenStr.empty() && dateTaken > 0) {
+            if (dateTakenStr.empty() && dateTaken != 0) {
                 dateTakenStr = formatTimestampToDateString(dateTaken);
             }
 
@@ -1244,16 +1322,20 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 }
                 latitude = body["latitude"].get<double>();
                 longitude = body["longitude"].get<double>();
-                if (latitude < -90.0 || latitude > 90.0) {
+                if (!std::isfinite(latitude) || latitude < -90.0 || latitude > 90.0) {
                     sendError(res, "Latitude must be between -90 and 90");
                     return;
                 }
-                if (longitude < -180.0 || longitude > 180.0) {
+                if (!std::isfinite(longitude) || longitude < -180.0 || longitude > 180.0) {
                     sendError(res, "Longitude must be between -180 and 180");
                     return;
                 }
                 if (body.contains("altitude") && body["altitude"].is_number()) {
                     altitude = body["altitude"].get<double>();
+                    if (!std::isfinite(altitude)) {
+                        sendError(res, "Altitude must be a finite number");
+                        return;
+                    }
                 }
             }
 
@@ -1383,6 +1465,10 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 sendError(res, "Missing or invalid 'ids' array");
                 return;
             }
+            if (body["ids"].size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
             bool deleteFromDisk = false;
             if (body.contains("delete_from_disk") && body["delete_from_disk"].is_boolean()) {
                 deleteFromDisk = body["delete_from_disk"].get<bool>();
@@ -1391,10 +1477,6 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 deleteFromDisk = (val == "true" || val == "1");
             }
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
-            if (ids.size() > kMaxBatchSize) {
-                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
-                return;
-            }
             int deletedCount = 0;
             std::vector<MediaId> failedIds;
             for (MediaId id : ids) {
@@ -1437,6 +1519,10 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 sendError(res, "Missing or invalid 'ids' array");
                 return;
             }
+            if (body["ids"].size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
             if (!body.contains("rating") || !body["rating"].is_number_integer()) {
                 sendError(res, "Missing or invalid rating field: must be an integer");
                 return;
@@ -1448,10 +1534,6 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
 
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
-            if (ids.size() > kMaxBatchSize) {
-                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
-                return;
-            }
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
             Status batchStatus = catalog_
@@ -1501,6 +1583,10 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 sendError(res, "Missing or invalid 'ids' array");
                 return;
             }
+            if (body["ids"].size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
             if (!body.contains("flag") || !body["flag"].is_number_integer()) {
                 sendError(res, "Missing or invalid flag field: must be an integer");
                 return;
@@ -1513,10 +1599,6 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
             FlagState flag = static_cast<FlagState>(flagInt);
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
-            if (ids.size() > kMaxBatchSize) {
-                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
-                return;
-            }
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
             Status batchStatus = catalog_
@@ -1563,19 +1645,21 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
         try {
             auto body = nlohmann::json::parse(req.body);
             std::vector<MediaId> ids;
+            const nlohmann::json* idsArray = nullptr;
             if (body.contains("ids") && body["ids"].is_array()) {
-                ids = body["ids"].get<std::vector<MediaId>>();
+                idsArray = &body["ids"];
             } else if (body.contains("media_ids") && body["media_ids"].is_array()) {
-                ids = body["media_ids"].get<std::vector<MediaId>>();
-            } else {
+                idsArray = &body["media_ids"];
+            }
+            if (!idsArray) {
                 sendError(res, "Missing or invalid 'ids' or 'media_ids' array");
                 return;
             }
-
-            if (ids.size() > kMaxBatchSize) {
+            if (idsArray->size() > kMaxBatchSize) {
                 sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
                 return;
             }
+            ids = idsArray->get<std::vector<MediaId>>();
 
             if (!body.contains("name") || !body["name"].is_string()) {
                 sendError(res, "Missing or invalid name field");
@@ -1791,14 +1875,13 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             auto body = nlohmann::json::parse(req.body);
             std::vector<MediaId> ids;
             if (body.contains("ids") && body["ids"].is_array()) {
+                if (body["ids"].size() > kMaxBatchSize) {
+                    sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                    return;
+                }
                 ids = body["ids"].get<std::vector<MediaId>>();
             } else {
                 sendError(res, "Missing or invalid 'ids' array");
-                return;
-            }
-
-            if (ids.size() > kMaxBatchSize) {
-                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
                 return;
             }
 
@@ -1808,12 +1891,16 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             double altitude = body.value("altitude", 0.0);
 
             if (hasGps) {
-                if (latitude < -90.0 || latitude > 90.0) {
+                if (!std::isfinite(latitude) || latitude < -90.0 || latitude > 90.0) {
                     sendError(res, "Latitude must be between -90 and 90");
                     return;
                 }
-                if (longitude < -180.0 || longitude > 180.0) {
+                if (!std::isfinite(longitude) || longitude < -180.0 || longitude > 180.0) {
                     sendError(res, "Longitude must be between -180 and 180");
+                    return;
+                }
+                if (!std::isfinite(altitude)) {
+                    sendError(res, "Altitude must be a finite number");
                     return;
                 }
             }
@@ -1869,6 +1956,10 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 sendError(res, "Missing or invalid 'ids' array", 400);
                 return;
             }
+            if (body["ids"].size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
             std::string destPath;
             if (body.contains("destination_path") && body["destination_path"].is_string()) {
                 destPath = body["destination_path"].get<std::string>();
@@ -1887,11 +1978,20 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 return;
             }
 
-            std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
-            if (ids.size() > kMaxBatchSize) {
-                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+            std::error_code ec;
+            auto destFsPath = pathFromUtf8(destPath);
+            auto canonicalDest = stripExtendedPrefix(std::filesystem::weakly_canonical(destFsPath, ec));
+            if (ec) {
+                sendError(res, "Invalid destination path: " + ec.message(), 400);
                 return;
             }
+            std::string rootErr;
+            if (!isWithinAllowedRoots(canonicalDest, rootErr)) {
+                sendError(res, rootErr, 403);
+                return;
+            }
+
+            std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
 
             int movedCount = 0;
             std::vector<MediaId> failedIds;
@@ -1955,7 +2055,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                         std::string custom = itm["date_taken_str"].get<std::string>();
                         if (!custom.empty()) {
                             strVal = custom;
-                            if (ts <= 0) ts = parseDateStringToTimestamp(strVal);
+                            if (ts == 0) ts = parseDateStringToTimestamp(strVal);
                         }
                     }
                     updates.emplace_back(id, ts);
@@ -1964,11 +2064,11 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                     }
                 }
             } else if (body.contains("ids") && body["ids"].is_array()) {
-                std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
-                if (ids.size() > kMaxBatchSize) {
+                if (body["ids"].size() > kMaxBatchSize) {
                     sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
                     return;
                 }
+                std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
 
                 if (body.contains("shift_seconds")) {
                     int64_t shiftSec = body["shift_seconds"].get<int64_t>();
@@ -1976,7 +2076,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                         auto mRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
                         if (mRes.isOk()) {
                             int64_t origTs = mRes.value().date_taken;
-                            int64_t newTs = (origTs > 0) ? (origTs + shiftSec) : 0;
+                            int64_t newTs = (origTs != 0) ? (origTs + shiftSec) : 0;
                             updates.emplace_back(id, newTs);
                         }
                     }
@@ -1991,7 +2091,10 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                     }
                     if (body.contains("date_taken_str") && body["date_taken_str"].is_string()) {
                         std::string custom = body["date_taken_str"].get<std::string>();
-                        if (!custom.empty()) strVal = custom;
+                        if (!custom.empty()) {
+                            strVal = custom;
+                            if (ts == 0) ts = parseDateStringToTimestamp(strVal);
+                        }
                     }
                     for (MediaId id : ids) {
                         updates.emplace_back(id, ts);
@@ -2013,7 +2116,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 ? catalog_->runInTransaction([&]() -> Status {
                     for (const auto& [id, dateTaken] : updates) {
                         std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
-                        if (dateTakenStr.empty() && dateTaken > 0) {
+                        if (dateTakenStr.empty() && dateTaken != 0) {
                             dateTakenStr = formatTimestampToDateString(dateTaken);
                         }
 
@@ -2034,7 +2137,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 : db().runInTransaction([&]() -> Status {
                     for (const auto& [id, dateTaken] : updates) {
                         std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
-                        if (dateTakenStr.empty() && dateTaken > 0) {
+                        if (dateTakenStr.empty() && dateTaken != 0) {
                             dateTakenStr = formatTimestampToDateString(dateTaken);
                         }
 
@@ -2109,17 +2212,31 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
             std::vector<MediaItem> media;
             std::vector<MediaId> missingIds;
+            std::vector<MediaId> foundIds;
             media.reserve(ids.size());
+            foundIds.reserve(ids.size());
             for (const MediaId id : ids) {
                 auto itemRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
                 if (!itemRes.isOk()) {
                     missingIds.push_back(id);
                     continue;
                 }
-                auto item = std::move(itemRes.value());
-                auto tagsRes = catalog_ ? catalog_->getTagsForMedia(id) : db().getTagsForMedia(id);
-                if (tagsRes.isOk()) item.tags = std::move(tagsRes.value());
-                media.push_back(std::move(item));
+                foundIds.push_back(id);
+                media.push_back(std::move(itemRes.value()));
+            }
+            if (!foundIds.empty()) {
+                auto batchTagsRes = catalog_
+                    ? catalog_->getTagsForMediaBatch(foundIds)
+                    : db().getTagsForMediaBatch(foundIds);
+                if (batchTagsRes.isOk()) {
+                    auto& tagsMap = batchTagsRes.value();
+                    for (auto& item : media) {
+                        auto it = tagsMap.find(item.id);
+                        if (it != tagsMap.end()) {
+                            item.tags = std::move(it->second);
+                        }
+                    }
+                }
             }
 
             auto suggestions = core::EventSuggestionEngine::suggest(media);
@@ -2418,7 +2535,8 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                         int deg = ops["rotation"].get<int>();
                         img = thumbnail::Generator::rotateAngle(img, deg);
                     }
-                    std::string tmpOut = photoPath + ".proc.tmp";
+                    static std::atomic<uint64_t> s_tmpCounter{0};
+                    std::string tmpOut = photoPath + "." + std::to_string(++s_tmpCounter) + ".proc.tmp";
                     auto saveStatus = thumbnail::Generator::saveJpeg(img, tmpOut, 95);
                     if (!saveStatus.isOk()) {
                         sendStatusError(res, saveStatus);
@@ -2519,7 +2637,13 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                 sendJson(res, {{"status", "created"}, {"path", destPath.string()}}, 201);
             }
         } else {
-            std::string tmpPath = photoPath + ".edit.tmp";
+            std::error_code dirEc;
+            if (std::filesystem::is_directory(photoPath + ".edit.tmp", dirEc)) {
+                sendError(res, "Failed to create temporary file for saving", 500);
+                return;
+            }
+            static std::atomic<uint64_t> s_editTmpCounter{0};
+            std::string tmpPath = photoPath + "." + std::to_string(++s_editTmpCounter) + ".edit.tmp";
             {
                 std::ofstream ofs(tmpPath, std::ios::binary);
                 if (!ofs) {
@@ -2554,10 +2678,16 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                 sendStatusError(res, hashRes.status());
                 return;
             }
+            std::string oldHash = item.content_hash;
             std::string newHash = hashRes.value();
             auto fsize = std::filesystem::file_size(photoPath, ec);
             auto mtime = std::filesystem::last_write_time(photoPath, ec);
             int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
+
+            if (!oldHash.empty() && oldHash != newHash) {
+                std::filesystem::remove(cache().getThumbnailPath(oldHash, thumbnail::Cache::SmallSize), ec);
+                std::filesystem::remove(cache().getThumbnailPath(oldHash, thumbnail::Cache::LargeSize), ec);
+            }
 
             item.exif.orientation = 1;
             cache().ensureDualThumbnails(photoPath, newHash, item.exif.orientation);
@@ -2575,6 +2705,10 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
             if (!updateStatus.isOk()) {
                 sendStatusError(res, updateStatus);
                 return;
+            }
+
+            if (clipService_) {
+                clipService_->removeMedia(item.id);
             }
 
             sendJson(res, item, 200);
@@ -2704,30 +2838,44 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
         try {
             auto body = nlohmann::json::parse(req.body);
             std::vector<MediaId> mediaIds;
-            if (body.contains("media_id") && body["media_id"].is_number()) {
+            if (body.contains("media_id") && body["media_id"].is_number_integer()) {
                 mediaIds.push_back(body["media_id"].get<MediaId>());
             } else if (body.contains("media_ids") && body["media_ids"].is_array()) {
+                if (body["media_ids"].size() > kMaxBatchSize) {
+                    sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                    return;
+                }
+                mediaIds.reserve(body["media_ids"].size());
                 for (const auto& mid : body["media_ids"]) {
-                    if (mid.is_number()) {
-                        mediaIds.push_back(mid.get<MediaId>());
+                    if (!mid.is_number_integer()) {
+                        sendError(res, "media_ids must contain only integers", 400);
+                        return;
                     }
+                    mediaIds.push_back(mid.get<MediaId>());
                 }
             } else {
                 sendError(res, "Missing media_id or media_ids array");
                 return;
             }
 
-            if (mediaIds.size() > kMaxBatchSize) {
-                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+            Status batchStatus = catalog_
+                ? catalog_->runInTransaction([&]() -> Status {
+                    for (MediaId mid : mediaIds) {
+                        Status s = catalog_->addMediaToAlbum(albumId, mid);
+                        if (!s.isOk()) return s;
+                    }
+                    return Status::ok();
+                })
+                : db().runInTransaction([&]() -> Status {
+                    for (MediaId mid : mediaIds) {
+                        Status s = db().addMediaToAlbum(albumId, mid);
+                        if (!s.isOk()) return s;
+                    }
+                    return Status::ok();
+                });
+            if (!batchStatus.isOk()) {
+                sendStatusError(res, batchStatus);
                 return;
-            }
-
-            for (MediaId mid : mediaIds) {
-                Status s = catalog_ ? catalog_->addMediaToAlbum(albumId, mid) : db().addMediaToAlbum(albumId, mid);
-                if (!s.isOk()) {
-                    sendStatusError(res, s);
-                    return;
-                }
             }
 
             sendJson(res, {{"status", "ok"}, {"album_id", albumId}, {"added_count", mediaIds.size()}});
@@ -2810,13 +2958,20 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
         try {
             auto body = nlohmann::json::parse(req.body);
             std::vector<MediaId> mediaIds;
-            if (body.contains("media_id") && body["media_id"].is_number()) {
+            if (body.contains("media_id") && body["media_id"].is_number_integer()) {
                 mediaIds.push_back(body["media_id"].get<MediaId>());
             } else if (body.contains("media_ids") && body["media_ids"].is_array()) {
+                if (body["media_ids"].size() > kMaxBatchSize) {
+                    sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                    return;
+                }
+                mediaIds.reserve(body["media_ids"].size());
                 for (const auto& mid : body["media_ids"]) {
-                    if (mid.is_number()) {
-                        mediaIds.push_back(mid.get<MediaId>());
+                    if (!mid.is_number_integer()) {
+                        sendError(res, "media_ids must contain only integers", 400);
+                        return;
                     }
+                    mediaIds.push_back(mid.get<MediaId>());
                 }
             } else {
                 sendError(res, "Missing media_id or media_ids array");
@@ -2827,10 +2982,6 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
                 sendError(res, "At least one media ID is required");
                 return;
             }
-            if (mediaIds.size() > kMaxBatchSize) {
-                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
-                return;
-            }
 
             auto albumRes = catalog_ ? catalog_->getAlbum(albumId) : db().getAlbumById(albumId);
             if (!albumRes.isOk()) {
@@ -2838,12 +2989,24 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
                 return;
             }
 
-            for (MediaId mediaId : mediaIds) {
-                Status s = catalog_ ? catalog_->removeMediaFromAlbum(albumId, mediaId) : db().removeMediaFromAlbum(albumId, mediaId);
-                if (!s.isOk()) {
-                    sendStatusError(res, s);
-                    return;
-                }
+            Status batchStatus = catalog_
+                ? catalog_->runInTransaction([&]() -> Status {
+                    for (MediaId mediaId : mediaIds) {
+                        Status s = catalog_->removeMediaFromAlbum(albumId, mediaId);
+                        if (!s.isOk()) return s;
+                    }
+                    return Status::ok();
+                })
+                : db().runInTransaction([&]() -> Status {
+                    for (MediaId mediaId : mediaIds) {
+                        Status s = db().removeMediaFromAlbum(albumId, mediaId);
+                        if (!s.isOk()) return s;
+                    }
+                    return Status::ok();
+                });
+            if (!batchStatus.isOk()) {
+                sendStatusError(res, batchStatus);
+                return;
             }
 
             sendJson(res, { {"status", "ok"}, {"album_id", albumId}, {"removed_count", mediaIds.size()} });
@@ -2961,16 +3124,17 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
 
             std::string path = pathToUtf8(canonicalPath);
 
+            std::lock_guard<std::mutex> lock(importThreadMutex_);
             if (isImportRunning()) {
                 sendError(res, "An import is already running", 409);
                 return;
             }
 
-            std::lock_guard<std::mutex> lock(importThreadMutex_);
             if (importThread_.joinable()) {
                 importThread_.join();
             }
 
+            isImporting_.store(true);
             if (catalog_) {
                 importThread_ = std::jthread([this, path, recursive](std::stop_token stopToken) {
                     IMAGINE_LOG_INFO("Starting background import of: " + path);
@@ -2984,6 +3148,7 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
                     } else {
                         IMAGINE_LOG_ERROR("Background import error: " + res.status().message());
                     }
+                    isImporting_.store(false);
                 });
             } else {
                 if (fallbackImportState_) {
@@ -3010,6 +3175,7 @@ void ApiRouter::registerImportRoutes(httplib::Server& server) {
                         }
                         fallbackImportState_->isImporting.store(false);
                     }
+                    isImporting_.store(false);
                 });
             }
 
@@ -3170,6 +3336,22 @@ void ApiRouter::registerGeocodeRoutes(httplib::Server& server) {
             if (osmRes && osmRes->status == 200) {
                 {
                     std::lock_guard<std::mutex> lock(g_geocodeCacheMutex);
+                    constexpr size_t kMaxGeocodeCacheEntries = 500;
+                    if (g_geocodeCache.size() >= kMaxGeocodeCacheEntries) {
+                        auto now = std::chrono::steady_clock::now();
+                        for (auto it = g_geocodeCache.begin(); it != g_geocodeCache.end(); ) {
+                            if (now - it->second.timestamp >= std::chrono::hours(24)) {
+                                it = g_geocodeCache.erase(it);
+                            } else {
+                                ++it;
+                            }
+                        }
+                        if (g_geocodeCache.size() >= kMaxGeocodeCacheEntries) {
+                            auto oldestIt = std::min_element(g_geocodeCache.begin(), g_geocodeCache.end(),
+                                [](const auto& a, const auto& b) { return a.second.timestamp < b.second.timestamp; });
+                            if (oldestIt != g_geocodeCache.end()) g_geocodeCache.erase(oldestIt);
+                        }
+                    }
                     g_geocodeCache[cacheKey] = GeocodeCacheEntry{std::chrono::steady_clock::now(), osmRes->body};
                 }
                 res.status = 200;
@@ -3695,11 +3877,14 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
             if (used != value.size() || revision <= 0) { sendError(res, "revision must be a positive integer", 400); return; }
             auto path = faceService_->cropPath(*faceIdOpt, revision);
             if (!path.isOk()) { sendStatusError(res, path.status()); return; }
-            std::ifstream file(pathFromUtf8(path.value()), std::ios::binary);
-            if (!file) { sendError(res, "Face crop is unavailable", 404); return; }
-            std::string bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            res.set_content(bytes, "image/jpeg");
+            std::error_code ec;
+            auto fsPath = pathFromUtf8(path.value());
+            if (!std::filesystem::exists(fsPath, ec) || !std::filesystem::is_regular_file(fsPath, ec)) {
+                sendError(res, "Face crop is unavailable", 404);
+                return;
+            }
             res.set_header("Cache-Control", "private, max-age=3600");
+            res.set_file_content(path.value(), "image/jpeg");
         } catch (...) { sendError(res, "Invalid crop request", 400); }
     });
 }
@@ -3764,11 +3949,24 @@ void ApiRouter::registerSemanticRoutes(httplib::Server& server) {
             if (result.isOk()) {
                 nlohmann::json j = result.value();
                 std::vector<MediaItem> mediaItems;
+                std::vector<MediaId> foundIds;
                 mediaItems.reserve(result.value().items.size());
+                foundIds.reserve(result.value().items.size());
                 for (const auto& hit : result.value().items) {
                     auto mRes = catalog_ ? catalog_->getMedia(hit.mediaId) : db().getMediaById(hit.mediaId);
                     if (mRes.isOk()) {
+                        if (!catalog_) foundIds.push_back(hit.mediaId);
                         mediaItems.push_back(std::move(mRes.value()));
+                    }
+                }
+                if (!catalog_ && !foundIds.empty()) {
+                    auto batchRes = db().getTagsForMediaBatch(foundIds);
+                    if (batchRes.isOk()) {
+                        auto& tagsMap = batchRes.value();
+                        for (auto& item : mediaItems) {
+                            auto it = tagsMap.find(item.id);
+                            if (it != tagsMap.end()) item.tags = std::move(it->second);
+                        }
                     }
                 }
                 j["media_items"] = mediaItems;
@@ -3798,17 +3996,37 @@ void ApiRouter::registerSemanticRoutes(httplib::Server& server) {
                     limit = body["limit"].get<int>();
                 }
             }
-        } catch (...) {}
+        } catch (...) {
+            sendError(res, "Invalid JSON", 400);
+            return;
+        }
+        if (limit < 1 || limit > 1000) {
+            sendError(res, "Limit must be between 1 and 1000", 400);
+            return;
+        }
         
         auto result = clipService_->findSimilar(*mediaIdOpt, limit);
         if (result.isOk()) {
             nlohmann::json j = result.value();
             std::vector<MediaItem> mediaItems;
+            std::vector<MediaId> foundIds;
             mediaItems.reserve(result.value().items.size());
+            foundIds.reserve(result.value().items.size());
             for (const auto& hit : result.value().items) {
                 auto mRes = catalog_ ? catalog_->getMedia(hit.mediaId) : db().getMediaById(hit.mediaId);
                 if (mRes.isOk()) {
+                    if (!catalog_) foundIds.push_back(hit.mediaId);
                     mediaItems.push_back(std::move(mRes.value()));
+                }
+            }
+            if (!catalog_ && !foundIds.empty()) {
+                auto batchRes = db().getTagsForMediaBatch(foundIds);
+                if (batchRes.isOk()) {
+                    auto& tagsMap = batchRes.value();
+                    for (auto& item : mediaItems) {
+                        auto it = tagsMap.find(item.id);
+                        if (it != tagsMap.end()) item.tags = std::move(it->second);
+                    }
                 }
             }
             j["media_items"] = mediaItems;
@@ -3827,10 +4045,22 @@ void ApiRouter::registerSemanticRoutes(httplib::Server& server) {
         try {
             auto body = nlohmann::json::parse(req.body);
             std::string scope = body.value("scope", "catalog");
+            if (scope != "catalog" && scope != "selected") {
+                sendError(res, "scope must be selected or catalog", 400);
+                return;
+            }
+            if (scope == "catalog" && body.contains("media_ids")) {
+                sendError(res, "media_ids may only be supplied with selected scope", 400);
+                return;
+            }
             bool force = body.value("force", false);
             std::vector<MediaId> mediaIds;
             if (body.contains("media_ids") && body["media_ids"].is_array()) {
                 for (const auto& el : body["media_ids"]) {
+                    if (!el.is_number_integer()) {
+                        sendError(res, "media_ids must contain integer IDs", 400);
+                        return;
+                    }
                     mediaIds.push_back(el.get<MediaId>());
                 }
             }
