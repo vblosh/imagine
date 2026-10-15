@@ -2,6 +2,43 @@
 
 namespace imagine {
 
+namespace {
+
+std::string jsonStringOr(const nlohmann::json& j, const char* key, const char* defaultVal = "") {
+    auto it = j.find(key);
+    if (it != j.end() && it->is_string()) {
+        return it->get<std::string>();
+    }
+    return defaultVal;
+}
+
+template <typename IntT>
+IntT jsonIntOr(const nlohmann::json& j, const char* key, IntT defaultVal = 0) {
+    auto it = j.find(key);
+    if (it != j.end() && it->is_number_integer()) {
+        return it->get<IntT>();
+    }
+    return defaultVal;
+}
+
+double jsonDoubleOr(const nlohmann::json& j, const char* key, double defaultVal = 0.0) {
+    auto it = j.find(key);
+    if (it != j.end() && it->is_number()) {
+        return it->get<double>();
+    }
+    return defaultVal;
+}
+
+bool jsonBoolOr(const nlohmann::json& j, const char* key, bool defaultVal = false) {
+    auto it = j.find(key);
+    if (it != j.end() && it->is_boolean()) {
+        return it->get<bool>();
+    }
+    return defaultVal;
+}
+
+} // namespace
+
 void to_json(nlohmann::json& j, const ExifData& e) {
     j = nlohmann::json{
         {"camera_make", e.camera_make},
@@ -22,20 +59,20 @@ void to_json(nlohmann::json& j, const ExifData& e) {
 }
 
 void from_json(const nlohmann::json& j, ExifData& e) {
-    e.camera_make = j.value("camera_make", "");
-    e.camera_model = j.value("camera_model", "");
-    e.lens = j.value("lens", "");
-    e.date_taken = j.value("date_taken", int64_t{0});
-    e.date_taken_str = j.value("date_taken_str", "");
-    e.exposure_time = j.value("exposure_time", 0.0);
-    e.f_number = j.value("f_number", 0.0);
-    e.iso = j.value("iso", int32_t{0});
-    e.focal_length = j.value("focal_length", 0.0);
-    e.orientation = j.value("orientation", int32_t{1});
-    e.has_gps = j.value("has_gps", false);
-    e.latitude = j.value("latitude", 0.0);
-    e.longitude = j.value("longitude", 0.0);
-    e.altitude = j.value("altitude", 0.0);
+    e.camera_make = jsonStringOr(j, "camera_make", "");
+    e.camera_model = jsonStringOr(j, "camera_model", "");
+    e.lens = jsonStringOr(j, "lens", "");
+    e.date_taken = jsonIntOr<int64_t>(j, "date_taken", int64_t{0});
+    e.date_taken_str = jsonStringOr(j, "date_taken_str", "");
+    e.exposure_time = jsonDoubleOr(j, "exposure_time", 0.0);
+    e.f_number = jsonDoubleOr(j, "f_number", 0.0);
+    e.iso = jsonIntOr<int32_t>(j, "iso", int32_t{0});
+    e.focal_length = jsonDoubleOr(j, "focal_length", 0.0);
+    e.orientation = jsonIntOr<int32_t>(j, "orientation", int32_t{1});
+    e.has_gps = jsonBoolOr(j, "has_gps", false);
+    e.latitude = jsonDoubleOr(j, "latitude", 0.0);
+    e.longitude = jsonDoubleOr(j, "longitude", 0.0);
+    e.altitude = jsonDoubleOr(j, "altitude", 0.0);
 }
 
 void to_json(nlohmann::json& j, const Tag& t) {
@@ -69,27 +106,27 @@ void to_json(nlohmann::json& j, const Tag& t) {
 }
 
 void from_json(const nlohmann::json& j, Tag& t) {
-    t.id = j.value("id", TagId{0});
-    t.name = j.value("name", "");
-    t.category = j.value("category", "keyword");
-    t.media_count = j.value("media_count", int64_t{0});
-    t.cover_hash = j.value("cover_hash", "");
-    if (j.contains("parent_id") && !j["parent_id"].is_null()) {
+    t.id = jsonIntOr<TagId>(j, "id", TagId{0});
+    t.name = jsonStringOr(j, "name", "");
+    t.category = jsonStringOr(j, "category", "keyword");
+    t.media_count = jsonIntOr<int64_t>(j, "media_count", int64_t{0});
+    t.cover_hash = jsonStringOr(j, "cover_hash", "");
+    if (j.contains("parent_id") && j["parent_id"].is_number_integer()) {
         t.parent_id = j["parent_id"].get<TagId>();
     } else {
         t.parent_id = std::nullopt;
     }
-    if (j.contains("cover_media_id") && !j["cover_media_id"].is_null()) {
+    if (j.contains("cover_media_id") && j["cover_media_id"].is_number_integer()) {
         t.cover_media_id = j["cover_media_id"].get<MediaId>();
     } else {
         t.cover_media_id = std::nullopt;
     }
-    if (j.contains("first_date") && !j["first_date"].is_null()) {
+    if (j.contains("first_date") && j["first_date"].is_number_integer()) {
         t.first_date = j["first_date"].get<int64_t>();
     } else {
         t.first_date = std::nullopt;
     }
-    if (j.contains("last_date") && !j["last_date"].is_null()) {
+    if (j.contains("last_date") && j["last_date"].is_number_integer()) {
         t.last_date = j["last_date"].get<int64_t>();
     } else {
         t.last_date = std::nullopt;
@@ -130,38 +167,49 @@ void to_json(nlohmann::json& j, const MediaItem& m) {
 }
 
 void from_json(const nlohmann::json& j, MediaItem& m) {
-    m.id = j.value("id", MediaId{0});
-    m.file_path = j.value("file_path", "");
-    m.file_name = j.value("file_name", "");
-    m.file_size = j.value("file_size", int64_t{0});
-    m.file_modified_time = j.value("file_modified_time", int64_t{0});
-    m.content_hash = j.value("content_hash", "");
-    m.width = j.value("width", int32_t{0});
-    m.height = j.value("height", int32_t{0});
-    m.date_taken = j.value("date_taken", int64_t{0});
-    m.rating = j.value("rating", int32_t{0});
-    m.flag = static_cast<FlagState>(j.value("flag", int8_t{0}));
-    if (j.contains("exif")) {
+    m.id = jsonIntOr<MediaId>(j, "id", MediaId{0});
+    m.file_path = jsonStringOr(j, "file_path", "");
+    m.file_name = jsonStringOr(j, "file_name", "");
+    m.file_size = jsonIntOr<int64_t>(j, "file_size", int64_t{0});
+    m.file_modified_time = jsonIntOr<int64_t>(j, "file_modified_time", int64_t{0});
+    m.content_hash = jsonStringOr(j, "content_hash", "");
+    m.width = jsonIntOr<int32_t>(j, "width", int32_t{0});
+    m.height = jsonIntOr<int32_t>(j, "height", int32_t{0});
+    m.date_taken = jsonIntOr<int64_t>(j, "date_taken", int64_t{0});
+    m.rating = jsonIntOr<int32_t>(j, "rating", int32_t{0});
+    const int8_t rawFlag = jsonIntOr<int8_t>(j, "flag", int8_t{0});
+    if (rawFlag == static_cast<int8_t>(FlagState::Reject) ||
+        rawFlag == static_cast<int8_t>(FlagState::Unflagged) ||
+        rawFlag == static_cast<int8_t>(FlagState::Pick)) {
+        m.flag = static_cast<FlagState>(rawFlag);
+    } else {
+        m.flag = FlagState::Unflagged;
+    }
+    if (j.contains("exif") && j["exif"].is_object()) {
         m.exif = j["exif"].get<ExifData>();
+    } else {
+        m.exif = ExifData{};
     }
-    m.thumb_small = j.value("thumb_small", "");
-    m.thumb_large = j.value("thumb_large", "");
-    if (j.contains("tags")) {
+    m.thumb_small = jsonStringOr(j, "thumb_small", "");
+    m.thumb_large = jsonStringOr(j, "thumb_large", "");
+    if (j.contains("tags") && j["tags"].is_array()) {
         m.tags = j["tags"].get<std::vector<Tag>>();
+    } else {
+        m.tags.clear();
     }
-    m.caption = j.value("caption", "");
-    m.created_at = j.value("created_at", int64_t{0});
-    m.updated_at = j.value("updated_at", int64_t{0});
-    m.media_type = j.value("media_type", "photo");
-    m.duration = j.value("duration", 0.0);
-    m.audio_artist = j.value("audio_artist", "");
-    m.audio_title = j.value("audio_title", "");
-    m.audio_album = j.value("audio_album", "");
-    m.audio_genre = j.value("audio_genre", "");
-    m.codec = j.value("codec", "");
-    m.bitrate = j.value("bitrate", int32_t{0});
-    m.channels = j.value("channels", int32_t{0});
-    m.sample_rate = j.value("sample_rate", int32_t{0});
+    m.caption = jsonStringOr(j, "caption", "");
+    m.created_at = jsonIntOr<int64_t>(j, "created_at", int64_t{0});
+    m.updated_at = jsonIntOr<int64_t>(j, "updated_at", int64_t{0});
+    m.media_type = jsonStringOr(j, "media_type", "photo");
+    m.duration = jsonDoubleOr(j, "duration", 0.0);
+    m.audio_artist = jsonStringOr(j, "audio_artist", "");
+    m.audio_title = jsonStringOr(j, "audio_title", "");
+    m.audio_album = jsonStringOr(j, "audio_album", "");
+    m.audio_genre = jsonStringOr(j, "audio_genre", "");
+    m.codec = jsonStringOr(j, "codec", "");
+    m.bitrate = jsonIntOr<int32_t>(j, "bitrate", int32_t{0});
+    m.channels = jsonIntOr<int32_t>(j, "channels", int32_t{0});
+    m.sample_rate = jsonIntOr<int32_t>(j, "sample_rate", int32_t{0});
 }
 
 void to_json(nlohmann::json& j, const Album& a) {
@@ -182,14 +230,14 @@ void to_json(nlohmann::json& j, const Album& a) {
 }
 
 void from_json(const nlohmann::json& j, Album& a) {
-    a.id = j.value("id", AlbumId{0});
-    a.name = j.value("name", "");
-    a.description = j.value("description", "");
-    a.is_smart = j.value("is_smart", false);
-    a.query_json = j.value("query_json", "");
-    a.item_count = j.value("item_count", int64_t{0});
-    a.created_at = j.value("created_at", int64_t{0});
-    if (j.contains("cover_media_id") && !j["cover_media_id"].is_null()) {
+    a.id = jsonIntOr<AlbumId>(j, "id", AlbumId{0});
+    a.name = jsonStringOr(j, "name", "");
+    a.description = jsonStringOr(j, "description", "");
+    a.is_smart = jsonBoolOr(j, "is_smart", false);
+    a.query_json = jsonStringOr(j, "query_json", "");
+    a.item_count = jsonIntOr<int64_t>(j, "item_count", int64_t{0});
+    a.created_at = jsonIntOr<int64_t>(j, "created_at", int64_t{0});
+    if (j.contains("cover_media_id") && j["cover_media_id"].is_number_integer()) {
         a.cover_media_id = j["cover_media_id"].get<MediaId>();
     } else {
         a.cover_media_id = std::nullopt;
@@ -216,20 +264,20 @@ void to_json(nlohmann::json& j, const CatalogStats& s) {
 }
 
 void from_json(const nlohmann::json& j, CatalogStats& s) {
-    s.total_media = j.value("total_media", int64_t{0});
-    s.total_photos = j.value("total_photos", int64_t{0});
-    s.total_videos = j.value("total_videos", int64_t{0});
-    s.total_audio = j.value("total_audio", int64_t{0});
-    s.total_picks = j.value("total_picks", int64_t{0});
-    s.total_rejects = j.value("total_rejects", int64_t{0});
-    s.total_not_rejects = j.value("total_not_rejects", int64_t{0});
-    s.total_unrated = j.value("total_unrated", int64_t{0});
-    s.total_duration = j.value("total_duration", 0.0);
-    s.total_size_bytes = j.value("total_size_bytes", int64_t{0});
-    s.total_tags = j.value("total_tags", int64_t{0});
-    s.total_albums = j.value("total_albums", int64_t{0});
-    s.earliest_date = j.value("earliest_date", int64_t{0});
-    s.latest_date = j.value("latest_date", int64_t{0});
+    s.total_media = jsonIntOr<int64_t>(j, "total_media", int64_t{0});
+    s.total_photos = jsonIntOr<int64_t>(j, "total_photos", int64_t{0});
+    s.total_videos = jsonIntOr<int64_t>(j, "total_videos", int64_t{0});
+    s.total_audio = jsonIntOr<int64_t>(j, "total_audio", int64_t{0});
+    s.total_picks = jsonIntOr<int64_t>(j, "total_picks", int64_t{0});
+    s.total_rejects = jsonIntOr<int64_t>(j, "total_rejects", int64_t{0});
+    s.total_not_rejects = jsonIntOr<int64_t>(j, "total_not_rejects", int64_t{0});
+    s.total_unrated = jsonIntOr<int64_t>(j, "total_unrated", int64_t{0});
+    s.total_duration = jsonDoubleOr(j, "total_duration", 0.0);
+    s.total_size_bytes = jsonIntOr<int64_t>(j, "total_size_bytes", int64_t{0});
+    s.total_tags = jsonIntOr<int64_t>(j, "total_tags", int64_t{0});
+    s.total_albums = jsonIntOr<int64_t>(j, "total_albums", int64_t{0});
+    s.earliest_date = jsonIntOr<int64_t>(j, "earliest_date", int64_t{0});
+    s.latest_date = jsonIntOr<int64_t>(j, "latest_date", int64_t{0});
 }
 
 void to_json(nlohmann::json& j, const TimelineEntry& t) {
@@ -241,9 +289,9 @@ void to_json(nlohmann::json& j, const TimelineEntry& t) {
 }
 
 void from_json(const nlohmann::json& j, TimelineEntry& t) {
-    t.year = j.value("year", int32_t{0});
-    t.month = j.value("month", int32_t{0});
-    t.count = j.value("count", int64_t{0});
+    t.year = jsonIntOr<int32_t>(j, "year", int32_t{0});
+    t.month = jsonIntOr<int32_t>(j, "month", int32_t{0});
+    t.count = jsonIntOr<int64_t>(j, "count", int64_t{0});
 }
 
 } // namespace imagine

@@ -774,3 +774,285 @@ TEST(TypesTest, CatalogStatsAndTimelineJsonSerialization) {
     EXPECT_EQ(dtEmpty.month, 0);
     EXPECT_EQ(dtEmpty.count, 0);
 }
+
+TEST(ErrorTest, ResultConstructedWithStatusOkInvariant) {
+    // MED-01: Result(Status::ok()) must not create a split-brain state
+    Result<int> res(Status::ok());
+    EXPECT_FALSE(res.isOk());
+    EXPECT_FALSE(static_cast<bool>(res));
+    EXPECT_FALSE(res.status().isOk());
+    EXPECT_EQ(res.status().code(), StatusCode::InternalError);
+    EXPECT_NE(res.status().message().find("Result<T> constructed with Status::ok()"), std::string::npos);
+    EXPECT_THROW((void)res.value(), std::runtime_error);
+
+    Result<std::string> failFactory = Result<std::string>::failure(Status::ok());
+    EXPECT_FALSE(failFactory.isOk());
+    EXPECT_FALSE(failFactory.status().isOk());
+    EXPECT_EQ(failFactory.status().code(), StatusCode::InternalError);
+}
+
+TEST(ErrorTest, ResultValueOrRvalueMoveOnly) {
+    // MED-05: Result<T>::valueOr() && overload supports move-only types
+    auto ptr = std::make_unique<int>(123);
+    Result<std::unique_ptr<int>> okRes(std::move(ptr));
+    auto val = std::move(okRes).valueOr(nullptr);
+    ASSERT_NE(val, nullptr);
+    EXPECT_EQ(*val, 123);
+
+    Result<std::unique_ptr<int>> errRes(Status::notFound("missing"));
+    auto fallback = std::make_unique<int>(456);
+    auto valFallback = std::move(errRes).valueOr(std::move(fallback));
+    ASSERT_NE(valFallback, nullptr);
+    EXPECT_EQ(*valFallback, 456);
+}
+
+TEST(LoggerTest, LoggerSingletonCopyMoveDeleted) {
+    // LOW-02: Logger copy/move explicitly deleted
+    static_assert(!std::is_copy_constructible_v<Logger>);
+    static_assert(!std::is_copy_assignable_v<Logger>);
+    static_assert(!std::is_move_constructible_v<Logger>);
+    static_assert(!std::is_move_assignable_v<Logger>);
+}
+
+TEST(LoggerTest, ShortCircuitEvaluationWhenLevelDisabled) {
+    // MED-02: IMAGINE_LOG_* macros must not evaluate arguments when level is disabled
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
+    logger.setLevel(LogLevel::Warn);
+
+    EXPECT_FALSE(logger.shouldLog(LogLevel::Debug));
+    EXPECT_FALSE(logger.shouldLog(LogLevel::Info));
+    EXPECT_TRUE(logger.shouldLog(LogLevel::Warn));
+    EXPECT_TRUE(logger.shouldLog(LogLevel::Error));
+
+    int sideEffects = 0;
+    auto expensiveFunc = [&sideEffects]() -> std::string {
+        ++sideEffects;
+        return "expensive output";
+    };
+
+    IMAGINE_LOG_DEBUG("Debug: " + expensiveFunc());
+    IMAGINE_LOG_INFO("Info: " + expensiveFunc());
+    EXPECT_EQ(sideEffects, 0);
+
+    IMAGINE_LOG_WARN("Warn: " + expensiveFunc());
+    EXPECT_EQ(sideEffects, 1);
+
+    logger.setLevel(origLevel);
+}
+
+TEST(LoggerTest, TextLogEscapingInjection) {
+    // MED-04: formatText escapes newlines, carriage returns, and control chars
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
+    auto origFormat = logger.fileFormat();
+    auto origConsole = logger.isConsoleEnabled();
+
+    auto tempDir = std::filesystem::temp_directory_path() /
+        ("imagine_injection_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(tempDir);
+    auto logFilePath = tempDir / "inject.log";
+
+    logger.setLevel(LogLevel::Info);
+    logger.setConsoleEnabled(false);
+    logger.setFileFormat(LogFormat::Text);
+    ASSERT_TRUE(logger.setLogFile(pathToUtf8(logFilePath)));
+
+    const std::string malicious = "user input\n[INFO ] [fake.cpp:1] forged admin log\r\x1b[31minjected";
+    IMAGINE_LOG_INFO(malicious);
+    logger.closeLogFile();
+
+    {
+        std::ifstream ifs(logFilePath, std::ios::binary);
+        ASSERT_TRUE(ifs.is_open());
+        std::string content((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+        // Raw newline from malicious string must NOT create a separate log line
+        EXPECT_EQ(content.find("user input\n[INFO ]"), std::string::npos);
+        EXPECT_NE(content.find("user input\\n[INFO ] [fake.cpp:1] forged admin log\\r\\x1b[31minjected"), std::string::npos);
+    }
+
+    std::error_code ec;
+    std::filesystem::remove_all(tempDir, ec);
+    logger.setConsoleEnabled(origConsole);
+    logger.setFileFormat(origFormat);
+    logger.setLevel(origLevel);
+}
+
+TEST(LoggerTest, PruneBackupsWithUnicodeSiblingFilesAndMaxFilesZero) {
+    // HIGH-03 & MED-03: Pruning handles Unicode sibling files without throwing std::system_error,
+    // and maxFiles == 0 prunes old backups.
+    auto& logger = Logger::instance();
+    auto origLevel = logger.level();
+    auto origFormat = logger.fileFormat();
+    auto origConsole = logger.isConsoleEnabled();
+    auto origMaxFileSize = logger.maxFileSize();
+    auto origMaxFiles = logger.maxFiles();
+
+    auto tempDir = std::filesystem::temp_directory_path() /
+        ("imagine_unicode_prune_test_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(tempDir);
+    auto logFilePath = tempDir / "app.log";
+
+    // Create sibling files with Unicode characters (Cyrillic, CJK, Emoji)
+    {
+        std::ofstream ofs1(tempDir / pathFromUtf8("Логи_Папка.txt"));
+        ofs1 << "test";
+        std::ofstream ofs2(tempDir / pathFromUtf8("東京_backup.txt"));
+        ofs2 << "test";
+    }
+
+    // Create stale backups
+    for (int i = 1; i <= 5; ++i) {
+        std::ofstream ofs(tempDir / ("app.log." + std::to_string(i)));
+        ofs << "backup " << i;
+    }
+
+    // Opening with maxFiles = 0 should prune all old backups (index > 0)
+    ASSERT_TRUE(logger.setLogFile(pathToUtf8(logFilePath), 1024 * 1024, 0));
+
+    std::error_code ec;
+    for (int i = 1; i <= 5; ++i) {
+        EXPECT_FALSE(std::filesystem::exists(tempDir / ("app.log." + std::to_string(i)), ec));
+    }
+    // Unicode siblings must still be intact
+    EXPECT_TRUE(std::filesystem::exists(tempDir / pathFromUtf8("Логи_Папка.txt"), ec));
+    EXPECT_TRUE(std::filesystem::exists(tempDir / pathFromUtf8("東京_backup.txt"), ec));
+
+    // Now test setRotation pruning immediately
+    for (int i = 1; i <= 5; ++i) {
+        std::ofstream ofs(tempDir / ("app.log." + std::to_string(i)));
+        ofs << "new backup " << i;
+    }
+    logger.setRotation(1024 * 1024, 2);
+    // .1, .2 remain, .3, .4, .5 pruned
+    EXPECT_TRUE(std::filesystem::exists(tempDir / "app.log.1", ec));
+    EXPECT_TRUE(std::filesystem::exists(tempDir / "app.log.2", ec));
+    EXPECT_FALSE(std::filesystem::exists(tempDir / "app.log.3", ec));
+    EXPECT_FALSE(std::filesystem::exists(tempDir / "app.log.4", ec));
+    EXPECT_FALSE(std::filesystem::exists(tempDir / "app.log.5", ec));
+
+    logger.closeLogFile();
+    std::filesystem::remove_all(tempDir, ec);
+    logger.setConsoleEnabled(origConsole);
+    logger.setFileFormat(origFormat);
+    logger.setRotation(origMaxFileSize, origMaxFiles);
+    logger.setLevel(origLevel);
+}
+
+TEST(TypesTest, SanitizeUtf8Rfc3629Strictness) {
+    // HIGH-01: sanitizeUtf8 enforces RFC 3629 shortest-form and surrogate bounds
+    const std::string replacement = "\xef\xbf\xbd";
+
+    // 2-byte overlongs (0xC0, 0xC1)
+    EXPECT_EQ(sanitizeUtf8(std::string("\xc0\x80", 2)), replacement + replacement);
+    EXPECT_EQ(sanitizeUtf8(std::string("\xc1\xbf", 2)), replacement + replacement);
+
+    // Valid 2-byte UTF-8 starts at 0xC2
+    EXPECT_EQ(sanitizeUtf8("\xc2\xa9"), "\xc2\xa9"); // ©
+
+    // 3-byte overlongs (0xE0 with byte 2 < 0xA0)
+    EXPECT_EQ(sanitizeUtf8(std::string("\xe0\x80\x80", 3)), replacement + replacement + replacement);
+    EXPECT_EQ(sanitizeUtf8(std::string("\xe0\x9f\xbf", 3)), replacement + replacement + replacement);
+    EXPECT_EQ(sanitizeUtf8("\xe0\xa0\x80"), "\xe0\xa0\x80"); // valid lowest 3-byte
+
+    // UTF-16 surrogate halves (0xED with byte 2 >= 0xA0)
+    EXPECT_EQ(sanitizeUtf8(std::string("\xed\xa0\x80", 3)), replacement + replacement + replacement); // U+D800
+    EXPECT_EQ(sanitizeUtf8(std::string("\xed\xbf\xbf", 3)), replacement + replacement + replacement); // U+DFFF
+    EXPECT_EQ(sanitizeUtf8("\xed\x9f\xbf"), "\xed\x9f\xbf"); // valid just before surrogates (U+D7FF)
+
+    // 4-byte overlongs (0xF0 with byte 2 < 0x90)
+    EXPECT_EQ(sanitizeUtf8(std::string("\xf0\x80\x80\x80", 4)), replacement + replacement + replacement + replacement);
+    EXPECT_EQ(sanitizeUtf8(std::string("\xf0\x8f\xbf\xbf", 4)), replacement + replacement + replacement + replacement);
+    EXPECT_EQ(sanitizeUtf8("\xf0\x90\x80\x80"), "\xf0\x90\x80\x80"); // valid lowest 4-byte (U+10000)
+
+    // Codepoints > U+10FFFF (0xF4 with byte 2 >= 0x90, 0xF5..0xFF)
+    EXPECT_EQ(sanitizeUtf8(std::string("\xf4\x90\x80\x80", 4)), replacement + replacement + replacement + replacement);
+    EXPECT_EQ(sanitizeUtf8(std::string("\xf5\x80\x80\x80", 4)), replacement + replacement + replacement + replacement);
+    EXPECT_EQ(sanitizeUtf8("\xf4\x8f\xbf\xbf"), "\xf4\x8f\xbf\xbf"); // valid maximum codepoint U+10FFFF
+}
+
+TEST(TypesTest, StripExtendedPrefixAndUnc) {
+    // HIGH-02 & LOW-03: stripExtendedPrefix bounds check and UNC normalization
+#if defined(_WIN32)
+    EXPECT_EQ(stripExtendedPrefix(std::filesystem::path(L"\\\\?\\C:\\Users")).wstring(), L"C:\\Users");
+    // Short path of length 5: must not read past ws.size()
+    EXPECT_EQ(stripExtendedPrefix(std::filesystem::path(L"\\\\?\\C")).wstring(), L"\\\\?\\C");
+    // UNC path
+    EXPECT_EQ(stripExtendedPrefix(std::filesystem::path(L"\\\\?\\UNC\\server\\share\\photo.jpg")).wstring(),
+              L"\\\\server\\share\\photo.jpg");
+#else
+    EXPECT_EQ(stripExtendedPrefix(std::filesystem::path("/home/user")).string(), "/home/user");
+#endif
+}
+
+TEST(TypesTest, PathFromUtf8StringView) {
+    // MED-06: pathFromUtf8 accepts string_view without temporary std::string
+    std::string_view sv = "photos/summer2026/beach.jpg";
+    auto p = pathFromUtf8(sv);
+    EXPECT_EQ(pathToUtf8(p), "photos/summer2026/beach.jpg");
+}
+
+TEST(TypesTest, JsonSafeNullsAndBadTypes) {
+    // HIGH-04: from_json handles nulls, unexpected types, and bad enum values safely
+    nlohmann::json jExif = {
+        {"camera_make", nullptr},
+        {"camera_model", nullptr},
+        {"date_taken", nullptr},
+        {"exposure_time", nullptr},
+        {"has_gps", nullptr}
+    };
+    ExifData exif = jExif.get<ExifData>();
+    EXPECT_EQ(exif.camera_make, "");
+    EXPECT_EQ(exif.date_taken, 0);
+    EXPECT_DOUBLE_EQ(exif.exposure_time, 0.0);
+    EXPECT_FALSE(exif.has_gps);
+
+    nlohmann::json jMedia = {
+        {"id", nullptr},
+        {"file_path", nullptr},
+        {"flag", 42}, // invalid enum value
+        {"exif", nullptr},
+        {"tags", nullptr},
+        {"caption", nullptr},
+        {"duration", nullptr}
+    };
+    MediaItem m;
+    m.flag = FlagState::Pick;
+    Tag sampleTag;
+    sampleTag.id = 1;
+    sampleTag.name = "Existing";
+    m.tags.push_back(sampleTag);
+    from_json(jMedia, m);
+
+    EXPECT_EQ(m.id, 0);
+    EXPECT_EQ(m.file_path, "");
+    EXPECT_EQ(m.flag, FlagState::Unflagged); // clamped to Unflagged
+    EXPECT_TRUE(m.tags.empty());             // reset when null
+    EXPECT_EQ(m.exif.camera_make, "");
+
+    nlohmann::json jTag = {
+        {"id", nullptr},
+        {"name", nullptr},
+        {"parent_id", nullptr},
+        {"cover_media_id", "not_an_int"},
+        {"first_date", nullptr}
+    };
+    Tag t = jTag.get<Tag>();
+    EXPECT_EQ(t.id, 0);
+    EXPECT_EQ(t.name, "");
+    EXPECT_FALSE(t.parent_id.has_value());
+    EXPECT_FALSE(t.cover_media_id.has_value());
+    EXPECT_FALSE(t.first_date.has_value());
+
+    nlohmann::json jAlbum = {
+        {"id", nullptr},
+        {"name", nullptr},
+        {"is_smart", nullptr},
+        {"cover_media_id", nullptr}
+    };
+    Album a = jAlbum.get<Album>();
+    EXPECT_EQ(a.id, 0);
+    EXPECT_EQ(a.name, "");
+    EXPECT_FALSE(a.is_smart);
+    EXPECT_FALSE(a.cover_media_id.has_value());
+}

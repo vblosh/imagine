@@ -5,6 +5,9 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <iostream>
+#include <sstream>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -14,6 +17,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace imagine {
@@ -55,13 +60,33 @@ static std::string_view extractFilename(std::string_view file) {
     return (pos == std::string_view::npos) ? file : file.substr(pos + 1);
 }
 
+static std::string sanitizeTextMessage(std::string_view sv) {
+    std::string out;
+    out.reserve(sv.size());
+    for (char c : sv) {
+        const auto uc = static_cast<unsigned char>(c);
+        if (c == '\n') {
+            out += "\\n";
+        } else if (c == '\r') {
+            out += "\\r";
+        } else if (uc < 0x20 && c != '\t') {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "\\x%02x", uc);
+            out += buf;
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
 Logger::Logger() {
 #if defined(_WIN32)
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut != INVALID_HANDLE_VALUE) {
+    if (hOut != nullptr && hOut != INVALID_HANDLE_VALUE) {
         DWORD mode = 0;
         if (GetConsoleMode(hOut, &mode)) {
             if (!SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
@@ -89,12 +114,14 @@ static void pruneStaleBackups(const std::string& basePath, size_t keepCount) {
     auto fsBase = pathFromUtf8(basePath);
     auto parent = fsBase.parent_path();
     auto stem = fsBase.filename();
+    auto stemStr = pathToUtf8(stem);
+    if (stemStr.empty()) return;
     if (parent.empty()) { parent = std::filesystem::current_path(ec); }
+    if (ec) return;
     for (auto& entry : std::filesystem::directory_iterator(parent, ec)) {
         auto name = entry.path().filename();
         // Match: <stem>.<N> where N > keepCount
-        auto nameStr = name.string();
-        auto stemStr = stem.string();
+        auto nameStr = pathToUtf8(name);
         if (nameStr.size() <= stemStr.size() + 1) continue;
         if (nameStr.substr(0, stemStr.size() + 1) != stemStr + ".") continue;
         auto suffix = nameStr.substr(stemStr.size() + 1);
@@ -124,10 +151,10 @@ void Logger::rotateLogFiles() {
     std::error_code ec;
     auto fsPath = pathFromUtf8(logFilePath_);
 
-    if (maxFiles_ > 0) {
-        // Delete any stale rotated files whose index exceeds maxFiles_
-        pruneStaleBackups(logFilePath_, maxFiles_);
+    // Delete any stale rotated files whose index exceeds maxFiles_
+    pruneStaleBackups(logFilePath_, maxFiles_);
 
+    if (maxFiles_ > 0) {
         // Delete the oldest backup (e.g. .3) if it exists
         auto oldest = rotatedPath(logFilePath_, maxFiles_);
         if (std::filesystem::exists(oldest, ec)) {
@@ -165,9 +192,8 @@ void Logger::rotateLogFiles() {
             }
         }
     } else {
-        // maxFiles_ == 0: unlimited backups (no shift, no delete) — just truncate active file.
-        // Keeping the active file is intentional: callers who want "delete on rotate"
-        // should set maxFiles_ == 1 and let the oldest-backup removal handle it.
+        // maxFiles_ == 0: no backups are kept. Stale .N files were already pruned
+        // above, so just remove the active file; it is reopened empty below.
         std::filesystem::remove(fsPath, ec);
     }
 
@@ -175,7 +201,7 @@ void Logger::rotateLogFiles() {
     if (!parent.empty()) {
         std::filesystem::create_directories(parent, ec);
     }
-    logFile_.open(fsPath, std::ios::out | std::ios::trunc);
+    logFile_.open(fsPath, std::ios::out | std::ios::trunc | std::ios::binary);
     currentFileSize_ = 0;
 
     if (!logFile_.is_open()) {
@@ -196,12 +222,16 @@ Logger::~Logger() {
 
 void Logger::setLevel(LogLevel level) {
     std::lock_guard<std::mutex> lock(mutex_);
-    level_ = level;
+    level_.store(level, std::memory_order_relaxed);
 }
 
 LogLevel Logger::level() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return level_;
+    return level_.load(std::memory_order_relaxed);
+}
+
+bool Logger::shouldLog(LogLevel msgLevel) const noexcept {
+    const LogLevel cur = level_.load(std::memory_order_relaxed);
+    return msgLevel >= cur && cur != LogLevel::None && msgLevel != LogLevel::None;
 }
 
 bool Logger::setLogFile(const std::string& path, size_t maxFileSize, size_t maxFiles) {
@@ -232,9 +262,7 @@ bool Logger::setLogFile(const std::string& path, size_t maxFileSize, size_t maxF
     logFilePath_ = path;
 
     // Delete any stale old files beyond maxFiles_
-    if (maxFiles_ > 0) {
-        pruneStaleBackups(logFilePath_, maxFiles_);
-    }
+    pruneStaleBackups(logFilePath_, maxFiles_);
 
     // Check existing file size
     if (std::filesystem::exists(fsPath, ec)) {
@@ -245,7 +273,7 @@ bool Logger::setLogFile(const std::string& path, size_t maxFileSize, size_t maxF
     if (maxFileSize_ > 0 && currentFileSize_ >= maxFileSize_) {
         rotateLogFiles();
     } else {
-        logFile_.open(fsPath, std::ios::app);
+        logFile_.open(fsPath, std::ios::out | std::ios::app | std::ios::binary);
     }
 
     return logFile_.is_open();
@@ -276,6 +304,9 @@ void Logger::setRotation(size_t maxFileSize, size_t maxFiles) {
     std::lock_guard<std::mutex> lock(mutex_);
     maxFileSize_ = maxFileSize;
     maxFiles_ = maxFiles;
+    if (!logFilePath_.empty()) {
+        pruneStaleBackups(logFilePath_, maxFiles_);
+    }
 }
 
 size_t Logger::maxFileSize() const {
@@ -395,8 +426,9 @@ LogLevel Logger::parseLevel(std::string_view name) {
 std::string Logger::formatText(LogLevel level, std::string_view file, int line,
                                 std::string_view message, bool withColor) const {
     auto now = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    auto secs = std::chrono::floor<std::chrono::seconds>(now);
+    auto time_t_now = std::chrono::system_clock::to_time_t(secs);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - secs);
 
     std::tm tm_buf{};
 #if defined(_WIN32)
@@ -417,6 +449,7 @@ std::string Logger::formatText(LogLevel level, std::string_view file, int line,
     }
 
     std::string_view filename = extractFilename(file);
+    std::string safeMessage = sanitizeTextMessage(message);
 
     std::ostringstream oss;
     if (withColor) {
@@ -425,7 +458,7 @@ std::string Logger::formatText(LogLevel level, std::string_view file, int line,
     oss << "[" << std::put_time(&tm_buf, "%Y-%m-%d %H:%M:%S")
         << "." << std::setfill('0') << std::setw(3) << ms.count() << std::setfill(' ')
         << "] [" << levelStr(level) << "] [" << filename << ":" << line << "] "
-        << message;
+        << safeMessage;
     if (withColor) {
         oss << "\033[0m";
     }
@@ -436,8 +469,9 @@ std::string Logger::formatText(LogLevel level, std::string_view file, int line,
 std::string Logger::formatJson(LogLevel level, std::string_view file, int line,
                                 std::string_view message) const {
     auto now = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    auto secs = std::chrono::floor<std::chrono::seconds>(now);
+    auto time_t_now = std::chrono::system_clock::to_time_t(secs);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - secs);
 
     std::tm tm_buf{};
 #if defined(_WIN32)
@@ -465,8 +499,11 @@ std::string Logger::formatJson(LogLevel level, std::string_view file, int line,
 }
 
 void Logger::log(LogLevel level, std::string_view file, int line, std::string_view message) {
+    if (!shouldLog(level)) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (level < level_ || level_ == LogLevel::None) {
+    if (!shouldLog(level)) {
         return;
     }
 
@@ -474,7 +511,7 @@ void Logger::log(LogLevel level, std::string_view file, int line, std::string_vi
 #if defined(_WIN32)
         HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
         DWORD mode = 0;
-        bool isConsole = (hOut != INVALID_HANDLE_VALUE && GetConsoleMode(hOut, &mode));
+        bool isConsole = (hOut != nullptr && hOut != INVALID_HANDLE_VALUE && GetConsoleMode(hOut, &mode));
         std::string formatted = formatText(level, file, line, message, consoleColors_ && isConsole);
         if (isConsole) {
             writeConsoleUtf8(hOut, formatted);
@@ -483,7 +520,8 @@ void Logger::log(LogLevel level, std::string_view file, int line, std::string_vi
             std::cout.flush();
         }
 #else
-        std::string formatted = formatText(level, file, line, message, consoleColors_);
+        bool isConsole = (isatty(STDOUT_FILENO) != 0);
+        std::string formatted = formatText(level, file, line, message, consoleColors_ && isConsole);
         std::cout.write(formatted.data(), formatted.size());
         std::cout.flush();
 #endif
@@ -492,7 +530,7 @@ void Logger::log(LogLevel level, std::string_view file, int line, std::string_vi
     if (!logFilePath_.empty()) {
         if (!logFile_.is_open()) {
             auto fsPath = pathFromUtf8(logFilePath_);
-            logFile_.open(fsPath, std::ios::app);
+            logFile_.open(fsPath, std::ios::out | std::ios::app | std::ios::binary);
             if (logFile_.is_open()) {
                 std::error_code ec;
                 auto sz = std::filesystem::file_size(fsPath, ec);
