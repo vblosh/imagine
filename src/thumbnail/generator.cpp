@@ -62,6 +62,20 @@ Status commitFile(const std::filesystem::path& tmpPath, const std::filesystem::p
     return Status::ok();
 }
 
+bool isValidImageBuffer(const ImageBuffer& img) {
+    if (img.data.empty() || img.width <= 0 || img.height <= 0 ||
+        img.channels < 1 || img.channels > 4) {
+        return false;
+    }
+    const size_t w = static_cast<size_t>(img.width);
+    const size_t h = static_cast<size_t>(img.height);
+    const size_t c = static_cast<size_t>(img.channels);
+    if (w > std::numeric_limits<size_t>::max() / h) return false;
+    const size_t pixels = w * h;
+    if (pixels > std::numeric_limits<size_t>::max() / c) return false;
+    return img.data.size() >= pixels * c;
+}
+
 } // namespace
 
 Result<std::pair<int, int>> Generator::getImageDimensions(const std::string& filePath) {
@@ -532,7 +546,7 @@ Result<ImageBuffer> Generator::resize(const ImageBuffer& src, int maxDimension) 
 }
 
 Status Generator::saveJpeg(const ImageBuffer& img, const std::string& destPath, int quality) {
-    if (img.data.empty() || img.width <= 0 || img.height <= 0 || img.channels <= 0) {
+    if (!isValidImageBuffer(img)) {
         return Status::invalidArgument("Empty or invalid image buffer for saving JPEG");
     }
     quality = std::clamp(quality, 1, 100);
@@ -569,7 +583,7 @@ Status Generator::saveJpeg(const ImageBuffer& img, const std::string& destPath, 
 }
 
 Status Generator::saveJpegFast(const ImageBuffer& img, const std::string& destPath, int quality) {
-    if (img.data.empty() || img.width <= 0 || img.height <= 0 || img.channels <= 0) {
+    if (!isValidImageBuffer(img)) {
         return Status::invalidArgument("Empty or invalid image buffer for saving JPEG");
     }
     quality = std::clamp(quality, 1, 100);
@@ -623,7 +637,7 @@ Status Generator::saveJpegFast(const ImageBuffer& img, const std::string& destPa
 }
 
 Status Generator::savePng(const ImageBuffer& img, const std::string& destPath) {
-    if (img.data.empty() || img.width <= 0 || img.height <= 0 || img.channels <= 0) {
+    if (!isValidImageBuffer(img)) {
         return Status::invalidArgument("Empty or invalid image buffer for saving PNG");
     }
 

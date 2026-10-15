@@ -21,6 +21,8 @@ public:
     static std::string getRelativeThumbnailPath(const std::string& hash, int size);
     bool hasThumbnail(const std::string& hash, int size) const;
 
+    /// Generates or returns a single cached thumbnail.
+    /// @note Cached thumbnails on disk are pre-rotated according to orientation.
     Result<std::string> ensureThumbnail(
         const std::string& sourceImagePath,
         const std::string& hash,
@@ -28,12 +30,18 @@ public:
         int orientation = 1
     );
 
+    /// Ensures both small and large thumbnails exist for a file on disk.
+    /// @note Cached thumbnails on disk are pre-rotated according to orientation.
     Result<std::pair<std::string, std::string>> ensureDualThumbnails(
         const std::string& sourceImagePath,
         const std::string& hash,
         int orientation = 1
     );
 
+    /// Ensures both small and large thumbnails exist for an in-memory image buffer.
+    /// @note Cached thumbnails on disk are pre-rotated according to orientation.
+    ///       outWidth and outHeight receive authentic pre-orientation sensor dimensions,
+    ///       matching the MediaItem and database schema expectations.
     Result<std::pair<std::string, std::string>> ensureDualThumbnailsFromMemory(
         const uint8_t* data,
         size_t size,

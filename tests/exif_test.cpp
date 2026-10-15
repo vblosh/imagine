@@ -54,7 +54,22 @@ TEST(ExifReaderTest, ParseExifDate) {
     int64_t ts = ExifReader::parseExifDate("2026:09:03 21:05:00");
     EXPECT_GT(ts, 0);
 
-    // Invalid string
+    // Valid dash-separated date
+    int64_t tsDash = ExifReader::parseExifDate("2026-09-03 21:05:00");
+    EXPECT_EQ(ts, tsDash);
+
+    // Invalid time components
+    EXPECT_EQ(ExifReader::parseExifDate("2026:05:10 24:00:00"), 0);
+    EXPECT_EQ(ExifReader::parseExifDate("2026:05:10 99:99:99"), 0);
+    EXPECT_EQ(ExifReader::parseExifDate("2026:05:10 12:60:00"), 0);
+    EXPECT_EQ(ExifReader::parseExifDate("2026:05:10 12:00:61"), 0);
+
+    // Invalid separators (negative hour parse bug: ss >> day >> hour with '-' separator)
+    EXPECT_EQ(ExifReader::parseExifDate("2026-05-10-12:00:00"), 0);
+    EXPECT_EQ(ExifReader::parseExifDate("2026/05/10 12:00:00"), 0);
+    EXPECT_EQ(ExifReader::parseExifDate("2026:05:10 12.00.00"), 0);
+
+    // Invalid strings
     EXPECT_EQ(ExifReader::parseExifDate("invalid-date"), 0);
     EXPECT_EQ(ExifReader::parseExifDate(""), 0);
     EXPECT_EQ(ExifReader::parseExifDate("short"), 0);
@@ -112,4 +127,38 @@ TEST(ExifReaderTest, ReadRealExifFileAndBuffer) {
         EXPECT_EQ(truncRes.value().camera_make, "Apple");
         EXPECT_TRUE(truncRes.value().has_gps);
     }
+}
+
+TEST(ExifReaderTest, NonAsciiUtf8PathsOnWindows) {
+    auto tmpDir = std::filesystem::temp_directory_path() / "imagine_utf8_тест_äöü";
+    std::filesystem::create_directories(tmpDir);
+
+    auto testFile = tmpDir / "фото_тест_üöä.txt";
+    {
+        std::ofstream ofs(testFile);
+        ofs << "utf8 path test content";
+    }
+
+    std::string pathStr = pathToUtf8(testFile);
+    auto hashRes = Hasher::computeFileSha256(pathStr);
+    EXPECT_TRUE(hashRes.isOk()) << hashRes.status().message();
+    EXPECT_FALSE(hashRes.value().empty());
+
+    // If test_exif.jpg exists, copy to non-ASCII path and test ExifReader::readFromFile
+    std::string exifPath = "tests/fixtures/test_exif.jpg";
+    if (std::filesystem::exists(exifPath)) {
+        auto imgFile = tmpDir / "тест_фото.jpg";
+        std::filesystem::copy_file(exifPath, imgFile, std::filesystem::copy_options::overwrite_existing);
+
+        std::string imgPathStr = pathToUtf8(imgFile);
+        auto exifRes = ExifReader::readFromFile(imgPathStr);
+        EXPECT_TRUE(exifRes.isOk()) << exifRes.status().message();
+        if (exifRes.isOk()) {
+            EXPECT_EQ(exifRes.value().camera_make, "Apple");
+            EXPECT_TRUE(exifRes.value().has_gps);
+        }
+    }
+
+    std::error_code ec;
+    std::filesystem::remove_all(tmpDir, ec);
 }

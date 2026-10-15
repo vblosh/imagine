@@ -5,6 +5,7 @@
 #include <ctime>
 #include <sstream>
 #include <chrono>
+#include <cmath>
 
 namespace imagine::metadata {
 
@@ -15,9 +16,16 @@ int64_t ExifReader::parseExifDate(const std::string& dateStr) {
 
     // Format: "YYYY:MM:DD HH:MM:SS"
     std::istringstream ss(dateStr);
-    char sep;
+    char sep1, sep2, sep3, sep4;
     int year, month, day, hour, min, sec;
-    if (ss >> year >> sep >> month >> sep >> day >> hour >> sep >> min >> sep >> sec) {
+    if (ss >> year >> sep1 >> month >> sep2 >> day >> hour >> sep3 >> min >> sep4 >> sec) {
+        if ((sep1 != ':' && sep1 != '-') || (sep2 != ':' && sep2 != '-') ||
+            sep3 != ':' || sep4 != ':') {
+            return 0;
+        }
+        if (hour < 0 || hour >= 24 || min < 0 || min >= 60 || sec < 0 || sec > 60) {
+            return 0;
+        }
         std::chrono::year_month_day ymd{
             std::chrono::year{year},
             std::chrono::month{static_cast<unsigned>(month)},
@@ -106,24 +114,27 @@ Result<ExifData> ExifReader::readFromBuffer(const uint8_t* data, size_t size) {
     }
 
     // GPS
-    if (info.GeoLocation.Latitude != 0.0 || info.GeoLocation.Longitude != 0.0) {
+    if (std::isfinite(info.GeoLocation.Latitude) && std::isfinite(info.GeoLocation.Longitude) &&
+        info.GeoLocation.Latitude >= -90.0 && info.GeoLocation.Latitude <= 90.0 &&
+        info.GeoLocation.Longitude >= -180.0 && info.GeoLocation.Longitude <= 180.0 &&
+        (info.GeoLocation.Latitude != 0.0 || info.GeoLocation.Longitude != 0.0)) {
         ed.has_gps = true;
         ed.latitude = info.GeoLocation.Latitude;
         ed.longitude = info.GeoLocation.Longitude;
-        ed.altitude = info.GeoLocation.Altitude;
+        ed.altitude = std::isfinite(info.GeoLocation.Altitude) ? info.GeoLocation.Altitude : 0.0;
     }
 
     return ed;
 }
 
 Result<ExifData> ExifReader::readFromFile(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         return Status::ioError("Unable to open image file: " + filePath);
     }
 
-    // EXIF header is within first 64KB - 128KB of JPEG
-    std::vector<uint8_t> buffer(128 * 1024);
+    // Read up to 512KB to accommodate JPEGs with large preceding ICC/XMP segments
+    std::vector<uint8_t> buffer(512 * 1024);
     file.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
     size_t bytesRead = file.gcount();
     if (bytesRead == 0) {
