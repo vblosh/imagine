@@ -44,6 +44,18 @@ using db::Connection;
 using db::Statement;
 using db::StepResult;
 constexpr size_t kEmbeddingDimensions = 512;
+constexpr size_t kMaxBatchSize = 1000;
+
+struct FutureWaitGuard {
+    std::vector<std::future<void>>& futures;
+    ~FutureWaitGuard() noexcept {
+        for (auto& f : futures) {
+            if (f.valid()) {
+                try { f.wait(); } catch (...) {}
+            }
+        }
+    }
+};
 
 int64_t nowSeconds() {
     return std::chrono::duration_cast<std::chrono::seconds>(
@@ -601,8 +613,9 @@ Result<EncodedSource> readEncodedSource(const std::string& path) {
     std::error_code ecTime;
     std::error_code ecSize;
     // Capture filesystem timestamp and size BEFORE reading bytes to avoid TOCTOU races
-    auto writeTime = std::filesystem::last_write_time(path, ecTime);
-    auto fileSize = std::filesystem::file_size(path, ecSize);
+    const auto fsPath = pathFromUtf8(path);
+    auto writeTime = std::filesystem::last_write_time(fsPath, ecTime);
+    auto fileSize = std::filesystem::file_size(fsPath, ecSize);
     const bool validStats = !ecTime && !ecSize;
 
     auto bytes = thumbnail::Generator::loadImageBytes(path);
@@ -918,25 +931,46 @@ Status persistAnalysis(Connection& conn, MediaId mediaId, const MediaItem& media
 
         const int64_t now = nowSeconds();
 
-        std::vector<float> fallbackEmbedding;
-        for (const auto& detection : detections) {
-            double bestIou = 0;
-            OldFace* match = nullptr;
-            for (auto& old : previous) {
-                if (old.used) continue;
+        struct IouPair {
+            size_t detIdx;
+            size_t oldIdx;
+            double iou;
+        };
+        std::vector<IouPair> candidatePairs;
+        for (size_t dIdx = 0; dIdx < detections.size(); ++dIdx) {
+            const auto& detection = detections[dIdx];
+            for (size_t oIdx = 0; oIdx < previous.size(); ++oIdx) {
+                const auto& old = previous[oIdx];
                 double left = std::max<double>(detection.x, old.x);
                 double top = std::max<double>(detection.y, old.y);
                 double right = std::min<double>(detection.x + detection.width, old.x + old.w);
                 double bottom = std::min<double>(detection.y + detection.height, old.y + old.h);
-                double inter = std::max(0.0, right-left) * std::max(0.0, bottom-top);
-                double uni = detection.width*detection.height + old.w*old.h - inter;
-                double iou = uni > 0 ? inter/uni : 0;
-                if (iou > bestIou) { bestIou = iou; match = &old; }
+                double inter = std::max(0.0, right - left) * std::max(0.0, bottom - top);
+                double uni = detection.width * detection.height + old.w * old.h - inter;
+                double iou = uni > 0 ? inter / uni : 0;
+                if (iou >= 0.5) {
+                    candidatePairs.push_back({dIdx, oIdx, iou});
+                }
             }
+        }
+        std::sort(candidatePairs.begin(), candidatePairs.end(), [](const IouPair& a, const IouPair& b) {
+            return a.iou > b.iou;
+        });
+        std::vector<OldFace*> matchedOld(detections.size(), nullptr);
+        for (const auto& pair : candidatePairs) {
+            if (!matchedOld[pair.detIdx] && !previous[pair.oldIdx].used) {
+                previous[pair.oldIdx].used = true;
+                matchedOld[pair.detIdx] = &previous[pair.oldIdx];
+            }
+        }
+
+        std::vector<float> fallbackEmbedding;
+        for (size_t dIdx = 0; dIdx < detections.size(); ++dIdx) {
+            const auto& detection = detections[dIdx];
+            OldFace* match = matchedOld[dIdx];
             std::string embedError;
             auto [embData, embSize] = checkedEmbedding(detection, fallbackEmbedding, embedError);
-            if (match && bestIou >= 0.5) {
-                match->used = true;
+            if (match) {
                 bindEmbedding(up, 1, embData, embSize); up.bind(2, static_cast<int32_t>(embSize));
                 up.bind(3, embedError); up.bind(4, now); up.bind(5, match->id);
                 Status s = execDone(conn, up, "Failed to refresh face embedding");
@@ -1346,6 +1380,7 @@ describeExemplars(const ExemplarCache& exemplars, concurrency::ThreadPool* pool 
             if (pool && numThreads > 1) {
                 std::vector<std::future<void>> futures;
                 futures.reserve(numThreads - 1);
+                FutureWaitGuard waitGuard{futures};
                 for (size_t t = 1; t < numThreads; ++t) {
                     const size_t start = t * chunkSize;
                     const size_t end = std::min(start + chunkSize, rows.size());
@@ -1758,6 +1793,7 @@ void finishGroupReviewBuild(GroupReviewBuild& built, float matchThreshold,
     } else if (pool) {
         std::vector<std::future<void>> futures;
         futures.reserve(numThreads - 1);
+        FutureWaitGuard waitGuard{futures};
         const size_t chunkSize = (totalFaces + numThreads - 1) / numThreads;
         for (size_t t = 1; t < numThreads; ++t) {
             const size_t start = t * chunkSize;
@@ -1903,7 +1939,6 @@ struct Service::Impl {
     Engine engine;
     RuntimeInfo runtime;
     mutable std::mutex workerMutex;
-    std::jthread worker;
     std::atomic<bool> cancelRequested{false};
     Status engineStatus;
     mutable std::mutex reviewMutex;
@@ -1920,9 +1955,20 @@ struct Service::Impl {
     bool idleWorkerStop{false};
     std::chrono::steady_clock::time_point lastScanEndTime{};
     bool scanRunning{false};
+    std::jthread worker;
     std::jthread idleWorker;
 
+    void invalidateReviewCache() {
+        std::lock_guard<std::mutex> lock(reviewMutex);
+        reviewIndex.reset();
+        reviewSnapshots.clear();
+    }
+
     void idleLoop(std::stop_token stopToken) {
+        std::stop_callback stopWake(stopToken, [this]() {
+            std::lock_guard<std::mutex> wakeLock(idleMutex);
+            idleCv.notify_all();
+        });
         std::unique_lock lock(idleMutex);
         while (!stopToken.stop_requested() && !idleWorkerStop) {
             if (!scanRunning && engine.isLoaded()) {
@@ -1949,7 +1995,8 @@ struct Service::Impl {
     Impl(db::CatalogDb& dbRef, std::string cacheDir, PathResolver resolve, Analyzer analyze)
         : db(dbRef), cacheDirectory(std::move(cacheDir)), resolver(std::move(resolve)), analyzer(std::move(analyze)),
           config{envString("IMAGINE_FACE_MODELS", ""), envString("IMAGINE_FACE_DEVICE", "cpu"),
-                 0.5f, 0.4f, envFloat("IMAGINE_FACE_MATCH_THRESHOLD", 0.5f), 4},
+                 0.5f, 0.4f, envFloat("IMAGINE_FACE_MATCH_THRESHOLD", 0.5f),
+                 std::clamp(envInt("IMAGINE_FACE_THREADS", 4), 1, 256)},
           engine(config) {
         if (analyzer) {
             engineStatus = Status::ok();
@@ -1971,13 +2018,13 @@ struct Service::Impl {
         if (analyzer) {
             runtime.error.clear();
         }
+        unsigned int hardwareThreads = std::thread::hardware_concurrency();
+        if (hardwareThreads == 0) hardwareThreads = 4;
+        pool = std::make_unique<concurrency::ThreadPool>(hardwareThreads);
         idleUnloadSec = envInt("IMAGINE_FACE_IDLE_UNLOAD_SEC", 30);
         if (idleUnloadSec > 0 && !analyzer) {
             idleWorker = std::jthread([this](std::stop_token stopToken) { idleLoop(stopToken); });
         }
-        unsigned int hardwareThreads = std::thread::hardware_concurrency();
-        if (hardwareThreads == 0) hardwareThreads = 4;
-        pool = std::make_unique<concurrency::ThreadPool>(hardwareThreads);
     }
 };
 
@@ -2104,10 +2151,14 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
             while (media.step() == StepResult::Row) ids.push_back(media.getInt64(0));
         } else {
             ids = requestedIds;
+            auto checkRes = impl_->db.conn_.prepare("SELECT media_type FROM media_items WHERE id=?;");
+            if (!checkRes.isOk()) return checkRes.status();
+            auto checkStmt = std::move(checkRes.value());
             for (MediaId id : ids) {
-                auto mediaRes = impl_->db.getMediaById(id);
-                if (!mediaRes.isOk()) return mediaRes.status();
-                if (mediaRes.value().media_type != "photo") return Status::invalidArgument("Face analysis only supports photos");
+                checkStmt.reset();
+                checkStmt.bind(1, id);
+                if (checkStmt.step() != StepResult::Row) return Status::notFound("Media item not found");
+                if (checkStmt.getString(0) != "photo") return Status::invalidArgument("Face analysis only supports photos");
             }
         }
 
@@ -2714,6 +2765,7 @@ Result<json> Service::setIdentity(int64_t faceId, int64_t revision, std::optiona
     if (oldTag && *oldTag != newTag) { s = syncFaceTagOwnership(conn, mediaId, *oldTag); if (!s.isOk()) return s; }
     if (newTag > 0) { s = syncFaceTagOwnership(conn, mediaId, newTag); if (!s.isOk()) return s; }
     s = tx.commit(); if (!s.isOk()) return s;
+    impl_->invalidateReviewCache();
     return faceJson(conn, faceId, impl_->config.matchThreshold, nullptr, nullptr,
                     false, nullptr, includeSuggestions);
 }
@@ -2740,7 +2792,12 @@ Result<json> Service::acceptSuggestion(int64_t faceId, int64_t revision, TagId t
 
 Result<std::vector<SuggestionAcceptanceOutcome>> Service::acceptSuggestionsBatch(
     const std::vector<SuggestionAcceptance>& acceptances) {
+    if (acceptances.size() > kMaxBatchSize) {
+        return Status::invalidArgument("Batch size exceeds maximum limit of 1000 items");
+    }
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+    Connection& conn = impl_->db.conn_;
+    db::Transaction tx(conn);
     std::vector<int64_t> faceIds;
     faceIds.reserve(acceptances.size());
     for (const auto& acceptance : acceptances) faceIds.push_back(acceptance.id);
@@ -2748,9 +2805,29 @@ Result<std::vector<SuggestionAcceptanceOutcome>> Service::acceptSuggestionsBatch
     Status rejectionStatus = loadRejections(impl_->db.conn_, faceIds, rejectionCache);
     if (!rejectionStatus.isOk()) return rejectionStatus;
 
-    ExemplarCache exemplarCache;
+    ExemplarCache initialExemplarCache;
+    std::unordered_map<int64_t, std::string> initialEligibleNames;
+    std::unordered_map<int64_t, FaceMatchInfo> initialMatchInfos;
+    for (const auto& acceptance : acceptances) {
+        if (acceptance.id <= 0 || acceptance.revision <= 0 || acceptance.tagId <= 0) continue;
+        FaceMatchInfo matchInfo;
+        auto face = faceJson(impl_->db.conn_, acceptance.id, impl_->config.matchThreshold,
+                             &initialExemplarCache, &rejectionCache, false, &matchInfo);
+        if (face.isOk() && face.value()["revision"].get<int64_t>() == acceptance.revision) {
+            for (const auto& suggestion : face.value()["suggestions"]) {
+                if (suggestion["tag_id"].get<int64_t>() == acceptance.tagId) {
+                    initialEligibleNames[acceptance.id] = suggestion["name"].get<std::string>();
+                    initialMatchInfos[acceptance.id] = matchInfo;
+                    break;
+                }
+            }
+        }
+    }
+
+    ExemplarCache sequentialExemplarCache = initialExemplarCache;
     std::vector<SuggestionAcceptanceOutcome> outcomes;
     outcomes.reserve(acceptances.size());
+    bool anyUpdated = false;
     for (const auto& acceptance : acceptances) {
         SuggestionAcceptanceOutcome outcome;
         outcome.id = acceptance.id;
@@ -2761,7 +2838,7 @@ Result<std::vector<SuggestionAcceptanceOutcome>> Service::acceptSuggestionsBatch
         }
         FaceMatchInfo matchInfo;
         auto face = faceJson(impl_->db.conn_, acceptance.id, impl_->config.matchThreshold,
-                             &exemplarCache, &rejectionCache, false, &matchInfo);
+                             &sequentialExemplarCache, &rejectionCache, false, &matchInfo);
         if (!face.isOk()) {
             outcome.status = face.status();
             outcomes.push_back(std::move(outcome));
@@ -2780,6 +2857,13 @@ Result<std::vector<SuggestionAcceptanceOutcome>> Service::acceptSuggestionsBatch
             }
         }
         if (!acceptedName) {
+            auto it = initialEligibleNames.find(acceptance.id);
+            if (it != initialEligibleNames.end()) {
+                acceptedName = it->second;
+                matchInfo = initialMatchInfos[acceptance.id];
+            }
+        }
+        if (!acceptedName) {
             outcome.status = Status::alreadyExists("That identity is no longer an eligible suggestion");
             outcomes.push_back(std::move(outcome));
             continue;
@@ -2793,17 +2877,24 @@ Result<std::vector<SuggestionAcceptanceOutcome>> Service::acceptSuggestionsBatch
             continue;
         }
         outcome.face = std::move(updated.value());
-        updateExemplarCache(exemplarCache, matchInfo, acceptance.id,
+        anyUpdated = true;
+        updateExemplarCache(sequentialExemplarCache, matchInfo, acceptance.id,
                             acceptance.tagId, *acceptedName);
         auto rejected = rejectionCache.find(acceptance.id);
         if (rejected != rejectionCache.end()) rejected->second.erase(acceptance.tagId);
         outcomes.push_back(std::move(outcome));
     }
+    Status commitStatus = tx.commit();
+    if (!commitStatus.isOk()) return commitStatus;
+    if (anyUpdated) impl_->invalidateReviewCache();
     return outcomes;
 }
 
 Result<std::vector<SuggestionRejectionOutcome>> Service::rejectSuggestionsBatch(
     const std::vector<SuggestionRejection>& rejections) {
+    if (rejections.size() > kMaxBatchSize) {
+        return Status::invalidArgument("Batch size exceeds maximum limit of 1000 items");
+    }
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
     std::vector<int64_t> faceIds;
     faceIds.reserve(rejections.size());
@@ -2915,6 +3006,7 @@ Result<std::vector<SuggestionRejectionOutcome>> Service::rejectSuggestionsBatch(
 
     Status commitStatus = tx.commit();
     if (!commitStatus.isOk()) return commitStatus;
+    impl_->invalidateReviewCache();
     return outcomes;
 }
 
@@ -2929,6 +3021,9 @@ Result<json> Service::rejectSuggestion(int64_t faceId, int64_t revision, TagId t
 
 Result<std::vector<FaceDismissalOutcome>> Service::setDismissedBatch(
     const std::vector<FaceDismissal>& dismissals, bool dismissed) {
+    if (dismissals.size() > kMaxBatchSize) {
+        return Status::invalidArgument("Batch size exceeds maximum limit of 1000 items");
+    }
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
     Connection& conn = impl_->db.conn_;
     db::Transaction tx(conn);
@@ -3030,6 +3125,7 @@ Result<std::vector<FaceDismissalOutcome>> Service::setDismissedBatch(
 
     Status commitStatus = tx.commit();
     if (!commitStatus.isOk()) return commitStatus;
+    impl_->invalidateReviewCache();
     return outcomes;
 }
 
@@ -3069,6 +3165,10 @@ Result<std::string> Service::cropPath(int64_t faceId, int64_t revision) {
     std::filesystem::path cropFile = cropRoot / (sourceHash + "-" + std::to_string(mediaId) + "-" + std::to_string(faceId) + "-" + std::to_string(revision) + ".jpg");
     std::error_code ec;
     if (std::filesystem::is_regular_file(cropFile, ec)) return pathToUtf8(cropFile);
+    std::filesystem::create_directories(cropRoot, ec);
+    if (ec && !std::filesystem::is_directory(cropRoot, ec)) {
+        return Status::ioError("Failed to create face crop cache directory: " + ec.message());
+    }
 
     auto currentHash = metadata::Hasher::computeFileSha256(photoPath);
     if (!currentHash.isOk()) return currentHash.status();
@@ -3089,11 +3189,15 @@ Result<std::string> Service::cropPath(int64_t faceId, int64_t revision) {
     if (!cropped.isOk()) return cropped.status();
     std::string tempPath = pathToUtf8(cropFile) + ".tmp-" +
         std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    std::filesystem::path tempFile = pathFromUtf8(tempPath);
     Status saved = thumbnail::Generator::saveJpeg(cropped.value(), tempPath, 90);
-    if (!saved.isOk()) return saved;
-    std::filesystem::rename(tempPath, cropFile, ec);
+    if (!saved.isOk()) {
+        std::filesystem::remove(tempFile, ec);
+        return saved;
+    }
+    std::filesystem::rename(tempFile, cropFile, ec);
     if (ec) {
-        std::filesystem::remove(tempPath, ec);
+        std::filesystem::remove(tempFile, ec);
         if (std::filesystem::is_regular_file(cropFile, ec)) return pathToUtf8(cropFile);
         return Status::ioError("Failed to publish face crop: " + ec.message());
     }
@@ -3302,8 +3406,9 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
             }
             std::error_code ecTimeAfter;
             std::error_code ecSizeAfter;
-            const auto writeTimeAfter = std::filesystem::last_write_time(photoPath, ecTimeAfter);
-            const auto fileSizeAfter = std::filesystem::file_size(photoPath, ecSizeAfter);
+            const auto fsPhotoPath = pathFromUtf8(photoPath);
+            const auto writeTimeAfter = std::filesystem::last_write_time(fsPhotoPath, ecTimeAfter);
+            const auto fileSizeAfter = std::filesystem::file_size(fsPhotoPath, ecSizeAfter);
             // Fast path: if timestamps and size match, skip expensive SHA-256 computation.
             // Note: On filesystems with coarse timestamps (e.g. FAT with 2 s resolution),
             // in-place edits within one tick and of identical file size are undetected by mtime,
@@ -3334,6 +3439,20 @@ void Service::runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force) {
                 }
                 continue;
             }
+            if (!preserveIdentities && !impl_->cacheDirectory.empty()) {
+                std::error_code cropEc;
+                const std::filesystem::path cropRoot = pathFromUtf8(impl_->cacheDirectory) / "faces";
+                const std::string cropPrefix = media.content_hash + "-" + std::to_string(mediaId) + "-";
+                if (std::filesystem::is_directory(cropRoot, cropEc)) {
+                    for (const auto& entry : std::filesystem::directory_iterator(cropRoot, cropEc)) {
+                        if (entry.is_regular_file(cropEc) &&
+                            pathToUtf8(entry.path().filename()).rfind(cropPrefix, 0) == 0) {
+                            std::filesystem::remove(entry.path(), cropEc);
+                        }
+                    }
+                }
+            }
+            impl_->invalidateReviewCache();
             updateProgress("processed");
         }
         finish(impl_->cancelRequested.load() ? "cancelled" : "completed");

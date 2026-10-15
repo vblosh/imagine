@@ -3,6 +3,7 @@
 #include "imagine/concurrency/thread_pool.hpp"
 #include "imagine/metadata/hasher.hpp"
 #include "imagine/common/logger.hpp"
+#include "imagine/common/types.hpp"
 
 #include <algorithm>
 #include <array>
@@ -45,6 +46,17 @@ namespace imagine::faces {
 namespace {
 
 constexpr const char* kPipelineVersion = "insightface-0.7.3-v1";
+
+struct FutureWaitGuard {
+    std::vector<std::future<void>>& futures;
+    ~FutureWaitGuard() noexcept {
+        for (auto& f : futures) {
+            if (f.valid()) {
+                try { f.wait(); } catch (...) {}
+            }
+        }
+    }
+};
 
 Status validateConfig(const Config& config) {
     if (config.device != "cpu" && config.device != "auto" && config.device != "cuda") {
@@ -409,9 +421,11 @@ LoadedModel openModel(const std::filesystem::path& path,
 }
 
 std::vector<Candidate> decodeDetections(const std::vector<std::vector<float>>& outputs,
-                                        float scale,
+                                        float scaleX,
+                                        float scaleY,
                                         float confidence) {
-    if (outputs.size() != 9 || !std::isfinite(scale) || scale <= 0.0f) {
+    if (outputs.size() != 9 || !std::isfinite(scaleX) || scaleX <= 0.0f ||
+        !std::isfinite(scaleY) || scaleY <= 0.0f) {
         throw std::runtime_error("SCRFD output layout or resize scale is invalid");
     }
     std::vector<Candidate> candidates;
@@ -439,17 +453,17 @@ std::vector<Candidate> decodeDetections(const std::vector<std::vector<float>>& o
                     const float cy = static_cast<float>(row * stride);
                     const size_t boxOffset = i * 4;
                     Candidate candidate;
-                    candidate.x1 = (cx - boxes[boxOffset] * stride) / scale;
-                    candidate.y1 = (cy - boxes[boxOffset + 1] * stride) / scale;
-                    candidate.x2 = (cx + boxes[boxOffset + 2] * stride) / scale;
-                    candidate.y2 = (cy + boxes[boxOffset + 3] * stride) / scale;
+                    candidate.x1 = (cx - boxes[boxOffset] * stride) / scaleX;
+                    candidate.y1 = (cy - boxes[boxOffset + 1] * stride) / scaleY;
+                    candidate.x2 = (cx + boxes[boxOffset + 2] * stride) / scaleX;
+                    candidate.y2 = (cy + boxes[boxOffset + 3] * stride) / scaleY;
                     candidate.score = score;
                     candidate.order = globalIndex;
                     for (size_t point = 0; point < candidate.landmarks.size(); ++point) {
                         const size_t offset = i * 10 + point * 2;
                         candidate.landmarks[point] = {
-                            (cx + landmarks[offset] * stride) / scale,
-                            (cy + landmarks[offset + 1] * stride) / scale,
+                            (cx + landmarks[offset] * stride) / scaleX,
+                            (cy + landmarks[offset + 1] * stride) / scaleY,
                         };
                     }
                     if (!std::isfinite(candidate.x1) || !std::isfinite(candidate.y1) ||
@@ -647,14 +661,6 @@ void alignAndNormalizeTo(const thumbnail::ImageBuffer& image,
     }
 }
 
-std::vector<float> alignAndNormalize(const thumbnail::ImageBuffer& image,
-                                     const std::array<Point, 5>& landmarks) {
-    constexpr size_t kPlaneSize = static_cast<size_t>(kRecognizerSide) * kRecognizerSide;
-    std::vector<float> chw(static_cast<size_t>(3) * kPlaneSize, 0.0f);
-    alignAndNormalizeTo(image, landmarks, chw.data(), chw.data() + kPlaneSize, chw.data() + 2 * kPlaneSize);
-    return chw;
-}
-
 std::string appendReason(const std::string& prior, const std::string& next) {
     if (prior.empty()) return next;
     return prior + "; " + next;
@@ -700,19 +706,44 @@ Status Engine::Impl::loadLocked() {
     if (initialized && detector && recognizer) {
         return Status::ok();
     }
-    if (detectorPath.empty() || recognizerPath.empty()) {
-        const std::filesystem::path directory(config.modelDirectory);
-        if (config.modelDirectory.empty() || !std::filesystem::is_directory(directory)) {
-            return Status::internal("Face model directory does not exist: " + config.modelDirectory);
-        }
-        detectorPath = directory / "det_10g.onnx";
-        recognizerPath = directory / "w600k_r50.onnx";
-        if (!std::filesystem::is_regular_file(detectorPath) || !std::filesystem::is_regular_file(recognizerPath)) {
-            return Status::internal("Model directory must contain det_10g.onnx and w600k_r50.onnx from buffalo_l");
-        }
+    if (const auto configStatus = validateConfig(config); !configStatus.isOk()) {
+        info.ready = false;
+        info.loaded = false;
+        info.error = configStatus.message();
+        return configStatus;
     }
 
     try {
+        std::error_code ec;
+        if (detectorPath.empty() || recognizerPath.empty()) {
+            const std::filesystem::path directory = pathFromUtf8(config.modelDirectory);
+            if (config.modelDirectory.empty() || !std::filesystem::is_directory(directory, ec)) {
+                throw std::runtime_error("Face model directory does not exist: " + config.modelDirectory);
+            }
+            detectorPath = directory / "det_10g.onnx";
+            recognizerPath = directory / "w600k_r50.onnx";
+            if (!std::filesystem::is_regular_file(detectorPath, ec) || !std::filesystem::is_regular_file(recognizerPath, ec)) {
+                throw std::runtime_error("Model directory must contain det_10g.onnx and w600k_r50.onnx from buffalo_l");
+            }
+        }
+        if (info.detectorChecksum.empty() || info.recognizerChecksum.empty()) {
+            auto detectorHash = metadata::Hasher::computeFileSha256(pathToUtf8(detectorPath));
+            auto recognizerHash = metadata::Hasher::computeFileSha256(pathToUtf8(recognizerPath));
+            if (!detectorHash.isOk() || !recognizerHash.isOk()) {
+                throw std::runtime_error(!detectorHash.isOk() ? detectorHash.status().message() : recognizerHash.status().message());
+            }
+            info.detectorChecksum = detectorHash.value();
+            info.recognizerChecksum = recognizerHash.value();
+        }
+        if (info.runtimeVersion.empty()) {
+            const char* runtimeVersion = OrtGetApiBase()->GetVersionString();
+            info.runtimeVersion = runtimeVersion ? runtimeVersion : "unknown";
+        }
+        if (info.runtimeVersion != "1.30.0") {
+            throw std::runtime_error("ONNX Runtime 1.30.0 is required; loaded " + info.runtimeVersion);
+        }
+
+        info.fallbackReason.clear();
         detector = std::make_unique<LoadedModel>();
         recognizer = std::make_unique<LoadedModel>();
         const bool tryCuda = config.device != "cpu";
@@ -761,11 +792,13 @@ Status Engine::Impl::loadLocked() {
                         ", recognizer=" + info.recognizerProvider);
         return Status::ok();
     } catch (const std::exception& ex) {
+        const std::string err = exceptionMessage(ex);
+        info.ready = false;
         info.loaded = false;
+        info.error = err;
         initialized = false;
         detector.reset();
         recognizer.reset();
-        const std::string err = exceptionMessage(ex);
         IMAGINE_LOG_WARN("Face analysis engine loading failed: " + err);
         return Status::internal(err);
     }
@@ -792,18 +825,19 @@ Status Engine::initialize(bool eager) {
     impl_->info.error.clear();
     impl_->info.fallbackReason.clear();
     try {
-        const std::filesystem::path directory(impl_->config.modelDirectory);
-        if (impl_->config.modelDirectory.empty() || !std::filesystem::is_directory(directory)) {
+        std::error_code ec;
+        const std::filesystem::path directory = pathFromUtf8(impl_->config.modelDirectory);
+        if (impl_->config.modelDirectory.empty() || !std::filesystem::is_directory(directory, ec)) {
             throw std::runtime_error("Face model directory does not exist: " + impl_->config.modelDirectory);
         }
         impl_->detectorPath = directory / "det_10g.onnx";
         impl_->recognizerPath = directory / "w600k_r50.onnx";
-        if (!std::filesystem::is_regular_file(impl_->detectorPath) || !std::filesystem::is_regular_file(impl_->recognizerPath)) {
+        if (!std::filesystem::is_regular_file(impl_->detectorPath, ec) || !std::filesystem::is_regular_file(impl_->recognizerPath, ec)) {
             throw std::runtime_error("Model directory must contain det_10g.onnx and w600k_r50.onnx from buffalo_l");
         }
 
-        auto detectorHash = metadata::Hasher::computeFileSha256(impl_->detectorPath.string());
-        auto recognizerHash = metadata::Hasher::computeFileSha256(impl_->recognizerPath.string());
+        auto detectorHash = metadata::Hasher::computeFileSha256(pathToUtf8(impl_->detectorPath));
+        auto recognizerHash = metadata::Hasher::computeFileSha256(pathToUtf8(impl_->recognizerPath));
         if (!detectorHash.isOk() || !recognizerHash.isOk()) {
             throw std::runtime_error(!detectorHash.isOk() ? detectorHash.status().message() : recognizerHash.status().message());
         }
@@ -892,23 +926,6 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
     (void)image;
     return Status::internal("Face analysis is unavailable: this build was configured without ONNX Runtime 1.30.0");
 #else
-    {
-        std::shared_lock readLock(impl_->sessionMutex);
-        if (!impl_->initialized || !impl_->detector || !impl_->recognizer) {
-            readLock.unlock();
-            std::unique_lock writeLock(impl_->sessionMutex);
-            if (!impl_->initialized || !impl_->detector || !impl_->recognizer) {
-                Status loadStatus = impl_->loadLocked();
-                if (!loadStatus.isOk()) {
-                    return loadStatus;
-                }
-            }
-        }
-    }
-    std::shared_lock lock(impl_->sessionMutex);
-    if (!impl_->initialized || !impl_->info.ready || !impl_->detector || !impl_->recognizer) {
-        return Status::internal(impl_->info.error.empty() ? "Face analysis engine is not initialized" : impl_->info.error);
-    }
     AnalysisTimings timings{};
     const auto totalStart = std::chrono::steady_clock::now();
     if (image.width <= 0 || image.height <= 0 || image.channels != 3 || image.data.empty()) {
@@ -921,6 +938,8 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
         image.data.size() != imageWidth * imageHeight * 3) {
         return Status::invalidArgument("Face analysis image dimensions overflow or do not match its RGB8 buffer");
     }
+
+
     try {
         const auto preprocessStart = std::chrono::steady_clock::now();
         const double imageRatio = static_cast<double>(image.height) / image.width;
@@ -936,7 +955,8 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
         }
         resizedWidth = std::clamp(resizedWidth, 1, kDetectorSide);
         resizedHeight = std::clamp(resizedHeight, 1, kDetectorSide);
-        const float scale = static_cast<float>(resizedHeight) / image.height;
+        const float scaleX = static_cast<float>(resizedWidth) / image.width;
+        const float scaleY = static_cast<float>(resizedHeight) / image.height;
 
         std::vector<float> detectorInput(static_cast<size_t>(3) * kDetectorSide * kDetectorSide,
                                          -127.5f / 128.0f);
@@ -1032,6 +1052,7 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
         } else {
             std::vector<std::future<void>> futures;
             futures.reserve(numThreads - 1);
+            FutureWaitGuard waitGuard{futures};
             const int chunkSize = (resizedHeight + numThreads - 1) / numThreads;
             for (int t = 1; t < numThreads; ++t) {
                 const int start = t * chunkSize;
@@ -1047,13 +1068,31 @@ Result<std::vector<Detection>> Engine::analyze(const thumbnail::ImageBuffer& ima
                 f.get();
             }
         }
-        const auto detectorStart = std::chrono::steady_clock::now();
-        timings.detectorPreprocessMs = std::chrono::duration<double, std::milli>(detectorStart - preprocessStart).count();
+        timings.detectorPreprocessMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - preprocessStart).count();
 
+        std::shared_lock lock(impl_->sessionMutex);
+        while (!impl_->initialized || !impl_->detector || !impl_->recognizer) {
+            lock.unlock();
+            {
+                std::unique_lock writeLock(impl_->sessionMutex);
+                if (!impl_->initialized || !impl_->detector || !impl_->recognizer) {
+                    Status loadStatus = impl_->loadLocked();
+                    if (!loadStatus.isOk()) {
+                        return loadStatus;
+                    }
+                }
+            }
+            lock.lock();
+        }
+        if (!impl_->info.ready || !impl_->detector || !impl_->recognizer) {
+            return Status::internal(impl_->info.error.empty() ? "Face analysis engine is not initialized" : impl_->info.error);
+        }
+
+        const auto detectorStart = std::chrono::steady_clock::now();
         const auto detectorOutputs = runModel(*impl_->detector, detectorInput.data(), impl_->detectorInputShape);
         const auto postprocessStart = std::chrono::steady_clock::now();
         timings.detectorInferenceMs = std::chrono::duration<double, std::milli>(postprocessStart - detectorStart).count();
-        auto candidates = decodeDetections(detectorOutputs, scale, impl_->config.confidence);
+        auto candidates = decodeDetections(detectorOutputs, scaleX, scaleY, impl_->config.confidence);
         const auto nmsStart = std::chrono::steady_clock::now();
         timings.detectorDecodeMs = std::chrono::duration<double, std::milli>(nmsStart - postprocessStart).count();
         candidates = suppress(std::move(candidates), impl_->config.nmsThreshold);
