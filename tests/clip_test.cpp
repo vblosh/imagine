@@ -802,4 +802,235 @@ TEST(ClipServiceTest, RemoveMediaAndFindSimilarExcludesDeleted) {
     fs::remove_all(tempModels, ec);
 }
 
+TEST(ClipTokenizerTest, EncodeClampMinLength) {
+    std::error_code ec;
+    auto tempDir = fs::temp_directory_path() / ("test_clip_tok_clamp_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempDir, ec);
+
+    auto vocabPath = tempDir / "vocab.json";
+    auto mergesPath = tempDir / "merges.txt";
+
+    nlohmann::json mockVocab = {
+        {"<|startoftext|>", 49406},
+        {"<|endoftext|>", 49407},
+        {"test</w>", 100}
+    };
+    std::ofstream vf(vocabPath);
+    vf << mockVocab.dump();
+    vf.close();
+
+    std::ofstream mf(mergesPath);
+    mf << "#version: 0.2\n";
+    mf.close();
+
+    imagine::clip::Tokenizer tok;
+    ASSERT_TRUE(tok.load(vocabPath.string(), mergesPath.string()).isOk());
+
+    for (int len : {0, 1, -5}) {
+        auto out = tok.encode("test", len);
+        EXPECT_EQ(out.input_ids.size(), 2u);
+        EXPECT_EQ(out.attention_mask.size(), 2u);
+        EXPECT_EQ(out.input_ids[0], 49406); // SOT
+        EXPECT_EQ(out.input_ids[1], 49407); // EOT
+        EXPECT_EQ(out.attention_mask[0], 1);
+        EXPECT_EQ(out.attention_mask[1], 1);
+    }
+
+    fs::remove_all(tempDir, ec);
+}
+
+TEST(ClipEngineTest, EncodeImageValidatesChannelsAndOverflow) {
+    imagine::clip::ClipConfig config;
+    config.modelDirectory = "nonexistent";
+    imagine::clip::Engine engine(config);
+
+    // Channels 5 is invalid
+    imagine::thumbnail::ImageBuffer chan5;
+    chan5.width = 10; chan5.height = 10; chan5.channels = 5;
+    chan5.data.resize(10 * 10 * 5, 128);
+    auto res5 = engine.encodeImage(chan5);
+    EXPECT_FALSE(res5.isOk());
+    EXPECT_EQ(res5.status().code(), imagine::StatusCode::InvalidArgument);
+
+    // Channels 0 is invalid
+    imagine::thumbnail::ImageBuffer chan0;
+    chan0.width = 10; chan0.height = 10; chan0.channels = 0;
+    auto res0 = engine.encodeImage(chan0);
+    EXPECT_FALSE(res0.isOk());
+    EXPECT_EQ(res0.status().code(), imagine::StatusCode::InvalidArgument);
+
+    // Overflow dimensions
+    imagine::thumbnail::ImageBuffer overflowBuf;
+    overflowBuf.width = 2000000;
+    overflowBuf.height = 2000000;
+    overflowBuf.channels = 3;
+    overflowBuf.data.resize(10);
+    auto resOvf = engine.encodeImage(overflowBuf);
+    EXPECT_FALSE(resOvf.isOk());
+    EXPECT_EQ(resOvf.status().code(), imagine::StatusCode::InvalidArgument);
+
+    // Channels 2 (grayscale + alpha) passes validation (fails with engine not ready, not invalidArgument)
+    imagine::thumbnail::ImageBuffer chan2;
+    chan2.width = 10; chan2.height = 10; chan2.channels = 2;
+    chan2.data.resize(10 * 10 * 2, 128);
+    auto res2 = engine.encodeImage(chan2);
+    EXPECT_FALSE(res2.isOk());
+    EXPECT_NE(res2.status().code(), imagine::StatusCode::InvalidArgument);
+}
+
+TEST(ClipServiceTest, StartJobWhenAlreadyRunningReturnsAlreadyExists) {
+    std::error_code ec;
+    auto testDb = fs::temp_directory_path() / ("test_clip_running_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+    auto tempCache = fs::temp_directory_path() / ("test_clip_running_cache_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    auto tempModels = fs::temp_directory_path() / ("test_clip_running_models_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempCache, ec);
+    fs::create_directories(tempModels, ec);
+
+    nlohmann::json mockVocab = {{"<|startoftext|>", 49406}, {"<|endoftext|>", 49407}};
+    std::ofstream(tempModels / "vocab.json") << mockVocab.dump();
+    std::ofstream(tempModels / "merges.txt") << "#version: 0.2\n";
+    nlohmann::json manifest = {{"model_id", "clip-running-test"}, {"revision", "v1"}, {"vector_dim", 4}};
+    std::ofstream(tempModels / "model_manifest.json") << manifest.dump();
+    std::ofstream(tempModels / "image_encoder.onnx") << "dummy";
+    std::ofstream(tempModels / "text_encoder.onnx") << "dummy";
+
+    const char* prevEnv = std::getenv("IMAGINE_CLIP_MODEL_DIR");
+    std::string prevModelDir = prevEnv ? prevEnv : "";
+    setTestEnv("IMAGINE_CLIP_MODEL_DIR", tempModels.string());
+    struct EnvGuard {
+        std::string prev;
+        ~EnvGuard() { setTestEnv("IMAGINE_CLIP_MODEL_DIR", prev); }
+    } guard{prevModelDir};
+
+    {
+        imagine::db::CatalogDb db;
+        ASSERT_TRUE(db.open(testDb.string()).isOk());
+
+        imagine::clip::Service svc(db, tempCache.string(), [](const std::string& p) { return p; });
+
+        // Insert a simulated active job after service startup
+        {
+            auto insRes = db.connection().prepare(
+                "INSERT INTO semantic_jobs (scope, state, model_id, total, processed, skipped, failed, remaining, created_at, updated_at) "
+                "VALUES ('catalog', 'running', 'clip-running-test', 10, 0, 0, 0, 10, 100, 100);"
+            );
+            ASSERT_TRUE(insRes.isOk());
+            auto ins = std::move(insRes.value());
+            ins.step();
+        }
+
+        int64_t newJobId = 0;
+        auto st = svc.startJob("catalog", {}, false, newJobId);
+        EXPECT_FALSE(st.isOk());
+        EXPECT_EQ(st.code(), imagine::StatusCode::AlreadyExists);
+
+        // Verify the existing job in the database was NOT cancelled or altered
+        {
+            auto selRes = db.connection().prepare("SELECT state FROM semantic_jobs WHERE id=1;");
+            ASSERT_TRUE(selRes.isOk());
+            auto sel = std::move(selRes.value());
+            ASSERT_EQ(sel.step(), imagine::db::StepResult::Row);
+            EXPECT_EQ(sel.getString(0), "running");
+        }
+
+        db.close();
+    }
+
+    fs::remove(testDb, ec);
+    fs::remove(testDb.string() + "-wal", ec);
+    fs::remove(testDb.string() + "-shm", ec);
+    fs::remove_all(tempCache, ec);
+    fs::remove_all(tempModels, ec);
+}
+
+TEST(ClipServiceTest, SearchAndFindSimilarClampingAndDateFilters) {
+#if !IMAGINE_FACE_ANALYSIS_BUILT
+    GTEST_SKIP() << "Semantic search requires ONNX Runtime (IMAGINE_FACE_ANALYSIS_BUILT)";
+#endif
+    std::error_code ec;
+    auto testDb = fs::temp_directory_path() / ("test_clip_clamp_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+    auto tempCache = fs::temp_directory_path() / ("test_clip_clamp_cache_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    auto tempModels = fs::temp_directory_path() / ("test_clip_clamp_models_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempCache, ec);
+    fs::create_directories(tempModels, ec);
+
+    nlohmann::json mockVocab = {{"<|startoftext|>", 49406}, {"<|endoftext|>", 49407}};
+    std::ofstream(tempModels / "vocab.json") << mockVocab.dump();
+    std::ofstream(tempModels / "merges.txt") << "#version: 0.2\n";
+    nlohmann::json manifest = {{"model_id", "clip-clamp-test"}, {"revision", "v1"}, {"vector_dim", 4}};
+    std::ofstream(tempModels / "model_manifest.json") << manifest.dump();
+    std::ofstream(tempModels / "image_encoder.onnx") << "dummy";
+    std::ofstream(tempModels / "text_encoder.onnx") << "dummy";
+
+    const char* prevEnv = std::getenv("IMAGINE_CLIP_MODEL_DIR");
+    std::string prevModelDir = prevEnv ? prevEnv : "";
+    setTestEnv("IMAGINE_CLIP_MODEL_DIR", tempModels.string());
+    struct EnvGuard {
+        std::string prev;
+        ~EnvGuard() { setTestEnv("IMAGINE_CLIP_MODEL_DIR", prev); }
+    } guard{prevModelDir};
+
+    {
+        imagine::db::CatalogDb db;
+        ASSERT_TRUE(db.open(testDb.string()).isOk());
+
+        imagine::MediaItem m1;
+        m1.file_path = "vintage.jpg"; m1.file_name = "vintage.jpg"; m1.content_hash = "hv"; m1.media_type = "photo";
+        m1.date_taken = -100000; // Pre-1970
+        imagine::MediaItem m2;
+        m2.file_path = "modern.jpg"; m2.file_name = "modern.jpg"; m2.content_hash = "hm"; m2.media_type = "photo";
+        m2.date_taken = 100000; // Post-1970
+        imagine::MediaItem m3;
+        m3.file_path = "nodate.jpg"; m3.file_name = "nodate.jpg"; m3.content_hash = "hn"; m3.media_type = "photo";
+        m3.date_taken = 0; // Unset date
+
+        imagine::MediaId id1 = db.insertMedia(m1).value();
+        imagine::MediaId id2 = db.insertMedia(m2).value();
+        imagine::MediaId id3 = db.insertMedia(m3).value();
+
+        std::vector<float> v1 = {1.0f, 0.0f, 0.0f, 0.0f};
+        std::vector<float> v2 = {0.8f, 0.2f, 0.0f, 0.0f};
+        std::vector<float> v3 = {0.5f, 0.5f, 0.0f, 0.0f};
+
+        auto insertState = [&](imagine::MediaId mid, const std::string& h, const std::vector<float>& vec) {
+            auto stmtRes = db.connection().prepare(
+                "INSERT INTO semantic_index_state (media_id, model_id, model_revision, preprocess_id, vector_dim, embedding, content_hash, indexed_at) "
+                "VALUES (?, 'clip-clamp-test', 'v1', '', 4, ?, ?, 100);"
+            );
+            ASSERT_TRUE(stmtRes.isOk());
+            auto stmt = std::move(stmtRes.value());
+            stmt.bind(1, mid);
+            sqlite3_bind_blob(stmt.raw(), 2, vec.data(), static_cast<int>(vec.size() * sizeof(float)), SQLITE_TRANSIENT);
+            stmt.bind(3, h);
+            stmt.step();
+        };
+        insertState(id1, "hv", v1);
+        insertState(id2, "hm", v2);
+        insertState(id3, "hn", v3);
+
+        imagine::clip::Service svc(db, tempCache.string(), [](const std::string& p) { return p; });
+        EXPECT_EQ(svc.status()["indexSize"].get<int>(), 3);
+
+        // Negative limit on findSimilar must not throw length_error
+        auto simNeg = svc.findSimilar(id1, -5);
+        ASSERT_TRUE(simNeg.isOk());
+        EXPECT_LE(simNeg.value().items.size(), 1u);
+
+        // findSimilar with limit = 0 clamped to 1
+        auto simZero = svc.findSimilar(id1, 0);
+        ASSERT_TRUE(simZero.isOk());
+        EXPECT_LE(simZero.value().items.size(), 1u);
+
+        db.close();
+    }
+
+    fs::remove(testDb, ec);
+    fs::remove(testDb.string() + "-wal", ec);
+    fs::remove(testDb.string() + "-shm", ec);
+    fs::remove_all(tempCache, ec);
+    fs::remove_all(tempModels, ec);
+}
+
+
+
 

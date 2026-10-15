@@ -1,8 +1,10 @@
 #include "imagine/clip/engine.hpp"
 #include "tokenizer.hpp"
 #include "imagine/common/logger.hpp"
+#include "imagine/common/types.hpp"
 #include "stb_image_resize2.h"
 #include <chrono>
+#include <limits>
 #include <mutex>
 #include <shared_mutex>
 #include <cmath>
@@ -73,7 +75,7 @@ Status Engine::Impl::loadLocked() {
         return Status::ok();
     }
     try {
-        std::filesystem::path dir(config.modelDirectory);
+        std::filesystem::path dir = pathFromUtf8(config.modelDirectory);
         auto imageModelPath = dir / "image_encoder.onnx";
         auto textModelPath = dir / "text_encoder.onnx";
 
@@ -180,7 +182,7 @@ Status Engine::initialize(bool eager) {
 #else
     std::unique_lock lock(impl_->sessionMutex);
     try {
-        std::filesystem::path dir(impl_->config.modelDirectory);
+        std::filesystem::path dir = pathFromUtf8(impl_->config.modelDirectory);
         if (impl_->config.modelDirectory.empty() || !std::filesystem::is_directory(dir)) {
             impl_->info.ready = false;
             impl_->info.loaded = false;
@@ -194,7 +196,7 @@ Status Engine::initialize(bool eager) {
         if (!std::filesystem::is_regular_file(imageModelPath) || !std::filesystem::is_regular_file(textModelPath)) {
             impl_->info.ready = false;
             impl_->info.loaded = false;
-            impl_->info.error = "Missing image_encoder.onnx or text_encoder.onnx in " + dir.string();
+            impl_->info.error = "Missing image_encoder.onnx or text_encoder.onnx in " + pathToUtf8(dir);
             return Status::internal(impl_->info.error);
         }
 
@@ -221,7 +223,7 @@ Status Engine::initialize(bool eager) {
 
         auto vocabPath = dir / "vocab.json";
         auto mergesPath = dir / "merges.txt";
-        Status tokStatus = impl_->tokenizer.load(vocabPath.string(), mergesPath.string());
+        Status tokStatus = impl_->tokenizer.load(pathToUtf8(vocabPath), pathToUtf8(mergesPath));
         if (!tokStatus.isOk()) {
             impl_->info.ready = false;
             impl_->info.loaded = false;
@@ -307,48 +309,46 @@ Result<std::vector<float>> Engine::encodeImage(const thumbnail::ImageBuffer& ima
     (void)image;
     return Status::internal("Semantic search requires ONNX Runtime");
 #else
-    {
-        std::shared_lock readLock(impl_->sessionMutex);
-        if (!impl_->info.ready) {
-            return Status::internal("Engine not ready");
-        }
-        if (!impl_->info.loaded || !impl_->imageSession) {
-            readLock.unlock();
-            std::unique_lock writeLock(impl_->sessionMutex);
-            if (!impl_->info.ready) {
-                return Status::internal("Engine not ready");
-            }
-            if (!impl_->info.loaded || !impl_->imageSession) {
-                Status loadStatus = impl_->loadLocked();
-                if (!loadStatus.isOk()) {
-                    return loadStatus;
-                }
-            }
-        }
-    }
-
-    std::shared_lock lock(impl_->sessionMutex);
-    if (!impl_->info.ready || !impl_->info.loaded || !impl_->imageSession) {
-        return Status::internal(impl_->info.error.empty() ? "Engine not ready" : impl_->info.error);
-    }
-    if (image.width <= 0 || image.height <= 0 || image.channels <= 0 ||
-        image.data.size() < static_cast<size_t>(image.width * image.height * image.channels)) {
+    if (image.width <= 0 || image.height <= 0 ||
+        (image.channels != 1 && image.channels != 2 && image.channels != 3 && image.channels != 4)) {
         return Status::invalidArgument("Invalid or empty image buffer");
     }
+    const size_t widthSz = static_cast<size_t>(image.width);
+    const size_t heightSz = static_cast<size_t>(image.height);
+    const size_t channelsSz = static_cast<size_t>(image.channels);
+    if (widthSz > std::numeric_limits<size_t>::max() / heightSz) {
+        return Status::invalidArgument("Image dimensions overflow");
+    }
+    const size_t pixelCount = widthSz * heightSz;
+    if (pixelCount > std::numeric_limits<size_t>::max() / std::max<size_t>(channelsSz, 3) ||
+        image.data.size() < pixelCount * channelsSz) {
+        return Status::invalidArgument("Invalid or empty image buffer");
+    }
+
+    auto startPre = std::chrono::steady_clock::now();
 
     const uint8_t* rgbData = image.data.data();
     std::vector<uint8_t> rgbConverted;
     if (image.channels == 4) {
-        rgbConverted.resize(static_cast<size_t>(image.width * image.height * 3));
-        for (int i = 0; i < image.width * image.height; ++i) {
+        rgbConverted.resize(pixelCount * 3);
+        for (size_t i = 0; i < pixelCount; ++i) {
             rgbConverted[i * 3 + 0] = image.data[i * 4 + 0];
             rgbConverted[i * 3 + 1] = image.data[i * 4 + 1];
             rgbConverted[i * 3 + 2] = image.data[i * 4 + 2];
         }
         rgbData = rgbConverted.data();
+    } else if (image.channels == 2) {
+        rgbConverted.resize(pixelCount * 3);
+        for (size_t i = 0; i < pixelCount; ++i) {
+            uint8_t v = image.data[i * 2 + 0];
+            rgbConverted[i * 3 + 0] = v;
+            rgbConverted[i * 3 + 1] = v;
+            rgbConverted[i * 3 + 2] = v;
+        }
+        rgbData = rgbConverted.data();
     } else if (image.channels == 1) {
-        rgbConverted.resize(static_cast<size_t>(image.width * image.height * 3));
-        for (int i = 0; i < image.width * image.height; ++i) {
+        rgbConverted.resize(pixelCount * 3);
+        for (size_t i = 0; i < pixelCount; ++i) {
             uint8_t v = image.data[i];
             rgbConverted[i * 3 + 0] = v;
             rgbConverted[i * 3 + 1] = v;
@@ -357,14 +357,12 @@ Result<std::vector<float>> Engine::encodeImage(const thumbnail::ImageBuffer& ima
         rgbData = rgbConverted.data();
     }
 
-    auto startPre = std::chrono::steady_clock::now();
-
     int shortEdge = std::min(image.width, image.height);
-    float scale = 224.0f / shortEdge;
-    int rw = std::max(224, static_cast<int>(image.width * scale));
-    int rh = std::max(224, static_cast<int>(image.height * scale));
+    double scale = 224.0 / static_cast<double>(shortEdge);
+    int rw = std::clamp(static_cast<int>(std::lround(image.width * scale)), 224, 16384);
+    int rh = std::clamp(static_cast<int>(std::lround(image.height * scale)), 224, 16384);
 
-    std::vector<uint8_t> resized(rw * rh * 3);
+    std::vector<uint8_t> resized(static_cast<size_t>(rw) * static_cast<size_t>(rh) * 3);
     stbir_resize_uint8_linear(rgbData, image.width, image.height, 0,
                               resized.data(), rw, rh, 0, STBIR_RGB);
 
@@ -377,7 +375,7 @@ Result<std::vector<float>> Engine::encodeImage(const thumbnail::ImageBuffer& ima
 
     for (int y = 0; y < 224; ++y) {
         for (int x = 0; x < 224; ++x) {
-            int srcIdx = ((cropY + y) * rw + (cropX + x)) * 3;
+            size_t srcIdx = static_cast<size_t>((cropY + y) * rw + (cropX + x)) * 3;
             for (int c = 0; c < 3; ++c) {
                 float val = resized[srcIdx + c] / 255.0f;
                 val = (val - means[c]) / stds[c];
@@ -388,6 +386,30 @@ Result<std::vector<float>> Engine::encodeImage(const thumbnail::ImageBuffer& ima
 
     auto startInf = std::chrono::steady_clock::now();
     double preMs = std::chrono::duration<double, std::milli>(startInf - startPre).count();
+
+    std::shared_lock<std::shared_mutex> lock(impl_->sessionMutex);
+    while (!impl_->info.loaded || !impl_->imageSession) {
+        if (!impl_->info.ready) {
+            return Status::internal(impl_->info.error.empty() ? "Engine not ready" : impl_->info.error);
+        }
+        lock.unlock();
+        {
+            std::unique_lock<std::shared_mutex> writeLock(impl_->sessionMutex);
+            if (!impl_->info.ready) {
+                return Status::internal(impl_->info.error.empty() ? "Engine not ready" : impl_->info.error);
+            }
+            if (!impl_->info.loaded || !impl_->imageSession) {
+                Status loadStatus = impl_->loadLocked();
+                if (!loadStatus.isOk()) {
+                    return loadStatus;
+                }
+            }
+        }
+        lock.lock();
+    }
+    if (!impl_->info.ready) {
+        return Status::internal(impl_->info.error.empty() ? "Engine not ready" : impl_->info.error);
+    }
 
     std::vector<int64_t> inputShape = {1, 3, 224, 224};
     auto memoryInfo = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -410,6 +432,7 @@ Result<std::vector<float>> Engine::encodeImage(const thumbnail::ImageBuffer& ima
     {
         std::lock_guard timingsLock(impl_->timingsMutex);
         impl_->lastTimings.preprocessMs = preMs;
+        impl_->lastTimings.tokenizeMs = 0.0;
         impl_->lastTimings.inferenceMs = infMs;
         impl_->lastTimings.totalMs = preMs + infMs;
     }
@@ -423,16 +446,16 @@ Result<std::vector<float>> Engine::encodeText(std::string_view query) {
     (void)query;
     return Status::internal("Semantic search requires ONNX Runtime");
 #else
-    {
-        std::shared_lock readLock(impl_->sessionMutex);
+    std::shared_lock<std::shared_mutex> lock(impl_->sessionMutex);
+    while (!impl_->info.loaded || !impl_->textSession) {
         if (!impl_->info.ready) {
-            return Status::internal("Engine not ready");
+            return Status::internal(impl_->info.error.empty() ? "Engine not ready" : impl_->info.error);
         }
-        if (!impl_->info.loaded || !impl_->textSession) {
-            readLock.unlock();
-            std::unique_lock writeLock(impl_->sessionMutex);
+        lock.unlock();
+        {
+            std::unique_lock<std::shared_mutex> writeLock(impl_->sessionMutex);
             if (!impl_->info.ready) {
-                return Status::internal("Engine not ready");
+                return Status::internal(impl_->info.error.empty() ? "Engine not ready" : impl_->info.error);
             }
             if (!impl_->info.loaded || !impl_->textSession) {
                 Status loadStatus = impl_->loadLocked();
@@ -441,10 +464,9 @@ Result<std::vector<float>> Engine::encodeText(std::string_view query) {
                 }
             }
         }
+        lock.lock();
     }
-
-    std::shared_lock lock(impl_->sessionMutex);
-    if (!impl_->info.ready || !impl_->info.loaded || !impl_->textSession) {
+    if (!impl_->info.ready) {
         return Status::internal(impl_->info.error.empty() ? "Engine not ready" : impl_->info.error);
     }
     auto startTok = std::chrono::steady_clock::now();
@@ -481,6 +503,7 @@ Result<std::vector<float>> Engine::encodeText(std::string_view query) {
 
     {
         std::lock_guard timingsLock(impl_->timingsMutex);
+        impl_->lastTimings.preprocessMs = 0.0;
         impl_->lastTimings.tokenizeMs = tokMs;
         impl_->lastTimings.inferenceMs = infMs;
         impl_->lastTimings.totalMs = tokMs + infMs;

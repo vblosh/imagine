@@ -1,4 +1,5 @@
 #include "tokenizer.hpp"
+#include "imagine/common/types.hpp"
 #include <array>
 #include <fstream>
 #include <sstream>
@@ -48,11 +49,10 @@ static std::string utf8_encode(uint32_t codepoint) {
 Status Tokenizer::load(const std::string& vocabPath, const std::string& mergesPath) {
     try {
         vocab_.clear();
-        merges_.clear();
         mergeRanks_.clear();
         loaded_ = false;
 
-        std::ifstream vf(vocabPath);
+        std::ifstream vf(pathFromUtf8(vocabPath));
         if (!vf.is_open()) return Status::internal("Failed to open vocab file: " + vocabPath);
         nlohmann::json j;
         vf >> j;
@@ -64,7 +64,7 @@ Status Tokenizer::load(const std::string& vocabPath, const std::string& mergesPa
         auto eot = vocab_.find("<|endoftext|>");
         if (eot != vocab_.end()) eotToken_ = eot->second;
 
-        std::ifstream mf(mergesPath);
+        std::ifstream mf(pathFromUtf8(mergesPath));
         if (!mf.is_open()) return Status::internal("Failed to open merges file: " + mergesPath);
         std::string line;
         std::getline(mf, line); // Skip header
@@ -76,7 +76,6 @@ Status Tokenizer::load(const std::string& vocabPath, const std::string& mergesPa
             if (space != std::string::npos) {
                 std::string first = line.substr(0, space);
                 std::string second = line.substr(space + 1);
-                merges_.push_back({first, second});
                 mergeRanks_[first + " " + second] = rank++;
             }
         }
@@ -126,6 +125,8 @@ TokenizerOutput Tokenizer::encode(std::string_view text, int maxLength) const {
     TokenizerOutput out;
     if (!loaded_) return out;
 
+    maxLength = std::max(maxLength, 2);
+
     std::string lowerText(text);
     for (char& c : lowerText) {
         auto uc = static_cast<unsigned char>(c);
@@ -133,7 +134,7 @@ TokenizerOutput Tokenizer::encode(std::string_view text, int maxLength) const {
             c = static_cast<char>(uc + ('a' - 'A'));
         }
     }
-    std::regex re(R"('s|'t|'re|'ve|'m|'ll|'d|[a-zA-Z0-9_\x80-\xff]+|[^\s\w\x80-\xff]+)");
+    static const std::regex re(R"('s|'t|'re|'ve|'m|'ll|'d|[a-zA-Z0-9_\x80-\xff]+|[^\s\w\x80-\xff]+)");
     auto words_begin = std::sregex_iterator(lowerText.begin(), lowerText.end(), re);
     auto words_end = std::sregex_iterator();
 
