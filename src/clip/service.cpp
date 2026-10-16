@@ -615,7 +615,6 @@ Result<SearchResult> Service::findSimilar(MediaId mediaId, int limit) {
 }
 
 Status Service::startJob(const std::string& scope, const std::vector<MediaId>& mediaIds, bool force, int64_t& jobId) {
-    if (!impl_->engine.info().ready) return Status::internal("CLIP engine is not ready");
     std::lock_guard<std::mutex> startLock(impl_->jobStartMutex);
     
     {
@@ -637,6 +636,8 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& m
         if (countStmt.step() == StepResult::Row && countStmt.getInt64(0) > 0) {
             return Status::alreadyExists("A semantic index job is already running");
         }
+
+        if (!info.ready) return Status::internal("CLIP engine is not ready");
 
         if (impl_->worker.joinable()) {
             impl_->worker.join();

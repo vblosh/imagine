@@ -305,10 +305,6 @@ ClipTimings Engine::lastTimings() const {
 }
 
 Result<std::vector<float>> Engine::encodeImage(const thumbnail::ImageBuffer& image) {
-#if !IMAGINE_FACE_ANALYSIS_BUILT
-    (void)image;
-    return Status::internal("Semantic search requires ONNX Runtime");
-#else
     if (image.width <= 0 || image.height <= 0 ||
         (image.channels != 1 && image.channels != 2 && image.channels != 3 && image.channels != 4)) {
         return Status::invalidArgument("Invalid or empty image buffer");
@@ -325,6 +321,9 @@ Result<std::vector<float>> Engine::encodeImage(const thumbnail::ImageBuffer& ima
         return Status::invalidArgument("Invalid or empty image buffer");
     }
 
+#if !IMAGINE_FACE_ANALYSIS_BUILT
+    return Status::internal("Semantic search requires ONNX Runtime");
+#else
     auto startPre = std::chrono::steady_clock::now();
 
     const uint8_t* rgbData = image.data.data();
