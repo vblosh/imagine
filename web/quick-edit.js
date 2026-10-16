@@ -2013,7 +2013,9 @@ export function updateQuickEditToolbarUI() {
   if (dom.editorFiltersStrip) {
     const chips = dom.editorFiltersStrip.querySelectorAll(".editor-filter-chip");
     chips.forEach(chip => {
-      chip.classList.toggle("active", chip.dataset.filter === quickEditState.filter);
+      const isChipActive = chip.dataset.filter === quickEditState.filter;
+      chip.classList.toggle("active", isChipActive);
+      chip.setAttribute("aria-pressed", isChipActive ? "true" : "false");
     });
   }
   if (dom.editorFilterIntensityContainer) {

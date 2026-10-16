@@ -399,6 +399,12 @@
 }
 
 /* Leaflet Dark Theme Overrides */
+/* Vendored Leaflet sets mix-blend-mode: plus-lighter on tiles (a Chromium seam
+   workaround). With our inverted dark tiles it flashes bright during zoom/fade
+   transitions, so reset it here instead of forking vendor CSS. */
+.leaflet-container img.leaflet-tile {
+  mix-blend-mode: normal;
+}
 .leaflet-popup-content-wrapper {
   background: #252525 !important;
   color: #e0e0e0 !important;

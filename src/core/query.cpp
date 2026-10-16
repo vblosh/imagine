@@ -57,9 +57,11 @@ void appendFolderClause(
     std::replace(winRel.begin(), winRel.end(), '/', '\\');
     std::string winAbs = "\\" + winRel;
 
-    clauses.push_back("(file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!')");
+    clauses.push_back("(file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!' OR file_path LIKE ? ESCAPE '!')");
     params.push_back(escapeLike(relFolder) + "/%");
+    params.push_back(escapeLike(relFolder) + "\\%");
     params.push_back(escapeLike(absFolder) + "/%");
+    params.push_back(escapeLike(winRel) + "/%");
     params.push_back(escapeLike(winRel) + "\\%");
     params.push_back(escapeLike(winAbs) + "\\%");
 }

@@ -197,9 +197,10 @@ export async function loadMediaData(append = false, { preserveScroll = false } =
     // Track all discovered folders across loads so filtering doesn't remove folders from sidebar
     state.mediaItems.forEach(item => {
       if (item.file_path) {
-        const lastSlash = Math.max(item.file_path.lastIndexOf('/'), item.file_path.lastIndexOf('\\'));
+        const normalized = item.file_path.replace(/\\/g, '/');
+        const lastSlash = normalized.lastIndexOf('/');
         if (lastSlash > 0) {
-          state.allFolders.add(item.file_path.substring(0, lastSlash));
+          state.allFolders.add(normalized.substring(0, lastSlash));
         }
       }
     });
@@ -301,9 +302,10 @@ export async function loadMoreMediaData() {
 
     newItems.forEach(item => {
       if (item.file_path) {
-        const lastSlash = Math.max(item.file_path.lastIndexOf('/'), item.file_path.lastIndexOf('\\'));
+        const normalized = item.file_path.replace(/\\/g, '/');
+        const lastSlash = normalized.lastIndexOf('/');
         if (lastSlash > 0) {
-          state.allFolders.add(item.file_path.substring(0, lastSlash));
+          state.allFolders.add(normalized.substring(0, lastSlash));
         }
       }
     });
@@ -344,7 +346,7 @@ export async function loadMetadataData() {
 
     state.tags = Array.isArray(tags) ? tags.map(normalizeTag).filter(Boolean) : [];
     state.albums = Array.isArray(albums) ? albums.map(normalizeAlbum).filter(Boolean) : [];
-    state.allFolders = new Set(Array.isArray(folders) ? folders.filter(Boolean) : []);
+    state.allFolders = new Set(Array.isArray(folders) ? folders.filter(Boolean).map(f => f.replace(/\\/g, '/')) : []);
     if (state.activeFolders) {
       for (const f of Array.from(state.activeFolders)) {
         if (!state.allFolders.has(f)) {
