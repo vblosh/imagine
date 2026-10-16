@@ -14,7 +14,10 @@ namespace imagine {
 inline std::filesystem::path stripExtendedPrefix(const std::filesystem::path& p) {
 #if defined(_WIN32)
     std::wstring ws = p.native();
-    if (ws.rfind(L"\\\\?\\", 0) == 0 && ws.size() > 4 && ws[5] == L':') {
+    if (ws.rfind(L"\\\\?\\UNC\\", 0) == 0 && ws.size() > 8) {
+        return std::filesystem::path(L"\\\\" + ws.substr(8));
+    }
+    if (ws.rfind(L"\\\\?\\", 0) == 0 && ws.size() >= 6 && ws[5] == L':') {
         return std::filesystem::path(ws.substr(4));
     }
 #endif
@@ -31,9 +34,10 @@ inline std::string pathToUtf8(const std::filesystem::path& p) {
 #endif
 }
 
-inline std::filesystem::path pathFromUtf8(const std::string& utf8Str) {
+inline std::filesystem::path pathFromUtf8(std::string_view utf8Str) {
 #if defined(_WIN32)
-    return std::filesystem::path(std::u8string(utf8Str.begin(), utf8Str.end()));
+    return std::filesystem::path(
+        std::u8string_view(reinterpret_cast<const char8_t*>(utf8Str.data()), utf8Str.size()));
 #else
     return std::filesystem::path(utf8Str);
 #endif
@@ -43,39 +47,29 @@ inline std::string sanitizeUtf8(std::string_view sv) {
     std::string out;
     out.reserve(sv.size());
     for (size_t i = 0; i < sv.size(); ) {
-        unsigned char c = static_cast<unsigned char>(sv[i]);
-        if (c < 0x80) {
-            out.push_back(c);
+        const unsigned char byte = static_cast<unsigned char>(sv[i]);
+        if (byte < 0x80) {
+            out.push_back(static_cast<char>(byte));
             ++i;
-        } else if ((c & 0xE0) == 0xC0) {
-            if (i + 1 < sv.size() && (static_cast<unsigned char>(sv[i + 1]) & 0xC0) == 0x80) {
-                out.append(sv.substr(i, 2));
-                i += 2;
-            } else {
-                out += "\xEF\xBF\xBD";
-                ++i;
+            continue;
+        }
+        const size_t length = (byte >= 0xC2 && byte <= 0xDF) ? 2
+                            : (byte >= 0xE0 && byte <= 0xEF) ? 3
+                            : (byte >= 0xF0 && byte <= 0xF4) ? 4 : 0;
+        bool valid = (length != 0) && (length <= sv.size() - i);
+        for (size_t j = 1; valid && j < length; ++j) {
+            const unsigned char next = static_cast<unsigned char>(sv[i + j]);
+            valid = (next >= 0x80 && next <= 0xBF);
+            if (j == 1) {
+                valid = valid && !(byte == 0xE0 && next < 0xA0)
+                              && !(byte == 0xED && next >= 0xA0)
+                              && !(byte == 0xF0 && next < 0x90)
+                              && !(byte == 0xF4 && next >= 0x90);
             }
-        } else if ((c & 0xF0) == 0xE0) {
-            if (i + 2 < sv.size() &&
-                (static_cast<unsigned char>(sv[i + 1]) & 0xC0) == 0x80 &&
-                (static_cast<unsigned char>(sv[i + 2]) & 0xC0) == 0x80) {
-                out.append(sv.substr(i, 3));
-                i += 3;
-            } else {
-                out += "\xEF\xBF\xBD";
-                ++i;
-            }
-        } else if ((c & 0xF8) == 0xF0) {
-            if (i + 3 < sv.size() &&
-                (static_cast<unsigned char>(sv[i + 1]) & 0xC0) == 0x80 &&
-                (static_cast<unsigned char>(sv[i + 2]) & 0xC0) == 0x80 &&
-                (static_cast<unsigned char>(sv[i + 3]) & 0xC0) == 0x80) {
-                out.append(sv.substr(i, 4));
-                i += 4;
-            } else {
-                out += "\xEF\xBF\xBD";
-                ++i;
-            }
+        }
+        if (valid) {
+            out.append(sv.substr(i, length));
+            i += length;
         } else {
             out += "\xEF\xBF\xBD";
             ++i;

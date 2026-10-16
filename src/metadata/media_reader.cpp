@@ -4,10 +4,12 @@
 #include <fstream>
 #include <filesystem>
 #include <chrono>
+#include <cmath>
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
 #include <sstream>
+#include <locale>
 #include <functional>
 
 namespace imagine::metadata {
@@ -67,21 +69,102 @@ int64_t getFileModifiedTime(const std::string& filePath) {
     return 0;
 }
 
+bool hasUnsafeShellChars(const std::string& s) {
+    for (unsigned char c : s) {
+        if (c < 0x20 || c == '"' || c == '`' || c == '$' || c == ';' ||
+            c == '&' || c == '|' || c == '<' || c == '>' || c == '%' || c == '^') {
+            return true;
+        }
+    }
+    return false;
+}
+
+void appendCodePointUtf8(std::string& out, uint32_t cp) {
+    if (cp == 0) return;
+    if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0x10FFFF) {
+        out.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+std::string decodeId3Text(uint8_t encoding, const uint8_t* data, size_t len) {
+    if (!data || len == 0) return "";
+    if (encoding == 1 || encoding == 2) { // UTF-16 with BOM or UTF-16BE
+        bool bigEndian = (encoding == 2);
+        size_t offset = 0;
+        if (len >= 2) {
+            if (data[0] == 0xFE && data[1] == 0xFF) {
+                bigEndian = true;
+                offset = 2;
+            } else if (data[0] == 0xFF && data[1] == 0xFE) {
+                bigEndian = false;
+                offset = 2;
+            }
+        }
+        std::string out;
+        out.reserve(len);
+        while (offset + 1 < len) {
+            uint16_t u1 = bigEndian ? readBe16(data + offset) : readLe16(data + offset);
+            offset += 2;
+            if (u1 == 0) break;
+            if (u1 >= 0xD800 && u1 <= 0xDBFF && offset + 1 < len) {
+                uint16_t u2 = bigEndian ? readBe16(data + offset) : readLe16(data + offset);
+                if (u2 >= 0xDC00 && u2 <= 0xDFFF) {
+                    offset += 2;
+                    uint32_t cp = 0x10000 + (((static_cast<uint32_t>(u1) - 0xD800) << 10) |
+                                             (static_cast<uint32_t>(u2) - 0xDC00));
+                    appendCodePointUtf8(out, cp);
+                    continue;
+                }
+            }
+            appendCodePointUtf8(out, u1);
+        }
+        return out;
+    }
+    if (encoding == 0) { // ISO-8859-1 (Latin-1): transcode code points to valid UTF-8
+        std::string out;
+        out.reserve(len);
+        for (size_t i = 0; i < len && data[i] != '\0'; ++i) {
+            appendCodePointUtf8(out, static_cast<uint8_t>(data[i]));
+        }
+        return out;
+    }
+    // UTF-8 (3) or other: trim trailing NUL bytes
+    size_t actualLen = 0;
+    while (actualLen < len && data[actualLen] != '\0') {
+        actualLen++;
+    }
+    return std::string(reinterpret_cast<const char*>(data), actualLen);
+}
+
 } // anonymous namespace
 
 // --- FfmpegHelper implementation ---
 
 bool FfmpegHelper::isAvailable() {
-    static int available = -1;
-    if (available != -1) {
-        return available == 1;
-    }
-    const char* customPath = std::getenv("IMAGINE_FFMPEG_PATH");
-    std::string cmd = (customPath && *customPath) ? (std::string(customPath) + " -version >/dev/null 2>&1")
-                                                  : "ffmpeg -version >/dev/null 2>&1";
-    int ret = std::system(cmd.c_str());
-    available = (ret == 0) ? 1 : 0;
-    return available == 1;
+    static const bool available = []() {
+        const char* customPath = std::getenv("IMAGINE_FFMPEG_PATH");
+        std::string bin = (customPath && *customPath) ? std::string(customPath) : "ffmpeg";
+        if (hasUnsafeShellChars(bin)) return false;
+#if defined(_WIN32)
+        std::string cmd = "\"" + bin + "\" -version >NUL 2>&1";
+#else
+        std::string cmd = "\"" + bin + "\" -version >/dev/null 2>&1";
+#endif
+        return std::system(cmd.c_str()) == 0;
+    }();
+    return available;
 }
 
 Result<std::string> FfmpegHelper::extractVideoFrame(
@@ -89,19 +172,30 @@ Result<std::string> FfmpegHelper::extractVideoFrame(
     double timeSeconds,
     const std::string& outJpegPath
 ) {
-    if (!isAvailable()) {
-        return Status::internal("FFmpeg is not available on this system");
-    }
-
     std::string bin = "ffmpeg";
     const char* customPath = std::getenv("IMAGINE_FFMPEG_PATH");
     if (customPath && *customPath) {
         bin = customPath;
     }
+    if (hasUnsafeShellChars(bin) || hasUnsafeShellChars(videoPath) || hasUnsafeShellChars(outJpegPath)) {
+        return Status::invalidArgument("Unsafe characters in FFmpeg path arguments");
+    }
+
+    if (!isAvailable()) {
+        return Status::internal("FFmpeg is not available on this system");
+    }
+    if (!std::isfinite(timeSeconds) || timeSeconds < 0.0) {
+        timeSeconds = 0.0;
+    }
 
     std::ostringstream ss;
-    ss << bin << " -v error -ss " << timeSeconds << " -i \"" << videoPath
+    ss.imbue(std::locale::classic());
+    ss << "\"" << bin << "\" -v error -ss " << timeSeconds << " -i \"" << videoPath
+#if defined(_WIN32)
+       << "\" -vframes 1 -f image2 -y \"" << outJpegPath << "\" >NUL 2>&1";
+#else
        << "\" -vframes 1 -f image2 -y \"" << outJpegPath << "\" 2>/dev/null";
+#endif
 
     int ret = std::system(ss.str().c_str());
     if (ret != 0) {
@@ -109,7 +203,8 @@ Result<std::string> FfmpegHelper::extractVideoFrame(
     }
 
     std::error_code ec;
-    if (!std::filesystem::exists(outJpegPath, ec) || std::filesystem::file_size(outJpegPath, ec) == 0) {
+    auto outFsPath = pathFromUtf8(outJpegPath);
+    if (!std::filesystem::exists(outFsPath, ec) || std::filesystem::file_size(outFsPath, ec) == 0) {
         return Status::internal("FFmpeg did not produce a valid output image");
     }
 
@@ -173,7 +268,7 @@ Result<MediaFileInfo> MediaReader::readMetadata(const std::string& filePath) {
 
     if (res.isOk()) {
         auto info = res.value();
-        if (info.date_taken <= 0) {
+        if (info.date_taken == 0) {
             info.date_taken = mtime;
         }
         if (info.media_type.empty()) {
@@ -209,6 +304,9 @@ bool MediaReader::parseIso6709(const std::string& str, double& outLat, double& o
         alt = std::strtod(p, &end);
     }
 
+    if (!std::isfinite(lat) || !std::isfinite(lon) || !std::isfinite(alt)) {
+        return false;
+    }
     if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
         return false;
     }
@@ -239,19 +337,21 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
     uint64_t fileSize = file.tellg();
     file.seekg(0, std::ios::beg);
 
-    auto readBoxHeader = [&](uint64_t& outBoxSize, std::string& outType) -> bool {
+    auto readBoxHeader = [&](uint64_t& outBoxSize, std::string& outType, uint64_t& outHdrSize) -> bool {
         uint8_t hdr[8];
         if (!file.read(reinterpret_cast<char*>(hdr), 8)) return false;
         outBoxSize = readBe32(hdr);
         outType = std::string(reinterpret_cast<char*>(hdr + 4), 4);
+        outHdrSize = 8;
         if (outBoxSize == 1) {
             uint8_t extHdr[8];
             if (!file.read(reinterpret_cast<char*>(extHdr), 8)) return false;
             outBoxSize = readBe64(extHdr);
+            outHdrSize = 16;
         } else if (outBoxSize == 0) {
             outBoxSize = fileSize - static_cast<uint64_t>(file.tellg()) + 8;
         }
-        return true;
+        return outBoxSize >= outHdrSize;
     };
 
     struct TrackContext {
@@ -273,11 +373,12 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
             uint64_t currentBoxPos = file.tellg();
             uint64_t boxSize = 0;
             std::string boxType;
-            if (!readBoxHeader(boxSize, boxType) || boxSize < 8) {
+            uint64_t hdrSize = 0;
+            if (!readBoxHeader(boxSize, boxType, hdrSize)) {
                 break;
             }
             uint64_t dataPos = file.tellg();
-            uint64_t nextBoxPos = currentBoxPos + boxSize;
+            uint64_t nextBoxPos = (boxSize > endPos - currentBoxPos) ? endPos : (currentBoxPos + boxSize);
 
             if (boxType == "moov") {
                 parseContainer(dataPos, std::min(nextBoxPos, endPos), nullptr);
@@ -330,7 +431,7 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                 if (timeScale > 0) {
                     info.duration = static_cast<double>(durationUnits) / static_cast<double>(timeScale);
                 }
-                if (creationTime > 2082844800LL) {
+                if (creationTime > 0) {
                     info.date_taken = creationTime - 2082844800LL;
                 }
             } else if (boxType == "tkhd") {
@@ -342,13 +443,17 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                 // Matrix structure (36 bytes)
                 uint8_t matrixBuf[36];
                 if (file.read(reinterpret_cast<char*>(matrixBuf), 36)) {
+                    int32_t a = static_cast<int32_t>(readBe32(matrixBuf));
                     int32_t b = static_cast<int32_t>(readBe32(matrixBuf + 4));
                     int32_t c = static_cast<int32_t>(readBe32(matrixBuf + 12));
+                    int32_t d = static_cast<int32_t>(readBe32(matrixBuf + 16));
                     int orient = 1;
                     if (b > 0 && c < 0) {
                         orient = 6; // 90 CW
                     } else if (b < 0 && c > 0) {
                         orient = 8; // 270 CW
+                    } else if (a < 0 && d < 0) {
+                        orient = 3; // 180
                     }
                     if (trackCtx) trackCtx->orientation = orient;
                     else if (orient != 1) info.orientation = orient;
@@ -383,7 +488,8 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                 file.seekg(8, std::ios::cur); // version + flags + entry count
                 uint64_t entrySize = 0;
                 std::string entryType;
-                if (readBoxHeader(entrySize, entryType) && entrySize >= 16) {
+                uint64_t entryHdrSize = 0;
+                if (readBoxHeader(entrySize, entryType, entryHdrSize) && entrySize >= 16) {
                     std::string codecStr;
                     if (entryType == "avc1") codecStr = "h264";
                     else if (entryType == "hvc1" || entryType == "hev1") codecStr = "h265";
@@ -419,13 +525,13 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                                 }
                             }
                         }
-                    } else if (isAudioTrack && entrySize >= 28) {
+                    } else if (isAudioTrack && entrySize >= 36) {
                         // Audio sample entry: skip 16 bytes (reserved(6) + data_ref_idx(2) + reserved(8) = 16)
                         file.seekg(16, std::ios::cur);
-                        uint8_t audioBuf[8];
-                        if (file.read(reinterpret_cast<char*>(audioBuf), 8)) {
+                        uint8_t audioBuf[12];
+                        if (file.read(reinterpret_cast<char*>(audioBuf), 12)) {
                             int ch = readBe16(audioBuf);
-                            int sr = readBe16(audioBuf + 6);
+                            int sr = readBe16(audioBuf + 8);
                             if (trackCtx) {
                                 trackCtx->channels = ch;
                                 trackCtx->sample_rate = sr;
@@ -464,6 +570,7 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                             uint32_t kSize = readBe32(entryHdr);
                             if (kSize < 8 || curOffset + kSize > nextBoxPos) break;
                             uint32_t nameLen = kSize - 8;
+                            if (nameLen > 1024) break;
                             std::string kName(nameLen, '\0');
                             if (file.read(kName.data(), nameLen)) {
                                 metaKeys[i] = kName;
@@ -478,8 +585,9 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                     uint64_t tagPos = file.tellg();
                     uint64_t tagSize = 0;
                     std::string tagType;
-                    if (!readBoxHeader(tagSize, tagType) || tagSize < 8) break;
-                    uint64_t nextTagPos = tagPos + tagSize;
+                    uint64_t tagHdrSize = 0;
+                    if (!readBoxHeader(tagSize, tagType, tagHdrSize)) break;
+                    uint64_t nextTagPos = (tagSize > nextBoxPos - tagPos) ? nextBoxPos : (tagPos + tagSize);
 
                     uint32_t keyIndex = 0;
                     if (tagType.size() >= 4) {
@@ -500,26 +608,31 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                         file.seekg(dataAtomPos, std::ios::beg);
                         uint64_t dataSize = 0;
                         std::string dType;
-                        if (!readBoxHeader(dataSize, dType) || dataSize < 16) break;
+                        uint64_t dHdrSize = 0;
+                        if (!readBoxHeader(dataSize, dType, dHdrSize) || dataSize < 16 ||
+                            dataSize > nextTagPos - dataAtomPos) {
+                            break;
+                        }
                         if (dType == "data") {
                             uint8_t typeFlag[4];
                             file.read(reinterpret_cast<char*>(typeFlag), 4);
                             file.seekg(4, std::ios::cur); // locale
                             uint32_t valLen = static_cast<uint32_t>(dataSize - 16);
+                            constexpr uint32_t kMaxTextMetaLen = 64 * 1024;
 
-                            if (tagType == "\xa9" "nam" || tagType == "titl") {
+                            if ((tagType == "\xa9" "nam" || tagType == "titl") && valLen <= kMaxTextMetaLen) {
                                 std::string val(valLen, '\0');
                                 file.read(val.data(), valLen);
                                 info.audio_title = val;
-                            } else if (tagType == "\xa9" "ART" || tagType == "aART") {
+                            } else if ((tagType == "\xa9" "ART" || tagType == "aART") && valLen <= kMaxTextMetaLen) {
                                 std::string val(valLen, '\0');
                                 file.read(val.data(), valLen);
                                 info.audio_artist = val;
-                            } else if (tagType == "\xa9" "alb") {
+                            } else if (tagType == "\xa9" "alb" && valLen <= kMaxTextMetaLen) {
                                 std::string val(valLen, '\0');
                                 file.read(val.data(), valLen);
                                 info.audio_album = val;
-                            } else if (tagType == "\xa9" "gen" || tagType == "gnre") {
+                            } else if ((tagType == "\xa9" "gen" || tagType == "gnre") && valLen <= kMaxTextMetaLen) {
                                 std::string val(valLen, '\0');
                                 file.read(val.data(), valLen);
                                 info.audio_genre = val;
@@ -528,7 +641,8 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                                 file.read(reinterpret_cast<char*>(info.cover_art.data()), valLen);
                                 uint32_t flagVal = readBe32(typeFlag);
                                 info.cover_mime = (flagVal == 14) ? "image/png" : "image/jpeg";
-                            } else if (keyName == "com.apple.quicktime.location.ISO6709" || tagType == "\xa9xyz" || tagType == "xyz ") {
+                            } else if ((keyName == "com.apple.quicktime.location.ISO6709" || tagType == "\xa9xyz" || tagType == "xyz ") &&
+                                       valLen <= kMaxTextMetaLen) {
                                 std::string val(valLen, '\0');
                                 file.read(val.data(), valLen);
                                 double lat = 0.0, lon = 0.0, alt = 0.0;
@@ -559,7 +673,7 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                     file.seekg(nextTagPos, std::ios::beg);
                 }
             } else if ((boxType == "\xa9xyz" || boxType == "xyz ") && nextBoxPos - dataPos >= 10) {
-                uint32_t payloadLen = static_cast<uint32_t>(nextBoxPos - dataPos);
+                uint32_t payloadLen = static_cast<uint32_t>(std::min<uint64_t>(nextBoxPos - dataPos, 1024));
                 std::string val(payloadLen, '\0');
                 if (file.read(val.data(), payloadLen)) {
                     size_t start = 0;
@@ -659,20 +773,24 @@ Result<MediaFileInfo> MediaReader::readWebm(const std::string& filePath) {
         return true;
     };
 
+    uint64_t maxScan = std::min<uint64_t>(fileSize, 2ULL * 1024 * 1024);
+
     auto readVIntSize = [&](uint64_t& outSize) -> bool {
         uint64_t raw = 0;
         uint32_t len = 0;
         if (!readVInt(raw, len)) return false;
         uint64_t clearMask = (1ULL << (7 * len)) - 1;
         outSize = raw & clearMask;
+        if (outSize == clearMask) {
+            uint64_t cur = static_cast<uint64_t>(file.tellg());
+            outSize = (cur < maxScan) ? (maxScan - cur) : 0;
+        }
         return true;
     };
 
     uint64_t timecodeScale = 1000000; // default 1ms
     double durationUnits = 0.0;
 
-    // Scan top-level elements up to first 2MB
-    uint64_t maxScan = std::min<uint64_t>(fileSize, 2ULL * 1024 * 1024);
     while (static_cast<uint64_t>(file.tellg()) < maxScan && file.good()) {
         uint64_t elemId = 0;
         uint32_t idLen = 0;
@@ -681,17 +799,20 @@ Result<MediaFileInfo> MediaReader::readWebm(const std::string& filePath) {
         if (!readVIntSize(elemSize)) break;
 
         uint64_t elemDataPos = file.tellg();
+        uint64_t elemEndPos = (elemSize > maxScan - elemDataPos) ? maxScan : (elemDataPos + elemSize);
 
         if (elemId == 0x18538067) { // Segment
             continue; // enter segment
         } else if (elemId == 0x1549A966) { // Info
-            uint64_t infoEnd = elemDataPos + elemSize;
+            uint64_t infoEnd = elemEndPos;
             while (static_cast<uint64_t>(file.tellg()) < infoEnd && file.good()) {
                 uint64_t subId = 0;
                 uint32_t subIdLen = 0;
                 if (!readVInt(subId, subIdLen)) break;
                 uint64_t subSize = 0;
                 if (!readVIntSize(subSize)) break;
+                uint64_t subPos = file.tellg();
+                uint64_t subEnd = (subSize > infoEnd - subPos) ? infoEnd : (subPos + subSize);
 
                 if (subId == 0x2AD7B1 && subSize <= 8) { // TimecodeScale
                     uint64_t tScale = 0;
@@ -713,29 +834,31 @@ Result<MediaFileInfo> MediaReader::readWebm(const std::string& filePath) {
                         std::memcpy(&dval, &raw, 8);
                         durationUnits = dval;
                     }
-                } else {
-                    file.seekg(subSize, std::ios::cur);
                 }
+                file.seekg(subEnd, std::ios::beg);
             }
         } else if (elemId == 0x1654AE6B) { // Tracks
-            uint64_t tracksEnd = elemDataPos + elemSize;
+            uint64_t tracksEnd = elemEndPos;
             while (static_cast<uint64_t>(file.tellg()) < tracksEnd && file.good()) {
                 uint64_t trackId = 0;
                 uint32_t tIdLen = 0;
                 if (!readVInt(trackId, tIdLen)) break;
                 uint64_t tSize = 0;
                 if (!readVIntSize(tSize)) break;
+                uint64_t tPos = file.tellg();
+                uint64_t entryEnd = (tSize > tracksEnd - tPos) ? tracksEnd : (tPos + tSize);
 
                 if (trackId == 0xAE) { // TrackEntry
-                    uint64_t entryEnd = static_cast<uint64_t>(file.tellg()) + tSize;
                     while (static_cast<uint64_t>(file.tellg()) < entryEnd && file.good()) {
                         uint64_t fieldId = 0;
                         uint32_t fLen = 0;
                         if (!readVInt(fieldId, fLen)) break;
                         uint64_t fSize = 0;
                         if (!readVIntSize(fSize)) break;
+                        uint64_t fPos = file.tellg();
+                        uint64_t fEnd = (fSize > entryEnd - fPos) ? entryEnd : (fPos + fSize);
 
-                        if (fieldId == 0x86) { // CodecID
+                        if (fieldId == 0x86 && fSize <= 256) { // CodecID
                             std::string c(fSize, '\0');
                             file.read(c.data(), fSize);
                             if (c.rfind("V_VP8", 0) == 0) info.codec = "vp8";
@@ -744,12 +867,14 @@ Result<MediaFileInfo> MediaReader::readWebm(const std::string& filePath) {
                             else if (c.rfind("A_OPUS", 0) == 0) info.codec = "opus";
                             else if (c.rfind("A_VORBIS", 0) == 0) info.codec = "vorbis";
                         } else if (fieldId == 0xE0) { // Video Settings
-                            uint64_t vEnd = static_cast<uint64_t>(file.tellg()) + fSize;
+                            uint64_t vEnd = fEnd;
                             while (static_cast<uint64_t>(file.tellg()) < vEnd && file.good()) {
                                 uint64_t vid = 0; uint32_t vl = 0;
                                 if (!readVInt(vid, vl)) break;
                                 uint64_t vs = 0;
                                 if (!readVIntSize(vs)) break;
+                                uint64_t vsPos = file.tellg();
+                                uint64_t vsEnd = (vs > vEnd - vsPos) ? vEnd : (vsPos + vs);
                                 if (vid == 0xB0 && vs <= 4) { // PixelWidth
                                     uint32_t w = 0;
                                     for (uint64_t i = 0; i < vs; ++i) w = (w << 8) | file.get();
@@ -758,21 +883,17 @@ Result<MediaFileInfo> MediaReader::readWebm(const std::string& filePath) {
                                     uint32_t h = 0;
                                     for (uint64_t i = 0; i < vs; ++i) h = (h << 8) | file.get();
                                     info.height = static_cast<int32_t>(h);
-                                } else {
-                                    file.seekg(vs, std::ios::cur);
                                 }
+                                file.seekg(vsEnd, std::ios::beg);
                             }
-                        } else {
-                            file.seekg(fSize, std::ios::cur);
                         }
+                        file.seekg(fEnd, std::ios::beg);
                     }
-                } else {
-                    file.seekg(tSize, std::ios::cur);
                 }
+                file.seekg(entryEnd, std::ios::beg);
             }
-        } else {
-            file.seekg(elemDataPos + elemSize, std::ios::beg);
         }
+        file.seekg(elemEndPos, std::ios::beg);
     }
 
     if (durationUnits > 0.0 && timecodeScale > 0) {
@@ -888,36 +1009,35 @@ Result<MediaFileInfo> MediaReader::readMp3(const std::string& filePath) {
 
             uint64_t nextFrame = static_cast<uint64_t>(file.tellg()) + frameSize;
 
-            if (frameId == "TIT2") {
-                file.get(); // skip encoding
-                std::string val(frameSize - 1, '\0');
-                file.read(val.data(), frameSize - 1);
-                info.audio_title = val;
-            } else if (frameId == "TPE1") {
-                file.get();
-                std::string val(frameSize - 1, '\0');
-                file.read(val.data(), frameSize - 1);
-                info.audio_artist = val;
-            } else if (frameId == "TALB") {
-                file.get();
-                std::string val(frameSize - 1, '\0');
-                file.read(val.data(), frameSize - 1);
-                info.audio_album = val;
-            } else if (frameId == "TCON") {
-                file.get();
-                std::string val(frameSize - 1, '\0');
-                file.read(val.data(), frameSize - 1);
-                info.audio_genre = val;
+            if ((frameId == "TIT2" || frameId == "TPE1" || frameId == "TALB" || frameId == "TCON") &&
+                frameSize <= 64 * 1024) {
+                uint8_t enc = static_cast<uint8_t>(file.get());
+                std::vector<uint8_t> raw(frameSize - 1);
+                file.read(reinterpret_cast<char*>(raw.data()), frameSize - 1);
+                std::string decoded = decodeId3Text(enc, raw.data(), raw.size());
+                if (frameId == "TIT2") info.audio_title = std::move(decoded);
+                else if (frameId == "TPE1") info.audio_artist = std::move(decoded);
+                else if (frameId == "TALB") info.audio_album = std::move(decoded);
+                else if (frameId == "TCON") info.audio_genre = std::move(decoded);
             } else if (frameId == "APIC" && frameSize > 12 && frameSize < 20 * 1024 * 1024) {
                 uint8_t enc = file.get();
-                (void)enc;
                 std::string mime;
                 char c;
-                while (file.get(c) && c != '\0') mime += c;
+                while (static_cast<uint64_t>(file.tellg()) < nextFrame && file.get(c) && c != '\0') {
+                    mime += c;
+                }
                 uint8_t picType = file.get();
                 (void)picType;
                 // skip description
-                while (file.get(c) && c != '\0') {}
+                if (enc == 1 || enc == 2) {
+                    while (static_cast<uint64_t>(file.tellg()) + 1 < nextFrame) {
+                        char c1 = 0, c2 = 0;
+                        if (!file.get(c1) || !file.get(c2)) break;
+                        if (c1 == '\0' && c2 == '\0') break;
+                    }
+                } else {
+                    while (static_cast<uint64_t>(file.tellg()) < nextFrame && file.get(c) && c != '\0') {}
+                }
 
                 uint64_t cur = file.tellg();
                 if (cur < nextFrame) {
@@ -949,17 +1069,23 @@ Result<MediaFileInfo> MediaReader::readMp3(const std::string& filePath) {
             int srateIdx = (b2 >> 2) & 0x03;
             int channelMode = (b3 >> 6) & 0x03;
 
-            if (mpegVer == 3 && layer == 1 && bitrateIdx > 0 && bitrateIdx < 15 && srateIdx < 3) {
-                static const int srateTable[] = {44100, 48000, 32000};
-                static const int bitrateTable[] = {
+            if (mpegVer != 1 && layer == 1 && bitrateIdx > 0 && bitrateIdx < 15 && srateIdx < 3) {
+                static const int srateTableMpeg1[] = {44100, 48000, 32000};
+                static const int bitrateTableMpeg1[] = {
                     0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320
                 };
-                info.sample_rate = srateTable[srateIdx];
-                info.bitrate = bitrateTable[bitrateIdx] * 1000;
+                static const int bitrateTableMpeg2[] = {
+                    0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160
+                };
+                int srateDiv = (mpegVer == 3) ? 1 : ((mpegVer == 2) ? 2 : 4);
+                info.sample_rate = srateTableMpeg1[srateIdx] / srateDiv;
+                info.bitrate = ((mpegVer == 3) ? bitrateTableMpeg1[bitrateIdx] : bitrateTableMpeg2[bitrateIdx]) * 1000;
                 info.channels = (channelMode == 3) ? 1 : 2;
 
                 // Check for Xing / Info header
-                size_t xingOffset = i + 4 + ((channelMode == 3) ? 17 : 32);
+                size_t sideInfoLen = (mpegVer == 3) ? ((channelMode == 3) ? 17 : 32)
+                                                    : ((channelMode == 3) ? 9 : 17);
+                size_t xingOffset = i + 4 + sideInfoLen;
                 if (xingOffset + 12 < scanRead) {
                     if (std::memcmp(scanBuf + xingOffset, "Xing", 4) == 0 ||
                         std::memcmp(scanBuf + xingOffset, "Info", 4) == 0) {
@@ -967,7 +1093,8 @@ Result<MediaFileInfo> MediaReader::readMp3(const std::string& filePath) {
                         if (flags & 1) { // total frames present
                             uint32_t frames = readBe32(scanBuf + xingOffset + 8);
                             if (info.sample_rate > 0) {
-                                info.duration = (static_cast<double>(frames) * 1152.0) / static_cast<double>(info.sample_rate);
+                                double samplesPerFrame = (mpegVer == 3) ? 1152.0 : 576.0;
+                                info.duration = (static_cast<double>(frames) * samplesPerFrame) / static_cast<double>(info.sample_rate);
                             }
                         }
                     }
@@ -1065,19 +1192,25 @@ Result<MediaFileInfo> MediaReader::readFlac(const std::string& filePath) {
             uint8_t pBuf[8];
             if (file.read(reinterpret_cast<char*>(pBuf), 8)) {
                 uint32_t mimeLen = readBe32(pBuf + 4);
-                std::string mime(mimeLen, '\0');
-                file.read(mime.data(), mimeLen);
-                uint8_t dBuf[4];
-                file.read(reinterpret_cast<char*>(dBuf), 4);
-                uint32_t descLen = readBe32(dBuf);
-                file.seekg(descLen + 16, std::ios::cur); // skip description, width, height, depth, colors
-                uint8_t lenBuf[4];
-                if (file.read(reinterpret_cast<char*>(lenBuf), 4)) {
-                    uint32_t dataLen = readBe32(lenBuf);
-                    if (dataLen > 0 && dataLen < 20 * 1024 * 1024) {
-                        info.cover_art.resize(dataLen);
-                        file.read(reinterpret_cast<char*>(info.cover_art.data()), dataLen);
-                        info.cover_mime = mime.empty() ? "image/jpeg" : mime;
+                if (mimeLen <= 256 && 8 + mimeLen + 24 <= blockLen) {
+                    std::string mime(mimeLen, '\0');
+                    file.read(mime.data(), mimeLen);
+                    uint8_t dBuf[4];
+                    if (file.read(reinterpret_cast<char*>(dBuf), 4)) {
+                        uint32_t descLen = readBe32(dBuf);
+                        if (12 + mimeLen + descLen + 20 <= blockLen) {
+                            file.seekg(descLen + 16, std::ios::cur); // skip description, width, height, depth, colors
+                            uint8_t lenBuf[4];
+                            if (file.read(reinterpret_cast<char*>(lenBuf), 4)) {
+                                uint32_t dataLen = readBe32(lenBuf);
+                                uint32_t headerUsed = 12 + mimeLen + descLen + 20;
+                                if (dataLen > 0 && dataLen <= blockLen - headerUsed && dataLen < 20 * 1024 * 1024) {
+                                    info.cover_art.resize(dataLen);
+                                    file.read(reinterpret_cast<char*>(info.cover_art.data()), dataLen);
+                                    info.cover_mime = mime.empty() ? "image/jpeg" : mime;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1103,6 +1236,10 @@ Result<MediaFileInfo> MediaReader::readWav(const std::string& filePath) {
         return Status::parseError("Not a valid WAV file");
     }
 
+    file.seekg(0, std::ios::end);
+    uint64_t fileSize = file.tellg();
+    file.seekg(12, std::ios::beg);
+
     MediaFileInfo info;
     info.media_type = "audio";
     info.codec = "pcm";
@@ -1114,7 +1251,12 @@ Result<MediaFileInfo> MediaReader::readWav(const std::string& filePath) {
     while (file.read(reinterpret_cast<char*>(chunkHdr), 8)) {
         std::string chunkId(reinterpret_cast<char*>(chunkHdr), 4);
         uint32_t chunkSize = readLe32(chunkHdr + 4);
-        uint64_t nextChunk = static_cast<uint64_t>(file.tellg()) + chunkSize;
+        uint64_t curPos = file.tellg();
+        uint64_t paddedChunkSize = (static_cast<uint64_t>(chunkSize) + 1) & ~1ULL;
+        if (paddedChunkSize > fileSize - curPos) {
+            break;
+        }
+        uint64_t nextChunk = curPos + paddedChunkSize;
 
         if (chunkId == "fmt " && chunkSize >= 16) {
             uint8_t fmt[16];
@@ -1161,9 +1303,9 @@ Result<MediaFileInfo> MediaReader::readOgg(const std::string& filePath) {
     uint64_t fileSize = file.tellg();
     file.seekg(0, std::ios::beg);
 
-    // Read first page header
-    uint8_t oggHdr[28];
-    if (file.read(reinterpret_cast<char*>(oggHdr), 28)) {
+    // Read first page header (standard Ogg page header is 27 bytes before segment table)
+    uint8_t oggHdr[27];
+    if (file.read(reinterpret_cast<char*>(oggHdr), 27)) {
         uint8_t numSegments = oggHdr[26];
         uint32_t payloadSize = 0;
         for (int s = 0; s < numSegments; ++s) payloadSize += file.get();
@@ -1174,6 +1316,12 @@ Result<MediaFileInfo> MediaReader::readOgg(const std::string& filePath) {
                 info.channels = payload[11];
                 info.sample_rate = static_cast<int32_t>(readLe32(payload.data() + 12));
                 info.codec = "vorbis";
+                if (payload.size() >= 28) {
+                    int32_t nomBitrate = static_cast<int32_t>(readLe32(payload.data() + 20));
+                    if (nomBitrate > 0) {
+                        info.bitrate = nomBitrate;
+                    }
+                }
             } else if (payload.size() >= 19 && std::memcmp(payload.data(), "OpusHead", 8) == 0) {
                 info.channels = payload[9];
                 info.sample_rate = static_cast<int32_t>(readLe32(payload.data() + 12));
@@ -1184,8 +1332,10 @@ Result<MediaFileInfo> MediaReader::readOgg(const std::string& filePath) {
 
     // Rough duration estimation based on bitrate and file size if available
     if (info.sample_rate > 0 && fileSize > 0) {
-        info.bitrate = 128000; // default Vorbis 128 kbps
-        info.duration = static_cast<double>(fileSize * 8) / 128000.0;
+        if (info.bitrate <= 0) {
+            info.bitrate = 128000; // default Vorbis 128 kbps
+        }
+        info.duration = static_cast<double>(fileSize * 8) / static_cast<double>(info.bitrate);
     }
 
     return info;

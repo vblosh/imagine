@@ -1,4 +1,5 @@
 #include "imagine/core/event_suggestions.hpp"
+#include "imagine/core/import_tags.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -44,15 +45,24 @@ double degreesToRadians(double degrees) {
     return degrees * kPi / 180.0;
 }
 
-double gpsDistanceKm(const MediaItem& a, const MediaItem& b) {
-    const double lat1 = degreesToRadians(a.exif.latitude);
+struct GpsCoord {
+    double latitude{0.0};
+    double longitude{0.0};
+};
+
+double gpsDistanceKm(const GpsCoord& a, const MediaItem& b) {
+    const double lat1 = degreesToRadians(a.latitude);
     const double lat2 = degreesToRadians(b.exif.latitude);
     const double dLat = lat2 - lat1;
-    const double dLon = degreesToRadians(b.exif.longitude - a.exif.longitude);
+    const double dLon = degreesToRadians(b.exif.longitude - a.longitude);
     const double sinLat = std::sin(dLat / 2.0);
     const double sinLon = std::sin(dLon / 2.0);
     const double h = sinLat * sinLat + std::cos(lat1) * std::cos(lat2) * sinLon * sinLon;
     return 2.0 * kEarthRadiusKm * std::asin(std::sqrt(std::min(1.0, h)));
+}
+
+bool isSystemImportTag(const Tag& tag) {
+    return tag.name == kLastImportedTagName && categoryEquals(tag, kLastImportedTagCategory);
 }
 
 std::vector<Tag> commonTags(const std::vector<MediaItem>& photos, std::string_view category) {
@@ -60,7 +70,7 @@ std::vector<Tag> commonTags(const std::vector<MediaItem>& photos, std::string_vi
 
     std::map<TagId, Tag> common;
     for (const auto& tag : photos.front().tags) {
-        if (categoryEquals(tag, category)) {
+        if (!isSystemImportTag(tag) && categoryEquals(tag, category)) {
             common.emplace(tag.id, tag);
         }
     }
@@ -69,7 +79,9 @@ std::vector<Tag> commonTags(const std::vector<MediaItem>& photos, std::string_vi
     for (size_t i = 1; i < photos.size() && !common.empty(); ++i) {
         ids.clear();
         for (const auto& tag : photos[i].tags) {
-            if (categoryEquals(tag, category)) ids.insert(tag.id);
+            if (common.contains(tag.id) && categoryEquals(tag, category)) {
+                ids.insert(tag.id);
+            }
         }
         for (auto it = common.begin(); it != common.end();) {
             if (!ids.contains(it->first)) {
@@ -147,7 +159,9 @@ bool isGenericFolder(std::string_view folder) {
 std::optional<std::string> commonParentFolder(const std::vector<MediaItem>& photos) {
     std::optional<std::string> common;
     for (const auto& photo : photos) {
-        const std::string folder = pathToUtf8(pathFromUtf8(photo.file_path).parent_path().filename());
+        std::string normPath = photo.file_path;
+        std::replace(normPath.begin(), normPath.end(), '\\', '/');
+        const std::string folder = pathToUtf8(pathFromUtf8(normPath).parent_path().filename());
         if (isGenericFolder(folder)) return std::nullopt;
         if (!common.has_value()) {
             common = folder;
@@ -213,7 +227,7 @@ EventSuggestionResult EventSuggestionEngine::suggest(const std::vector<MediaItem
     });
 
     std::vector<MediaItem> current;
-    std::optional<MediaItem> previousLocated;
+    std::optional<GpsCoord> previousLocated;
     for (auto& item : eligible) {
         bool split = false;
         if (!current.empty()) {
@@ -229,7 +243,9 @@ EventSuggestionResult EventSuggestionEngine::suggest(const std::vector<MediaItem
             current.clear();
             previousLocated.reset();
         }
-        if (hasValidGps(item)) previousLocated = item;
+        if (hasValidGps(item)) {
+            previousLocated = GpsCoord{item.exif.latitude, item.exif.longitude};
+        }
         current.push_back(std::move(item));
     }
     if (!current.empty()) result.groups.push_back(makeGroup(std::move(current)));

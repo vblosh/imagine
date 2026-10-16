@@ -872,6 +872,12 @@ export function setupEventListeners() {
         openLoupeForMedia(id);
       }
     });
+    dom.openLoupeFromInspector.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        dom.openLoupeFromInspector.click();
+      }
+    });
   }
 
   // Inspector flag pick/reject
@@ -1249,6 +1255,13 @@ export function setupEventListeners() {
     dom.editorFiltersStrip.addEventListener('click', (e) => {
       const chip = e.target.closest('.editor-filter-chip');
       if (chip && chip.dataset.filter) {
+        setFilter(chip.dataset.filter);
+      }
+    });
+    dom.editorFiltersStrip.addEventListener('keydown', (e) => {
+      const chip = e.target.closest('.editor-filter-chip');
+      if (chip && chip.dataset.filter && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
         setFilter(chip.dataset.filter);
       }
     });

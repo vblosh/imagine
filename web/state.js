@@ -53,7 +53,7 @@ export const state = {
   set activeFolder(val) {
     this.activeFolders.clear();
     if (val !== null && val !== undefined) {
-      this.activeFolders.add(String(val));
+      this.activeFolders.add(String(val).replace(/\\/g, '/'));
     }
   },
   allFolders: new Set(),

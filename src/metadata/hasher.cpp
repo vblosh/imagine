@@ -1,18 +1,19 @@
 #include "imagine/metadata/hasher.hpp"
+#include "imagine/common/types.hpp"
 #include <openssl/evp.h>
 #include <fstream>
 #include <vector>
-#include <sstream>
-#include <iomanip>
 
 namespace imagine::metadata {
 
 static std::string hexEncode(const unsigned char* hash, unsigned int len) {
-    std::ostringstream oss;
+    static constexpr char kHexDigits[] = "0123456789abcdef";
+    std::string out(static_cast<size_t>(len) * 2, '\0');
     for (unsigned int i = 0; i < len; ++i) {
-        oss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hash[i]);
+        out[static_cast<size_t>(i) * 2]     = kHexDigits[(hash[i] >> 4) & 0x0F];
+        out[static_cast<size_t>(i) * 2 + 1] = kHexDigits[hash[i] & 0x0F];
     }
-    return oss.str();
+    return out;
 }
 
 std::string Hasher::computeBytesSha256(const uint8_t* data, size_t size) {
@@ -44,7 +45,7 @@ std::string Hasher::computeBytesSha256(const uint8_t* data, size_t size) {
 }
 
 Result<std::string> Hasher::computeFileSha256(const std::string& filePath) {
-    std::ifstream file(filePath, std::ios::binary);
+    std::ifstream file(pathFromUtf8(filePath), std::ios::binary);
     if (!file.is_open()) {
         return Status::ioError("Unable to open file for hashing: " + filePath);
     }
@@ -66,6 +67,10 @@ Result<std::string> Hasher::computeFileSha256(const std::string& filePath) {
             EVP_MD_CTX_free(ctx);
             return Status::internal("Failed to update SHA-256 digest");
         }
+    }
+    if (file.bad() || !file.eof()) {
+        EVP_MD_CTX_free(ctx);
+        return Status::ioError("Error reading file during hashing: " + filePath);
     }
 
     unsigned char hash[EVP_MAX_MD_SIZE];

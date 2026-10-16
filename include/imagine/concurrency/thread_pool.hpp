@@ -109,7 +109,12 @@ public:
             if (stop_.load(std::memory_order_relaxed)) {
                 throw std::runtime_error("Cannot enqueue task to stopped ThreadPool");
             }
-            tasks_.emplace(std::move(task));
+            if constexpr (std::is_copy_constructible_v<decltype(task)>) {
+                tasks_.emplace(std::move(task));
+            } else {
+                auto sharedTask = std::make_shared<decltype(task)>(std::move(task));
+                tasks_.emplace([sharedTask]() { (*sharedTask)(); });
+            }
         }
 
         cv_.notify_one();

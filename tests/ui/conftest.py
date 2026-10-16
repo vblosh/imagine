@@ -180,6 +180,7 @@ def golden_seeded_template(imagine_bin: str, web_dir: str) -> Generator[Dict[str
         imagine_bin, "serve",
         "--catalog", db_path,
         "--thumbs", thumbs_dir,
+        "--photos-dir", photos_dir,
         "--port", str(port),
         "--web-dir", web_dir
     ]
@@ -232,6 +233,7 @@ def golden_media_template(imagine_bin: str, web_dir: str) -> Generator[Dict[str,
         imagine_bin, "serve",
         "--catalog", db_path,
         "--thumbs", thumbs_dir,
+        "--photos-dir", photos_dir,
         "--port", str(port),
         "--web-dir", web_dir
     ]
@@ -357,6 +359,8 @@ def start_backend(imagine_bin: str, web_dir: str, env: Dict[str, Any]) -> Genera
             "--port", str(port),
             "--web-dir", web_dir
         ]
+        if env.get("items") and env.get("photos_dir"):
+            cmd.extend(["--photos-dir", env["photos_dir"]])
         stdout_log = tempfile.TemporaryFile(mode="w+b")
         stderr_log = tempfile.TemporaryFile(mode="w+b")
         try:

@@ -3,6 +3,7 @@
 #include "imagine/server/mime_types.hpp"
 #include "imagine/core/catalog.hpp"
 #include "imagine/common/logger.hpp"
+#include "imagine/common/types.hpp"
 #include <httplib.h>
 #include <filesystem>
 #include <fstream>
@@ -16,11 +17,48 @@ bool readTextOrBinaryFile(const std::filesystem::path& path, std::string& out) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     if (!ifs.is_open()) return false;
     auto size = ifs.tellg();
+    if (size < 0) return false;
     ifs.seekg(0, std::ios::beg);
-    out.resize(size);
-    if (!ifs.read(out.data(), size)) return false;
+    out.resize(static_cast<size_t>(size));
+    if (size > 0 && !ifs.read(out.data(), size)) return false;
     return true;
 }
+
+bool isDescendantOrEqualPath(const std::filesystem::path& target, const std::filesystem::path& root) {
+    auto pNormal = target.lexically_normal();
+    auto rNormal = root.lexically_normal();
+
+    if (pNormal.filename() == ".") pNormal = pNormal.parent_path();
+    if (rNormal.filename() == ".") rNormal = rNormal.parent_path();
+
+    auto itP = pNormal.begin();
+    auto endP = pNormal.end();
+    auto itR = rNormal.begin();
+    auto endR = rNormal.end();
+
+    while (itR != endR) {
+        if (itP == endP) return false;
+#if defined(_WIN32)
+        std::string sP = pathToUtf8(*itP);
+        std::string sR = pathToUtf8(*itR);
+        if (sP.size() != sR.size()) return false;
+        for (size_t i = 0; i < sP.size(); ++i) {
+            if (std::tolower(static_cast<unsigned char>(sP[i])) !=
+                std::tolower(static_cast<unsigned char>(sR[i]))) {
+                return false;
+            }
+        }
+#else
+        if (*itP != *itR) return false;
+#endif
+        ++itP;
+        ++itR;
+    }
+    return true;
+}
+
+constexpr uintmax_t kMaxCachedStaticFileSize = 16 * 1024 * 1024; // 16 MB
+constexpr size_t kMaxCachedStaticFileEntries = 256;
 
 struct CachedStaticFile {
     std::string content;
@@ -40,9 +78,9 @@ public:
 
         auto mtime = std::filesystem::last_write_time(path, ec);
         auto fsize = std::filesystem::file_size(path, ec);
-        if (ec) return nullptr;
+        if (ec || fsize > kMaxCachedStaticFileSize) return nullptr;
 
-        std::string key = path.string();
+        std::string key = pathToUtf8(path);
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -59,13 +97,16 @@ public:
 
         auto mtimeSec = std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
         std::string etag = "\"" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
-        std::string mime = getMimeType(path.string());
+        std::string mime = getMimeType(key);
 
         auto entry = std::make_shared<CachedStaticFile>(
             CachedStaticFile{std::move(content), std::move(mime), std::move(etag), mtime, fsize});
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            if (cache_.size() >= kMaxCachedStaticFileEntries && cache_.find(key) == cache_.end()) {
+                cache_.erase(cache_.begin());
+            }
             cache_[key] = entry;
         }
 
@@ -293,7 +334,7 @@ bool WebServer::isRunning() const {
 }
 
 void WebServer::setupStaticFileServing() {
-    std::filesystem::path root(webRoot_);
+    std::filesystem::path root = pathFromUtf8(webRoot_);
     std::error_code ec;
     std::filesystem::path canonicalRoot = std::filesystem::weakly_canonical(root, ec);
     if (ec) {
@@ -313,6 +354,14 @@ void WebServer::setupStaticFileServing() {
         auto serveCached = [&](const std::filesystem::path& target, bool isSpaFallback) -> bool {
             auto entry = cache->get(target);
             if (!entry) {
+                std::error_code fEc;
+                auto fsize = std::filesystem::file_size(target, fEc);
+                if (!fEc && fsize > kMaxCachedStaticFileSize) {
+                    std::string targetUtf8 = pathToUtf8(target);
+                    res.set_header("Cache-Control", "no-cache");
+                    res.set_file_content(targetUtf8, getMimeType(targetUtf8));
+                    return true;
+                }
                 return false;
             }
 
@@ -340,21 +389,15 @@ void WebServer::setupStaticFileServing() {
         }
 
         std::error_code ec;
-        std::filesystem::path target = std::filesystem::weakly_canonical(canonicalRoot / relPath, ec);
+        std::filesystem::path target = std::filesystem::weakly_canonical(canonicalRoot / pathFromUtf8(relPath), ec);
         if (ec) {
             res.status = 404;
             res.set_content("File not found", "text/plain");
             return;
         }
 
-        std::string rootStr = canonicalRoot.string();
-        if (!rootStr.empty() && rootStr.back() != std::filesystem::path::preferred_separator) {
-            rootStr += std::filesystem::path::preferred_separator;
-        }
-        std::string targetStr = target.string();
-
         // Enforce boundary check to prevent path traversal and symlink escape
-        if (targetStr != canonicalRoot.string() && targetStr.rfind(rootStr, 0) != 0) {
+        if (!isDescendantOrEqualPath(target, canonicalRoot)) {
             res.status = 403;
             res.set_content("Access denied", "text/plain");
             return;
@@ -369,8 +412,7 @@ void WebServer::setupStaticFileServing() {
         // SPA routing fallback: serve index.html if file was not found
         std::filesystem::path indexPath = std::filesystem::weakly_canonical(canonicalRoot / "index.html", ec);
         if (!ec && std::filesystem::is_regular_file(indexPath, ec)) {
-            std::string indexStr = indexPath.string();
-            if ((indexStr == canonicalRoot.string() || indexStr.rfind(rootStr, 0) == 0) &&
+            if (isDescendantOrEqualPath(indexPath, canonicalRoot) &&
                 serveCached(indexPath, true)) {
                 return;
             }

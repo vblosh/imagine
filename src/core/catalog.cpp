@@ -2,6 +2,7 @@
 #include "imagine/common/logger.hpp"
 #include <ctime>
 #include <cstdio>
+#include <thread>
 
 namespace imagine::core {
 
@@ -55,6 +56,9 @@ void Catalog::closeInternal() {
 
     if (importer_) {
         importer_->cancel();
+        while (importer_->isRunning()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
 
     if (threadPool_) {
@@ -108,8 +112,8 @@ std::string Catalog::resolvePhotoPathInternal(const std::string& recordedPath) c
     std::filesystem::path recPath = pathFromUtf8(recordedPath);
     std::error_code ec;
 
-    // 1. If recordedPath is a relative path
-    if (recPath.is_relative()) {
+    // 1. If recordedPath is a relative path (without root directory)
+    if (recPath.is_relative() && !recPath.has_root_directory()) {
 
         if (!photosDir_.empty()) {
             return pathToUtf8(pathFromUtf8(photosDir_) / recPath);
@@ -140,10 +144,6 @@ std::string Catalog::resolvePhotoPathInternal(const std::string& recordedPath) c
     if (!photosDir_.empty()) {
         std::filesystem::path pDir = pathFromUtf8(photosDir_);
         std::filesystem::path fname = recPath.filename();
-        std::filesystem::path directCandidate = pDir / fname;
-        if (std::filesystem::exists(directCandidate, ec) && std::filesystem::is_regular_file(directCandidate, ec)) {
-            return pathToUtf8(directCandidate);
-        }
 
         std::vector<std::string> parts;
         for (const auto& part : recPath) {
@@ -163,7 +163,12 @@ std::string Catalog::resolvePhotoPathInternal(const std::string& recordedPath) c
             }
         }
 
-        return pathToUtf8(pDir / fname);
+        std::filesystem::path directCandidate = pDir / fname;
+        if (std::filesystem::exists(directCandidate, ec) && std::filesystem::is_regular_file(directCandidate, ec)) {
+            return pathToUtf8(directCandidate);
+        }
+
+        return pathToUtf8(directCandidate);
     }
 
     return recordedPath;
@@ -193,23 +198,29 @@ Result<ImportProgress> Catalog::importDirectory(
     bool recursive,
     Importer::ProgressCallback progressCb
 ) {
-    std::shared_lock<std::shared_mutex> lock(rwMutex_);
-    if (!isOpen_ || !importer_) {
-        return Status::internal("Catalog is not open");
+    Importer* imp = nullptr;
+    {
+        std::shared_lock<std::shared_mutex> lock(rwMutex_);
+        if (!isOpen_ || !importer_) {
+            return Status::internal("Catalog is not open");
+        }
+        imp = importer_.get();
     }
-    auto res = importer_->importDirectory(path, recursive, std::move(progressCb));
-    lock.unlock();
+    auto res = imp->importDirectory(path, recursive, std::move(progressCb));
     syncPhotosDirFromImporter();
     return res;
 }
 
 Result<MediaItem> Catalog::importFile(const std::string& path) {
-    std::shared_lock<std::shared_mutex> lock(rwMutex_);
-    if (!isOpen_ || !importer_) {
-        return Status::internal("Catalog is not open");
+    Importer* imp = nullptr;
+    {
+        std::shared_lock<std::shared_mutex> lock(rwMutex_);
+        if (!isOpen_ || !importer_) {
+            return Status::internal("Catalog is not open");
+        }
+        imp = importer_.get();
     }
-    auto res = importer_->importFile(path);
-    lock.unlock();
+    auto res = imp->importFile(path);
     if (res.isOk()) {
         syncPhotosDirFromImporter();
     }
@@ -217,9 +228,13 @@ Result<MediaItem> Catalog::importFile(const std::string& path) {
 }
 
 void Catalog::cancelImport() {
-    std::shared_lock<std::shared_mutex> lock(rwMutex_);
-    if (importer_) {
-        importer_->cancel();
+    Importer* imp = nullptr;
+    {
+        std::shared_lock<std::shared_mutex> lock(rwMutex_);
+        imp = importer_.get();
+    }
+    if (imp) {
+        imp->cancel();
     }
 }
 
@@ -309,6 +324,12 @@ Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::str
     if (newFileName.empty()) {
         return Status::invalidArgument("File name cannot be empty");
     }
+    for (char c : newFileName) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (uc < 0x20 || c == '<' || c == '>' || c == '"' || c == '|' || c == '?' || c == '*') {
+            return Status::invalidArgument("Invalid file name: contains control or reserved characters");
+        }
+    }
     if (newFileName.find('/') != std::string::npos ||
         newFileName.find('\\') != std::string::npos ||
         newFileName.find(':') != std::string::npos ||
@@ -358,7 +379,10 @@ Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::str
 
     std::filesystem::path newDiskFs = oldDiskFs.parent_path() / pathFromUtf8(actualNewFileName);
     if (std::filesystem::exists(newDiskFs, ec) && newDiskFs != oldDiskFs) {
-        return Status::alreadyExists("A file with this name already exists on disk: " + pathToUtf8(newDiskFs));
+        std::error_code eqEc;
+        if (!std::filesystem::equivalent(oldDiskFs, newDiskFs, eqEc)) {
+            return Status::alreadyExists("A file with this name already exists on disk: " + pathToUtf8(newDiskFs));
+        }
     }
     std::filesystem::rename(oldDiskFs, newDiskFs, ec);
     if (ec) {
@@ -482,11 +506,6 @@ Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::s
             isAbs = true;
         } else if (!normRootCheck.empty() && normRootCheck.has_parent_path() && normRootCheck.parent_path() != "/" &&
                    (normTargetCheck == normRootCheck.parent_path() || Importer::isInsideRootDir(normTargetCheck, normRootCheck.parent_path()))) {
-            isAbs = true;
-        } else if (std::filesystem::exists(destFs, ecCheck)) {
-            isAbs = true;
-        } else if (destFs.has_parent_path() && destFs.parent_path() != "/" &&
-                   std::filesystem::exists(destFs.parent_path(), ecCheck)) {
             isAbs = true;
         }
     }
@@ -641,19 +660,45 @@ Status Catalog::setDateTaken(MediaId id, int64_t dateTaken, const std::string& d
     }
 
     std::string formattedStr = dateTakenStr;
-    if (formattedStr.empty() && dateTaken > 0) {
+    if (formattedStr.empty() && dateTaken != 0) {
         std::time_t tt = static_cast<std::time_t>(dateTaken);
         std::tm tm{};
+        bool ok = false;
 #if defined(_WIN32)
-        gmtime_s(&tm, &tt);
+        ok = (gmtime_s(&tm, &tt) == 0);
 #else
-        gmtime_r(&tt, &tm);
+        ok = (gmtime_r(&tt, &tm) != nullptr);
 #endif
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), "%04d:%02d:%02d %02d:%02d:%02d",
-                      tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                      tm.tm_hour, tm.tm_min, tm.tm_sec);
-        formattedStr = buf;
+        if (ok) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%04d:%02d:%02d %02d:%02d:%02d",
+                          tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                          tm.tm_hour, tm.tm_min, tm.tm_sec);
+            formattedStr = buf;
+        } else {
+            int64_t days = dateTaken / 86400;
+            int64_t rem = dateTaken % 86400;
+            if (rem < 0) { rem += 86400; days -= 1; }
+            int hour = static_cast<int>(rem / 3600);
+            int min = static_cast<int>((rem % 3600) / 60);
+            int sec = static_cast<int>(rem % 60);
+
+            days += 719468;
+            const int64_t era = (days >= 0 ? days : days - 146096) / 146097;
+            const unsigned doe = static_cast<unsigned>(days - era * 146097);
+            const unsigned yoe = (doe - doe / 1024 + doe / 1460 - doe / 36524) / 365;
+            const int64_t y = static_cast<int64_t>(yoe) + era * 400;
+            const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+            const unsigned mp = (5 * doy + 2) / 153;
+            const unsigned d = doy - (153 * mp + 2) / 5 + 1;
+            const unsigned m = mp < 10 ? mp + 3 : mp - 9;
+            const int64_t yr = y + (m <= 2);
+
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%04lld:%02u:%02u %02d:%02d:%02d",
+                          static_cast<long long>(yr), m, d, hour, min, sec);
+            formattedStr = buf;
+        }
     }
 
     return db_->updateDateTaken(id, dateTaken, formattedStr);
@@ -676,7 +721,7 @@ Status Catalog::setGps(MediaId id, bool hasGps, double latitude, double longitud
 }
 
 Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
-    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    std::unique_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
@@ -693,7 +738,7 @@ Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
             if (effPhotosDir.empty() && importer_) {
                 effPhotosDir = importer_->photosDir();
             }
-            if (!effPhotosDir.empty() && !Importer::isInsideRootDir(filePath, effPhotosDir)) {
+            if (effPhotosDir.empty() || !Importer::isInsideRootDir(filePath, effPhotosDir)) {
                 IMAGINE_LOG_WARN("Refusing to delete file outside photos directory: " + filePath);
                 return Status::invalidArgument("Cannot delete file outside photos directory: " + filePath);
             }
@@ -887,31 +932,37 @@ Result<std::vector<std::string>> Catalog::getFolders() {
 }
 
 db::CatalogDb& Catalog::db() {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!db_) throw std::runtime_error("Catalog db accessed while closed");
     return *db_;
 }
 
 const db::CatalogDb& Catalog::db() const {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!db_) throw std::runtime_error("Catalog db accessed while closed");
     return *db_;
 }
 
 thumbnail::Cache& Catalog::cache() {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!cache_) throw std::runtime_error("Catalog cache accessed while closed");
     return *cache_;
 }
 
 const thumbnail::Cache& Catalog::cache() const {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!cache_) throw std::runtime_error("Catalog cache accessed while closed");
     return *cache_;
 }
 
 concurrency::ThreadPool& Catalog::threadPool() {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!threadPool_) throw std::runtime_error("Catalog thread pool accessed while closed");
     return *threadPool_;
 }
 
 Importer& Catalog::importer() {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!importer_) throw std::runtime_error("Catalog importer accessed while closed");
     return *importer_;
 }

@@ -130,7 +130,11 @@ public:
 
     Result<MediaItem> importFile(const std::string& filePath);
 
-    void setThreadPool(concurrency::ThreadPool* pool) noexcept { pool_ = pool; }
+    void setThreadPool(concurrency::ThreadPool* pool) noexcept {
+        if (!running_.load()) {
+            pool_ = pool;
+        }
+    }
     concurrency::ThreadPool* threadPool() const noexcept { return pool_; }
 
     void cancel() noexcept;
@@ -142,7 +146,11 @@ public:
     static std::string normalizePath(const std::string& path);
 
     using FileHook = std::function<void(const std::string&)>;
-    void setFileHook(FileHook hook) { file_hook_ = std::move(hook); }
+    void setFileHook(FileHook hook) {
+        if (!running_.load()) {
+            file_hook_ = std::move(hook);
+        }
+    }
 
 private:
     ProcessStatus processFileInternal(const std::string& filePath, MediaItem* outItem = nullptr, bool commitToDb = true);

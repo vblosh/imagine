@@ -260,7 +260,7 @@ export function restoreNavigationPreferences() {
     try {
       const arr = JSON.parse(savedFoldersRaw);
       if (Array.isArray(arr) && arr.length > 0) {
-        state.activeFolders = new Set(arr);
+        state.activeFolders = new Set(arr.map(f => String(f).replace(/\\/g, '/')));
       }
     } catch (_) {}
   }

@@ -1,10 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <string_view>
 #include <mutex>
-#include <iostream>
-#include <sstream>
 #include <fstream>
 
 namespace imagine {
@@ -26,8 +25,14 @@ class Logger {
 public:
     static Logger& instance();
 
+    Logger(const Logger&) = delete;
+    Logger& operator=(const Logger&) = delete;
+    Logger(Logger&&) = delete;
+    Logger& operator=(Logger&&) = delete;
+
     void setLevel(LogLevel level);
     LogLevel level() const;
+    bool shouldLog(LogLevel msgLevel) const noexcept;
 
     static constexpr size_t kDefaultMaxLogFileSize = 10 * 1024 * 1024; // 10MB
     static constexpr size_t kDefaultMaxLogFiles = 3;                  // 3 rotated files
@@ -74,7 +79,7 @@ private:
     static std::string escapeJson(std::string_view sv);
     void rotateLogFiles();
 
-    LogLevel level_{LogLevel::Info};
+    std::atomic<LogLevel> level_{LogLevel::Info};
     LogFormat fileFormat_{LogFormat::Json};
     bool consoleEnabled_{true};
     bool consoleColors_{true};
@@ -86,9 +91,29 @@ private:
     mutable std::mutex mutex_;
 };
 
-#define IMAGINE_LOG_DEBUG(msg) ::imagine::Logger::instance().log(::imagine::LogLevel::Debug, __FILE__, __LINE__, (msg))
-#define IMAGINE_LOG_INFO(msg)  ::imagine::Logger::instance().log(::imagine::LogLevel::Info,  __FILE__, __LINE__, (msg))
-#define IMAGINE_LOG_WARN(msg)  ::imagine::Logger::instance().log(::imagine::LogLevel::Warn,  __FILE__, __LINE__, (msg))
-#define IMAGINE_LOG_ERROR(msg) ::imagine::Logger::instance().log(::imagine::LogLevel::Error, __FILE__, __LINE__, (msg))
+#define IMAGINE_LOG_DEBUG(msg) \
+    do { \
+        if (::imagine::Logger::instance().shouldLog(::imagine::LogLevel::Debug)) { \
+            ::imagine::Logger::instance().log(::imagine::LogLevel::Debug, __FILE__, __LINE__, (msg)); \
+        } \
+    } while (0)
+#define IMAGINE_LOG_INFO(msg) \
+    do { \
+        if (::imagine::Logger::instance().shouldLog(::imagine::LogLevel::Info)) { \
+            ::imagine::Logger::instance().log(::imagine::LogLevel::Info, __FILE__, __LINE__, (msg)); \
+        } \
+    } while (0)
+#define IMAGINE_LOG_WARN(msg) \
+    do { \
+        if (::imagine::Logger::instance().shouldLog(::imagine::LogLevel::Warn)) { \
+            ::imagine::Logger::instance().log(::imagine::LogLevel::Warn, __FILE__, __LINE__, (msg)); \
+        } \
+    } while (0)
+#define IMAGINE_LOG_ERROR(msg) \
+    do { \
+        if (::imagine::Logger::instance().shouldLog(::imagine::LogLevel::Error)) { \
+            ::imagine::Logger::instance().log(::imagine::LogLevel::Error, __FILE__, __LINE__, (msg)); \
+        } \
+    } while (0)
 
 } // namespace imagine

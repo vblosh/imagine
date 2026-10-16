@@ -19,10 +19,8 @@ public:
     bool isLoaded() const;
     TokenizerOutput encode(std::string_view text, int maxLength = 77) const;
 private:
-    struct MergePair { std::string first; std::string second; };
     std::vector<std::string> bpe(const std::vector<std::string>& initialWord) const;
     std::unordered_map<std::string, int64_t> vocab_;
-    std::vector<MergePair> merges_;
     std::unordered_map<std::string, int> mergeRanks_;
     int64_t sotToken_{49406};
     int64_t eotToken_{49407};

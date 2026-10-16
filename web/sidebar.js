@@ -468,9 +468,10 @@ export function renderSidebarFolders() {
   if (state.allFolders.size === 0 && state.mediaItems && state.mediaItems.length > 0) {
     state.mediaItems.forEach(item => {
       if (item.file_path) {
-        const lastSlash = Math.max(item.file_path.lastIndexOf('/'), item.file_path.lastIndexOf('\\'));
+        const normalized = item.file_path.replace(/\\/g, '/');
+        const lastSlash = normalized.lastIndexOf('/');
         if (lastSlash > 0) {
-          state.allFolders.add(item.file_path.substring(0, lastSlash));
+          state.allFolders.add(normalized.substring(0, lastSlash));
         }
       }
     });

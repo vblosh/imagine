@@ -315,4 +315,94 @@ TEST_F(CatalogClassTest, MoveMediaToNewPath) {
     EXPECT_EQ(mediaAfterMissing.value().file_path, "photo.jpg"); // untouched
 }
 
+TEST_F(CatalogClassTest, RenameMediaValidationAndCaseOnly) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+
+    auto impRes = cat.importFile(sampleImg);
+    ASSERT_TRUE(impRes.isOk());
+    MediaId mid = impRes.value().id;
+
+    // Control characters and reserved symbols
+    EXPECT_FALSE(cat.renameMedia(mid, "photo<bad>.jpg").isOk());
+    EXPECT_FALSE(cat.renameMedia(mid, "photo>bad.jpg").isOk());
+    EXPECT_FALSE(cat.renameMedia(mid, "photo|bad.jpg").isOk());
+    EXPECT_FALSE(cat.renameMedia(mid, "photo?bad.jpg").isOk());
+    EXPECT_FALSE(cat.renameMedia(mid, "photo*bad.jpg").isOk());
+    EXPECT_FALSE(cat.renameMedia(mid, "photo\"bad.jpg").isOk());
+    std::string ctrlName = "photo\x1f.jpg";
+    EXPECT_FALSE(cat.renameMedia(mid, ctrlName).isOk());
+
+    // Case-only rename should succeed on case-insensitive filesystems
+    std::string newPath;
+    std::string newName;
+    EXPECT_TRUE(cat.renameMedia(mid, "PHOTO.jpg", &newPath, &newName).isOk());
+    EXPECT_EQ(newName, "PHOTO.jpg");
+    auto getRes = cat.getMedia(mid);
+    ASSERT_TRUE(getRes.isOk());
+    EXPECT_EQ(getRes.value().file_name, "PHOTO.jpg");
+}
+
+TEST_F(CatalogClassTest, Pre1970DateTakenFormatted) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+
+    auto impRes = cat.importFile(sampleImg);
+    ASSERT_TRUE(impRes.isOk());
+    MediaId mid = impRes.value().id;
+
+    // 1935-01-01 00:00:00 UTC
+    int64_t pre1970 = -1104537600;
+    EXPECT_TRUE(cat.setDateTaken(mid, pre1970).isOk());
+
+    auto getRes = cat.getMedia(mid);
+    ASSERT_TRUE(getRes.isOk());
+    EXPECT_EQ(getRes.value().date_taken, pre1970);
+    EXPECT_EQ(getRes.value().exif.date_taken_str, "1935:01:01 00:00:00");
+}
+
+TEST_F(CatalogClassTest, ResolvePhotoPathSuffixPrecedence) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+
+    // Create root colliding file testDir/IMG_0001.JPG
+    std::filesystem::path rootColliding = testDir / "IMG_0001.JPG";
+    std::filesystem::copy_file(sampleImg, rootColliding);
+
+    // Create subfolder file testDir/2026/trip/IMG_0001.JPG
+    std::filesystem::path subDir = testDir / "2026" / "trip";
+    std::filesystem::create_directories(subDir);
+    std::filesystem::path targetSubFile = subDir / "IMG_0001.JPG";
+    std::filesystem::copy_file(sampleImg, targetSubFile);
+
+    // Resolving legacy path "/old_disk/photos/2026/trip/IMG_0001.JPG"
+    // MUST resolve to testDir/2026/trip/IMG_0001.JPG, NOT the root testDir/IMG_0001.JPG!
+    std::string resolved = cat.resolvePhotoPath("/old_disk/photos/2026/trip/IMG_0001.JPG");
+    EXPECT_EQ(std::filesystem::path(resolved), targetSubFile);
+}
+
+TEST_F(CatalogClassTest, DeleteMediaGuardsUnsetPhotosDir) {
+    // Open catalog without photosDir
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir).isOk());
+
+    // Insert an item with absolute path pointing to sampleImg
+    MediaItem item;
+    item.file_path = sampleImg;
+    item.file_name = "photo.jpg";
+    item.file_size = 1000;
+    item.file_modified_time = 1000;
+    item.content_hash = "h_delete_guard";
+    item.date_taken = 1000;
+    auto insRes = cat.db().insertMedia(item);
+    ASSERT_TRUE(insRes.isOk());
+    MediaId mid = insRes.value();
+
+    // deleteMedia with deleteFromDisk=true must fail because photosDir is unset
+    EXPECT_FALSE(cat.deleteMedia(mid, true).isOk());
+    // File on disk must remain intact
+    EXPECT_TRUE(std::filesystem::exists(sampleImg));
+}
+
+
 

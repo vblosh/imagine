@@ -277,6 +277,7 @@ Status Schema::applyMigrationV5(Connection& conn) {
             rejected_at INTEGER NOT NULL,
             PRIMARY KEY(face_id, tag_id)
         );
+        CREATE INDEX IF NOT EXISTS idx_face_rejections_tag ON face_rejections(tag_id);
 
         CREATE TABLE IF NOT EXISTS media_tag_provenance (
             media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
@@ -304,6 +305,7 @@ Status Schema::applyMigrationV6(Connection& conn) {
             media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
             PRIMARY KEY(job_id, media_id)
         );
+        CREATE INDEX IF NOT EXISTS idx_face_job_media_media ON face_analysis_job_media(media_id);
     )SQL";
 
     Transaction tx(conn);
@@ -376,6 +378,12 @@ Status Schema::migrate(Connection& conn) {
     }
 
     int current = verResult.value();
+    if (current > CurrentVersion) {
+        return Status::databaseError(
+            "Database schema version (" + std::to_string(current) +
+            ") is newer than supported version (" + std::to_string(CurrentVersion) + ")"
+        );
+    }
     if (current < 1) {
         IMAGINE_LOG_INFO("Applying database migration v1...");
         Status s = applyMigrationV1(conn);
@@ -418,6 +426,9 @@ Status Schema::migrate(Connection& conn) {
         if (!s.isOk()) return s;
         current = 7;
     }
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_face_rejections_tag ON face_rejections(tag_id);");
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_face_job_media_media ON face_analysis_job_media(media_id);");
+
     IMAGINE_LOG_INFO("Database schema up to date at version " + std::to_string(current));
     return Status::ok();
 }

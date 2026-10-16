@@ -1,6 +1,7 @@
 #include "imagine/thumbnail/cache.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/types.hpp"
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 
@@ -49,12 +50,19 @@ void Cache::setCacheDir(const std::string& cacheDir) {
 }
 
 std::string Cache::getRelativeThumbnailPath(const std::string& hash, int size) {
-    if (hash.size() < 4) {
-        return "misc_" + hash + "_" + std::to_string(size) + ".jpg";
+    std::string safeHash;
+    safeHash.reserve(hash.size());
+    for (unsigned char c : hash) {
+        if (std::isalnum(c)) {
+            safeHash.push_back(static_cast<char>(c));
+        }
     }
-    std::string p1 = hash.substr(0, 2);
-    std::string p2 = hash.substr(2, 2);
-    std::string filename = hash + "_" + std::to_string(size) + ".jpg";
+    if (safeHash.size() < 4) {
+        return "misc_" + safeHash + "_" + std::to_string(size) + ".jpg";
+    }
+    std::string p1 = safeHash.substr(0, 2);
+    std::string p2 = safeHash.substr(2, 2);
+    std::string filename = safeHash + "_" + std::to_string(size) + ".jpg";
 
     return (std::filesystem::path(p1) / p2 / filename).generic_string();
 }
@@ -85,6 +93,18 @@ Result<std::string> Cache::ensureThumbnail(
     std::string targetPath = getThumbnailPath(hash, size);
     if (hasThumbnail(hash, size)) {
         return targetPath;
+    }
+    if (size <= SmallSize && hasThumbnail(hash, LargeSize)) {
+        auto largeRes = Generator::loadImage(getThumbnailPath(hash, LargeSize));
+        if (largeRes.isOk()) {
+            auto resSmall = Generator::resize(largeRes.value(), size);
+            if (resSmall.isOk()) {
+                Status saveSmall = Generator::saveJpegFast(resSmall.value(), targetPath);
+                if (saveSmall.isOk()) {
+                    return targetPath;
+                }
+            }
+        }
     }
 
     auto loadRes = Generator::loadImage(sourceImagePath);
@@ -160,6 +180,9 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemor
     int* outWidth,
     int* outHeight
 ) {
+    if (outWidth) *outWidth = 0;
+    if (outHeight) *outHeight = 0;
+
     std::string smallPath = getThumbnailPath(hash, SmallSize);
     std::string largePath = getThumbnailPath(hash, LargeSize);
 

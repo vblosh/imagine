@@ -125,22 +125,34 @@ void ThreadPool::workerLoop() {
             ++active_tasks_;
         }
 
+        struct ActiveTaskGuard {
+            ThreadPool& pool;
+            ~ActiveTaskGuard() noexcept {
+                std::lock_guard<std::mutex> lock(pool.queue_mutex_);
+                --pool.active_tasks_;
+                if (pool.tasks_.empty() && pool.active_tasks_ == 0) {
+                    pool.wait_cv_.notify_all();
+                }
+            }
+        } activeGuard{*this};
+
         try {
             task();
+            task = nullptr; // Explicitly release task callable and captured resources before decrementing active_tasks_
         } catch (const std::exception& ex) {
-            IMAGINE_LOG_ERROR(std::string("Exception in ThreadPool task: ") + ex.what());
+            try {
+                task = nullptr;
+            } catch (...) {}
+            try {
+                IMAGINE_LOG_ERROR(std::string("Exception in ThreadPool task: ") + ex.what());
+            } catch (...) {}
         } catch (...) {
-            IMAGINE_LOG_ERROR("Unknown exception in ThreadPool task");
-        }
-
-        task = nullptr; // Explicitly release task callable and captured resources before decrementing active_tasks_
-
-        {
-            std::lock_guard<std::mutex> lock(queue_mutex_);
-            --active_tasks_;
-            if (tasks_.empty() && active_tasks_ == 0) {
-                wait_cv_.notify_all();
-            }
+            try {
+                task = nullptr;
+            } catch (...) {}
+            try {
+                IMAGINE_LOG_ERROR("Unknown exception in ThreadPool task");
+            } catch (...) {}
         }
     }
 }

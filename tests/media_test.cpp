@@ -407,6 +407,7 @@ TEST(MediaTest, Mp4MultiTrackParser) {
     EXPECT_EQ(info.height, 1080);
     EXPECT_EQ(info.codec, "h264"); // Must NOT be overwritten with "aac"!
     EXPECT_EQ(info.channels, 2);
+    EXPECT_EQ(info.sample_rate, 44100);
 }
 
 // 3. Test MP3 with ID3v2 Tags
@@ -855,6 +856,16 @@ TEST(MediaTest, ImporterVideoAndAudio) {
 
 // 11. Test Server Routes: media_type filter, /api/media/:id/file, and thumbnail upload
 TEST(MediaTest, ServerMediaEndpoints) {
+    std::string prevToken;
+    if (const char* t = std::getenv("IMAGINE_API_TOKEN")) {
+        prevToken = t;
+    }
+#if defined(_WIN32)
+    _putenv_s("IMAGINE_API_TOKEN", "");
+#else
+    unsetenv("IMAGINE_API_TOKEN");
+#endif
+
     TempDir tmpDir;
     std::string dbPath = (tmpDir.path() / "test_catalog.db").string();
     std::string cacheDir = (tmpDir.path() / "thumbs").string();
@@ -949,6 +960,13 @@ TEST(MediaTest, ServerMediaEndpoints) {
 
     server.stop();
     catalog.close();
+    if (!prevToken.empty()) {
+#if defined(_WIN32)
+        _putenv_s("IMAGINE_API_TOKEN", prevToken.c_str());
+#else
+        setenv("IMAGINE_API_TOKEN", prevToken.c_str(), 1);
+#endif
+    }
 }
 
 TEST(MediaTest, Mp4QuickTimeGpsParser) {
@@ -1104,4 +1122,561 @@ TEST(MediaTest, Mp4QuickTimeGpsParser) {
         EXPECT_NEAR(realInfo.altitude, 295.730, 0.001);
     }
 }
+
+// 13. Test MP4 180-Degree Rotation Matrix and Audio Sample Rate
+TEST(MediaTest, Mp4Rotation180AndSampleRate) {
+    TempDir tmp;
+    std::string mp4Path = (tmp.path() / "rotate180.mp4").string();
+
+    std::vector<uint8_t> data;
+    // ftyp box
+    writeBe32(data, 20);
+    writeString(data, "ftyp");
+    writeString(data, "isom");
+    writeBe32(data, 512);
+    writeString(data, "isom");
+
+    // moov container
+    size_t moovStart = data.size();
+    writeBe32(data, 0);
+    writeString(data, "moov");
+
+    // mvhd
+    size_t mvhdStart = data.size();
+    writeBe32(data, 108);
+    writeString(data, "mvhd");
+    data.push_back(0); // version
+    data.push_back(0); data.push_back(0); data.push_back(0); // flags
+    writeBe32(data, 0); // creation
+    writeBe32(data, 0); // mod
+    writeBe32(data, 1000); // timescale
+    writeBe32(data, 5000); // duration = 5s
+    data.resize(mvhdStart + 108, 0);
+
+    // Track 1: Video with 180 deg matrix
+    size_t trak1Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "trak");
+
+    // tkhd (92 bytes)
+    size_t tkhd1Start = data.size();
+    writeBe32(data, 92);
+    writeString(data, "tkhd");
+    data.push_back(0); // version 0
+    data.push_back(0); data.push_back(0); data.push_back(0);
+    data.resize(tkhd1Start + 8 + 4 + 36, 0); // skip to matrix
+    // matrix: a = -1.0, b = 0, u = 0, c = 0, d = -1.0, v = 0, x = 0, y = 0, w = 1.0
+    writeBe32(data, 0xFFFF0000); // a (-1.0 in 16.16)
+    writeBe32(data, 0);          // b
+    writeBe32(data, 0);          // u
+    writeBe32(data, 0);          // c
+    writeBe32(data, 0xFFFF0000); // d (-1.0 in 16.16)
+    writeBe32(data, 0);          // v
+    writeBe32(data, 0);          // x
+    writeBe32(data, 0);          // y
+    writeBe32(data, 0x40000000); // w
+    writeBe32(data, 1920 << 16); // width 1920
+    writeBe32(data, 1080 << 16); // height 1080
+
+    // mdia 1
+    size_t mdia1Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "mdia");
+
+    writeBe32(data, 32);
+    writeString(data, "hdlr");
+    writeBe32(data, 0);
+    writeBe32(data, 0);
+    writeString(data, "vide");
+    data.resize(data.size() + 12, 0);
+
+    size_t minf1Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "minf");
+
+    size_t stbl1Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "stbl");
+
+    size_t stsd1Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "stsd");
+    writeBe32(data, 0);
+    writeBe32(data, 1);
+
+    size_t avc1Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "avc1");
+    data.resize(avc1Start + 40, 0);
+    uint32_t avc1Size = static_cast<uint32_t>(data.size() - avc1Start);
+    data[avc1Start] = (avc1Size >> 24) & 0xFF;
+    data[avc1Start + 1] = (avc1Size >> 16) & 0xFF;
+    data[avc1Start + 2] = (avc1Size >> 8) & 0xFF;
+    data[avc1Start + 3] = avc1Size & 0xFF;
+
+    uint32_t stsd1Size = static_cast<uint32_t>(data.size() - stsd1Start);
+    data[stsd1Start] = (stsd1Size >> 24) & 0xFF;
+    data[stsd1Start + 1] = (stsd1Size >> 16) & 0xFF;
+    data[stsd1Start + 2] = (stsd1Size >> 8) & 0xFF;
+    data[stsd1Start + 3] = stsd1Size & 0xFF;
+
+    uint32_t stbl1Size = static_cast<uint32_t>(data.size() - stbl1Start);
+    data[stbl1Start] = (stbl1Size >> 24) & 0xFF;
+    data[stbl1Start + 1] = (stbl1Size >> 16) & 0xFF;
+    data[stbl1Start + 2] = (stbl1Size >> 8) & 0xFF;
+    data[stbl1Start + 3] = stbl1Size & 0xFF;
+
+    uint32_t minf1Size = static_cast<uint32_t>(data.size() - minf1Start);
+    data[minf1Start] = (minf1Size >> 24) & 0xFF;
+    data[minf1Start + 1] = (minf1Size >> 16) & 0xFF;
+    data[minf1Start + 2] = (minf1Size >> 8) & 0xFF;
+    data[minf1Start + 3] = minf1Size & 0xFF;
+
+    uint32_t mdia1Size = static_cast<uint32_t>(data.size() - mdia1Start);
+    data[mdia1Start] = (mdia1Size >> 24) & 0xFF;
+    data[mdia1Start + 1] = (mdia1Size >> 16) & 0xFF;
+    data[mdia1Start + 2] = (mdia1Size >> 8) & 0xFF;
+    data[mdia1Start + 3] = mdia1Size & 0xFF;
+
+    uint32_t trak1Size = static_cast<uint32_t>(data.size() - trak1Start);
+    data[trak1Start] = (trak1Size >> 24) & 0xFF;
+    data[trak1Start + 1] = (trak1Size >> 16) & 0xFF;
+    data[trak1Start + 2] = (trak1Size >> 8) & 0xFF;
+    data[trak1Start + 3] = trak1Size & 0xFF;
+
+    // Track 2: Audio
+    size_t trak2Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "trak");
+
+    size_t tkhd2Start = data.size();
+    writeBe32(data, 92);
+    writeString(data, "tkhd");
+    data.push_back(0);
+    data.push_back(0); data.push_back(0); data.push_back(0);
+    data.resize(tkhd2Start + 84, 0);
+    writeBe32(data, 0);
+    writeBe32(data, 0);
+
+    size_t mdia2Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "mdia");
+
+    writeBe32(data, 32);
+    writeString(data, "hdlr");
+    writeBe32(data, 0);
+    writeBe32(data, 0);
+    writeString(data, "soun");
+    data.resize(data.size() + 12, 0);
+
+    size_t minf2Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "minf");
+
+    size_t stbl2Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "stbl");
+
+    size_t stsd2Start = data.size();
+    writeBe32(data, 0);
+    writeString(data, "stsd");
+    writeBe32(data, 0);
+    writeBe32(data, 1);
+
+    size_t mp4aStart = data.size();
+    writeBe32(data, 36);
+    writeString(data, "mp4a");
+    writeBe32(data, 0);
+    writeBe32(data, 0);
+    writeBe32(data, 0);
+    writeBe32(data, 0);
+    writeBe16(data, 2); // channels = 2
+    writeBe16(data, 16); // samplesize = 16
+    writeBe16(data, 0);
+    writeBe16(data, 0);
+    writeBe16(data, 48000); // 48000 Hz sample rate
+    writeBe16(data, 0);
+
+    uint32_t stsd2Size = static_cast<uint32_t>(data.size() - stsd2Start);
+    data[stsd2Start] = (stsd2Size >> 24) & 0xFF;
+    data[stsd2Start + 1] = (stsd2Size >> 16) & 0xFF;
+    data[stsd2Start + 2] = (stsd2Size >> 8) & 0xFF;
+    data[stsd2Start + 3] = stsd2Size & 0xFF;
+
+    uint32_t stbl2Size = static_cast<uint32_t>(data.size() - stbl2Start);
+    data[stbl2Start] = (stbl2Size >> 24) & 0xFF;
+    data[stbl2Start + 1] = (stbl2Size >> 16) & 0xFF;
+    data[stbl2Start + 2] = (stbl2Size >> 8) & 0xFF;
+    data[stbl2Start + 3] = stbl2Size & 0xFF;
+
+    uint32_t minf2Size = static_cast<uint32_t>(data.size() - minf2Start);
+    data[minf2Start] = (minf2Size >> 24) & 0xFF;
+    data[minf2Start + 1] = (minf2Size >> 16) & 0xFF;
+    data[minf2Start + 2] = (minf2Size >> 8) & 0xFF;
+    data[minf2Start + 3] = minf2Size & 0xFF;
+
+    uint32_t mdia2Size = static_cast<uint32_t>(data.size() - mdia2Start);
+    data[mdia2Start] = (mdia2Size >> 24) & 0xFF;
+    data[mdia2Start + 1] = (mdia2Size >> 16) & 0xFF;
+    data[mdia2Start + 2] = (mdia2Size >> 8) & 0xFF;
+    data[mdia2Start + 3] = mdia2Size & 0xFF;
+
+    uint32_t trak2Size = static_cast<uint32_t>(data.size() - trak2Start);
+    data[trak2Start] = (trak2Size >> 24) & 0xFF;
+    data[trak2Start + 1] = (trak2Size >> 16) & 0xFF;
+    data[trak2Start + 2] = (trak2Size >> 8) & 0xFF;
+    data[trak2Start + 3] = trak2Size & 0xFF;
+
+    uint32_t moovSize = static_cast<uint32_t>(data.size() - moovStart);
+    data[moovStart] = (moovSize >> 24) & 0xFF;
+    data[moovStart + 1] = (moovSize >> 16) & 0xFF;
+    data[moovStart + 2] = (moovSize >> 8) & 0xFF;
+    data[moovStart + 3] = moovSize & 0xFF;
+
+    {
+        std::ofstream ofs(mp4Path, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    auto res = MediaReader::readMetadata(mp4Path);
+    ASSERT_TRUE(res.isOk()) << res.status().message();
+    auto info = res.value();
+    EXPECT_EQ(info.media_type, "video");
+    EXPECT_EQ(info.width, 1920);
+    EXPECT_EQ(info.height, 1080);
+    EXPECT_EQ(info.orientation, 3); // 180-degree rotation
+    EXPECT_EQ(info.channels, 2);
+    EXPECT_EQ(info.sample_rate, 48000);
+}
+
+// 14. Test MP3 with ID3v2 UTF-16 frames, double-null APIC description, and MPEG-2 Layer 3
+TEST(MediaTest, Mp3Id3v2Utf16AndMpeg2Layer3) {
+    TempDir tmp;
+    std::string mp3Path = (tmp.path() / "test_utf16.mp3").string();
+
+    std::vector<uint8_t> data;
+    // ID3v2.3 header: "ID3", ver 3.0, flags 0, synchsafe size
+    writeString(data, "ID3");
+    data.push_back(3); // major
+    data.push_back(0); // revision
+    data.push_back(0); // flags
+
+    std::vector<uint8_t> tagData;
+    // Helper to add UTF-16 frame with LE BOM
+    auto addUtf16Frame = [&](const std::string& frameId, const std::string& asciiText) {
+        writeString(tagData, frameId);
+        // encoding (1 byte) + BOM (2 bytes) + asciiText.size() * 2 bytes
+        uint32_t fsize = static_cast<uint32_t>(1 + 2 + asciiText.size() * 2);
+        writeBe32(tagData, fsize);
+        writeBe16(tagData, 0); // flags
+        tagData.push_back(1); // UTF-16 with BOM
+        tagData.push_back(0xFF); // BOM LE
+        tagData.push_back(0xFE);
+        for (char c : asciiText) {
+            tagData.push_back(static_cast<uint8_t>(c));
+            tagData.push_back(0);
+        }
+    };
+
+    addUtf16Frame("TIT2", "Unicode Title");
+    addUtf16Frame("TPE1", "Unicode Artist");
+
+    // Add APIC frame with UTF-16 description and double-null terminator
+    {
+        writeString(tagData, "APIC");
+        std::string mime = "image/jpeg";
+        std::string desc = "Cover";
+        std::vector<uint8_t> imgBytes = {0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0xFF, 0xD9};
+        // frame size: enc(1) + mime(mime.size() + 1) + picType(1) + BOM(2) + desc(desc.size() * 2) + double-null(2) + imgBytes.size()
+        uint32_t apicSize = static_cast<uint32_t>(1 + mime.size() + 1 + 1 + 2 + desc.size() * 2 + 2 + imgBytes.size());
+        writeBe32(tagData, apicSize);
+        writeBe16(tagData, 0); // flags
+        tagData.push_back(1); // enc = UTF-16
+        writeString(tagData, mime);
+        tagData.push_back(0); // mime null-terminator
+        tagData.push_back(3); // picType = Cover (front)
+        tagData.push_back(0xFF); // BOM LE
+        tagData.push_back(0xFE);
+        for (char c : desc) {
+            tagData.push_back(static_cast<uint8_t>(c));
+            tagData.push_back(0);
+        }
+        tagData.push_back(0); // double-null for UTF-16 description
+        tagData.push_back(0);
+        tagData.insert(tagData.end(), imgBytes.begin(), imgBytes.end());
+    }
+
+    uint32_t tagSize = static_cast<uint32_t>(tagData.size());
+    data.push_back((tagSize >> 21) & 0x7F);
+    data.push_back((tagSize >> 14) & 0x7F);
+    data.push_back((tagSize >> 7) & 0x7F);
+    data.push_back(tagSize & 0x7F);
+    data.insert(data.end(), tagData.begin(), tagData.end());
+
+    // MPEG-2 Layer III audio frame:
+    // Sync: 0xFF, 0xF3 (1111 0011 -> sync 11111111 111, mpegVer=2 (MPEG-2), layer=1 (Layer III), no CRC=1)
+    // b2: 0x40 (bitrateIdx=4 -> 32 kbps in MPEG-2, srateIdx=0 -> 22050 Hz)
+    // b3: 0x00 (stereo)
+    data.push_back(0xFF);
+    data.push_back(0xF3);
+    data.push_back(0x40);
+    data.push_back(0x00);
+    data.resize(data.size() + 200, 0);
+
+    {
+        std::ofstream ofs(mp3Path, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    auto res = MediaReader::readMetadata(mp3Path);
+    ASSERT_TRUE(res.isOk()) << res.status().message();
+    auto info = res.value();
+    EXPECT_EQ(info.media_type, "audio");
+    EXPECT_EQ(info.audio_title, "Unicode Title");
+    EXPECT_EQ(info.audio_artist, "Unicode Artist");
+    EXPECT_EQ(info.sample_rate, 22050);
+    EXPECT_EQ(info.bitrate, 32000);
+    EXPECT_EQ(info.channels, 2);
+    EXPECT_EQ(info.cover_mime, "image/jpeg");
+    EXPECT_EQ(info.cover_art.size(), 13u);
+    EXPECT_EQ(info.cover_art[0], 0xFF);
+    EXPECT_EQ(info.cover_art[1], 0xD8);
+}
+
+// 15. Test WAV Parser with odd RIFF chunk size word-alignment
+TEST(MediaTest, WavOddChunkAlignment) {
+    TempDir tmp;
+    std::string wavPath = (tmp.path() / "test_odd.wav").string();
+
+    std::vector<uint8_t> data;
+    writeString(data, "RIFF");
+    writeLe32(data, 1000); // placeholder total size
+    writeString(data, "WAVE");
+
+    // "fmt " chunk (16 bytes)
+    writeString(data, "fmt ");
+    writeLe32(data, 16);
+    writeLe16(data, 1);  // PCM
+    writeLe16(data, 2);  // stereo
+    writeLe32(data, 44100);
+    writeLe32(data, 176400); // byte rate
+    writeLe16(data, 4);
+    writeLe16(data, 16);
+
+    // An odd-sized chunk: "junk" of size 3 bytes (padded with 1 byte in RIFF)
+    writeString(data, "junk");
+    writeLe32(data, 3);
+    writeString(data, "abc");
+    data.push_back(0); // pad byte to even offset
+
+    // "data" chunk (17640 bytes = 0.1s)
+    writeString(data, "data");
+    writeLe32(data, 17640);
+    data.resize(data.size() + 17640, 0);
+
+    // Update RIFF total size
+    uint32_t riffPayloadSize = static_cast<uint32_t>(data.size() - 8);
+    data[4] = riffPayloadSize & 0xFF;
+    data[5] = (riffPayloadSize >> 8) & 0xFF;
+    data[6] = (riffPayloadSize >> 16) & 0xFF;
+    data[7] = (riffPayloadSize >> 24) & 0xFF;
+
+    {
+        std::ofstream ofs(wavPath, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    auto res = MediaReader::readMetadata(wavPath);
+    ASSERT_TRUE(res.isOk()) << res.status().message();
+    auto info = res.value();
+    EXPECT_EQ(info.media_type, "audio");
+    EXPECT_EQ(info.channels, 2);
+    EXPECT_EQ(info.sample_rate, 44100);
+    EXPECT_NEAR(info.duration, 0.1, 0.01);
+}
+
+// 16. Test OGG Vorbis Bitrate Extraction
+TEST(MediaTest, OggVorbisBitrate) {
+    TempDir tmp;
+    std::string oggPath = (tmp.path() / "test.ogg").string();
+
+    std::vector<uint8_t> data;
+    // OggS magic
+    writeString(data, "OggS");
+    data.push_back(0); // version
+    data.push_back(2); // header type: first page of logical bitstream (BOS)
+    for (int i = 0; i < 8; ++i) data.push_back(0); // granule pos = 0
+    writeLe32(data, 12345); // stream serial number
+    writeLe32(data, 0);     // page sequence number
+    writeLe32(data, 0);     // checksum
+    data.push_back(1);      // 1 segment
+
+    // Vorbis identification packet: 30 bytes
+    std::vector<uint8_t> vorbisPacket;
+    writeString(vorbisPacket, "\x01vorbis"); // 7 bytes
+    writeLe32(vorbisPacket, 0); // vorbis_version = 0 (4 bytes)
+    vorbisPacket.push_back(2);  // audio_channels = 2 (offset 11)
+    writeLe32(vorbisPacket, 48000);  // sample_rate = 48000 (offset 12)
+    writeLe32(vorbisPacket, 0);      // bitrate_maximum (offset 16)
+    writeLe32(vorbisPacket, 192000); // bitrate_nominal = 192000 (offset 20)
+    writeLe32(vorbisPacket, 0);      // bitrate_minimum (offset 24)
+    vorbisPacket.push_back(0xB8);    // blocksize 0 / 1 (offset 28)
+    vorbisPacket.push_back(1);       // framing_flag (offset 29)
+
+    data.push_back(static_cast<uint8_t>(vorbisPacket.size())); // segment table (30 bytes)
+    data.insert(data.end(), vorbisPacket.begin(), vorbisPacket.end());
+
+    {
+        std::ofstream ofs(oggPath, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    auto res = MediaReader::readMetadata(oggPath);
+    ASSERT_TRUE(res.isOk()) << res.status().message();
+    auto info = res.value();
+    EXPECT_EQ(info.media_type, "audio");
+    EXPECT_EQ(info.codec, "vorbis");
+    EXPECT_EQ(info.channels, 2);
+    EXPECT_EQ(info.sample_rate, 48000);
+    EXPECT_EQ(info.bitrate, 192000);
+}
+
+// 17. Test FFmpeg Helper rejects cmd.exe metacharacters (% and ^)
+TEST(MediaTest, FfmpegHelperUnsafeMetacharacters) {
+    auto resPercent = FfmpegHelper::extractVideoFrame("test%USERPROFILE%.mp4", 1.0, "out.jpg");
+    EXPECT_FALSE(resPercent.isOk());
+    EXPECT_EQ(resPercent.status().code(), StatusCode::InvalidArgument);
+
+    auto resCaret = FfmpegHelper::extractVideoFrame("test^name.mp4", 1.0, "out.jpg");
+    EXPECT_FALSE(resCaret.isOk());
+    EXPECT_EQ(resCaret.status().code(), StatusCode::InvalidArgument);
+}
+
+// 18. Test MP3 with ID3v2 Latin-1 frame transcoded to UTF-8
+TEST(MediaTest, Mp3Id3v2Latin1Transcoding) {
+    TempDir tmp;
+    std::string mp3Path = (tmp.path() / "test_latin1.mp3").string();
+
+    std::vector<uint8_t> data;
+    writeString(data, "ID3");
+    data.push_back(3); // major 2.3
+    data.push_back(0); // revision
+    data.push_back(0); // flags
+
+    std::vector<uint8_t> tagData;
+    // Add TIT2 frame with encoding 0 (Latin-1) containing "Caf\xE9"
+    writeString(tagData, "TIT2");
+    std::string latinTitle = "Caf\xE9";
+    uint32_t fsize = static_cast<uint32_t>(1 + latinTitle.size());
+    writeBe32(tagData, fsize);
+    writeBe16(tagData, 0); // flags
+    tagData.push_back(0);  // enc = 0 (ISO-8859-1)
+    writeString(tagData, latinTitle);
+
+    uint32_t tagSize = static_cast<uint32_t>(tagData.size());
+    data.push_back((tagSize >> 21) & 0x7F);
+    data.push_back((tagSize >> 14) & 0x7F);
+    data.push_back((tagSize >> 7) & 0x7F);
+    data.push_back(tagSize & 0x7F);
+    data.insert(data.end(), tagData.begin(), tagData.end());
+
+    // Minimal audio frame to make parser recognize it
+    data.push_back(0xFF);
+    data.push_back(0xFB); // MPEG-1 Layer 3
+    data.push_back(0x90); // 128 kbps, 44100 Hz
+    data.push_back(0x00);
+    data.resize(data.size() + 200, 0);
+
+    {
+        std::ofstream ofs(mp3Path, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    auto res = MediaReader::readMetadata(mp3Path);
+    ASSERT_TRUE(res.isOk()) << res.status().message();
+    EXPECT_EQ(res.value().audio_title, "Caf\xC3\xA9"); // Transcoded to UTF-8
+}
+
+// 19. Test WAV parser clamps corrupt chunk size exceeding EOF
+TEST(MediaTest, WavCorruptChunkSizeClamping) {
+    TempDir tmp;
+    std::string wavPath = (tmp.path() / "test_oversized.wav").string();
+
+    std::vector<uint8_t> data;
+    writeString(data, "RIFF");
+    writeLe32(data, 100);
+    writeString(data, "WAVE");
+
+    // "fmt " chunk
+    writeString(data, "fmt ");
+    writeLe32(data, 16);
+    writeLe16(data, 1);
+    writeLe16(data, 2);
+    writeLe32(data, 44100);
+    writeLe32(data, 176400);
+    writeLe16(data, 4);
+    writeLe16(data, 16);
+
+    // Corrupt chunk claiming 1 GB size
+    writeString(data, "junk");
+    writeLe32(data, 0x40000000);
+
+    {
+        std::ofstream ofs(wavPath, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    auto res = MediaReader::readMetadata(wavPath);
+    ASSERT_TRUE(res.isOk()) << res.status().message();
+    EXPECT_EQ(res.value().sample_rate, 44100);
+}
+
+// 20. Test container parser preserves pre-1970 negative timestamp
+TEST(MediaTest, MediaReaderPre1970Timestamp) {
+    TempDir tmp;
+    std::string mp4Path = (tmp.path() / "test_pre1970.mp4").string();
+
+    std::vector<uint8_t> data;
+    // ftyp
+    writeBe32(data, 16);
+    writeString(data, "ftyp");
+    writeString(data, "isom");
+    writeBe32(data, 512);
+
+    // moov
+    std::vector<uint8_t> moovPayload;
+    // mvhd: version 0 (108 bytes total)
+    std::vector<uint8_t> mvhdPayload;
+    mvhdPayload.push_back(0); // version 0
+    mvhdPayload.push_back(0); mvhdPayload.push_back(0); mvhdPayload.push_back(0); // flags
+    // Pre-1970 MP4 timestamp: MP4 epoch is 1904-01-01. Unix epoch (1970-01-01) is 2082844800.
+    // So 1969-07-20 (Apollo 11 moon landing) is approx 2068864000 in MP4 time, which is -13980800 Unix time.
+    uint32_t apolloMp4 = 2082844800U - 13980800U;
+    writeBe32(mvhdPayload, apolloMp4); // creationTime
+    writeBe32(mvhdPayload, apolloMp4); // modificationTime
+    writeBe32(mvhdPayload, 1000);      // timeScale
+    writeBe32(mvhdPayload, 10000);     // duration
+    for (int i = 0; i < 80; ++i) mvhdPayload.push_back(0);
+
+    writeBe32(moovPayload, static_cast<uint32_t>(8 + mvhdPayload.size()));
+    writeString(moovPayload, "mvhd");
+    moovPayload.insert(moovPayload.end(), mvhdPayload.begin(), mvhdPayload.end());
+
+    writeBe32(data, static_cast<uint32_t>(8 + moovPayload.size()));
+    writeString(data, "moov");
+    data.insert(data.end(), moovPayload.begin(), moovPayload.end());
+
+    {
+        std::ofstream ofs(mp4Path, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    auto res = MediaReader::readMetadata(mp4Path);
+    ASSERT_TRUE(res.isOk()) << res.status().message();
+    // Verify that the negative date_taken timestamp was preserved and not overwritten with mtime
+    EXPECT_LT(res.value().date_taken, 0);
+    EXPECT_EQ(res.value().date_taken, -13980800LL);
+}
+
+
 

@@ -73,7 +73,7 @@ public:
     Status cancelJob(int64_t jobId);
 
 private:
-    void runJob(int64_t jobId, std::vector<MediaId> mediaIds, bool force);
+    void runJob(int64_t jobId, std::string scope, std::vector<MediaId> mediaIds, bool force);
     void loadIndex();
     struct Impl;
     std::unique_ptr<Impl> impl_;

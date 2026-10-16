@@ -1,11 +1,8 @@
 #pragma once
 
 #include <string>
-#include <string_view>
-#include <system_error>
 #include <variant>
 #include <utility>
-#include <optional>
 #include <stdexcept>
 
 namespace imagine {
@@ -51,7 +48,10 @@ template <typename T>
 class Result {
 public:
     Result(T value) : data_(std::move(value)) {}
-    Result(Status status) : data_(std::move(status)) {}
+    Result(Status status)
+        : data_(status.isOk()
+                    ? Status::internal("Result<T> constructed with Status::ok()")
+                    : std::move(status)) {}
 
     static Result<T> failure(Status status) {
         return Result<T>(std::move(status));
@@ -67,21 +67,21 @@ public:
 
     const T& value() const & {
         if (!isOk()) {
-            throw std::runtime_error("Attempted to access value on error Result: " + status().message());
+            throw std::runtime_error("Attempted to access value on error Result: " + std::get<Status>(data_).message());
         }
         return std::get<T>(data_);
     }
 
     T& value() & {
         if (!isOk()) {
-            throw std::runtime_error("Attempted to access value on error Result: " + status().message());
+            throw std::runtime_error("Attempted to access value on error Result: " + std::get<Status>(data_).message());
         }
         return std::get<T>(data_);
     }
 
     T&& value() && {
         if (!isOk()) {
-            throw std::runtime_error("Attempted to access value on error Result: " + status().message());
+            throw std::runtime_error("Attempted to access value on error Result: " + std::get<Status>(data_).message());
         }
         return std::get<T>(std::move(data_));
     }
@@ -91,6 +91,13 @@ public:
             return std::get<T>(data_);
         }
         return defaultValue;
+    }
+
+    T valueOr(T defaultValue) && {
+        if (isOk()) {
+            return std::get<T>(std::move(data_));
+        }
+        return std::move(defaultValue);
     }
 
     Status status() const {

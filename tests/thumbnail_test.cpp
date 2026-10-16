@@ -534,3 +534,75 @@ TEST_F(ThumbnailTest, CacheConcurrentAccessAndMutation) {
         t.join();
     }
 }
+
+TEST_F(ThumbnailTest, RelativeThumbnailPathSanitization) {
+    // Malicious or malformed hash with path traversal characters
+    std::string traversalHash = "../../etc/passwd123456";
+    std::string relPath = Cache::getRelativeThumbnailPath(traversalHash, 256);
+    EXPECT_EQ(relPath.find(".."), std::string::npos);
+    EXPECT_EQ(relPath.find("/"), 2); // standard 2/2 partition separator
+    EXPECT_EQ(relPath.substr(0, 2), "et");
+
+    // All punctuation stripped
+    std::string punctHash = "../..\\..//";
+    std::string relPunct = Cache::getRelativeThumbnailPath(punctHash, 256);
+    EXPECT_EQ(relPunct, "misc__256.jpg");
+}
+
+TEST_F(ThumbnailTest, EnsureThumbnailFastPathDownscale) {
+    std::string cacheDir = (testDir / "fastpath_cache").string();
+    Cache cache(cacheDir);
+
+    // Create a LargeSize thumbnail in cache
+    std::string fakeHash = "1234567890abcdef1234567890abcdef";
+    std::string largeThumbPath = cache.getThumbnailPath(fakeHash, Cache::LargeSize);
+
+    ImageBuffer largeBuf;
+    largeBuf.width = Cache::LargeSize;
+    largeBuf.height = 768;
+    largeBuf.channels = 3;
+    largeBuf.data.resize(static_cast<size_t>(largeBuf.width * largeBuf.height * 3), 128);
+    ASSERT_TRUE(Generator::saveJpeg(largeBuf, largeThumbPath).isOk());
+    ASSERT_TRUE(cache.hasThumbnail(fakeHash, Cache::LargeSize));
+
+    // Calling ensureThumbnail for SmallSize with a non-existent source path should succeed
+    // because it uses the fast-path downscale from LargeSize
+    std::string nonExistentSource = (testDir / "does_not_exist.jpg").string();
+    auto smallRes = cache.ensureThumbnail(nonExistentSource, fakeHash, Cache::SmallSize, 1);
+    ASSERT_TRUE(smallRes.isOk()) << smallRes.status().message();
+    EXPECT_TRUE(cache.hasThumbnail(fakeHash, Cache::SmallSize));
+}
+
+TEST_F(ThumbnailTest, IsValidImageBufferValidation) {
+    std::string outPath = (testDir / "invalid_buf.jpg").string();
+
+    // 1. Undersized buffer
+    ImageBuffer undersized;
+    undersized.width = 100;
+    undersized.height = 100;
+    undersized.channels = 3;
+    undersized.data.resize(100); // Should be 30000
+
+    auto resJpeg = Generator::saveJpeg(undersized, outPath);
+    EXPECT_FALSE(resJpeg.isOk());
+    EXPECT_EQ(resJpeg.code(), StatusCode::InvalidArgument);
+
+    auto resFast = Generator::saveJpegFast(undersized, outPath);
+    EXPECT_FALSE(resFast.isOk());
+    EXPECT_EQ(resFast.code(), StatusCode::InvalidArgument);
+
+    auto resPng = Generator::savePng(undersized, outPath);
+    EXPECT_FALSE(resPng.isOk());
+    EXPECT_EQ(resPng.code(), StatusCode::InvalidArgument);
+
+    // 2. Invalid channels
+    ImageBuffer badChannels;
+    badChannels.width = 10;
+    badChannels.height = 10;
+    badChannels.channels = 5;
+    badChannels.data.resize(500);
+
+    EXPECT_FALSE(Generator::saveJpeg(badChannels, outPath).isOk());
+    EXPECT_FALSE(Generator::saveJpegFast(badChannels, outPath).isOk());
+    EXPECT_FALSE(Generator::savePng(badChannels, outPath).isOk());
+}
