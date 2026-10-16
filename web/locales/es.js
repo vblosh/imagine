@@ -166,6 +166,7 @@ export default {
     face_review_button: 'Revisar rostros',
     face_open_scan_dialog: 'Rostros',
     face_scan_scope_label: 'Analizar',
+    semantic_scan_scope_label: 'Indexar',
     face_scope_selected: 'Fotos seleccionadas',
     face_scope_catalog: 'Todo el catálogo',
     face_view_existing: 'Ver rostros',

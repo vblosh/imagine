@@ -166,6 +166,7 @@ export default {
     face_review_button: '审核人脸',
     face_open_scan_dialog: '人脸',
     face_scan_scope_label: '分析范围',
+    semantic_scan_scope_label: '索引范围',
     face_scope_selected: '所选照片',
     face_scope_catalog: '整个目录',
     face_view_existing: '查看人脸',

@@ -166,6 +166,7 @@ export default {
     face_review_button: 'Review faces',
     face_open_scan_dialog: 'Faces',
     face_scan_scope_label: 'Analyze',
+    semantic_scan_scope_label: 'Index',
     face_scope_selected: 'Selected photos',
     face_scope_catalog: 'Entire catalog',
     face_view_existing: 'View faces',

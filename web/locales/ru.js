@@ -166,6 +166,7 @@ export default {
     face_review_button: 'Проверить лица',
     face_open_scan_dialog: 'Лица',
     face_scan_scope_label: 'Анализировать',
+    semantic_scan_scope_label: 'Индексировать',
     face_scope_selected: 'Выбранные фото',
     face_scope_catalog: 'Весь каталог',
     face_view_existing: 'Показать лица',
