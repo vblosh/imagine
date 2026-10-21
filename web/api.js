@@ -41,8 +41,14 @@ export function getAuthHeaders() {
 async function parseJsonResponse(res) {
   if (res.status === 204) return null;
   const text = await res.text();
-  if (!text) return null;
-  return JSON.parse(text);
+  if (!text || !text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const err = new Error(`Invalid JSON response (${res.status} ${res.statusText}): ${text.slice(0, 100)}`);
+    err.status = res.status;
+    throw err;
+  }
 }
 
 export const api = {
@@ -97,8 +103,11 @@ export const api = {
     return parseJsonResponse(res);
   },
 
-  async del(endpoint, data = null) {
+  async del(endpoint, data = null, options = {}) {
     const fetchOpts = { method: 'DELETE', headers: getAuthHeaders() };
+    if (options && options.signal) {
+      fetchOpts.signal = options.signal;
+    }
     if (data !== null && data !== undefined) {
       fetchOpts.headers = { ...getAuthHeaders(), 'Content-Type': 'application/json' };
       fetchOpts.body = JSON.stringify(data);
@@ -127,7 +136,7 @@ export function escapeHtml(str) {
 }
 
 export function numeric(value) {
-  if (value === null || value === undefined) return null;
+  if (value === null || value === undefined || typeof value === 'boolean') return null;
   if (typeof value === 'string' && value.trim() === '') return null;
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
@@ -138,7 +147,7 @@ export function formatBytes(bytes) {
   if (!Number.isFinite(value) || value <= 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(Math.floor(Math.log(value) / Math.log(k)), sizes.length - 1);
+  const i = Math.max(0, Math.min(Math.floor(Math.log(value) / Math.log(k)), sizes.length - 1));
   return parseFloat((value / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 

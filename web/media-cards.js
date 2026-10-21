@@ -10,6 +10,10 @@ import { isAlbumOrderMode } from './media-params.js';
 import { t } from './i18n.js';
 
 export const cardMap = new Map();
+
+export function clearCardMap() {
+  cardMap.clear();
+}
 let albumOrderSaveInFlight = false;
 let renderGridCallback = () => {};
 

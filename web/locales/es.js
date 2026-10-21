@@ -174,6 +174,7 @@ export default {
     face_scan_busy_message: 'No se pueden revisar rostros durante el análisis; cancele el análisis o espere a que termine.',
     face_force_title: '¿Restablecer las revisiones de rostros?',
     face_force_confirm: 'Volver a analizar',
+      face_grid_snapshot_changed: 'La instantánea del catálogo de rostros ha cambiado. Por favor recarga.',
     face_grid_title: 'Revisar rostros',
     face_grid_select_all: 'Seleccionar todos los rostros cargados',
     face_grid_person_filter: 'Persona confirmada',

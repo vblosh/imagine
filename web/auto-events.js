@@ -20,8 +20,13 @@ function suggestedName(group, index, groupCount) {
   const date = dateLabel(group.start_date);
   let name = group.name_value ? `${group.name_value} — ${date}` : `${t('auto_event_default_name', { date })}`;
   if (groupCount > 1 && source !== 'event') {
-    const start = new Date(Number(group.start_date) * 1000);
-    name += ` ${start.toLocaleTimeString(getLocaleCode(), { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' })}`;
+    const ts = Number(group.start_date);
+    if (Number.isFinite(ts) && ts > 0) {
+      const start = new Date(ts * 1000);
+      if (Number.isFinite(start.getTime())) {
+        name += ` ${start.toLocaleTimeString(getLocaleCode(), { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' })}`;
+      }
+    }
   }
   return truncateUtf8(name, 100);
 }

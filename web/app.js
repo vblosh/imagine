@@ -16,7 +16,7 @@ import {
   normalizeImportProgress,
   getOriginalMediaUrl
 } from './api.js';
-import { state } from './state.js';
+import { state, invalidateGpsCache } from './state.js';
 import { dom, validateRequiredDom, showToast } from './dom.js';
 import { initViews, renderCurrentView } from './views.js';
 import { bindGridHandlers } from './grid.js';
@@ -25,6 +25,7 @@ import { bindTimelineHandlers } from './timeline.js';
 import { initI18n, setLanguage, onLanguageChange, t, SUPPORTED_LANGUAGES } from './i18n.js';
 import {
   cardMap,
+  clearCardMap,
   getCardElement,
   clearCardSelections,
   syncSelectionDOM,
@@ -557,6 +558,7 @@ export function setupEventListeners() {
         }
 
         state.mediaItems = items;
+        invalidateGpsCache();
         state.totalCount = items.length;
         state.mediaOffset = items.length;
 
@@ -854,7 +856,10 @@ export function setupEventListeners() {
           }
           loadMedia();
         } else {
-          if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
+          if (dom.mediaGrid) {
+            dom.mediaGrid.innerHTML = '';
+            clearCardMap();
+          }
           if (dom.emptyState) dom.emptyState.style.display = 'none';
           renderCategoryView(state.activeTab);
           updateFilterLabel();
@@ -1479,6 +1484,7 @@ export function setupEventListeners() {
   let loupeTouchStartTime = 0;
   let loupeLastTapTime = 0;
   let isTouchPanning = false;
+  let wasPinching = false;
   let initialPinchDistance = 0;
   let initialPinchZoom = 1.0;
   let pinchMidX = 0;
@@ -1496,13 +1502,16 @@ export function setupEventListeners() {
 
         if (state.loupeZoom > 1.0) {
           isTouchPanning = true;
+          dom.loupeImageViewport?.classList.add('is-dragging');
           loupeDragStartX = touch.clientX - state.loupePanX;
           loupeDragStartY = touch.clientY - state.loupePanY;
         } else {
           isTouchPanning = false;
         }
       } else if (e.touches.length === 2) {
+        wasPinching = true;
         isTouchPanning = false;
+        dom.loupeImageViewport?.classList.remove('is-dragging');
         const t1 = e.touches[0];
         const t2 = e.touches[1];
         initialPinchDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
@@ -1526,6 +1535,8 @@ export function setupEventListeners() {
       } else if (e.touches.length === 2 && initialPinchDistance > 10) {
         const t1 = e.touches[0];
         const t2 = e.touches[1];
+        pinchMidX = (t1.clientX + t2.clientX) / 2;
+        pinchMidY = (t1.clientY + t2.clientY) / 2;
         const currentDistance = Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
         const scaleFactor = currentDistance / initialPinchDistance;
         const newZoom = initialPinchZoom * scaleFactor;
@@ -1537,9 +1548,16 @@ export function setupEventListeners() {
     dom.loupeModal.addEventListener('touchend', (e) => {
       if (e.target.closest('.loupe-toolbar')) return;
 
+      dom.loupeImageViewport?.classList.remove('is-dragging');
+
       if (e.touches.length === 0) {
         isTouchPanning = false;
         initialPinchDistance = 0;
+
+        if (wasPinching) {
+          wasPinching = false;
+          return;
+        }
 
         if (e.changedTouches.length === 1) {
           const touch = e.changedTouches[0];
@@ -1573,6 +1591,13 @@ export function setupEventListeners() {
           }
         }
       }
+    }, { passive: true });
+
+    dom.loupeModal.addEventListener('touchcancel', () => {
+      isTouchPanning = false;
+      wasPinching = false;
+      initialPinchDistance = 0;
+      dom.loupeImageViewport?.classList.remove('is-dragging');
     }, { passive: true });
   }
 
@@ -1832,9 +1857,7 @@ export function isFullscreenActive() {
     document.fullscreenElement ||
     document.webkitFullscreenElement ||
     document.mozFullScreenElement ||
-    document.msFullscreenElement ||
-    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
-    window.navigator.standalone === true
+    document.msFullscreenElement
   );
 }
 

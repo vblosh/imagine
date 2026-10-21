@@ -174,6 +174,7 @@ export default {
     face_scan_busy_message: 'Cannot show Review faces during the scan, please cancel or wait to the end.',
     face_force_title: 'Reset face reviews?',
     face_force_confirm: 'Reanalyze',
+      face_grid_snapshot_changed: 'The face catalog snapshot changed. Please reload.',
     face_grid_title: 'Review faces',
     face_grid_select_all: 'Select all loaded faces',
     face_grid_person_filter: 'Confirmed person',

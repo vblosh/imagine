@@ -511,6 +511,12 @@ export function refreshDomReferences() {
   if (!dom.mapSearchBox) {
     dom.mapSearchBox = document.querySelector('.map-search-box');
   }
+  if (!dom.bottomScrubBar) {
+    dom.bottomScrubBar = document.querySelector('.bottom-scrub-bar');
+  }
+  if (!dom.sidebarResizer) {
+    dom.sidebarResizer = document.getElementById('sidebarResizerRight');
+  }
 }
 
 export function validateRequiredDom() {
@@ -538,6 +544,8 @@ export function showToast(messageOrKey, type = 'info', params = {}) {
   if (!container) {
     container = document.createElement('div');
     container.id = 'toastContainer';
+    container.setAttribute('role', 'status');
+    container.setAttribute('aria-live', 'polite');
     container.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
     document.body.appendChild(container);
   }

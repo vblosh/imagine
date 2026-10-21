@@ -241,18 +241,21 @@ export function restoreNavigationPreferences() {
 
   // 2. Nav filter (picks, rejects, photos, etc.)
   const savedNavFilter = safeGetItem(STORAGE_KEYS.ACTIVE_NAV_FILTER);
-  if (savedNavFilter && savedNavFilter !== 'all') {
-    state.activeNavFilter = savedNavFilter;
-  }
   const savedMediaType = safeGetItem(STORAGE_KEYS.ACTIVE_MEDIA_TYPE);
-  if (savedMediaType && ['photos', 'videos', 'audio'].includes(savedMediaType)) {
-    state.activeMediaType = savedMediaType;
-  }
   const savedStatusFilter = safeGetItem(STORAGE_KEYS.ACTIVE_STATUS_FILTER);
-  if (savedStatusFilter && ['picks', 'rejects', 'not_rejects', 'unrated'].includes(savedStatusFilter)) {
-    state.activeStatusFilter = savedStatusFilter;
+  const savedLastImported = safeGetItem(STORAGE_KEYS.ACTIVE_LAST_IMPORTED) === 'true';
+
+  let effectiveNavFilter = 'all';
+  if (savedNavFilter && savedNavFilter !== 'all') {
+    effectiveNavFilter = savedNavFilter;
+  } else if (savedStatusFilter && ['picks', 'rejects', 'not_rejects', 'unrated'].includes(savedStatusFilter)) {
+    effectiveNavFilter = savedStatusFilter;
+  } else if (savedMediaType && ['photos', 'videos', 'audio'].includes(savedMediaType)) {
+    effectiveNavFilter = savedMediaType;
+  } else if (savedLastImported) {
+    effectiveNavFilter = 'last_imported';
   }
-  state.activeLastImported = safeGetItem(STORAGE_KEYS.ACTIVE_LAST_IMPORTED) === 'true';
+  state.activeNavFilter = effectiveNavFilter;
 
   // 3. Active folders
   const savedFoldersRaw = safeGetItem(STORAGE_KEYS.ACTIVE_FOLDERS);

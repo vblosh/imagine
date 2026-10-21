@@ -174,6 +174,7 @@ export default {
     face_scan_busy_message: 'Gesichter können während des Suchlaufs nicht überprüft werden; bitte abbrechen oder bis zum Ende warten.',
     face_force_title: 'Gesichtsprüfungen zurücksetzen?',
     face_force_confirm: 'Erneut analysieren',
+      face_grid_snapshot_changed: 'Der Snapshot des Gesichterskatalogs hat sich geändert. Bitte neu laden.',
     face_grid_title: 'Gesichter prüfen',
     face_grid_select_all: 'Alle geladenen Gesichter auswählen',
     face_grid_person_filter: 'Bestätigte Person',

@@ -15,6 +15,7 @@
 
 export {
   cardMap,
+  clearCardMap,
   getCardElement,
   createPhotoCard,
   patchCardRating,

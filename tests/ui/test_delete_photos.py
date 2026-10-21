@@ -105,7 +105,7 @@ def test_keyboard_delete_shortcut_and_escape(server, page: Page):
 
 
 def test_loupe_delete_photo(server, page: Page):
-    """Deleting a photo from within the Loupe view closes loupe and removes card."""
+    """Deleting a photo from within Loupe view stays in loupe mode and switches to previous photo."""
     page.goto(server["url"])
 
     card = page.locator(".photo-card", has_text="sunset.bmp")
@@ -125,7 +125,8 @@ def test_loupe_delete_photo(server, page: Page):
     # Confirm deletion
     page.locator("#confirmDeleteMediaBtn").click()
     expect(modal).to_be_hidden()
-    expect(loupe).to_be_hidden()
+    expect(loupe).to_be_visible()
+    expect(page.locator("#loupeFileName")).to_contain_text("mountain.bmp")
     expect(page.locator(".photo-card", has_text="sunset.bmp")).to_have_count(0)
 
 
@@ -360,7 +361,8 @@ def test_delete_modal_in_loupe_space_and_enter(server, page: Page):
     # Press Enter to delete
     page.keyboard.press("Enter")
     expect(modal).to_be_hidden()
-    expect(loupe).to_be_hidden()
+    expect(loupe).to_be_visible()
+    expect(page.locator("#loupeFileName")).to_contain_text("mountain.bmp")
 
     expect(page.locator(".photo-card", has_text="sunset.bmp")).to_have_count(0)
     assert not os.path.exists(sunset_path)
@@ -497,6 +499,68 @@ def test_delete_modal_immediate_enter_deletes_and_closes(server, page: Page):
     expect(page.locator(".photo-card", has_text="sunset.bmp")).to_have_count(0)
     assert os.path.isfile(sunset_path)
 
+def test_loupe_delete_first_photo_switches_to_next(server, page: Page):
+    """Deleting the first photo in Loupe view stays in loupe mode and switches to the next photo."""
+    page.goto(server["url"])
+
+    # mountain.bmp is the first photo (index 0) in the default date-sorted grid
+    card = page.locator(".photo-card", has_text="mountain.bmp")
+    card.dblclick()
+
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+    expect(page.locator("#loupeFileName")).to_contain_text("mountain.bmp")
+
+    # Delete first photo via loupe delete button
+    page.locator("#loupeDeleteBtn").click()
+    modal = page.locator("#deleteMediaModal")
+    expect(modal).to_be_visible()
+
+    page.locator("#confirmDeleteMediaBtn").click()
+    expect(modal).to_be_hidden()
+
+    # Loupe stays visible and advances to next photo (sunset.bmp)
+    expect(loupe).to_be_visible()
+    expect(page.locator("#loupeFileName")).to_contain_text("sunset.bmp")
+    expect(page.locator(".photo-card", has_text="mountain.bmp")).to_have_count(0)
 
 
+def test_loupe_delete_only_photo_switches_to_grid(server, page: Page):
+    """Deleting a photo in Loupe view switches to grid mode only if it was the only photo."""
+    page.goto(server["url"])
+
+    # Filter by album 'Best of 2026' (contains mountain.bmp and sunset.bmp) or batch delete down to 1
+    # Batch select and delete 5 of the 6 photos so only 1 remains
+    cards = page.locator(".photo-card")
+    expect(cards).to_have_count(6)
+
+    # Click first card, then Shift+click 5th card to select 5 cards
+    cards.nth(0).click()
+    page.keyboard.down("Shift")
+    cards.nth(4).click()
+    page.keyboard.up("Shift")
+
+    page.locator("#batchDeleteBtn").click()
+    modal = page.locator("#deleteMediaModal")
+    expect(modal).to_be_visible()
+    page.locator("#confirmDeleteMediaBtn").click()
+    expect(modal).to_be_hidden()
+
+    # Exactly 1 photo remains in the catalog
+    expect(cards).to_have_count(1)
+
+    # Open remaining photo in loupe mode
+    cards.nth(0).dblclick()
+    loupe = page.locator("#loupeModal")
+    expect(loupe).to_be_visible()
+
+    # Delete the only remaining photo
+    page.locator("#loupeDeleteBtn").click()
+    expect(modal).to_be_visible()
+    page.locator("#confirmDeleteMediaBtn").click()
+    expect(modal).to_be_hidden()
+
+    # Since it was the only photo, loupe must close and switch to grid mode
+    expect(loupe).to_be_hidden()
+    expect(cards).to_have_count(0)
 

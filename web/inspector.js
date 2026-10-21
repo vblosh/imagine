@@ -126,9 +126,13 @@ export function renderInspectorContent(item) {
     ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/1024`
     : getOriginalMediaUrl(item);
   if (dom.inspectorImg) {
+    const originalUrl = getOriginalMediaUrl(item);
     dom.inspectorImg.src = previewUrl;
     dom.inspectorImg.onerror = () => {
-      dom.inspectorImg.src = getOriginalMediaUrl(item);
+      dom.inspectorImg.onerror = null;
+      if (previewUrl !== originalUrl) {
+        dom.inspectorImg.src = originalUrl;
+      }
     };
   }
 

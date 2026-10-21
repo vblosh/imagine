@@ -96,8 +96,6 @@
   line-height: 1.45;
 }
 
-.face-grid-modal { z-index: 1200; }
-.face-force-modal, .face-busy-modal { z-index: 1300; }
 
 .modal-dialog.face-grid-dialog {
   width: min(1180px, calc(100vw - 28px));

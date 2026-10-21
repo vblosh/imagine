@@ -174,6 +174,7 @@ export default {
     face_scan_busy_message: '扫描进行中无法查看人脸，请取消或等待扫描结束。',
     face_force_title: '重置人脸审核？',
     face_force_confirm: '重新分析',
+      face_grid_snapshot_changed: '人脸目录快照已更改，请重新加载。',
     face_grid_title: '审核人脸',
     face_grid_select_all: '选择所有已加载的人脸',
     face_grid_person_filter: '已确认人物',

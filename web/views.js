@@ -21,7 +21,7 @@ import {
   updateMapMarkerSelections,
   setMapViewActionHooks,
 } from './map-view.js';
-import { openLoupeForMedia, updateLoupeControls, closeLoupe } from './loupe.js';
+import { openLoupeForMedia, updateLoupeControls, closeLoupe, updateLoupeView } from './loupe.js';
 import {
   renderCategoryView,
   setCategoryViewActionHooks,
@@ -33,6 +33,7 @@ import {
   openTagModal,
   openAlbumModal,
   setModalCloseLoupeHandler,
+  setModalUpdateLoupeHandler,
 } from './modals.js';
 import {
   renderGrid,
@@ -210,7 +211,7 @@ export async function loadMoreMedia() {
   if (state.viewMode !== 'map') {
     appendMediaToGrid(result.newItems);
   }
-  if (state.viewMode === 'map' || state.mapInstance) {
+  if (state.viewMode === 'map') {
     renderMapMarkers();
     renderUnmappedTray();
   }
@@ -239,6 +240,7 @@ export function initViews() {
 
   setGridOpenLoupeHandler(openLoupeForMedia);
   setModalCloseLoupeHandler(closeLoupe);
+  setModalUpdateLoupeHandler(updateLoupeView);
 
   setMapViewActionHooks({
     loadMoreMedia,

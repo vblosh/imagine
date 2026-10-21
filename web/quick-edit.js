@@ -18,7 +18,7 @@
  */
 
 import { normalizeMediaItem, getOriginalMediaUrl, getAuthHeaders } from "./api.js";
-import { state } from "./state.js";
+import { state, invalidateGpsCache } from "./state.js";
 import { dom, showToast } from "./dom.js";
 import { renderGrid } from "./grid.js";
 import { t } from "./i18n.js";
@@ -206,12 +206,23 @@ export function captureStateSnapshot() {
   };
 }
 
+export const MAX_HISTORY_STATES = 20;
+
 export function pushHistoryState() {
   // While an edit mode is active, the first mutation captures the single
   // undo entry for the whole session; further pushes are absorbed until apply.
   if (quickEditState.activeMode && quickEditState.modeSessionPushed) return;
   quickEditState.history.push(captureStateSnapshot());
-  if (quickEditState.history.length > 100) quickEditState.history.shift();
+  while (quickEditState.history.length > MAX_HISTORY_STATES) {
+    const dropped = quickEditState.history.shift();
+    if (dropped && dropped.workingCanvas && dropped.workingCanvas !== quickEditState.workingCanvas) {
+      const stillReferenced = quickEditState.history.some(s => s.workingCanvas === dropped.workingCanvas);
+      if (!stillReferenced) {
+        dropped.workingCanvas.width = 0;
+        dropped.workingCanvas.height = 0;
+      }
+    }
+  }
   if (quickEditState.activeMode) {
     quickEditState.modeSessionPushed = true;
     quickEditState.modeSessionHistoryLen = quickEditState.history.length;
@@ -1879,6 +1890,7 @@ export async function saveEdits(mode = "overwrite") {
       }
     } else {
       state.mediaItems.unshift(updatedItem);
+      invalidateGpsCache();
       state.totalCount++;
       if (dom.totalMediaCount) dom.totalMediaCount.textContent = state.totalCount;
       if (state.loupeIndex >= 0) {

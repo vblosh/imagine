@@ -174,6 +174,7 @@ export default {
     face_scan_busy_message: 'Невозможно открыть просмотр лиц во время сканирования, пожалуйста, отмените его или дождитесь завершения.',
     face_force_title: 'Сбросить проверки лиц?',
     face_force_confirm: 'Повторить анализ',
+      face_grid_snapshot_changed: 'Снимок каталога лиц изменился. Пожалуйста, перезагрузите.',
     face_grid_title: 'Проверка лиц',
     face_grid_select_all: 'Выбрать все загруженные лица',
     face_grid_person_filter: 'Подтверждённая личность',

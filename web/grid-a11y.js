@@ -24,6 +24,8 @@ function findCardInNextRow(currentCard, cards, currentIndex) {
         nextRowCards = [{ index: i, rect }];
       } else if (Math.abs(rect.top - minRowTop) <= 10) {
         nextRowCards.push({ index: i, rect });
+      } else if (nextRowCards.length > 0 && rect.top > minRowTop + 10) {
+        break;
       }
     }
   }
@@ -65,6 +67,8 @@ function findCardInPreviousRow(currentCard, cards, currentIndex) {
         prevRowCards = [{ index: i, rect }];
       } else if (Math.abs(rect.bottom - maxRowBottom) <= 10) {
         prevRowCards.push({ index: i, rect });
+      } else if (prevRowCards.length > 0 && rect.bottom < maxRowBottom - 10) {
+        break;
       }
     }
   }
