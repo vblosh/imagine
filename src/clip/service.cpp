@@ -250,6 +250,7 @@ struct Service::Impl {
     } index;
     
     std::atomic<bool> cancelRequested{false};
+    std::atomic<bool> stopping{false};
     std::mutex jobStartMutex;
 
     TagTaxonomy taxonomy;
@@ -293,6 +294,10 @@ struct Service::Impl {
     std::jthread worker;
 
     void idleLoop(std::stop_token stopToken) {
+        std::stop_callback stopWake(stopToken, [this]() {
+            std::lock_guard<std::mutex> wakeLock(idleMutex);
+            idleCv.notify_all();
+        });
         std::unique_lock lock(idleMutex);
         while (!stopToken.stop_requested() && !idleWorkerStop) {
             const bool busy = jobRunning || activeSearchCount > 0;
@@ -349,7 +354,8 @@ Service::Service(db::CatalogDb& db, std::string cacheDirectory, PathResolver res
     }
 }
 
-Service::~Service() {
+void Service::stop() {
+    if (!impl_) return;
     impl_->cancelRequested.store(true);
     {
         std::lock_guard<std::mutex> lock(impl_->idleMutex);
@@ -360,10 +366,16 @@ Service::~Service() {
         impl_->idleWorker.request_stop();
         impl_->idleWorker.join();
     }
+    std::lock_guard<std::mutex> lock(impl_->jobStartMutex);
+    impl_->stopping.store(true);
     if (impl_->worker.joinable()) {
         impl_->worker.request_stop();
         impl_->worker.join();
     }
+}
+
+Service::~Service() {
+    stop();
     impl_->engine.unload();
 }
 
@@ -638,6 +650,9 @@ Result<SearchResult> Service::findSimilar(MediaId mediaId, int limit) {
 
 Status Service::startJob(const std::string& scope, const std::vector<MediaId>& mediaIds, bool force, int64_t& jobId) {
     std::lock_guard<std::mutex> startLock(impl_->jobStartMutex);
+    if (impl_->stopping.load()) {
+        return Status::internal("CLIP service is stopping");
+    }
     
     {
         std::lock_guard<std::mutex> idleLock(impl_->idleMutex);
@@ -645,6 +660,11 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& m
             return Status::alreadyExists("A semantic index job is already running");
         }
     }
+
+    if (impl_->worker.joinable()) {
+        impl_->worker.join();
+    }
+    impl_->cancelRequested.store(false);
 
     std::vector<MediaId> toIndex;
     const auto info = impl_->engine.info();
@@ -660,11 +680,6 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& m
         }
 
         if (!info.ready) return Status::internal("CLIP engine is not ready");
-
-        if (impl_->worker.joinable()) {
-            impl_->worker.join();
-        }
-        impl_->cancelRequested.store(false);
         
         if (scope == "selected") {
             toIndex = mediaIds;
@@ -1135,6 +1150,9 @@ nlohmann::json Service::smartTagStatus() const {
 
 Status Service::startSmartTagJob(const std::string& scope, const std::vector<MediaId>& mediaIds, bool force, int64_t& jobId) {
     std::lock_guard<std::mutex> startLock(impl_->jobStartMutex);
+    if (impl_->stopping.load()) {
+        return Status::internal("CLIP service is stopping");
+    }
 
     {
         std::lock_guard<std::mutex> idleLock(impl_->idleMutex);
@@ -1142,6 +1160,11 @@ Status Service::startSmartTagJob(const std::string& scope, const std::vector<Med
             return Status::alreadyExists("A job is already running");
         }
     }
+
+    if (impl_->worker.joinable()) {
+        impl_->worker.join();
+    }
+    impl_->cancelRequested.store(false);
 
     const auto info = impl_->engine.info();
     if (!info.ready) return Status::internal("CLIP model unavailable");
@@ -1202,11 +1225,6 @@ Status Service::startSmartTagJob(const std::string& scope, const std::vector<Med
                 candidates.push_back(stmt.getInt64(0));
             }
         }
-
-        if (impl_->worker.joinable()) {
-            impl_->worker.join();
-        }
-        impl_->cancelRequested.store(false);
 
         auto insRes = conn.prepare(
             "INSERT INTO semantic_jobs (scope, state, model_id, kind, total, processed, skipped, failed, remaining, created_at, updated_at) "

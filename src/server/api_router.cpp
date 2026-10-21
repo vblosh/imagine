@@ -448,8 +448,18 @@ ApiRouter::ApiRouter(db::CatalogDb& db, thumbnail::Cache& cache)
         [this](const std::string& path) { return resolvePhotoPath(path); });
 }
 
-ApiRouter::~ApiRouter() {
+void ApiRouter::stop() {
     stopImport();
+    if (clipService_) {
+        clipService_->stop();
+    }
+    if (faceService_) {
+        faceService_->stop();
+    }
+}
+
+ApiRouter::~ApiRouter() {
+    stop();
     clipService_.reset();
     faceService_.reset();
 }

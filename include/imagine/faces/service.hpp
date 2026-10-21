@@ -67,6 +67,8 @@ public:
     Service(db::CatalogDb& db, std::string cacheDirectory, PathResolver resolver, Analyzer analyzer = {});
     ~Service();
 
+    void stop();
+
     Service(const Service&) = delete;
     Service& operator=(const Service&) = delete;
 

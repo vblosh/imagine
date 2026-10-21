@@ -695,7 +695,23 @@ Result<TagId> CatalogDb::createOrGetTag(const std::string& name, const std::stri
 Result<std::vector<Tag>> CatalogDb::getAllTags() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
-        WITH tag_covers AS (
+        WITH tag_stats AS (
+            SELECT mt.tag_id,
+                   COUNT(mt.media_id) AS media_count,
+                   MIN(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS first_date,
+                   MAX(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS last_date
+            FROM media_tags mt
+            JOIN media_items m ON mt.media_id = m.id
+            GROUP BY mt.tag_id
+        ),
+        tag_ai_stats AS (
+            SELECT p.tag_id, COUNT(*) AS ai_count
+            FROM media_tag_provenance p
+            JOIN media_tags mt ON p.media_id = mt.media_id AND p.tag_id = mt.tag_id
+            WHERE p.source = 'clip'
+            GROUP BY p.tag_id
+        ),
+        tag_covers AS (
             SELECT t.id AS tag_id,
                    (SELECT mt2.media_id
                     FROM media_tags mt2
@@ -705,20 +721,20 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
                              m2.date_taken DESC, m2.id DESC
                     LIMIT 1) AS cover_media_id
             FROM tags t
+            WHERE EXISTS (SELECT 1 FROM media_tags mt3 WHERE mt3.tag_id = t.id)
         )
-        SELECT t.id, t.name, t.category, t.parent_id, COUNT(mt.media_id) AS media_count,
+        SELECT t.id, t.name, t.category, t.parent_id,
+               COALESCE(ts.media_count, 0) AS media_count,
                tc.cover_media_id,
                cov.content_hash AS cover_hash,
-               MIN(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS first_date,
-               MAX(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS last_date,
-               COALESCE(SUM(CASE WHEN p.source = 'clip' THEN 1 ELSE 0 END), 0) AS ai_count
+               ts.first_date,
+               ts.last_date,
+               COALESCE(ai.ai_count, 0) AS ai_count
         FROM tags t
+        LEFT JOIN tag_stats ts ON t.id = ts.tag_id
+        LEFT JOIN tag_ai_stats ai ON t.id = ai.tag_id
         LEFT JOIN tag_covers tc ON t.id = tc.tag_id
         LEFT JOIN media_items cov ON tc.cover_media_id = cov.id
-        LEFT JOIN media_tags mt ON t.id = mt.tag_id
-        LEFT JOIN media_tag_provenance p ON mt.media_id = p.media_id AND mt.tag_id = p.tag_id
-        LEFT JOIN media_items m ON mt.media_id = m.id
-        GROUP BY t.id, t.name, t.category, t.parent_id, tc.cover_media_id, cov.content_hash
         ORDER BY t.category ASC, t.name ASC;
     )SQL";
 

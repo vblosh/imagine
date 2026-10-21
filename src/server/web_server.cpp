@@ -183,6 +183,9 @@ httplib::Server& WebServer::server() {
     if (!server_) {
         server_ = std::make_unique<httplib::Server>();
         server_->set_payload_max_length(payloadMaxLength_);
+        server_->set_keep_alive_timeout(5);
+        server_->set_read_timeout(5, 0);
+        server_->set_write_timeout(5, 0);
     }
     return *server_;
 }
@@ -208,6 +211,9 @@ Status WebServer::start(const std::string& host, int port, const std::string& we
 
     server_ = std::make_unique<httplib::Server>();
     server_->set_payload_max_length(payloadMaxLength_);
+    server_->set_keep_alive_timeout(5);
+    server_->set_read_timeout(5, 0);
+    server_->set_write_timeout(5, 0);
 
     router_ = std::make_unique<ApiRouter>(catalog_);
     if (!apiToken_.empty()) {
@@ -274,7 +280,7 @@ void WebServer::stop() {
         isRunning_ = false;
     }
     if (r) {
-        r->stopImport();
+        r->stop();
     }
     if (s) {
         auto startWait = std::chrono::steady_clock::now();
@@ -301,6 +307,9 @@ void WebServer::stop() {
             IMAGINE_LOG_WARN("Unknown exception during web server thread shutdown");
         }
     }
+    r.reset();
+    s.reset();
+    t.reset();
     {
         std::lock_guard<std::mutex> lock(lifecycleMutex_);
         stopping_ = false;

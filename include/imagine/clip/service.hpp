@@ -68,6 +68,8 @@ public:
     Result<SearchResult> findSimilar(MediaId mediaId, int limit = 20);
     void removeMedia(MediaId mediaId);
 
+    void stop();
+
     Status startJob(const std::string& scope, const std::vector<MediaId>& mediaIds,
                     bool force, int64_t& jobId);
     Status startSmartTagJob(const std::string& scope, const std::vector<MediaId>& mediaIds,

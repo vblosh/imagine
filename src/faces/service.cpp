@@ -1944,6 +1944,7 @@ struct Service::Impl {
     RuntimeInfo runtime;
     mutable std::mutex workerMutex;
     std::atomic<bool> cancelRequested{false};
+    std::atomic<bool> stopping{false};
     Status engineStatus;
     mutable std::mutex reviewMutex;
     mutable std::shared_ptr<GroupReviewIndex> reviewIndex;
@@ -2044,7 +2045,7 @@ Service::Service(db::CatalogDb& db, std::string cacheDirectory, PathResolver res
     }
 }
 
-Service::~Service() {
+void Service::stop() {
     if (!impl_) return;
     impl_->cancelRequested.store(true);
     {
@@ -2057,12 +2058,19 @@ Service::~Service() {
         impl_->idleWorker.join();
     }
     std::lock_guard<std::mutex> lock(impl_->workerMutex);
+    impl_->stopping.store(true);
     if (impl_->worker.joinable()) {
         impl_->worker.request_stop();
         impl_->worker.join();
     }
+}
+
+Service::~Service() {
+    if (!impl_) return;
+    stop();
     impl_->engine.unload();
 }
+
 
 json Service::status() const {
     const RuntimeInfo info = impl_->analyzer ? impl_->runtime : impl_->engine.info();
@@ -2119,6 +2127,13 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
     }
 
     std::unique_lock<std::mutex> workerLock(impl_->workerMutex);
+    if (impl_->stopping.load()) {
+        return Status::internal("Face-analysis service is stopping");
+    }
+    if (impl_->worker.joinable()) {
+        impl_->worker.join();
+    }
+    impl_->cancelRequested.store(false);
     std::vector<MediaId> ids;
     {
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
@@ -2203,8 +2218,6 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
                      " (scope: " + scope + ", items: " + std::to_string(ids.size()) +
                      ", force: " + (force ? "true" : "false") + ")");
 
-    impl_->cancelRequested.store(false);
-    if (impl_->worker.joinable()) impl_->worker.join();
     impl_->worker = std::jthread([this, jobId, ids = std::move(ids), force](std::stop_token) mutable {
         runJob(jobId, std::move(ids), force);
     });

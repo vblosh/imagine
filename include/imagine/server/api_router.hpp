@@ -37,6 +37,7 @@ public:
     db::CatalogDb& db() const;
     thumbnail::Cache& cache() const;
 
+    void stop();
     void stopImport();
     bool isImportRunning() const;
     std::string resolvePhotoPath(const std::string& recordedPath) const;

@@ -4839,3 +4839,28 @@ TEST_F(ServerTest, SmartTagsClearKeepsManualTagsAndExposesSourceAndAiCount) {
         }
     }
 }
+
+
+TEST_F(ServerTest, ApiRouterAndWebServerGracefulStop) {
+    auto testCatalog = std::make_unique<Catalog>(1);
+    std::string cDb = (testDir_ / "graceful_cat.db").string();
+    std::string cCache = (testDir_ / "graceful_cache").string();
+    ASSERT_TRUE(testCatalog->open(cDb, cCache).isOk());
+
+    ApiRouter router(*testCatalog);
+    // Explicit call to router.stop() should be safe and idempotent
+    EXPECT_NO_THROW(router.stop());
+    EXPECT_NO_THROW(router.stop());
+
+    int p = 19900 + (std::rand() % 4000);
+    WebServer ws(*testCatalog, webDir_.string());
+    ASSERT_TRUE(ws.start("127.0.0.1", p, webDir_.string()).isOk());
+    EXPECT_TRUE(ws.isRunning());
+
+    // Stop shuts down without hanging
+    auto t0 = std::chrono::steady_clock::now();
+    ws.stop();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    EXPECT_FALSE(ws.isRunning());
+    EXPECT_LT(elapsed, 3000);
+}
