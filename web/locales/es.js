@@ -787,6 +787,7 @@ export default {
     smart_tags_job_failed: 'Error al generar etiquetas inteligentes.',
     smart_tags_job_counts: '{processed} etiquetadas · {skipped} omitidas · {failed} fallidas · {remaining} restantes de {total}',
     smart_tags_clear_confirm: '¿Seguro que desea eliminar todas las etiquetas inteligentes? Las etiquetas manuales y de caras no se verán afectadas.',
+    smart_tags_clear_warning: 'Esto elimina todas las etiquetas inteligentes generadas automáticamente de la base de datos del catálogo. Los archivos originales en el disco no se borrarán.',
     smart_tags_clear_success: 'Etiquetas inteligentes eliminadas correctamente.',
     smart_tags_clear_failed: 'Error al eliminar las etiquetas inteligentes: {error}',
     smart_tags_start_scan: 'Iniciar etiquetado',

@@ -232,6 +232,9 @@ import {
   closeSmartTagsModal,
   startSmartTagsJob,
   cancelSmartTagsJob,
+  openClearSmartTagsModal,
+  closeClearSmartTagsModal,
+  submitClearSmartTags,
   clearSmartTags,
   onSmartTagsScopeChange,
   renderSmartTagsJobState,
@@ -432,7 +435,31 @@ export function setupEventListeners() {
 
   if (dom.settingsClearSmartTagsBtn) {
     dom.settingsClearSmartTagsBtn.addEventListener('click', () => {
-      clearSmartTags();
+      openClearSmartTagsModal();
+    });
+  }
+
+  if (dom.closeClearSmartTagsModalBtn) {
+    dom.closeClearSmartTagsModalBtn.addEventListener('click', () => {
+      closeClearSmartTagsModal();
+    });
+  }
+
+  if (dom.cancelClearSmartTagsBtn) {
+    dom.cancelClearSmartTagsBtn.addEventListener('click', () => {
+      closeClearSmartTagsModal();
+    });
+  }
+
+  if (dom.clearSmartTagsBackdrop) {
+    dom.clearSmartTagsBackdrop.addEventListener('click', () => {
+      closeClearSmartTagsModal();
+    });
+  }
+
+  if (dom.confirmClearSmartTagsBtn) {
+    dom.confirmClearSmartTagsBtn.addEventListener('click', () => {
+      submitClearSmartTags();
     });
   }
 
@@ -2082,6 +2109,9 @@ export const imagineUI = {
   closeSmartTagsModal,
   startSmartTagsJob,
   cancelSmartTagsJob,
+  openClearSmartTagsModal,
+  closeClearSmartTagsModal,
+  submitClearSmartTags,
   clearSmartTags,
   onSmartTagsScopeChange,
   renderSmartTagsJobState,

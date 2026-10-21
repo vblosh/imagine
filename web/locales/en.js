@@ -787,6 +787,7 @@ export default {
     smart_tags_job_failed: 'Smart tagging failed.',
     smart_tags_job_counts: '{processed} labeled · {skipped} skipped · {failed} failed · {remaining} remaining of {total}',
     smart_tags_clear_confirm: 'Are you sure you want to remove all smart tags? Manual and face tags will not be affected.',
+    smart_tags_clear_warning: 'This action removes all automatically generated smart tags from the catalog database. The original files on disk will not be deleted.',
     smart_tags_clear_success: 'Smart tags removed successfully.',
     smart_tags_clear_failed: 'Failed to remove smart tags: {error}',
     smart_tags_start_scan: 'Start Tagging',

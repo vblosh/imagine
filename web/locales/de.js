@@ -787,6 +787,7 @@ export default {
     smart_tags_job_failed: 'Erstellung der Smart-Tags fehlgeschlagen.',
     smart_tags_job_counts: '{processed} getaggt · {skipped} übersprungen · {failed} fehlgeschlagen · {remaining} verbleibend von {total}',
     smart_tags_clear_confirm: 'Möchten Sie wirklich alle Smart-Tags entfernen? Manuelle Tags und Personen-Tags bleiben unberührt.',
+    smart_tags_clear_warning: 'Dadurch werden alle automatisch generierten Smart-Tags aus der Katalogdatenbank entfernt. Die Originaldateien auf der Festplatte werden nicht gelöscht.',
     smart_tags_clear_success: 'Smart-Tags erfolgreich entfernt.',
     smart_tags_clear_failed: 'Smart-Tags konnten nicht entfernt werden: {error}',
     smart_tags_start_scan: 'Tagging starten',

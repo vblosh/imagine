@@ -787,6 +787,7 @@ export default {
     smart_tags_job_failed: 'Не удалось создать умные теги.',
     smart_tags_job_counts: '{processed} размечено · {skipped} пропущено · {failed} с ошибкой · {remaining} осталось из {total}',
     smart_tags_clear_confirm: 'Вы уверены, что хотите удалить все умные теги? Ручные теги и теги лиц затронуты не будут.',
+    smart_tags_clear_warning: 'Это удалит все автоматически созданные умные теги из базы данных каталога. Исходные файлы на диске не будут удалены.',
     smart_tags_clear_success: 'Умные теги успешно удалены.',
     smart_tags_clear_failed: 'Не удалось удалить умные теги: {error}',
     smart_tags_start_scan: 'Начать разметку',

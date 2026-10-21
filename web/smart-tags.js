@@ -330,9 +330,24 @@ export async function cancelSmartTagsJob(jobId) {
   }
 }
 
-export async function clearSmartTags() {
-  const confirmMsg = t('smart_tags_clear_confirm') || 'Are you sure you want to remove all smart tags? Manual and face tags will not be affected.';
-  if (!window.confirm(confirmMsg)) return;
+export function openClearSmartTagsModal() {
+  if (!dom.clearSmartTagsModal) return;
+  if (dom.clearSmartTagsPromptText) {
+    dom.clearSmartTagsPromptText.textContent = t('smart_tags_clear_confirm') || 'Are you sure you want to remove all smart tags? Manual and face tags will not be affected.';
+  }
+  if (dom.clearSmartTagsWarningText) {
+    dom.clearSmartTagsWarningText.textContent = t('smart_tags_clear_warning') || 'This action removes all automatically generated smart tags from the catalog database. The original files on disk will not be deleted.';
+  }
+  showModal(dom.clearSmartTagsModal, dom.cancelClearSmartTagsBtn || dom.confirmClearSmartTagsBtn);
+}
+
+export function closeClearSmartTagsModal() {
+  if (!dom.clearSmartTagsModal) return;
+  hideModal(dom.clearSmartTagsModal);
+}
+
+export async function submitClearSmartTags() {
+  closeClearSmartTagsModal();
 
   try {
     await api.post('/api/smart-tags/clear', {});
@@ -346,11 +361,23 @@ export async function clearSmartTags() {
   }
 }
 
-// Global escape key handler for Smart Tags modal
+export async function clearSmartTags() {
+  openClearSmartTagsModal();
+}
+
+// Global escape key handler for Smart Tags modals
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && dom.smartTagsModal && dom.smartTagsModal.style.display === 'flex') {
-    e.preventDefault();
-    e.stopPropagation();
-    closeSmartTagsModal();
+  if (e.key === 'Escape') {
+    if (dom.clearSmartTagsModal && dom.clearSmartTagsModal.style.display === 'flex') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeClearSmartTagsModal();
+      return;
+    }
+    if (dom.smartTagsModal && dom.smartTagsModal.style.display === 'flex') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeSmartTagsModal();
+    }
   }
 }, true);

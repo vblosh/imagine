@@ -787,6 +787,7 @@ export default {
     smart_tags_job_failed: '智能标签生成失败。',
     smart_tags_job_counts: '{processed} 已标记 · {skipped} 已跳过 · {failed} 失败 · 剩余 {remaining} / 共 {total}',
     smart_tags_clear_confirm: '确定要移除所有智能标签吗？手动标签和面孔标签不会受到影响。',
+    smart_tags_clear_warning: '这将从目录数据库中移除所有自动生成的智能标签。磁盘上的原始文件不会被删除。',
     smart_tags_clear_success: '已成功移除智能标签。',
     smart_tags_clear_failed: '移除智能标签失败：{error}',
     smart_tags_start_scan: '开始打标签',

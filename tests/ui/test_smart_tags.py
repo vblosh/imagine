@@ -232,6 +232,12 @@ def test_smart_tags_i18n_multilingual(server, page: Page):
     expect(page.locator('label#smartTagsForceOption span')).to_have_text("Re-label all photos (overwrite existing smart tags)")
     page.locator("#closeSmartTagsJobBtn").click()
 
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(page.locator("#clearSmartTagsModalTitle")).to_have_text("Remove Smart Tags")
+    expect(page.locator("#clearSmartTagsPromptText")).to_have_text("Are you sure you want to remove all smart tags? Manual and face tags will not be affected.")
+    expect(page.locator("#confirmClearSmartTagsBtn")).to_have_text("Remove Smart Tags")
+    page.locator("#closeClearSmartTagsModalBtn").click()
+
     # 2. German (de) verification
     page.locator("#langSelect").select_option("de")
     expect(page.locator("#langSelect")).to_have_value("de")
@@ -248,6 +254,12 @@ def test_smart_tags_i18n_multilingual(server, page: Page):
     expect(page.locator('label#smartTagsForceOption span')).to_have_text("Alle Fotos neu taggen (bestehende Smart-Tags überschreiben)")
     page.locator("#closeSmartTagsJobBtn").click()
 
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(page.locator("#clearSmartTagsModalTitle")).to_have_text("Smart-Tags entfernen")
+    expect(page.locator("#clearSmartTagsPromptText")).to_have_text("Möchten Sie wirklich alle Smart-Tags entfernen? Manuelle Tags und Personen-Tags bleiben unberührt.")
+    expect(page.locator("#confirmClearSmartTagsBtn")).to_have_text("Smart-Tags entfernen")
+    page.locator("#closeClearSmartTagsModalBtn").click()
+
     # 3. Spanish (es) verification
     page.locator("#langSelect").select_option("es")
     expect(page.locator("#langSelect")).to_have_value("es")
@@ -263,6 +275,12 @@ def test_smart_tags_i18n_multilingual(server, page: Page):
     expect(page.locator('label[for="smartTagsScanScope"]')).to_have_text("Etiquetar")
     expect(page.locator('label#smartTagsForceOption span')).to_have_text("Re-etiquetar todas las fotos (sobrescribir etiquetas inteligentes existentes)")
     page.locator("#closeSmartTagsJobBtn").click()
+
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(page.locator("#clearSmartTagsModalTitle")).to_have_text("Eliminar etiquetas inteligentes")
+    expect(page.locator("#clearSmartTagsPromptText")).to_have_text("¿Seguro que desea eliminar todas las etiquetas inteligentes? Las etiquetas manuales y de caras no se verán afectadas.")
+    expect(page.locator("#confirmClearSmartTagsBtn")).to_have_text("Eliminar etiquetas inteligentes")
+    page.locator("#closeClearSmartTagsModalBtn").click()
 
 
 def test_smart_tags_ai_marker_in_sidebar_and_inspector(server, page: Page):
@@ -423,11 +441,67 @@ def test_smart_tags_job_start_poll_cancel_and_clear(server, page: Page):
     expect(clear_btn).to_be_visible()
     expect(clear_btn).to_be_enabled()
 
-    # Handle confirmation dialog
-    page.once("dialog", lambda dialog: dialog.accept())
+    # Click clear button -> opens styled warning modal
     clear_btn.click()
+    clear_modal = page.locator("#clearSmartTagsModal")
+    expect(clear_modal).to_be_visible()
+    expect(clear_modal.locator(".modal-dialog")).to_be_visible()
+    expect(clear_modal.locator(".modal-backdrop")).to_be_visible()
+    expect(page.locator("#clearSmartTagsModalTitle")).to_have_text("Remove Smart Tags")
+    expect(page.locator("#clearSmartTagsPromptText")).to_contain_text("Are you sure you want to remove all smart tags?")
+    expect(page.locator("#clearSmartTagsWarningText")).to_contain_text("This action removes all automatically generated smart tags")
+    expect(page.locator("#cancelClearSmartTagsBtn")).to_have_text("Cancel")
+    expect(page.locator("#confirmClearSmartTagsBtn")).to_have_text("Remove Smart Tags")
+
+    # Dismiss via Cancel button first
+    page.locator("#cancelClearSmartTagsBtn").click()
+    expect(clear_modal).to_be_hidden()
+    expect(settings_modal).to_be_visible()
+
+    # Open again, test Escape dismissal
+    clear_btn.click()
+    expect(clear_modal).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(clear_modal).to_be_hidden()
+    expect(settings_modal).to_be_visible()
+
+    # Open again, confirm removal
+    clear_btn.click()
+    expect(clear_modal).to_be_visible()
+    page.locator("#confirmClearSmartTagsBtn").click()
+    expect(clear_modal).to_be_hidden()
 
     # Toast confirms removal
     toast = page.locator(".toast")
     expect(toast).to_be_visible()
     expect(toast).to_contain_text("Smart tags removed")
+
+
+def test_clear_smart_tags_modal_dismissal_methods(server, page: Page):
+    """The Clear Smart Tags warning modal can be dismissed via close icon, cancel button, backdrop, and Escape."""
+    page.goto(server["url"])
+    modal = page.locator("#clearSmartTagsModal")
+
+    # 1. Dismiss via header close icon
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(modal).to_be_visible()
+    page.locator("#closeClearSmartTagsModalBtn").click()
+    expect(modal).to_be_hidden()
+
+    # 2. Dismiss via footer cancel button
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(modal).to_be_visible()
+    page.locator("#cancelClearSmartTagsBtn").click()
+    expect(modal).to_be_hidden()
+
+    # 3. Dismiss via backdrop click
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(modal).to_be_visible()
+    page.locator("#clearSmartTagsBackdrop").click(position={"x": 10, "y": 10})
+    expect(modal).to_be_hidden()
+
+    # 4. Dismiss via Escape key
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(modal).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(modal).to_be_hidden()
