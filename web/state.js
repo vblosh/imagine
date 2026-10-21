@@ -21,15 +21,16 @@ export const state = {
     return 'all';
   },
   set activeNavFilter(val) {
-    this.activeMediaType = 'all';
-    this.activeStatusFilter = null;
-    this.activeLastImported = false;
     if (['photos', 'videos', 'audio'].includes(val)) {
       this.activeMediaType = val;
     } else if (['picks', 'rejects', 'not_rejects', 'unrated'].includes(val)) {
       this.activeStatusFilter = val;
     } else if (val === 'last_imported') {
       this.activeLastImported = true;
+    } else {
+      this.activeMediaType = 'all';
+      this.activeStatusFilter = null;
+      this.activeLastImported = false;
     }
   },
   activeTagIds: new Set(),

@@ -1021,7 +1021,7 @@ def test_virtual_face_grid_keeps_bottom_position_while_far_page_is_pending(serve
     page.evaluate("window.__holdFarFacePages = true")
     grid = page.locator("#faceGridList")
     grid.evaluate("element => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); }")
-    page.wait_for_function("window.__farFacePageOffsets.length > 0", timeout=15000)
+    page.wait_for_function("() => window.__farFacePageOffsets.length > 0", timeout=15000)
     pending = page.evaluate("""() => {
       const list = document.getElementById('faceGridList');
       return {

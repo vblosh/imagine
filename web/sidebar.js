@@ -648,7 +648,7 @@ export function bindSidebarHandlers() {
   }
   if (dom.navLastImported) {
     dom.navLastImported.addEventListener('click', () => {
-      state.activeNavFilter = state.activeNavFilter === 'last_imported' ? 'all' : 'last_imported';
+      state.activeLastImported = !state.activeLastImported;
       state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
@@ -660,7 +660,7 @@ export function bindSidebarHandlers() {
   }
   if (dom.navPhotos) {
     dom.navPhotos.addEventListener('click', () => {
-      state.activeNavFilter = state.activeNavFilter === 'photos' ? 'all' : 'photos';
+      state.activeMediaType = state.activeMediaType === 'photos' ? 'all' : 'photos';
       state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
@@ -672,7 +672,7 @@ export function bindSidebarHandlers() {
   }
   if (dom.navVideos) {
     dom.navVideos.addEventListener('click', () => {
-      state.activeNavFilter = state.activeNavFilter === 'videos' ? 'all' : 'videos';
+      state.activeMediaType = state.activeMediaType === 'videos' ? 'all' : 'videos';
       state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
@@ -684,7 +684,7 @@ export function bindSidebarHandlers() {
   }
   if (dom.navAudio) {
     dom.navAudio.addEventListener('click', () => {
-      state.activeNavFilter = state.activeNavFilter === 'audio' ? 'all' : 'audio';
+      state.activeMediaType = state.activeMediaType === 'audio' ? 'all' : 'audio';
       state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
@@ -696,7 +696,7 @@ export function bindSidebarHandlers() {
   }
   if (dom.navPicks) {
     dom.navPicks.addEventListener('click', () => {
-      state.activeNavFilter = state.activeNavFilter === 'picks' ? 'all' : 'picks';
+      state.activeStatusFilter = state.activeStatusFilter === 'picks' ? null : 'picks';
       state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
@@ -708,7 +708,7 @@ export function bindSidebarHandlers() {
   }
   if (dom.navRejects) {
     dom.navRejects.addEventListener('click', () => {
-      state.activeNavFilter = state.activeNavFilter === 'rejects' ? 'all' : 'rejects';
+      state.activeStatusFilter = state.activeStatusFilter === 'rejects' ? null : 'rejects';
       state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
@@ -720,7 +720,7 @@ export function bindSidebarHandlers() {
   }
   if (dom.navNotRejects) {
     dom.navNotRejects.addEventListener('click', () => {
-      state.activeNavFilter = state.activeNavFilter === 'not_rejects' ? 'all' : 'not_rejects';
+      state.activeStatusFilter = state.activeStatusFilter === 'not_rejects' ? null : 'not_rejects';
       state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
@@ -732,7 +732,7 @@ export function bindSidebarHandlers() {
   }
   if (dom.navUnrated) {
     dom.navUnrated.addEventListener('click', () => {
-      state.activeNavFilter = state.activeNavFilter === 'unrated' ? 'all' : 'unrated';
+      state.activeStatusFilter = state.activeStatusFilter === 'unrated' ? null : 'unrated';
       state.activeFolders.clear();
       clearTimelineSelection();
       persistenceHooks.saveNavFilterPreference(state.activeNavFilter);
