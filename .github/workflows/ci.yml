@@ -23,6 +23,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci || npm install
@@ -103,7 +104,9 @@ jobs:
 
       - name: Get Playwright version
         id: playwright-version
-        run: echo "version=$(python -c 'import importlib.metadata; print(importlib.metadata.version(\"playwright\"))')" >> $GITHUB_OUTPUT
+        run: |
+          PW_VERSION=$(python -c "import importlib.metadata; print(importlib.metadata.version('playwright'))")
+          echo "version=${PW_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Cache Playwright Browsers
         uses: actions/cache@v4
@@ -111,6 +114,8 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
 
       - name: Install Playwright Chromium with system dependencies
         run: |
@@ -192,17 +197,29 @@ jobs:
         with:
           arch: x64
 
-      - name: Get MSVC toolset version
-        id: msvc-toolset
-        run: '"version=$env:VCToolsVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append'
+      - name: Get toolset and vcpkg information
+        id: toolset-info
+        run: |
+          $vcpkgRoot = if ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { "C:/vcpkg" }
+          $vcpkgCommit = if (Test-Path "$vcpkgRoot/.git") { (git -C $vcpkgRoot rev-parse HEAD).Trim() } else { "unknown" }
+          $msvcVer = if ($env:VCToolsVersion) { $env:VCToolsVersion } else { "unknown" }
+          $imgVer = if ($env:ImageVersion) { $env:ImageVersion } else { "unknown" }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "vcpkg-commit=$vcpkgCommit"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "msvc-version=$msvcVer"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "image-version=$imgVer"
 
       - name: Cache vcpkg dependencies
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/vcpkg-cache
-          key: ${{ runner.os }}-vcpkg-${{ steps.msvc-toolset.outputs.version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          path: |
+            ${{ github.workspace }}/vcpkg-cache
+            ~/AppData/Local/vcpkg/registries
+          key: ${{ runner.os }}-vcpkg-${{ steps.toolset-info.outputs.image-version }}-${{ steps.toolset-info.outputs.msvc-version }}-${{ steps.toolset-info.outputs.vcpkg-commit }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-${{ steps.msvc-toolset.outputs.version }}-
+            ${{ runner.os }}-vcpkg-${{ steps.toolset-info.outputs.image-version }}-${{ steps.toolset-info.outputs.msvc-version }}-${{ steps.toolset-info.outputs.vcpkg-commit }}-
+            ${{ runner.os }}-vcpkg-${{ steps.toolset-info.outputs.image-version }}-${{ steps.toolset-info.outputs.msvc-version }}-
+            ${{ runner.os }}-vcpkg-${{ steps.toolset-info.outputs.msvc-version }}-
+            ${{ runner.os }}-vcpkg-
 
       - name: Create vcpkg cache directory
         run: New-Item -ItemType Directory -Force -Path "${{ github.workspace }}/vcpkg-cache" | Out-Null
