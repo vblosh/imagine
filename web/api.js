@@ -69,7 +69,10 @@ export const api = {
     const res = await fetch(url.toString(), fetchOpts);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || 'Request failed');
+      const error = new Error(err.error || 'Request failed');
+      error.status = res.status;
+      error.statusText = res.statusText;
+      throw error;
     }
     return parseJsonResponse(res);
   },
@@ -86,7 +89,10 @@ export const api = {
     const res = await fetch(endpoint, fetchOpts);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || 'Request failed');
+      const error = new Error(err.error || 'Request failed');
+      error.status = res.status;
+      error.statusText = res.statusText;
+      throw error;
     }
     return parseJsonResponse(res);
   },
@@ -100,7 +106,10 @@ export const api = {
     const res = await fetch(endpoint, fetchOpts);
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || 'Delete failed');
+      const error = new Error(err.error || 'Delete failed');
+      error.status = res.status;
+      error.statusText = res.statusText;
+      throw error;
     }
     return parseJsonResponse(res);
   }

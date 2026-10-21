@@ -307,8 +307,9 @@ export function renderInspectorTags(item) {
     badge.dataset.category = cat;
     badge.title = `${t('category_label')} ${tag.category || 'keyword'}`;
     const removeLabel = t('remove_tag') || 'Remove tag';
+    const aiMarker = tag.source === 'clip' ? `<span class="tag-ai-marker" title="${escapeHtml(t('tag_ai_source_tooltip'))}">AI</span>` : '';
     badge.innerHTML = `
-      <span>${escapeHtml(tag.name)}</span>
+      <span>${escapeHtml(tag.name)}</span>${aiMarker}
       <button class="remove-tag" title="${escapeHtml(removeLabel)}" aria-label="${escapeHtml(removeLabel)}"><span aria-hidden="true">&times;</span></button>
     `;
     badge.querySelector('.remove-tag').addEventListener('click', async () => {

@@ -88,7 +88,8 @@ import {
   openInspector,
   renderStarWidget,
   setupResizablePanels,
-  setupInspectorInlineEditing
+  setupInspectorInlineEditing,
+  renderInspectorTags
 } from './inspector.js';
 import {
   switchViewMode,
@@ -225,6 +226,20 @@ import {
   getCurrentSemanticJob,
   SEMANTIC_SEARCH_DEBOUNCE_MS
 } from './semantic-search.js';
+import { checkSmartTagStatus } from './smart-tags-status.js';
+import {
+  openSmartTagsModal,
+  closeSmartTagsModal,
+  startSmartTagsJob,
+  cancelSmartTagsJob,
+  openClearSmartTagsModal,
+  closeClearSmartTagsModal,
+  submitClearSmartTags,
+  clearSmartTags,
+  onSmartTagsScopeChange,
+  renderSmartTagsJobState,
+  getCurrentSmartTagsJob
+} from './smart-tags.js';
 
 async function removeSelectedFromActiveAlbum() {
   const albumId = state.activeAlbumId;
@@ -405,6 +420,82 @@ export function setupEventListeners() {
       }
       closeSettingsModal();
       openSemanticIndexModal();
+    });
+  }
+
+  if (dom.settingsSmartTagsBtn) {
+    dom.settingsSmartTagsBtn.addEventListener('click', () => {
+      if (!state.smartTagsAvailable || state.smartTagIndexedPhotos === 0) {
+        return;
+      }
+      closeSettingsModal();
+      openSmartTagsModal();
+    });
+  }
+
+  if (dom.settingsClearSmartTagsBtn) {
+    dom.settingsClearSmartTagsBtn.addEventListener('click', () => {
+      openClearSmartTagsModal();
+    });
+  }
+
+  if (dom.closeClearSmartTagsModalBtn) {
+    dom.closeClearSmartTagsModalBtn.addEventListener('click', () => {
+      closeClearSmartTagsModal();
+    });
+  }
+
+  if (dom.cancelClearSmartTagsBtn) {
+    dom.cancelClearSmartTagsBtn.addEventListener('click', () => {
+      closeClearSmartTagsModal();
+    });
+  }
+
+  if (dom.clearSmartTagsBackdrop) {
+    dom.clearSmartTagsBackdrop.addEventListener('click', () => {
+      closeClearSmartTagsModal();
+    });
+  }
+
+  if (dom.confirmClearSmartTagsBtn) {
+    dom.confirmClearSmartTagsBtn.addEventListener('click', () => {
+      submitClearSmartTags();
+    });
+  }
+
+  if (dom.closeSmartTagsJobBtn) {
+    dom.closeSmartTagsJobBtn.addEventListener('click', () => {
+      closeSmartTagsModal();
+    });
+  }
+
+  if (dom.cancelSmartTagsJobBtn) {
+    dom.cancelSmartTagsJobBtn.addEventListener('click', () => {
+      closeSmartTagsModal();
+    });
+  }
+
+  if (dom.smartTagsBackdrop) {
+    dom.smartTagsBackdrop.addEventListener('click', () => {
+      closeSmartTagsModal();
+    });
+  }
+
+  if (dom.smartTagsJobStartBtn) {
+    dom.smartTagsJobStartBtn.addEventListener('click', () => {
+      startSmartTagsJob();
+    });
+  }
+
+  if (dom.smartTagsJobStopBtn) {
+    dom.smartTagsJobStopBtn.addEventListener('click', () => {
+      cancelSmartTagsJob();
+    });
+  }
+
+  if (dom.smartTagsScanScope) {
+    dom.smartTagsScanScope.addEventListener('change', () => {
+      onSmartTagsScopeChange();
     });
   }
 
@@ -1536,7 +1627,12 @@ export function setupEventListeners() {
   if (dom.importBackdrop) dom.importBackdrop.addEventListener('click', closeImportModal);
 
   // Settings modal
-  if (dom.settingsBtn) dom.settingsBtn.addEventListener('click', openSettingsModal);
+  if (dom.settingsBtn) {
+    dom.settingsBtn.addEventListener('click', () => {
+      checkSmartTagStatus();
+      openSettingsModal();
+    });
+  }
   if (dom.closeSettingsModalBtn) dom.closeSettingsModalBtn.addEventListener('click', closeSettingsModal);
   if (dom.cancelSettingsBtn) dom.cancelSettingsBtn.addEventListener('click', closeSettingsModal);
   if (dom.settingsBackdrop) dom.settingsBackdrop.addEventListener('click', closeSettingsModal);
@@ -1871,6 +1967,7 @@ export async function init() {
   setupEventListeners();
   initFaceAnalysis();
   checkSemanticStatus();
+  checkSmartTagStatus();
   updateFullscreenBtnState();
 
   const savedMode = getSavedViewMode();
@@ -2007,6 +2104,20 @@ export const imagineUI = {
   openFaceAnalysisDialog,
   refreshFaceStatus,
   updateSettingsFaceStatus,
+  checkSmartTagStatus,
+  openSmartTagsModal,
+  closeSmartTagsModal,
+  startSmartTagsJob,
+  cancelSmartTagsJob,
+  openClearSmartTagsModal,
+  closeClearSmartTagsModal,
+  submitClearSmartTags,
+  clearSmartTags,
+  onSmartTagsScopeChange,
+  renderSmartTagsJobState,
+  getCurrentSmartTagsJob,
+  renderSidebarTags,
+  renderInspectorTags,
   STANDARD_SEARCH_DEBOUNCE_MS,
   SEMANTIC_SEARCH_DEBOUNCE_MS,
   getSearchDebounceDelay,

@@ -37,6 +37,7 @@ public:
     db::CatalogDb& db() const;
     thumbnail::Cache& cache() const;
 
+    void stop();
     void stopImport();
     bool isImportRunning() const;
     std::string resolvePhotoPath(const std::string& recordedPath) const;
@@ -60,6 +61,7 @@ private:
     void registerGeocodeRoutes(httplib::Server& server);
     void registerFaceRoutes(httplib::Server& server);
     void registerSemanticRoutes(httplib::Server& server);
+    void registerSmartTagRoutes(httplib::Server& server);
     void registerAccessLog(httplib::Server& server);
 
     bool checkAuth(const httplib::Request& req, httplib::Response& res) const;

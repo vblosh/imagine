@@ -4727,3 +4727,225 @@ TEST_F(ServerTest, AccessLogOutput) {
     logger.setLevel(origLevel);
 }
 
+
+
+TEST_F(ServerTest, SmartTagsStatusReportsUnavailableWithoutModels) {
+    httplib::Client client("127.0.0.1", port_);
+    auto res = client.Get("/api/smart-tags/status");
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->status, 200);
+
+    auto j = nlohmann::json::parse(res->body);
+    EXPECT_TRUE(j.contains("built"));
+    EXPECT_TRUE(j.contains("ready"));
+    EXPECT_TRUE(j.contains("taxonomyReady"));
+    EXPECT_TRUE(j.contains("labelCount"));
+    EXPECT_TRUE(j.contains("indexedPhotos"));
+    EXPECT_TRUE(j.contains("labeledPhotos"));
+    EXPECT_TRUE(j.contains("tagAssignments"));
+    EXPECT_TRUE(j["ready"].is_boolean());
+}
+
+TEST_F(ServerTest, SmartTagsJobPayloadValidation) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // Invalid JSON
+    auto res1 = client.Post("/api/smart-tags/jobs", "not json", "application/json");
+    ASSERT_TRUE(res1);
+    EXPECT_EQ(res1->status, 400);
+
+    // Invalid scope
+    auto res2 = client.Post("/api/smart-tags/jobs", R"({"scope":"invalid"})", "application/json");
+    ASSERT_TRUE(res2);
+    EXPECT_EQ(res2->status, 400);
+
+    // Media IDs with catalog scope
+    auto res3 = client.Post("/api/smart-tags/jobs", R"({"scope":"catalog","media_ids":[1,2]})", "application/json");
+    ASSERT_TRUE(res3);
+    EXPECT_EQ(res3->status, 400);
+
+    // Empty media IDs with selected scope
+    auto resEmpty = client.Post("/api/smart-tags/jobs", R"({"scope":"selected","media_ids":[]})", "application/json");
+    ASSERT_TRUE(resEmpty);
+    EXPECT_EQ(resEmpty->status, 400);
+
+    // Missing media IDs with selected scope
+    auto resMissing = client.Post("/api/smart-tags/jobs", R"({"scope":"selected"})", "application/json");
+    ASSERT_TRUE(resMissing);
+    EXPECT_EQ(resMissing->status, 400);
+
+    // Duplicate media IDs
+    auto res4 = client.Post("/api/smart-tags/jobs", R"({"scope":"selected","media_ids":[1,1]})", "application/json");
+    ASSERT_TRUE(res4);
+    EXPECT_EQ(res4->status, 400);
+
+    // Non-positive media ID
+    auto res5 = client.Post("/api/smart-tags/jobs", R"({"scope":"selected","media_ids":[0]})", "application/json");
+    ASSERT_TRUE(res5);
+    EXPECT_EQ(res5->status, 400);
+
+    // Invalid force type
+    auto res6 = client.Post("/api/smart-tags/jobs", R"({"scope":"catalog","force":"yes"})", "application/json");
+    ASSERT_TRUE(res6);
+    EXPECT_EQ(res6->status, 400);
+
+    // Valid format rejected because models/index unavailable
+    auto res7 = client.Post("/api/smart-tags/jobs", R"({"scope":"catalog","force":false})", "application/json");
+    ASSERT_TRUE(res7);
+    EXPECT_EQ(res7->status, 400);
+}
+
+TEST_F(ServerTest, SmartTagsJobKindIsolation) {
+    httplib::Client client("127.0.0.1", port_);
+
+    int64_t tagsJobId = 0;
+    int64_t indexJobId = 0;
+    {
+        auto& conn = catalog_->db().connection();
+        ASSERT_TRUE(conn.execute(
+            "INSERT INTO semantic_jobs (scope, state, model_id, kind, total, created_at, updated_at) "
+            "VALUES ('catalog', 'completed', 'clip', 'tags', 10, 100, 100);"
+        ).isOk());
+        tagsJobId = conn.lastInsertRowId();
+
+        ASSERT_TRUE(conn.execute(
+            "INSERT INTO semantic_jobs (scope, state, model_id, kind, total, created_at, updated_at) "
+            "VALUES ('catalog', 'completed', 'clip', 'index', 10, 100, 100);"
+        ).isOk());
+        indexJobId = conn.lastInsertRowId();
+    }
+
+    // Access tags job via smart-tags endpoint
+    auto tagRes = client.Get(("/api/smart-tags/jobs/" + std::to_string(tagsJobId)).c_str());
+    ASSERT_TRUE(tagRes);
+    EXPECT_EQ(tagRes->status, 200);
+    auto tagJson = nlohmann::json::parse(tagRes->body);
+    EXPECT_EQ(tagJson["kind"].get<std::string>(), "tags");
+
+    // Index job NOT accessible via smart-tags endpoint
+    auto tagIndexRes = client.Get(("/api/smart-tags/jobs/" + std::to_string(indexJobId)).c_str());
+    ASSERT_TRUE(tagIndexRes);
+    EXPECT_EQ(tagIndexRes->status, 404);
+
+    // Tags job NOT accessible via semantic endpoint
+    auto semTagRes = client.Get(("/api/semantic/jobs/" + std::to_string(tagsJobId)).c_str());
+    ASSERT_TRUE(semTagRes);
+    EXPECT_EQ(semTagRes->status, 404);
+
+    // Index job accessible via semantic endpoint
+    auto semIndexRes = client.Get(("/api/semantic/jobs/" + std::to_string(indexJobId)).c_str());
+    ASSERT_TRUE(semIndexRes);
+    EXPECT_EQ(semIndexRes->status, 200);
+    auto semJson = nlohmann::json::parse(semIndexRes->body);
+    EXPECT_EQ(semJson["kind"].get<std::string>(), "index");
+}
+
+TEST_F(ServerTest, SmartTagsClearKeepsManualTagsAndExposesSourceAndAiCount) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Add a media item
+    MediaItem item;
+    item.file_path = (testDir_ / "photo.jpg").string();
+    item.file_name = "photo.jpg";
+    item.file_size = 1234;
+    item.content_hash = "hash123";
+    auto addRes = catalog_->db().insertMedia(item);
+    ASSERT_TRUE(addRes.isOk());
+    MediaId mid = addRes.value();
+
+    // 2. Add manual tag
+    auto manTagRes = catalog_->db().createOrGetTag("ManualTag", "keyword");
+    ASSERT_TRUE(manTagRes.isOk());
+    TagId manTagId = manTagRes.value();
+    ASSERT_TRUE(catalog_->db().addTagToMedia(mid, manTagId).isOk());
+
+    // 3. Add AI tag via replaceSmartTags
+    auto aiTagRes = catalog_->db().createOrGetTag("Nature", "keyword");
+    ASSERT_TRUE(aiTagRes.isOk());
+    TagId aiTagId = aiTagRes.value();
+    db::SmartTagRecord rec{mid, {aiTagId}, "hash123"};
+    ASSERT_TRUE(catalog_->db().replaceSmartTags({rec}, "clip", "v1", "tax1").isOk());
+
+    // 4. Check tags endpoint: ai_count reflects clip tags
+    auto tagsRes = client.Get("/api/tags");
+    ASSERT_TRUE(tagsRes);
+    EXPECT_EQ(tagsRes->status, 200);
+    auto tagsJson = nlohmann::json::parse(tagsRes->body);
+    bool foundAiTag = false;
+    bool foundManTag = false;
+    for (const auto& t : tagsJson) {
+        if (t["name"] == "Nature") {
+            foundAiTag = true;
+            EXPECT_EQ(t["ai_count"].get<int64_t>(), 1);
+        }
+        if (t["name"] == "ManualTag") {
+            foundManTag = true;
+            EXPECT_EQ(t["ai_count"].get<int64_t>(), 0);
+        }
+    }
+    EXPECT_TRUE(foundAiTag);
+    EXPECT_TRUE(foundManTag);
+
+    // 5. Check photo endpoint: source field on tags
+    auto photoRes = client.Get(("/api/media/" + std::to_string(mid)).c_str());
+    ASSERT_TRUE(photoRes);
+    EXPECT_EQ(photoRes->status, 200);
+    auto photoJson = nlohmann::json::parse(photoRes->body);
+    ASSERT_TRUE(photoJson.contains("tags"));
+    for (const auto& t : photoJson["tags"]) {
+        if (t["name"] == "Nature") {
+            EXPECT_EQ(t["source"].get<std::string>(), "clip");
+        }
+        if (t["name"] == "ManualTag") {
+            EXPECT_EQ(t["source"].get<std::string>(), "manual");
+        }
+    }
+
+    // 6. Clear smart tags via POST /api/smart-tags/clear
+    auto clearRes = client.Post("/api/smart-tags/clear", "{}", "application/json");
+    ASSERT_TRUE(clearRes);
+    EXPECT_EQ(clearRes->status, 200);
+
+    // 7. Verify photo still has manual tag and Nature is gone
+    auto photoRes2 = client.Get(("/api/media/" + std::to_string(mid)).c_str());
+    ASSERT_TRUE(photoRes2);
+    auto photoJson2 = nlohmann::json::parse(photoRes2->body);
+    ASSERT_EQ(photoJson2["tags"].size(), 1u);
+    EXPECT_EQ(photoJson2["tags"][0]["name"].get<std::string>(), "ManualTag");
+    EXPECT_EQ(photoJson2["tags"][0]["source"].get<std::string>(), "manual");
+
+    // 8. Verify tags endpoint: Nature has ai_count = 0
+    auto tagsRes2 = client.Get("/api/tags");
+    ASSERT_TRUE(tagsRes2);
+    auto tagsJson2 = nlohmann::json::parse(tagsRes2->body);
+    for (const auto& t : tagsJson2) {
+        if (t["name"] == "Nature") {
+            EXPECT_EQ(t["ai_count"].get<int64_t>(), 0);
+        }
+    }
+}
+
+
+TEST_F(ServerTest, ApiRouterAndWebServerGracefulStop) {
+    auto testCatalog = std::make_unique<Catalog>(1);
+    std::string cDb = (testDir_ / "graceful_cat.db").string();
+    std::string cCache = (testDir_ / "graceful_cache").string();
+    ASSERT_TRUE(testCatalog->open(cDb, cCache).isOk());
+
+    ApiRouter router(*testCatalog);
+    // Explicit call to router.stop() should be safe and idempotent
+    EXPECT_NO_THROW(router.stop());
+    EXPECT_NO_THROW(router.stop());
+
+    int p = 19900 + (std::rand() % 4000);
+    WebServer ws(*testCatalog, webDir_.string());
+    ASSERT_TRUE(ws.start("127.0.0.1", p, webDir_.string()).isOk());
+    EXPECT_TRUE(ws.isRunning());
+
+    // Stop shuts down without hanging
+    auto t0 = std::chrono::steady_clock::now();
+    ws.stop();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    EXPECT_FALSE(ws.isRunning());
+    EXPECT_LT(elapsed, 3000);
+}

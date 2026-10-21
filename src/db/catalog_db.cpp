@@ -695,7 +695,23 @@ Result<TagId> CatalogDb::createOrGetTag(const std::string& name, const std::stri
 Result<std::vector<Tag>> CatalogDb::getAllTags() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
-        WITH tag_covers AS (
+        WITH tag_stats AS (
+            SELECT mt.tag_id,
+                   COUNT(mt.media_id) AS media_count,
+                   MIN(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS first_date,
+                   MAX(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS last_date
+            FROM media_tags mt
+            JOIN media_items m ON mt.media_id = m.id
+            GROUP BY mt.tag_id
+        ),
+        tag_ai_stats AS (
+            SELECT p.tag_id, COUNT(*) AS ai_count
+            FROM media_tag_provenance p
+            JOIN media_tags mt ON p.media_id = mt.media_id AND p.tag_id = mt.tag_id
+            WHERE p.source = 'clip'
+            GROUP BY p.tag_id
+        ),
+        tag_covers AS (
             SELECT t.id AS tag_id,
                    (SELECT mt2.media_id
                     FROM media_tags mt2
@@ -705,18 +721,20 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
                              m2.date_taken DESC, m2.id DESC
                     LIMIT 1) AS cover_media_id
             FROM tags t
+            WHERE EXISTS (SELECT 1 FROM media_tags mt3 WHERE mt3.tag_id = t.id)
         )
-        SELECT t.id, t.name, t.category, t.parent_id, COUNT(mt.media_id) AS media_count,
+        SELECT t.id, t.name, t.category, t.parent_id,
+               COALESCE(ts.media_count, 0) AS media_count,
                tc.cover_media_id,
                cov.content_hash AS cover_hash,
-               MIN(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS first_date,
-               MAX(CASE WHEN m.date_taken != 0 THEN m.date_taken WHEN m.created_at > 0 THEN m.created_at WHEN m.file_modified_time > 0 THEN m.file_modified_time ELSE NULL END) AS last_date
+               ts.first_date,
+               ts.last_date,
+               COALESCE(ai.ai_count, 0) AS ai_count
         FROM tags t
+        LEFT JOIN tag_stats ts ON t.id = ts.tag_id
+        LEFT JOIN tag_ai_stats ai ON t.id = ai.tag_id
         LEFT JOIN tag_covers tc ON t.id = tc.tag_id
         LEFT JOIN media_items cov ON tc.cover_media_id = cov.id
-        LEFT JOIN media_tags mt ON t.id = mt.tag_id
-        LEFT JOIN media_items m ON mt.media_id = m.id
-        GROUP BY t.id
         ORDER BY t.category ASC, t.name ASC;
     )SQL";
 
@@ -747,6 +765,7 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
         if (!stmt.isNull(8)) {
             t.last_date = stmt.getInt64(8);
         }
+        t.ai_count = stmt.getInt64(9);
         tags.push_back(std::move(t));
     }
     if (stepRes == StepResult::Error) {
@@ -758,9 +777,10 @@ Result<std::vector<Tag>> CatalogDb::getAllTags() {
 Result<std::vector<Tag>> CatalogDb::getTagsForMedia(MediaId id) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     const char* sql = R"SQL(
-        SELECT t.id, t.name, t.category, t.parent_id
+        SELECT t.id, t.name, t.category, t.parent_id, COALESCE(mtp.source, 'manual') AS source
         FROM tags t
         JOIN media_tags mt ON t.id = mt.tag_id
+        LEFT JOIN media_tag_provenance mtp ON mt.media_id = mtp.media_id AND mt.tag_id = mtp.tag_id
         WHERE mt.media_id = ?
         ORDER BY t.name ASC;
     )SQL";
@@ -780,6 +800,7 @@ Result<std::vector<Tag>> CatalogDb::getTagsForMedia(MediaId id) {
         if (!stmt.isNull(3)) {
             t.parent_id = stmt.getInt64(3);
         }
+        t.source = stmt.getString(4);
         tags.push_back(std::move(t));
     }
     if (stepRes == StepResult::Error) {
@@ -801,9 +822,10 @@ Result<std::unordered_map<MediaId, std::vector<Tag>>> CatalogDb::getTagsForMedia
         size_t count = chunkEnd - chunkStart;
 
         std::string sql = R"SQL(
-            SELECT mt.media_id, t.id, t.name, t.category, t.parent_id
+            SELECT mt.media_id, t.id, t.name, t.category, t.parent_id, COALESCE(mtp.source, 'manual') AS source
             FROM tags t
             JOIN media_tags mt ON t.id = mt.tag_id
+            LEFT JOIN media_tag_provenance mtp ON mt.media_id = mtp.media_id AND mt.tag_id = mtp.tag_id
             WHERE mt.media_id IN (
         )SQL";
 
@@ -831,6 +853,7 @@ Result<std::unordered_map<MediaId, std::vector<Tag>>> CatalogDb::getTagsForMedia
             if (!stmt.isNull(4)) {
                 t.parent_id = stmt.getInt64(4);
             }
+            t.source = stmt.getString(5);
             result[mid].push_back(std::move(t));
         }
         if (stepRes == StepResult::Error) {
@@ -856,14 +879,23 @@ Status CatalogDb::addTagToMedia(MediaId mediaId, TagId tagId) {
         return Status::databaseError("Failed to add tag to media: " + conn_.lastErrorMessage());
     }
     auto provenanceRes = conn_.prepare(
-        "INSERT INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,1) "
-        "ON CONFLICT(media_id,tag_id) DO UPDATE SET manual=1;");
+        "INSERT INTO media_tag_provenance(media_id,tag_id,manual,source) VALUES(?,?,1,'manual') "
+        "ON CONFLICT(media_id,tag_id) DO UPDATE SET manual=1, source='manual';");
     if (!provenanceRes.isOk()) return provenanceRes.status();
     auto provenance = std::move(provenanceRes.value());
     provenance.bind(1, mediaId); provenance.bind(2, tagId);
     if (provenance.step() != StepResult::Done) {
         return Status::databaseError("Failed to record manual tag assignment: " + conn_.lastErrorMessage());
     }
+
+    auto rejRes = conn_.prepare("DELETE FROM smart_tag_rejections WHERE media_id=? AND tag_id=?;");
+    if (!rejRes.isOk()) return rejRes.status();
+    auto rejStmt = std::move(rejRes.value());
+    rejStmt.bind(1, mediaId); rejStmt.bind(2, tagId);
+    if (rejStmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to clear smart tag rejection: " + conn_.lastErrorMessage());
+    }
+
     return tx.commit();
 }
 
@@ -891,6 +923,23 @@ Status CatalogDb::removeTagFromMedia(MediaId mediaId, TagId tagId) {
         auto clear = std::move(clearRes.value()); clear.bind(1, currentUnixTime()); clear.bind(2, mediaId); clear.bind(3, tagId);
         if (clear.step() != StepResult::Done) return Status::databaseError("Failed to clear removed people identities: " + conn_.lastErrorMessage());
     }
+    auto provCheckRes = conn_.prepare("SELECT source FROM media_tag_provenance WHERE media_id=? AND tag_id=?;");
+    if (!provCheckRes.isOk()) return provCheckRes.status();
+    auto provCheck = std::move(provCheckRes.value());
+    provCheck.bind(1, mediaId);
+    provCheck.bind(2, tagId);
+    if (provCheck.step() == StepResult::Row && !provCheck.isNull(0) && provCheck.getString(0) == "clip") {
+        auto smartRejRes = conn_.prepare("INSERT OR REPLACE INTO smart_tag_rejections(media_id,tag_id,rejected_at) VALUES(?,?,?);");
+        if (!smartRejRes.isOk()) return smartRejRes.status();
+        auto smartRej = std::move(smartRejRes.value());
+        smartRej.bind(1, mediaId);
+        smartRej.bind(2, tagId);
+        smartRej.bind(3, currentUnixTime());
+        if (smartRej.step() != StepResult::Done) {
+            return Status::databaseError("Failed to record smart tag rejection: " + conn_.lastErrorMessage());
+        }
+    }
+
     auto stmtRes = conn_.prepare("DELETE FROM media_tags WHERE media_id = ? AND tag_id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -940,6 +989,18 @@ static Status invalidateFaceAnalysis(Connection& conn, MediaId mediaId) {
     auto semantic = std::move(semanticRes.value());
     semantic.bind(1, mediaId);
     if (semantic.step() != StepResult::Done) return Status::databaseError("Failed to invalidate semantic index state: " + conn.lastErrorMessage());
+
+    auto smartStateRes = conn.prepare("DELETE FROM smart_tag_state WHERE media_id = ?;");
+    if (!smartStateRes.isOk()) return smartStateRes.status();
+    auto smartState = std::move(smartStateRes.value());
+    smartState.bind(1, mediaId);
+    if (smartState.step() != StepResult::Done) return Status::databaseError("Failed to invalidate smart tag state: " + conn.lastErrorMessage());
+
+    auto smartRejRes = conn.prepare("DELETE FROM smart_tag_rejections WHERE media_id = ?;");
+    if (!smartRejRes.isOk()) return smartRejRes.status();
+    auto smartRej = std::move(smartRejRes.value());
+    smartRej.bind(1, mediaId);
+    if (smartRej.step() != StepResult::Done) return Status::databaseError("Failed to invalidate smart tag rejections: " + conn.lastErrorMessage());
 
     return Status::ok();
 }
@@ -1057,14 +1118,28 @@ Result<TagId> CatalogDb::replaceTagAssignments(
     if (!insertRes.isOk()) return insertRes.status();
     auto insertStmt = std::move(insertRes.value());
 
-    auto provenanceRes = conn_.prepare("INSERT OR IGNORE INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,1);");
+    auto provenanceRes = conn_.prepare(
+        "INSERT INTO media_tag_provenance(media_id,tag_id,manual,source) VALUES(?,?,1,'manual') "
+        "ON CONFLICT(media_id,tag_id) DO UPDATE SET manual=1, source='manual';");
     if (!provenanceRes.isOk()) return provenanceRes.status();
     auto provenance = std::move(provenanceRes.value());
 
+    auto clearRejRes = conn_.prepare("DELETE FROM smart_tag_rejections WHERE media_id=? AND tag_id=?;");
+    if (!clearRejRes.isOk()) return clearRejRes.status();
+    auto clearRej = std::move(clearRejRes.value());
+
     for (MediaId mediaId : uniqueMediaIds) {
+        clearRej.reset();
+        clearRej.bind(1, mediaId);
+        clearRej.bind(2, tagId);
+        if (clearRej.step() != StepResult::Done) {
+            return Status::databaseError("Failed to clear smart tag rejections: " + conn_.lastErrorMessage());
+        }
+
         if (existingMediaIds.contains(mediaId)) {
             continue;
         }
+
         insertStmt.reset();
         insertStmt.bind(1, mediaId);
         insertStmt.bind(2, tagId);
@@ -1107,6 +1182,138 @@ Status CatalogDb::deleteTag(TagId tagId) {
     if (conn_.changes() == 0) {
         return Status::notFound("Tag not found: " + std::to_string(tagId));
     }
+    return tx.commit();
+}
+
+Status CatalogDb::replaceSmartTags(
+    const std::vector<SmartTagRecord>& records,
+    const std::string& modelId,
+    const std::string& modelRevision,
+    const std::string& taxonomyVersion
+) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!conn_.isOpen()) {
+        return Status::internal("Database not open");
+    }
+
+    Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
+
+    auto delMediaTagsRes = conn_.prepare(R"SQL(
+        DELETE FROM media_tags
+        WHERE media_id = ? AND tag_id IN (
+            SELECT tag_id FROM media_tag_provenance WHERE media_id = ? AND source = 'clip'
+        );
+    )SQL");
+    if (!delMediaTagsRes.isOk()) return delMediaTagsRes.status();
+    auto delMediaTags = std::move(delMediaTagsRes.value());
+
+    auto delProvRes = conn_.prepare("DELETE FROM media_tag_provenance WHERE media_id = ? AND source = 'clip';");
+    if (!delProvRes.isOk()) return delProvRes.status();
+    auto delProv = std::move(delProvRes.value());
+
+    auto insMediaTagRes = conn_.prepare("INSERT OR IGNORE INTO media_tags(media_id, tag_id) VALUES(?, ?);");
+    if (!insMediaTagRes.isOk()) return insMediaTagRes.status();
+    auto insMediaTag = std::move(insMediaTagRes.value());
+
+    auto insProvRes = conn_.prepare(
+        "INSERT INTO media_tag_provenance(media_id, tag_id, manual, source) VALUES(?, ?, 0, 'clip') "
+        "ON CONFLICT(media_id, tag_id) DO NOTHING;");
+    if (!insProvRes.isOk()) return insProvRes.status();
+    auto insProv = std::move(insProvRes.value());
+
+    auto upsertStateRes = conn_.prepare(R"SQL(
+        INSERT INTO smart_tag_state(media_id, content_hash, model_id, model_revision, taxonomy_version, label_count, updated_at)
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(media_id) DO UPDATE SET
+            content_hash = excluded.content_hash,
+            model_id = excluded.model_id,
+            model_revision = excluded.model_revision,
+            taxonomy_version = excluded.taxonomy_version,
+            label_count = excluded.label_count,
+            updated_at = excluded.updated_at;
+    )SQL");
+    if (!upsertStateRes.isOk()) return upsertStateRes.status();
+    auto upsertState = std::move(upsertStateRes.value());
+
+    int64_t now = currentUnixTime();
+
+    for (const auto& rec : records) {
+        delMediaTags.reset();
+        delMediaTags.bind(1, rec.mediaId);
+        delMediaTags.bind(2, rec.mediaId);
+        if (delMediaTags.step() != StepResult::Done) {
+            return Status::databaseError("Failed to delete old clip media tags: " + conn_.lastErrorMessage());
+        }
+
+        delProv.reset();
+        delProv.bind(1, rec.mediaId);
+        if (delProv.step() != StepResult::Done) {
+            return Status::databaseError("Failed to delete old clip tag provenance: " + conn_.lastErrorMessage());
+        }
+
+        for (TagId tagId : rec.tagIds) {
+            insMediaTag.reset();
+            insMediaTag.bind(1, rec.mediaId);
+            insMediaTag.bind(2, tagId);
+            if (insMediaTag.step() != StepResult::Done) {
+                return Status::databaseError("Failed to insert smart media tag: " + conn_.lastErrorMessage());
+            }
+
+            insProv.reset();
+            insProv.bind(1, rec.mediaId);
+            insProv.bind(2, tagId);
+            if (insProv.step() != StepResult::Done) {
+                return Status::databaseError("Failed to insert smart tag provenance: " + conn_.lastErrorMessage());
+            }
+        }
+
+        upsertState.reset();
+        upsertState.bind(1, rec.mediaId);
+        upsertState.bind(2, rec.contentHash);
+        upsertState.bind(3, modelId);
+        upsertState.bind(4, modelRevision);
+        upsertState.bind(5, taxonomyVersion);
+        upsertState.bind(6, static_cast<int64_t>(rec.tagIds.size()));
+        upsertState.bind(7, now);
+        if (upsertState.step() != StepResult::Done) {
+            return Status::databaseError("Failed to upsert smart tag state: " + conn_.lastErrorMessage());
+        }
+    }
+
+    return tx.commit();
+}
+
+Status CatalogDb::clearSmartTags() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!conn_.isOpen()) {
+        return Status::internal("Database not open");
+    }
+
+    Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
+
+    Status s = conn_.execute(R"SQL(
+        DELETE FROM media_tags
+        WHERE (media_id, tag_id) IN (
+            SELECT media_id, tag_id FROM media_tag_provenance WHERE source = 'clip'
+        );
+    )SQL");
+    if (!s.isOk()) return s;
+
+    s = conn_.execute("DELETE FROM media_tag_provenance WHERE source = 'clip';");
+    if (!s.isOk()) return s;
+
+    s = conn_.execute("DELETE FROM smart_tag_state;");
+    if (!s.isOk()) return s;
+
+    s = conn_.execute("DELETE FROM smart_tag_rejections;");
+    if (!s.isOk()) return s;
+
     return tx.commit();
 }
 

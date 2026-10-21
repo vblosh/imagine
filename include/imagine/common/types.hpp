@@ -118,6 +118,8 @@ struct Tag {
     TagId id{0};
     std::string name;
     std::string category{"keyword"}; // "people", "places", "events", "keyword"
+    std::string source;              // per-media provenance ("manual", "face", "clip")
+    int64_t ai_count{0};             // tag-list metadata
     std::optional<TagId> parent_id{std::nullopt};
     int64_t media_count{0};
     std::optional<MediaId> cover_media_id{std::nullopt};

@@ -457,7 +457,9 @@ Status execDone(Connection& conn, Statement& stmt, const std::string& context) {
     return Status::ok();
 }
 
-Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
+} // namespace
+
+Status syncFaceTagOwnership(db::Connection& conn, MediaId mediaId, TagId tagId) {
     auto countRes = conn.prepare(
         "SELECT COUNT(*) FROM faces INDEXED BY idx_faces_media "
         "WHERE media_id=? AND person_tag_id=? AND dismissed=0;");
@@ -467,13 +469,14 @@ Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
     count.bind(2, tagId);
     int64_t assigned = count.step() == StepResult::Row ? count.getInt64(0) : 0;
 
-    auto provenanceRes = conn.prepare("SELECT manual FROM media_tag_provenance WHERE media_id=? AND tag_id=?;");
+    auto provenanceRes = conn.prepare("SELECT manual, source FROM media_tag_provenance WHERE media_id=? AND tag_id=?;");
     if (!provenanceRes.isOk()) return provenanceRes.status();
     auto provenance = std::move(provenanceRes.value());
     provenance.bind(1, mediaId);
     provenance.bind(2, tagId);
     bool hasProvenance = provenance.step() == StepResult::Row;
     bool manual = hasProvenance && provenance.getInt(0) != 0;
+    std::string source = hasProvenance && !provenance.isNull(1) ? provenance.getString(1) : "manual";
 
     if (assigned > 0) {
         auto linkRes = conn.prepare("INSERT OR IGNORE INTO media_tags(media_id,tag_id) VALUES(?,?);");
@@ -483,17 +486,16 @@ Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
         Status s = execDone(conn, link, "Failed to attach face people tag");
         if (!s.isOk()) return s;
         if (!hasProvenance) {
-            auto provRes = conn.prepare("INSERT INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,?);");
+            auto provRes = conn.prepare("INSERT INTO media_tag_provenance(media_id,tag_id,manual,source) VALUES(?,?,0,'face');");
             if (!provRes.isOk()) return provRes.status();
             auto prov = std::move(provRes.value());
             prov.bind(1, mediaId); prov.bind(2, tagId);
-            prov.bind(3, conn.changes() > 0 ? 0 : 1);
             return execDone(conn, prov, "Failed to record face tag ownership");
         }
         return Status::ok();
     }
 
-    if (hasProvenance && !manual) {
+    if (hasProvenance && !manual && source != "clip") {
         auto deleteLinkRes = conn.prepare("DELETE FROM media_tags WHERE media_id=? AND tag_id=?;");
         if (!deleteLinkRes.isOk()) return deleteLinkRes.status();
         auto deleteLink = std::move(deleteLinkRes.value());
@@ -508,6 +510,8 @@ Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
     }
     return Status::ok();
 }
+
+namespace {
 
 Status assignExistingPersonTag(Connection& conn, int64_t faceId, int64_t revision,
                                TagId tagId, int64_t expectedDataVersion) {
@@ -1940,6 +1944,7 @@ struct Service::Impl {
     RuntimeInfo runtime;
     mutable std::mutex workerMutex;
     std::atomic<bool> cancelRequested{false};
+    std::atomic<bool> stopping{false};
     Status engineStatus;
     mutable std::mutex reviewMutex;
     mutable std::shared_ptr<GroupReviewIndex> reviewIndex;
@@ -2040,7 +2045,7 @@ Service::Service(db::CatalogDb& db, std::string cacheDirectory, PathResolver res
     }
 }
 
-Service::~Service() {
+void Service::stop() {
     if (!impl_) return;
     impl_->cancelRequested.store(true);
     {
@@ -2053,12 +2058,19 @@ Service::~Service() {
         impl_->idleWorker.join();
     }
     std::lock_guard<std::mutex> lock(impl_->workerMutex);
+    impl_->stopping.store(true);
     if (impl_->worker.joinable()) {
         impl_->worker.request_stop();
         impl_->worker.join();
     }
+}
+
+Service::~Service() {
+    if (!impl_) return;
+    stop();
     impl_->engine.unload();
 }
+
 
 json Service::status() const {
     const RuntimeInfo info = impl_->analyzer ? impl_->runtime : impl_->engine.info();
@@ -2115,6 +2127,13 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
     }
 
     std::unique_lock<std::mutex> workerLock(impl_->workerMutex);
+    if (impl_->stopping.load()) {
+        return Status::internal("Face-analysis service is stopping");
+    }
+    if (impl_->worker.joinable()) {
+        impl_->worker.join();
+    }
+    impl_->cancelRequested.store(false);
     std::vector<MediaId> ids;
     {
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
@@ -2199,8 +2218,6 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
                      " (scope: " + scope + ", items: " + std::to_string(ids.size()) +
                      ", force: " + (force ? "true" : "false") + ")");
 
-    impl_->cancelRequested.store(false);
-    if (impl_->worker.joinable()) impl_->worker.join();
     impl_->worker = std::jthread([this, jobId, ids = std::move(ids), force](std::stop_token) mutable {
         runJob(jobId, std::move(ids), force);
     });

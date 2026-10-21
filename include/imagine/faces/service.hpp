@@ -12,9 +12,11 @@
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/faces/engine.hpp"
 
-namespace imagine::db { class CatalogDb; }
+namespace imagine::db { class Connection; class CatalogDb; }
 
 namespace imagine::faces {
+
+Status syncFaceTagOwnership(db::Connection& conn, MediaId mediaId, TagId tagId);
 
 struct SuggestionAcceptance {
     int64_t id{0};
@@ -64,6 +66,8 @@ public:
 
     Service(db::CatalogDb& db, std::string cacheDirectory, PathResolver resolver, Analyzer analyzer = {});
     ~Service();
+
+    void stop();
 
     Service(const Service&) = delete;
     Service& operator=(const Service&) = delete;
