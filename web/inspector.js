@@ -123,7 +123,7 @@ export function renderInspectorContent(item) {
 
   // Inspector Preview
   const previewUrl = item.content_hash
-    ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/1024`
+    ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/1024?v=2`
     : getOriginalMediaUrl(item);
   if (dom.inspectorImg) {
     dom.inspectorImg.src = previewUrl;

@@ -444,6 +444,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
             if (thumbRes.isOk()) {
                 thumbSmall = thumbRes.value().first;
                 thumbLarge = thumbRes.value().second;
+                cache_.clearPlaceholderMarker(hash);
             }
         }
 
@@ -458,6 +459,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
                 if (dualRes.isOk()) {
                     thumbSmall = dualRes.value().first;
                     thumbLarge = dualRes.value().second;
+                    cache_.clearPlaceholderMarker(hash);
                 }
             }
             std::filesystem::remove(pathFromUtf8(tmpThumb), ec);
@@ -473,6 +475,11 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
             if (procRes.isOk()) {
                 thumbSmall = procRes.value().first;
                 thumbLarge = procRes.value().second;
+                if (mediaType == "video") {
+                    // Record that this video still needs a real frame so the server
+                    // can retry once FFmpeg becomes available.
+                    cache_.setPlaceholderMarker(hash);
+                }
             } else {
                 IMAGINE_LOG_WARN("Failed to generate procedural thumbnail for " + filePath + ": " + procRes.status().message());
             }

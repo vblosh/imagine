@@ -1110,6 +1110,7 @@ TEST_F(ServerTest, VideoOnDemandThumbnailGeneration) {
     EXPECT_EQ(thumbRes->get_header_value("Content-Type"), "image/jpeg");
     EXPECT_FALSE(thumbRes->body.empty());
     EXPECT_TRUE(catalog_->cache().hasThumbnail("video_hash_ondemand_123", 256));
+    EXPECT_FALSE(catalog_->cache().hasPlaceholderMarker("video_hash_ondemand_123"));
 
     // The database stores cache-relative paths, never absolute ones.
     auto storedRes = catalog_->db().getMediaByHash("video_hash_ondemand_123");
@@ -1127,10 +1128,11 @@ TEST_F(ServerTest, VideoOnDemandThumbnailGeneration) {
     EXPECT_TRUE(catalog_->cache().hasThumbnail("video_hash_ondemand_123", 512));
 }
 
-TEST_F(ServerTest, VideoMissingSourceFallsBackToProcedural) {
+TEST_F(ServerTest, VideoMissingSourceFallsBackToRetryablePlaceholder) {
     httplib::Client client("127.0.0.1", port_);
 
-    // No file on disk: extraction cannot succeed, so fallback to procedural thumbnail.
+    // No file on disk: extraction can never succeed, so the procedural
+    // placeholder must be cached and marked for a later retry.
     MediaItem item;
     item.file_path = pathToUtf8(testDir_ / "missing_video.mp4");
     item.file_name = "missing_video.mp4";
@@ -1143,7 +1145,9 @@ TEST_F(ServerTest, VideoMissingSourceFallsBackToProcedural) {
     ASSERT_TRUE(res);
     EXPECT_EQ(res->status, 200);
     EXPECT_TRUE(catalog_->cache().hasThumbnail("video_missing_placeholder_1", 256));
+    EXPECT_TRUE(catalog_->cache().hasPlaceholderMarker("video_missing_placeholder_1"));
 
+    // Arbitrary sizes are materialized from the placeholder instead of 404ing.
     auto extraRes = client.Get("/api/thumbnails/video_missing_placeholder_1/512");
     ASSERT_TRUE(extraRes);
     EXPECT_EQ(extraRes->status, 200);

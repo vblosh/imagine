@@ -755,4 +755,57 @@ Result<ImageBuffer> Generator::generateProceduralThumbnail(
     return img;
 }
 
+bool Generator::isProceduralThumbnail(const ImageBuffer& img, const std::string& mediaType) {
+    if (img.width <= 0 || img.height <= 0 || img.width != img.height || img.channels < 3) {
+        return false;
+    }
+    const int size = img.width;
+    const int c = img.channels;
+    if (img.data.size() < static_cast<size_t>(size) * static_cast<size_t>(size) * static_cast<size_t>(c)) {
+        return false;
+    }
+
+    auto getPixel = [&](int x, int y, uint8_t& r, uint8_t& g, uint8_t& b) -> bool {
+        if (x < 0 || x >= size || y < 0 || y >= size) return false;
+        size_t idx = (static_cast<size_t>(y) * size + x) * c;
+        r = img.data[idx];
+        g = img.data[idx + 1];
+        b = img.data[idx + 2];
+        return true;
+    };
+
+    auto colorMatch = [](uint8_t r, uint8_t g, uint8_t b,
+                         int targetR, int targetG, int targetB, int tol = 18) {
+        return std::abs(static_cast<int>(r) - targetR) <= tol &&
+               std::abs(static_cast<int>(g) - targetG) <= tol &&
+               std::abs(static_cast<int>(b) - targetB) <= tol;
+    };
+
+    uint8_t r = 0, g = 0, b = 0;
+    if (mediaType == "audio") {
+        if (!getPixel(2, 2, r, g, b) || !colorMatch(r, g, b, 24, 18, 36)) return false;
+        if (!getPixel(size - 3, size - 3, r, g, b) || !colorMatch(r, g, b, 48, 28, 72)) return false;
+        if (!getPixel(size / 2, size / 2, r, g, b) || !colorMatch(r, g, b, 15, 12, 20)) return false;
+        return true;
+    }
+
+    // Video procedural thumbnail:
+    // Top-left: (18, 24, 38)
+    if (!getPixel(2, 2, r, g, b) || !colorMatch(r, g, b, 18, 24, 38)) return false;
+    // Bottom-right: (28, 42, 68)
+    if (!getPixel(size - 3, size - 3, r, g, b) || !colorMatch(r, g, b, 28, 42, 68)) return false;
+    // Center play triangle: (70, 160, 245)
+    if (!getPixel(size / 2, size / 2, r, g, b) || !colorMatch(r, g, b, 70, 160, 245)) return false;
+
+    return true;
+}
+
+bool Generator::isProceduralThumbnail(const std::string& filePath, const std::string& mediaType) {
+    auto imgRes = loadImage(filePath);
+    if (!imgRes.isOk()) {
+        return false;
+    }
+    return isProceduralThumbnail(imgRes.value(), mediaType);
+}
+
 } // namespace imagine::thumbnail

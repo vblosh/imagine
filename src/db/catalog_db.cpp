@@ -1570,6 +1570,27 @@ Result<int64_t> CatalogDb::countMedia(
     return 0;
 }
 
+Result<std::vector<std::string>> CatalogDb::getMediaHashesByType(const std::string& mediaType) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const std::string sql = "SELECT content_hash FROM media_items WHERE media_type = ? AND content_hash != '';";
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) {
+        return Result<std::vector<std::string>>::failure(stmtRes.status());
+    }
+    auto& stmt = stmtRes.value();
+    stmt.bind(1, mediaType);
+    std::vector<std::string> hashes;
+    StepResult stepRes;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
+        hashes.push_back(stmt.getString(0));
+    }
+    return hashes;
+}
+
+Result<std::vector<std::string>> CatalogDb::getVideoHashes() {
+    return getMediaHashesByType("video");
+}
+
 Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const std::string& thumbsDir) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!conn_.isOpen()) {

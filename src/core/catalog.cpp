@@ -762,6 +762,26 @@ Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
     return Status::ok();
 }
 
+Result<size_t> Catalog::clearThumbnailCache(bool dryRun) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !cache_) {
+        return Result<size_t>::failure(Status::invalidArgument("Catalog is not open"));
+    }
+    return cache_->clearAll(dryRun);
+}
+
+Result<size_t> Catalog::clearVideoThumbnailCache(bool dryRun) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !cache_ || !db_) {
+        return Result<size_t>::failure(Status::invalidArgument("Catalog is not open"));
+    }
+    auto hashesRes = db_->getVideoHashes();
+    if (!hashesRes.isOk()) {
+        return Result<size_t>::failure(hashesRes.status());
+    }
+    return cache_->clearThumbnails(hashesRes.value(), dryRun);
+}
+
 Status Catalog::addTag(MediaId id, const std::string& tagName, const std::string& category) {
     std::shared_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {

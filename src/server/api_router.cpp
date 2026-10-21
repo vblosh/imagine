@@ -2302,7 +2302,42 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
 
         std::string thumbPath = cache().getThumbnailPath(hash, size);
         std::error_code ec;
-        if (!std::filesystem::exists(pathFromUtf8(thumbPath), ec)) {
+        // Match Cache::hasThumbnail: zero-byte files count as missing.
+        bool thumbExists = std::filesystem::is_regular_file(pathFromUtf8(thumbPath), ec) && !ec &&
+                           std::filesystem::file_size(pathFromUtf8(thumbPath), ec) > 0 && !ec;
+        ec.clear();
+
+        // A procedural video placeholder is retried once FFmpeg is usable again.
+        // The marker age acts as a back-off so a failing extraction is not retried
+        // on every request. The marker is the cheap hot-path check; the expensive
+        // pixel-signature fallback runs only for video items with no marker
+        // (legacy placeholders), so photo/audio hits never pay for a JPEG decode.
+        constexpr int kPlaceholderRetrySeconds = 300;
+        bool isPlaceholder = false;
+        bool placeholderServed = false;
+        if (thumbExists && metadata::FfmpegHelper::isAvailable() &&
+            cache().hasPlaceholderMarker(hash)) {
+            isPlaceholder = cache().shouldRetryPlaceholder(hash, kPlaceholderRetrySeconds);
+            placeholderServed = !isPlaceholder;
+        }
+
+        if (isPlaceholder) {
+            cache().clearThumbnail(hash);
+            thumbExists = false;
+        } else if (thumbExists && metadata::FfmpegHelper::isAvailable() &&
+                   !cache().hasPlaceholderMarker(hash)) {
+            // Legacy placeholder without a marker: resolve the media type first so
+            // only video items pay for the signature decode. A match is cleared so
+            // the miss path below regenerates (and marks) it now.
+            if (auto legacyMedia = db().getMediaByHash(hash);
+                legacyMedia.isOk() && legacyMedia.value().media_type == "video" &&
+                thumbnail::Generator::isProceduralThumbnail(thumbPath, "video")) {
+                cache().clearThumbnail(hash);
+                thumbExists = false;
+            }
+        }
+
+        if (!thumbExists) {
             // Attempt on-demand generation
             auto mediaRes = db().getMediaByHash(hash);
             if (mediaRes.isOk()) {
@@ -2312,23 +2347,17 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                     const std::string videoPath = resolvePhotoPath(item.file_path);
                     bool generated = false;
 
-                    // Prefer deriving from an already cached large thumbnail
-                    if (cache().hasThumbnail(hash, thumbnail::Cache::LargeSize)) {
+                    // Prefer deriving the requested size from an already cached frame
+                    // instead of paying for another FFmpeg extraction.
+                    bool largeIsPlaceholder = cache().hasPlaceholderMarker(hash) ||
+                        thumbnail::Generator::isProceduralThumbnail(
+                            cache().getThumbnailPath(hash, thumbnail::Cache::LargeSize), "video");
+                    if (!largeIsPlaceholder && cache().hasThumbnail(hash, thumbnail::Cache::LargeSize)) {
                         auto deriveRes = cache().ensureThumbnail(
                             cache().getThumbnailPath(hash, thumbnail::Cache::LargeSize), hash, size);
                         if (deriveRes.isOk()) {
                             thumbPath = deriveRes.value();
                             generated = true;
-                            if (item.thumb_small.empty() || item.thumb_large.empty()) {
-                                auto updateRes = db().updateThumbnails(
-                                    item.id,
-                                    thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize),
-                                    thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize));
-                                if (!updateRes.isOk()) {
-                                    IMAGINE_LOG_WARN("Failed to persist video thumbnails for " + hash + ": " +
-                                                     updateRes.message());
-                                }
-                            }
                         }
                     }
 
@@ -2348,8 +2377,8 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                                 auto genRes = cache().ensureThumbnail(sizeSource, hash, size);
                                 if (genRes.isOk()) {
                                     thumbPath = genRes.value();
-                                    ec.clear();
-                                    generated = std::filesystem::is_regular_file(pathFromUtf8(thumbPath), ec) && !ec;
+                                    thumbExists = std::filesystem::is_regular_file(pathFromUtf8(thumbPath), ec) && !ec;
+                                    generated = thumbExists;
                                 }
                                 if (generated) {
                                     auto updateRes = db().updateThumbnails(
@@ -2360,6 +2389,7 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                                         IMAGINE_LOG_WARN("Failed to persist video thumbnails for " + hash + ": " +
                                                          updateRes.message());
                                     }
+                                    cache().clearPlaceholderMarker(hash);
                                 }
                             } else {
                                 IMAGINE_LOG_WARN("Failed to generate video thumbnails for " + hash + ": " +
@@ -2376,7 +2406,14 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                     if (!generated) {
                         auto procRes = cache().ensureProceduralThumbnails(hash, item.media_type);
                         if (procRes.isOk()) {
-                            thumbPath = cache().getThumbnailPath(hash, size);
+                            auto sizeRes = cache().ensureThumbnail(procRes.value().second, hash, size);
+                            thumbPath = sizeRes.isOk() ? sizeRes.value()
+                                                       : cache().getThumbnailPath(hash, size);
+                            auto markerRes = cache().setPlaceholderMarker(hash);
+                            if (!markerRes.isOk()) {
+                                IMAGINE_LOG_WARN("Failed to mark video thumbnail as placeholder for " + hash + ": " +
+                                                 markerRes.message());
+                            }
                         }
                     }
                 } else if (item.media_type == "audio") {
@@ -2386,7 +2423,9 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                     }
                     auto procRes = cache().ensureProceduralThumbnails(hash, item.media_type, label);
                     if (procRes.isOk()) {
-                        thumbPath = cache().getThumbnailPath(hash, size);
+                        auto sizeRes = cache().ensureThumbnail(procRes.value().second, hash, size);
+                        thumbPath = sizeRes.isOk() ? sizeRes.value()
+                                                   : cache().getThumbnailPath(hash, size);
                     }
                 } else {
                     std::string photoPath = resolvePhotoPath(item.file_path);
@@ -2402,11 +2441,19 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         ec.clear();
         if (std::filesystem::is_regular_file(thumbFsPath, ec) && !ec) {
             auto fsize = std::filesystem::file_size(thumbFsPath, ec);
+            if (ec) { fsize = 0; ec.clear(); }
             auto mtime = std::filesystem::last_write_time(thumbFsPath, ec);
             int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
-            std::string etag = "\"thumb-v1-" + hash + "_" + std::to_string(size) + "-" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
+            std::string etag = "\"thumb-v2-" + hash + "_" + std::to_string(size) + "-" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
 
-            res.set_header("Cache-Control", "public, max-age=31536000, immutable");
+            // No signature decode here: placeholder state is already tracked above and
+            // the fallback path (re)sets the marker when it serves a placeholder.
+            placeholderServed = placeholderServed || cache().hasPlaceholderMarker(hash);
+            if (placeholderServed) {
+                res.set_header("Cache-Control", "no-cache, must-revalidate");
+            } else {
+                res.set_header("Cache-Control", "public, max-age=31536000, immutable");
+            }
             res.set_header("ETag", etag);
 
             if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {

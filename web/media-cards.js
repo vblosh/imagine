@@ -165,7 +165,7 @@ export function createPhotoCard(item) {
   // Thumbnail URL with fallback
   const originalMediaUrl = getOriginalMediaUrl(item);
   const thumbUrl = item.content_hash
-    ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
+    ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256?v=2`
     : originalMediaUrl;
   const rankBadge =
     state.semanticSearchActive && item.rank
