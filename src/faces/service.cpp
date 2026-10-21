@@ -457,7 +457,9 @@ Status execDone(Connection& conn, Statement& stmt, const std::string& context) {
     return Status::ok();
 }
 
-Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
+} // namespace
+
+Status syncFaceTagOwnership(db::Connection& conn, MediaId mediaId, TagId tagId) {
     auto countRes = conn.prepare(
         "SELECT COUNT(*) FROM faces INDEXED BY idx_faces_media "
         "WHERE media_id=? AND person_tag_id=? AND dismissed=0;");
@@ -467,13 +469,14 @@ Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
     count.bind(2, tagId);
     int64_t assigned = count.step() == StepResult::Row ? count.getInt64(0) : 0;
 
-    auto provenanceRes = conn.prepare("SELECT manual FROM media_tag_provenance WHERE media_id=? AND tag_id=?;");
+    auto provenanceRes = conn.prepare("SELECT manual, source FROM media_tag_provenance WHERE media_id=? AND tag_id=?;");
     if (!provenanceRes.isOk()) return provenanceRes.status();
     auto provenance = std::move(provenanceRes.value());
     provenance.bind(1, mediaId);
     provenance.bind(2, tagId);
     bool hasProvenance = provenance.step() == StepResult::Row;
     bool manual = hasProvenance && provenance.getInt(0) != 0;
+    std::string source = hasProvenance && !provenance.isNull(1) ? provenance.getString(1) : "manual";
 
     if (assigned > 0) {
         auto linkRes = conn.prepare("INSERT OR IGNORE INTO media_tags(media_id,tag_id) VALUES(?,?);");
@@ -483,17 +486,16 @@ Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
         Status s = execDone(conn, link, "Failed to attach face people tag");
         if (!s.isOk()) return s;
         if (!hasProvenance) {
-            auto provRes = conn.prepare("INSERT INTO media_tag_provenance(media_id,tag_id,manual) VALUES(?,?,?);");
+            auto provRes = conn.prepare("INSERT INTO media_tag_provenance(media_id,tag_id,manual,source) VALUES(?,?,0,'face');");
             if (!provRes.isOk()) return provRes.status();
             auto prov = std::move(provRes.value());
             prov.bind(1, mediaId); prov.bind(2, tagId);
-            prov.bind(3, conn.changes() > 0 ? 0 : 1);
             return execDone(conn, prov, "Failed to record face tag ownership");
         }
         return Status::ok();
     }
 
-    if (hasProvenance && !manual) {
+    if (hasProvenance && !manual && source != "clip") {
         auto deleteLinkRes = conn.prepare("DELETE FROM media_tags WHERE media_id=? AND tag_id=?;");
         if (!deleteLinkRes.isOk()) return deleteLinkRes.status();
         auto deleteLink = std::move(deleteLinkRes.value());
@@ -508,6 +510,8 @@ Status syncFaceTagOwnership(Connection& conn, MediaId mediaId, TagId tagId) {
     }
     return Status::ok();
 }
+
+namespace {
 
 Status assignExistingPersonTag(Connection& conn, int64_t faceId, int64_t revision,
                                TagId tagId, int64_t expectedDataVersion) {

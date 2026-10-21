@@ -16,6 +16,12 @@ namespace imagine::clip { class Service; }
 
 namespace imagine::db {
 
+struct SmartTagRecord {
+    MediaId mediaId{0};
+    std::vector<TagId> tagIds;
+    std::string contentHash;
+};
+
 class CatalogDb {
 public:
     CatalogDb();
@@ -56,6 +62,15 @@ public:
         const std::vector<MediaId>& mediaIds
     );
     Status deleteTag(TagId tagId);
+
+    // Smart Tags
+    Status replaceSmartTags(
+        const std::vector<SmartTagRecord>& records,
+        const std::string& modelId,
+        const std::string& modelRevision,
+        const std::string& taxonomyVersion
+    );
+    Status clearSmartTags();
 
     // Albums
     Result<AlbumId> createAlbum(const std::string& name, const std::string& description = "", bool is_smart = false, const std::string& query_json = "");

@@ -62,6 +62,7 @@ public:
     Service& operator=(const Service&) = delete;
 
     nlohmann::json status() const;
+    nlohmann::json smartTagStatus() const;
 
     Result<SearchResult> search(const SearchRequest& request);
     Result<SearchResult> findSimilar(MediaId mediaId, int limit = 20);
@@ -69,11 +70,18 @@ public:
 
     Status startJob(const std::string& scope, const std::vector<MediaId>& mediaIds,
                     bool force, int64_t& jobId);
-    Result<nlohmann::json> getJob(int64_t jobId) const;
-    Status cancelJob(int64_t jobId);
+    Status startSmartTagJob(const std::string& scope, const std::vector<MediaId>& mediaIds,
+                            bool force, int64_t& jobId);
+    Status clearSmartTags();
+    Result<nlohmann::json> getJob(int64_t jobId, const std::string& expectedKind = "") const;
+    Status cancelJob(int64_t jobId, const std::string& expectedKind = "");
+
+    // Test seam for validating tag job worker loop directly
+    void runTagJobForTest(int64_t jobId, std::string scope, std::vector<MediaId> mediaIds, bool force);
 
 private:
     void runJob(int64_t jobId, std::string scope, std::vector<MediaId> mediaIds, bool force);
+    void runTagJob(int64_t jobId, std::string scope, std::vector<MediaId> mediaIds, bool force);
     void loadIndex();
     struct Impl;
     std::unique_ptr<Impl> impl_;

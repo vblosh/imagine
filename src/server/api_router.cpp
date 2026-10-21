@@ -570,6 +570,7 @@ void ApiRouter::registerRoutes(httplib::Server& server) {
     registerGeocodeRoutes(server);
     registerFaceRoutes(server);
     registerSemanticRoutes(server);
+    registerSmartTagRoutes(server);
 }
 
 void ApiRouter::registerCorsHandler(httplib::Server& server) {
@@ -3390,6 +3391,12 @@ void ApiRouter::registerFaceRoutes(httplib::Server& server) {
                 sendError(res, "media_ids may only be supplied with selected scope", 400);
                 return;
             }
+            if (scope == "selected") {
+                if (!body.contains("media_ids") || !body["media_ids"].is_array() || body["media_ids"].empty()) {
+                    sendError(res, "media_ids must be non-empty when scope is selected", 400);
+                    return;
+                }
+            }
             bool force = false;
             if (body.contains("force")) {
                 if (!body["force"].is_boolean()) { sendError(res, "force must be a boolean", 400); return; }
@@ -4088,7 +4095,7 @@ void ApiRouter::registerSemanticRoutes(httplib::Server& server) {
         auto jobIdOpt = parseMatchId<int64_t>(req, 1, res, "Job ID");
         if (!jobIdOpt) return;
         
-        auto result = clipService_->getJob(*jobIdOpt);
+        auto result = clipService_->getJob(*jobIdOpt, "index");
         if (result.isOk()) {
             sendJson(res, result.value());
         } else {
@@ -4105,7 +4112,164 @@ void ApiRouter::registerSemanticRoutes(httplib::Server& server) {
         auto jobIdOpt = parseMatchId<int64_t>(req, 1, res, "Job ID");
         if (!jobIdOpt) return;
         
-        auto status = clipService_->cancelJob(*jobIdOpt);
+        auto status = clipService_->cancelJob(*jobIdOpt, "index");
+        if (status.isOk()) {
+            nlohmann::json j;
+            j["status"] = "ok";
+            sendJson(res, j);
+        } else {
+            sendStatusError(res, status);
+        }
+    });
+}
+
+
+void ApiRouter::registerSmartTagRoutes(httplib::Server& server) {
+    server.Get("/api/smart-tags/status", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (clipService_) {
+            sendJson(res, clipService_->smartTagStatus());
+        } else {
+            nlohmann::json j;
+            j["built"] = false;
+            j["ready"] = false;
+            j["taxonomyReady"] = false;
+            j["taxonomyError"] = "Smart tagging engine not built";
+            j["taxonomyVersion"] = "";
+            j["labelCount"] = 0;
+            j["indexedPhotos"] = 0;
+            j["labeledPhotos"] = 0;
+            j["tagAssignments"] = 0;
+            j["modelId"] = "";
+            sendJson(res, j);
+        }
+    });
+
+    server.Post("/api/smart-tags/jobs", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (!clipService_) {
+            sendError(res, "Smart tagging engine not built", 400);
+            return;
+        }
+
+        try {
+            auto body = nlohmann::json::parse(req.body);
+            std::string scope = body.value("scope", "catalog");
+            if (scope != "catalog" && scope != "selected") {
+                sendError(res, "scope must be selected or catalog", 400);
+                return;
+            }
+            if (scope == "catalog" && body.contains("media_ids")) {
+                sendError(res, "media_ids may only be supplied with selected scope", 400);
+                return;
+            }
+            if (body.contains("force") && !body["force"].is_boolean()) {
+                sendError(res, "force must be a boolean", 400);
+                return;
+            }
+            bool force = body.value("force", false);
+            std::vector<MediaId> mediaIds;
+            if (body.contains("media_ids")) {
+                if (!body["media_ids"].is_array()) {
+                    sendError(res, "media_ids must be an array", 400);
+                    return;
+                }
+                std::unordered_set<MediaId> seen;
+                for (const auto& el : body["media_ids"]) {
+                    if (!el.is_number_integer()) {
+                        sendError(res, "media_ids must contain integer IDs", 400);
+                        return;
+                    }
+                    MediaId id = el.get<MediaId>();
+                    if (id <= 0) {
+                        sendError(res, "media_ids must contain positive integers", 400);
+                        return;
+                    }
+                    if (!seen.insert(id).second) {
+                        sendError(res, "media_ids cannot contain duplicates", 400);
+                        return;
+                    }
+                    mediaIds.push_back(id);
+                }
+            }
+
+            auto st = clipService_->smartTagStatus();
+            if (!st.value("built", false)) {
+                sendError(res, "Smart tagging engine not built in this binary", 400);
+                return;
+            }
+            if (!st.value("ready", false)) {
+                sendError(res, "CLIP model unavailable", 400);
+                return;
+            }
+            if (!st.value("taxonomyReady", false)) {
+                sendError(res, "Taxonomy error: " + st.value("taxonomyError", ""), 400);
+                return;
+            }
+            if (st.value("indexedPhotos", 0) <= 0) {
+                sendError(res, "Build the search index first (0 photos indexed)", 400);
+                return;
+            }
+
+            int64_t jobId = 0;
+            auto status = clipService_->startSmartTagJob(scope, mediaIds, force, jobId);
+            if (status.isOk()) {
+                nlohmann::json j;
+                j["job_id"] = jobId;
+                j["status"] = "ok";
+                sendJson(res, j);
+            } else {
+                sendStatusError(res, status);
+            }
+        } catch (...) {
+            sendError(res, "Invalid JSON", 400);
+        }
+    });
+
+    server.Get(R"(/api/smart-tags/jobs/(\d+))", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (!clipService_) {
+            sendError(res, "Smart tagging engine not built", 400);
+            return;
+        }
+        auto jobIdOpt = parseMatchId<int64_t>(req, 1, res, "Job ID");
+        if (!jobIdOpt) return;
+
+        auto result = clipService_->getJob(*jobIdOpt, "tags");
+        if (result.isOk()) {
+            sendJson(res, result.value());
+        } else {
+            sendStatusError(res, result.status());
+        }
+    });
+
+    server.Post(R"(/api/smart-tags/jobs/(\d+)/cancel)", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (!clipService_) {
+            sendError(res, "Smart tagging engine not built", 400);
+            return;
+        }
+        auto jobIdOpt = parseMatchId<int64_t>(req, 1, res, "Job ID");
+        if (!jobIdOpt) return;
+
+        auto status = clipService_->cancelJob(*jobIdOpt, "tags");
+        if (status.isOk()) {
+            nlohmann::json j;
+            j["status"] = "ok";
+            sendJson(res, j);
+        } else {
+            sendStatusError(res, status);
+        }
+    });
+
+    server.Post("/api/smart-tags/clear", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        if (!clipService_) {
+            sendError(res, "Smart tagging engine not built", 400);
+            return;
+        }
+
+        auto status = clipService_->clearSmartTags();
         if (status.isOk()) {
             nlohmann::json j;
             j["status"] = "ok";

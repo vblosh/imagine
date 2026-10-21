@@ -12,9 +12,11 @@
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/faces/engine.hpp"
 
-namespace imagine::db { class CatalogDb; }
+namespace imagine::db { class Connection; class CatalogDb; }
 
 namespace imagine::faces {
+
+Status syncFaceTagOwnership(db::Connection& conn, MediaId mediaId, TagId tagId);
 
 struct SuggestionAcceptance {
     int64_t id{0};

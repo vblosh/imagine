@@ -22,6 +22,7 @@ Imagine combines a high-speed C++20 core engine with an interactive Command-Line
 13. [Troubleshooting & FAQ](#13-troubleshooting--faq)
 14. [Face Detection & Recognition](#14-face-detection--recognition)
 15. [Semantic AI Search (Natural Language & Visual Similarity)](#15-semantic-ai-search-natural-language--visual-similarity)
+16. [Smart Tags (Local Auto-Labeling)](#16-smart-tags-local-auto-labeling)
 
 ---
 
@@ -694,6 +695,55 @@ When `IMAGINE_API_TOKEN` is configured, catalog-changing `POST` and `DELETE` end
 | `GET` | `/api/stats` | Get catalog statistics |
 | `POST` | `/api/import` | Start asynchronous background folder import |
 | `GET` | `/api/import/progress` | Check ongoing import status and metrics |
+| `GET` | `/api/smart-tags/status` | Get Smart Tags engine status, indexing metrics, and taxonomy state |
+| `POST` | `/api/smart-tags/jobs` | Start Smart Tags job (`{"scope": "catalog"|"selected", "media_ids": [...], "force": false}`) |
+| `GET` | `/api/smart-tags/jobs/:id` | Get Smart Tags background job status, progress, and error details |
+| `POST` | `/api/smart-tags/jobs/:id/cancel` | Cancel an ongoing Smart Tags job |
+| `POST` | `/api/smart-tags/clear` | Remove all AI-generated smart tags (`source='clip'`) and state from catalog |
+
+### Smart Tags Endpoints
+
+The Smart Tags subsystem exposes dedicated endpoints to control and monitor background auto-labeling:
+
+#### `GET /api/smart-tags/status`
+Returns whether the engine is built and ready, taxonomy validation status, model ID, and photo counts.
+```json
+{
+  "built": true,
+  "ready": true,
+  "taxonomyReady": true,
+  "taxonomyError": "",
+  "taxonomyVersion": "b47c8f2a1e0d4a9f",
+  "labelCount": 58,
+  "indexedPhotos": 1200,
+  "labeledPhotos": 900,
+  "tagAssignments": 2300,
+  "modelId": "clip-vit-base-patch32"
+}
+```
+
+#### `POST /api/smart-tags/jobs`
+Starts a background smart-tagging job. Accepts `scope` (`"catalog"` or `"selected"`), optional `media_ids` (for selected scope), and optional `force` (boolean, default `false`).
+```json
+{
+  "scope": "catalog",
+  "force": false
+}
+```
+Returns `{"job_id": 14, "status": "ok"}`. Returns `400 Bad Request` if models or the semantic index are unavailable, or `409 Conflict` if another indexing or tagging job is active.
+
+#### `GET /api/smart-tags/jobs/:id`
+Returns job status, state (`"running"`, `"cancelling"`, `"completed"`, `"cancelled"`, `"interrupted"`, `"failed"`), and item counts (`total`, `processed`, `skipped`, `failed`, `remaining`).
+
+#### `POST /api/smart-tags/jobs/:id/cancel`
+Requests graceful cancellation of a running smart tagging job.
+
+#### `POST /api/smart-tags/clear`
+Clears all AI-generated tags (`source = 'clip'`), along with `smart_tag_state` and `smart_tag_rejections`. All manual tags (`source = 'manual'`) and face tags (`source = 'face'`) are preserved. Tag definitions in the catalog remain so shared tag names are not lost; lazy tag creation ensures labels never assigned to photos are not created.
+
+#### Tag Provenance & AI Count Metadata
+- Media tag responses from `/api/media` and `/api/media/:id` include a `source` field (`"manual"`, `"face"`, or `"clip"`).
+- Tag listings from `/api/tags` include an `ai_count` field reporting the number of media items tagged via AI.
 
 ---
 
@@ -784,4 +834,86 @@ Traditional keyword search matches only filenames, folders, EXIF data, and tags.
 - Type any natural English description and press **Enter** to search immediately, or pause typing for 2 seconds (debounced). The 2-second debounce lets you compose descriptive sentences without triggering multiple intermediate searches on natural typing pauses between words.
 - Results are ranked by visual relevance. Combine with star ratings, pick/reject flags, or timeline date filters for fine-grained discovery.
 - Click **✕** in the search bar to clear the search.
+
+---
+
+## 16. Smart Tags (Local Auto-Labeling)
+
+Imagine provides **Smart Tags**, an automatic, zero-shot photo scene, object, activity, and mood labeling engine powered by the existing CLIP ViT-B/32 neural network. For full technical specifications, JSON schemas, and API documentation, see the [Smart Tags Guide](smart-tags.md).
+
+### What are Smart Tags?
+Smart Tags acts as your local, private equivalent to Google Photos' "Things" search:
+- **Zero-Shot Scene & Subject Labels**: Automatically tags photos with descriptive labels like *"Beach"*, *"Dog"*, *"Mountain"*, *"Wedding"*, *"Coffee"*, or *"Sunset"*.
+- **No Additional Downloads**: Uses the same local CLIP ONNX models already installed for semantic search. No extra neural network downloads are needed.
+- **100% Offline & Private**: Runs entirely on your local machine using vector math. No photos or metadata are ever transmitted across the network.
+- **Reversible AI Tags**: Smart tags live alongside manual tags in the **Keywords** category, clearly marked with an **AI** badge.
+- **Intelligent Rejection Memory**: If you remove an inaccurate AI tag from a photo, Imagine remembers your decision and will never re-apply that tag to that photo in future scans.
+
+### Prerequisites
+Because Smart Tags classifies photos by comparing text prompt vectors against pre-computed image embeddings, **photos must be indexed by the Semantic Search engine first**:
+1. Open **Settings** (gear icon `⚙️` in the top bar).
+2. Under **Semantic Search**, verify that the index is built or click **Rebuild Search Index**.
+
+> [!NOTE]
+> If you open Smart Tags before indexing, the status reports:
+> `Status: Build the search index first (0 photos indexed)` and tagging cannot be started.
+
+### Generating Smart Tags
+
+1. Open **Settings** and scroll to the **Smart Tags** section.
+2. Review the status indicator (e.g. `Ready`, `N photos labeled · M labels`).
+3. Click **Generate Smart Tags** to open the tagging dialog.
+4. Configure job options:
+   - **Scope**: Choose **Entire Catalog** to label all indexed photos, or **Selected Photos** to label only images currently selected in the media grid.
+   - **Force re-label**: Leave unchecked for fast incremental scans that skip already-labeled photos. Check this box to force a complete re-evaluation of all photos against the taxonomy.
+5. Click **Start Tagging**:
+   - A real-time progress bar shows completed photos.
+   - Live counters report: `{processed} labeled · {skipped} skipped · {failed} failed · {remaining} remaining of {total}`.
+   - You can click **Cancel** at any time to safely halt processing; completed batches remain saved in SQLite.
+
+### Browsing & Filtering by AI Tags
+
+- **Sidebar Integration**: Smart tags appear under the **Keywords** accordion group in the left sidebar.
+- **AI Badge**: Tags populated by the AI engine display an **AI** badge in the sidebar.
+- **Filtering**: Clicking any smart tag filters the media grid to show all matching photos, just like a regular manual tag.
+- **Search Bar**: Typing a smart tag name into the top search bar automatically matches photos tagged with that label.
+
+### Inspecting Photo Tags
+
+When you select a photo and open the **Inspector Panel** on the right:
+- Tags assigned by the AI engine feature a distinct **AI** badge.
+- Hovering over the badge shows the tooltip: `Smart Tag (AI-generated)`.
+- User-created manual tags and face-recognition tags do not display this badge.
+
+### Removing an AI Tag & Rejection Memory
+
+If a photo is tagged incorrectly (for example, a photo of a statue tagged as *Portrait*):
+1. In the Inspector panel, click the small **✕** icon on the AI tag.
+2. The tag is immediately removed from the photo.
+3. Imagine records a **rejection memory** in `smart_tag_rejections`.
+4. On all subsequent runs—even forced catalog re-scans—the engine checks rejection history and will **never re-assign that tag to that photo**.
+
+> [!TIP]
+> If you later change your mind and manually add the tag back to the photo, Imagine deletes the rejection record and marks the tag as manual (`source = 'manual'`).
+
+### Clearing Smart Tags
+
+To completely remove all AI-generated tags from your catalog:
+1. Open **Settings → Smart Tags**.
+2. Click **Remove Smart Tags**.
+3. Confirm the prompt:
+   > *"Are you sure you want to remove all AI-generated smart tags? Manual tags and face tags will not be affected."*
+4. All tags with `source = 'clip'` and associated state records are safely deleted. Manual tags (`source = 'manual'`) and face tags (`source = 'face'`) are strictly preserved. Tag definitions in the catalog remain with count 0 so shared tag names are not lost. Lazy tag creation ensures that labels never assigned to photos are not created in the catalog.
+
+### Customizing Taxonomy & Thresholds
+
+Imagine includes a default taxonomy of 58 labels across 8 groups (Nature, Animals, Food & Drink, People & Events, Places & Travel, Activities, Objects & Home, Mood & Weather).
+
+You can customize the taxonomy or tune scoring parameters using environment variables:
+- `IMAGINE_SMART_TAGS_TAXONOMY`: Path to a custom JSON taxonomy file overriding default labels, prompts, and per-label thresholds.
+- `IMAGINE_SMART_TAGS_MIN_SCORE`: Global minimum cosine similarity threshold (default: `0.23`).
+- `IMAGINE_SMART_TAGS_MAX_LABELS`: Maximum number of smart tags assigned to a single photo (default: `3`).
+- `IMAGINE_SMART_TAGS_MAX_PER_GROUP`: Maximum smart tags from any single taxonomy group (default: `2`).
+
+For complete schema examples and tuning guidance, refer to the [Smart Tags Guide](smart-tags.md).
 
