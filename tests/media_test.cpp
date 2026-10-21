@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <vector>
 #include <chrono>
+#include <cstdlib>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
@@ -39,6 +40,17 @@ public:
 private:
     std::filesystem::path path_;
 };
+
+// Mirrors FfmpegHelper's own resolution so the test generation command uses the
+// same binary the code under test will invoke.
+std::string ffmpegBinaryForTests() {
+    const char* customPath = std::getenv("IMAGINE_FFMPEG_PATH");
+    std::string bin = (customPath && *customPath) ? std::string(customPath) : std::string("ffmpeg");
+    if (bin.size() >= 2 && bin.front() == '"' && bin.back() == '"') {
+        bin = bin.substr(1, bin.size() - 2);
+    }
+    return bin;
+}
 
 void writeBe16(std::vector<uint8_t>& buf, uint16_t v) {
     buf.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
@@ -1541,15 +1553,89 @@ TEST(MediaTest, OggVorbisBitrate) {
     EXPECT_EQ(info.bitrate, 192000);
 }
 
-// 17. Test FFmpeg Helper rejects cmd.exe metacharacters (% and ^)
+// 17. Test FFmpeg Helper shell-metacharacter policy.
+// POSIX still goes through a shell, so metacharacters must be rejected outright.
+// Windows uses CreateProcessW, where those characters are legal in file names;
+// there they only fail because the files do not exist.
 TEST(MediaTest, FfmpegHelperUnsafeMetacharacters) {
     auto resPercent = FfmpegHelper::extractVideoFrame("test%USERPROFILE%.mp4", 1.0, "out.jpg");
-    EXPECT_FALSE(resPercent.isOk());
-    EXPECT_EQ(resPercent.status().code(), StatusCode::InvalidArgument);
-
     auto resCaret = FfmpegHelper::extractVideoFrame("test^name.mp4", 1.0, "out.jpg");
+    EXPECT_FALSE(resPercent.isOk());
     EXPECT_FALSE(resCaret.isOk());
+#if defined(_WIN32)
+    EXPECT_EQ(resPercent.status().code(), StatusCode::NotFound);
+    EXPECT_EQ(resCaret.status().code(), StatusCode::NotFound);
+#else
+    EXPECT_EQ(resPercent.status().code(), StatusCode::InvalidArgument);
     EXPECT_EQ(resCaret.status().code(), StatusCode::InvalidArgument);
+#endif
+}
+
+// 17b. Test FFmpeg Helper dynamic isAvailable() without a permanent cache
+TEST(MediaTest, FfmpegHelperDynamicAvailability) {
+    const char* orig = std::getenv("IMAGINE_FFMPEG_PATH");
+    std::string origVal = orig ? orig : "";
+    const bool originallyAvailable = FfmpegHelper::isAvailable();
+
+#if defined(_WIN32)
+    _putenv("IMAGINE_FFMPEG_PATH=invalid_nonexistent_ffmpeg_binary_xyz");
+#else
+    setenv("IMAGINE_FFMPEG_PATH", "invalid_nonexistent_ffmpeg_binary_xyz", 1);
+#endif
+    FfmpegHelper::resetAvailabilityCache();
+    EXPECT_FALSE(FfmpegHelper::isAvailable());
+
+    // Availability is re-evaluated after the configuration changes back.
+#if defined(_WIN32)
+    if (!origVal.empty()) {
+        std::string s = "IMAGINE_FFMPEG_PATH=" + origVal;
+        _putenv(s.c_str());
+    } else {
+        _putenv("IMAGINE_FFMPEG_PATH=");
+    }
+#else
+    if (!origVal.empty()) {
+        setenv("IMAGINE_FFMPEG_PATH", origVal.c_str(), 1);
+    } else {
+        unsetenv("IMAGINE_FFMPEG_PATH");
+    }
+#endif
+    FfmpegHelper::resetAvailabilityCache();
+    EXPECT_EQ(FfmpegHelper::isAvailable(), originallyAvailable);
+}
+
+// 17c. Test FFmpeg Helper frame extraction with spaces and non-ASCII paths
+TEST(MediaTest, FfmpegHelperSpacesAndUnicodePaths) {
+    if (!FfmpegHelper::isAvailable()) {
+        GTEST_SKIP() << "FFmpeg is not installed on this system";
+    }
+
+    TempDir tmp;
+    std::filesystem::path subDir = tmp.path() / pathFromUtf8("тест видео с пробелами");
+    std::filesystem::create_directories(subDir);
+
+    std::string videoPath = pathToUtf8(subDir / pathFromUtf8("sample video.mp4"));
+    std::string outThumbPath = pathToUtf8(subDir / pathFromUtf8("превью кадра.jpg"));
+
+    std::string bin = ffmpegBinaryForTests();
+
+#if defined(_WIN32)
+    std::wstring binW = pathFromUtf8(bin).wstring();
+    std::wstring vidW = pathFromUtf8(videoPath).wstring();
+    std::wstring genCmd = LR"(")" + binW + LR"(" -y -v error -f lavfi -i testsrc=duration=2:size=160x120:rate=1 ")" + vidW + LR"(")";
+    _wsystem(genCmd.c_str());
+#else
+    std::string genCmd = R"(")" + bin + R"(" -y -v error -f lavfi -i testsrc=duration=2:size=160x120:rate=1 ")" + videoPath + R"(" 2>/dev/null)";
+    std::system(genCmd.c_str());
+#endif
+
+    std::error_code ec;
+    ASSERT_TRUE(std::filesystem::is_regular_file(pathFromUtf8(videoPath), ec)) << "Failed to generate test video";
+
+    auto extractRes = FfmpegHelper::extractVideoFrame(videoPath, 0.5, outThumbPath);
+    ASSERT_TRUE(extractRes.isOk()) << extractRes.status().message();
+    EXPECT_TRUE(std::filesystem::exists(pathFromUtf8(outThumbPath), ec));
+    EXPECT_GT(std::filesystem::file_size(pathFromUtf8(outThumbPath), ec), 0u);
 }
 
 // 18. Test MP3 with ID3v2 Latin-1 frame transcoded to UTF-8
