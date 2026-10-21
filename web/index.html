@@ -2043,12 +2043,12 @@
       </div>
     </div>
     <!-- Clear Smart Tags Warning Modal Dialog -->
-    <div class="modal" id="clearSmartTagsModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="clearSmartTagsModalTitle">
+    <div class="modal" id="clearSmartTagsModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="clearSmartTagsModalTitle" aria-describedby="clearSmartTagsPromptText clearSmartTagsWarningText">
       <div class="modal-backdrop" id="clearSmartTagsBackdrop"></div>
-      <div class="modal-dialog" style="max-width: 440px;">
+      <div class="modal-dialog" style="width: min(440px, calc(100vw - 28px));">
         <div class="modal-header">
           <h3 id="clearSmartTagsModalTitle" data-i18n="remove_smart_tags">Remove Smart Tags</h3>
-          <button type="button" class="btn-icon-sm" id="closeClearSmartTagsModalBtn" title="Close" data-i18n-title="close_panel" aria-label="Close" data-i18n-aria-label="close">&times;</button>
+          <button type="button" class="btn-icon-sm" id="closeClearSmartTagsModalBtn" title="Close" data-i18n-title="close" aria-label="Close" data-i18n-aria-label="close">&times;</button>
         </div>
         <div class="modal-body">
           <p id="clearSmartTagsPromptText" style="margin-bottom: 8px; font-size: 14px;" data-i18n="smart_tags_clear_confirm">Are you sure you want to remove all smart tags? Manual and face tags will not be affected.</p>

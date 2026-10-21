@@ -714,7 +714,7 @@ Returns whether the engine is built and ready, taxonomy validation status, model
   "taxonomyReady": true,
   "taxonomyError": "",
   "taxonomyVersion": "b47c8f2a1e0d4a9f",
-  "labelCount": 58,
+  "labelCount": 75,
   "indexedPhotos": 1200,
   "labeledPhotos": 900,
   "tagAssignments": 2300,
@@ -907,7 +907,7 @@ To completely remove all AI-generated tags from your catalog:
 
 ### Customizing Taxonomy & Thresholds
 
-Imagine includes a default taxonomy of 58 labels across 8 groups (Nature, Animals, Food & Drink, People & Events, Places & Travel, Activities, Objects & Home, Mood & Weather).
+Imagine includes a default taxonomy of 75 labels across 9 groups (Nature, Animals, Food & Drink, People & Events, Places & Travel, Architecture & Landmarks, Activities, Objects & Home, Mood & Weather).
 
 You can customize the taxonomy or tune scoring parameters using environment variables:
 - `IMAGINE_SMART_TAGS_TAXONOMY`: Path to a custom JSON taxonomy file overriding default labels, prompts, and per-label thresholds.

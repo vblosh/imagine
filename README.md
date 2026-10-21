@@ -42,7 +42,7 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Zero New Downloads & No Re-Encoding**: Reuses existing CLIP embeddings and text tokenizer; scores thousands of photos in seconds using pure in-memory vector dot products.
   - **Rejection Memory**: Removing an AI tag from a photo permanently prevents the tag from reappearing on that photo during future runs.
   - **Reversible AI Tags & Provenance**: AI tags are marked with an "AI" badge in the Keywords sidebar and Inspector; one-click clear removes only AI-owned tags without affecting manual or face tags.
-  - **Customizable Taxonomy**: Built-in 58-label taxonomy across 8 groups, fully customizable via JSON override (`IMAGINE_SMART_TAGS_TAXONOMY`).
+  - **Customizable Taxonomy**: Built-in 75-label taxonomy across 9 groups, fully customizable via JSON override (`IMAGINE_SMART_TAGS_TAXONOMY`).
 - **High-Throughput Importer**:
   - Multi-threaded scanning and processing pipeline (`std::jthread` thread pool).
   - Support for Photos (JPEG, PNG, WebP, TIFF, BMP), Videos (MP4, MOV, WebM, MKV, AVI, etc.), and Audio (MP3, FLAC, WAV, AAC, etc.).

@@ -392,7 +392,7 @@ export function setupKeyboardShortcuts() {
         e.preventDefault();
         if (active === dom.cancelClearSmartTagsBtn || active === dom.closeClearSmartTagsModalBtn) {
           closeClearSmartTagsModal();
-        } else if (dom.confirmClearSmartTagsBtn) {
+        } else if (active === dom.confirmClearSmartTagsBtn) {
           dom.confirmClearSmartTagsBtn.click();
         }
         return;

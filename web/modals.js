@@ -118,9 +118,9 @@ export function hideModal(modalEl) {
   let returnEl = modalReturnFocusMap.get(modalEl);
   modalReturnFocusMap.delete(modalEl);
 
-  // If photos are selected in the media grid, prefer returning focus
-  // to the active photo card so grid keyboard navigation (Enter, Arrows, Escape) continues smoothly
-  if (state.selectedIds && state.selectedIds.size > 0 && dom.mediaGrid) {
+  // If photos are selected in the media grid and no other modal remains open,
+  // prefer returning focus to the active photo card so grid keyboard navigation (Enter, Arrows, Escape) continues smoothly
+  if (openModalStack.length === 0 && state.selectedIds && state.selectedIds.size > 0 && dom.mediaGrid) {
     const activeCard = dom.mediaGrid.querySelector('.photo-card[tabindex="0"]') ||
       (state.lastSelectedId ? dom.mediaGrid.querySelector(`.photo-card[data-id="${state.lastSelectedId}"]`) : null) ||
       dom.mediaGrid.querySelector('.photo-card.selected');

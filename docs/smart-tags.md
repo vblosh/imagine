@@ -109,7 +109,7 @@ During startup or before a labeling job runs:
 4. The resulting pooled vector is L2-normalized:
    $$\mathbf{v}_{\text{label}} = \frac{\mathbf{v}_{\text{mean}}}{\|\mathbf{v}_{\text{mean}}\|_2}$$
 
-These precomputed label vectors are cached in memory keyed by `model_id + revision + taxonomy_version` (~350 KB for 174 prompts across 58 labels), eliminating redundant text encoding across runs.
+These precomputed label vectors are cached in memory keyed by `model_id + revision + taxonomy_version` (~450 KB for 225 prompts across 75 labels), eliminating redundant text encoding across runs.
 
 ### Cosine Similarity & Selection Heuristics
 
@@ -234,7 +234,7 @@ If you ever wish to reset or remove all AI-assigned labels:
 
 ### Built-In Taxonomy
 
-Imagine ships with an embedded, carefully curated taxonomy of **58 labels** across **8 semantic groups**. Each label includes multiple natural phrasing prompts and tuned threshold values to maximize precision:
+Imagine ships with an embedded, carefully curated taxonomy of **75 labels** across **9 semantic groups**. Each label includes multiple natural phrasing prompts and tuned threshold values to maximize precision:
 
 | Group | Included Labels |
 |---|---|
@@ -242,7 +242,8 @@ Imagine ships with an embedded, carefully curated taxonomy of **58 labels** acro
 | **Animals** (7) | Dog, Cat, Bird, Horse, Wildlife, Fish, Insect |
 | **Food & Drink** (6) | Food, Coffee, Wine, Beer, Cake, Fruit |
 | **People & Events** (6) | Wedding, Birthday, Concert, Portrait, Party, Baby |
-| **Places & Travel** (9) | City, Architecture, Bridge, Street, Airplane, Car, Bicycle, Boat, Train |
+| **Places & Travel** (7) | City, Street, Airplane, Car, Bicycle, Boat, Train |
+| **Architecture & Landmarks** (19) | Architecture, Bridge, Church, Cathedral, Castle, Fortress, Museum, Palace, Ruins, Temple, Mosque, Monument, Skyscraper, Tower, Lighthouse, Plaza, Library, Stained Glass, Arch & Colonnade |
 | **Activities** (6) | Camping, Hiking, Swimming, Skiing, Running, Cycling |
 | **Objects & Home** (6) | Book, Instrument, Art, Garden, Interior, Furniture |
 | **Mood & Weather** (6) | Night, Autumn, Spring, Summer, Winter, Rain |
@@ -344,7 +345,7 @@ Returns the operational status, index coverage, and taxonomy metrics.
   "taxonomyReady": true,
   "taxonomyError": "",
   "taxonomyVersion": "b47c8f2a1e0d4a9f",
-  "labelCount": 58,
+  "labelCount": 75,
   "indexedPhotos": 1200,
   "labeledPhotos": 900,
   "tagAssignments": 2300,

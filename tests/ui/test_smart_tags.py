@@ -235,6 +235,7 @@ def test_smart_tags_i18n_multilingual(server, page: Page):
     page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
     expect(page.locator("#clearSmartTagsModalTitle")).to_have_text("Remove Smart Tags")
     expect(page.locator("#clearSmartTagsPromptText")).to_have_text("Are you sure you want to remove all smart tags? Manual and face tags will not be affected.")
+    expect(page.locator("#clearSmartTagsWarningText")).to_have_text("This action removes all automatically generated smart tags from the catalog database. The original files on disk will not be deleted.")
     expect(page.locator("#confirmClearSmartTagsBtn")).to_have_text("Remove Smart Tags")
     page.locator("#closeClearSmartTagsModalBtn").click()
 
@@ -257,6 +258,7 @@ def test_smart_tags_i18n_multilingual(server, page: Page):
     page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
     expect(page.locator("#clearSmartTagsModalTitle")).to_have_text("Smart-Tags entfernen")
     expect(page.locator("#clearSmartTagsPromptText")).to_have_text("Möchten Sie wirklich alle Smart-Tags entfernen? Manuelle Tags und Personen-Tags bleiben unberührt.")
+    expect(page.locator("#clearSmartTagsWarningText")).to_have_text("Dadurch werden alle automatisch generierten Smart-Tags aus der Katalogdatenbank entfernt. Die Originaldateien auf der Festplatte werden nicht gelöscht.")
     expect(page.locator("#confirmClearSmartTagsBtn")).to_have_text("Smart-Tags entfernen")
     page.locator("#closeClearSmartTagsModalBtn").click()
 
@@ -279,7 +281,28 @@ def test_smart_tags_i18n_multilingual(server, page: Page):
     page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
     expect(page.locator("#clearSmartTagsModalTitle")).to_have_text("Eliminar etiquetas inteligentes")
     expect(page.locator("#clearSmartTagsPromptText")).to_have_text("¿Seguro que desea eliminar todas las etiquetas inteligentes? Las etiquetas manuales y de caras no se verán afectadas.")
+    expect(page.locator("#clearSmartTagsWarningText")).to_have_text("Esto elimina todas las etiquetas inteligentes generadas automáticamente de la base de datos del catálogo. Los archivos originales en el disco no se borrarán.")
     expect(page.locator("#confirmClearSmartTagsBtn")).to_have_text("Eliminar etiquetas inteligentes")
+    page.locator("#closeClearSmartTagsModalBtn").click()
+
+    # 4. Russian (ru) verification
+    page.locator("#langSelect").select_option("ru")
+    expect(page.locator("#langSelect")).to_have_value("ru")
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(page.locator("#clearSmartTagsModalTitle")).to_have_text("Удалить умные теги")
+    expect(page.locator("#clearSmartTagsPromptText")).to_have_text("Вы уверены, что хотите удалить все умные теги? Ручные теги и теги лиц затронуты не будут.")
+    expect(page.locator("#clearSmartTagsWarningText")).to_have_text("Это удалит все автоматически созданные умные теги из базы данных каталога. Исходные файлы на диске не будут удалены.")
+    expect(page.locator("#confirmClearSmartTagsBtn")).to_have_text("Удалить умные теги")
+    page.locator("#closeClearSmartTagsModalBtn").click()
+
+    # 5. Chinese (zh) verification
+    page.locator("#langSelect").select_option("zh")
+    expect(page.locator("#langSelect")).to_have_value("zh")
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(page.locator("#clearSmartTagsModalTitle")).to_have_text("移除智能标签")
+    expect(page.locator("#clearSmartTagsPromptText")).to_have_text("确定要移除所有智能标签吗？手动标签和面孔标签不会受到影响。")
+    expect(page.locator("#clearSmartTagsWarningText")).to_have_text("这将从目录数据库中移除所有自动生成的智能标签。磁盘上的原始文件不会被删除。")
+    expect(page.locator("#confirmClearSmartTagsBtn")).to_have_text("移除智能标签")
     page.locator("#closeClearSmartTagsModalBtn").click()
 
 
@@ -479,6 +502,25 @@ def test_smart_tags_job_start_poll_cancel_and_clear(server, page: Page):
 
 def test_clear_smart_tags_modal_dismissal_methods(server, page: Page):
     """The Clear Smart Tags warning modal can be dismissed via close icon, cancel button, backdrop, and Escape."""
+    def handle_status(route):
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "built": True,
+                "ready": True,
+                "taxonomyReady": True,
+                "taxonomyError": "",
+                "taxonomyVersion": "v1",
+                "labelCount": 75,
+                "indexedPhotos": 50,
+                "labeledPhotos": 10,
+                "tagAssignments": 20,
+                "modelId": "clip-vit-b32"
+            })
+        )
+
+    page.route("**/api/smart-tags/status", handle_status)
     page.goto(server["url"])
     modal = page.locator("#clearSmartTagsModal")
 
@@ -503,5 +545,28 @@ def test_clear_smart_tags_modal_dismissal_methods(server, page: Page):
     # 4. Dismiss via Escape key
     page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
     expect(modal).to_be_visible()
+    expect(modal).to_have_attribute("aria-describedby", "clearSmartTagsPromptText clearSmartTagsWarningText")
     page.keyboard.press("Escape")
     expect(modal).to_be_hidden()
+
+    # 5. Enter key on Cancel button closes modal
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(modal).to_be_visible()
+    page.locator("#cancelClearSmartTagsBtn").focus()
+    page.keyboard.press("Enter")
+    expect(modal).to_be_hidden()
+
+    # 6. Focus restoration returns to Remove Smart Tags button even when photo cards are selected
+    first_card = page.locator(".photo-card").first
+    if first_card.is_visible():
+        first_card.click()
+    page.locator("#settingsBtn").click()
+    expect(page.locator("#settingsModal")).to_be_visible()
+    clear_btn = page.locator("#settingsClearSmartTagsBtn")
+    clear_btn.focus()
+    page.evaluate("() => window.imagineUI.openClearSmartTagsModal()")
+    expect(modal).to_be_visible()
+    page.locator("#cancelClearSmartTagsBtn").click()
+    expect(modal).to_be_hidden()
+    expect(clear_btn).to_be_focused()
+    page.locator("#closeSettingsModalBtn").click()

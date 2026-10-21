@@ -364,20 +364,3 @@ export async function submitClearSmartTags() {
 export async function clearSmartTags() {
   openClearSmartTagsModal();
 }
-
-// Global escape key handler for Smart Tags modals
-window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    if (dom.clearSmartTagsModal && dom.clearSmartTagsModal.style.display === 'flex') {
-      e.preventDefault();
-      e.stopPropagation();
-      closeClearSmartTagsModal();
-      return;
-    }
-    if (dom.smartTagsModal && dom.smartTagsModal.style.display === 'flex') {
-      e.preventDefault();
-      e.stopPropagation();
-      closeSmartTagsModal();
-    }
-  }
-}, true);

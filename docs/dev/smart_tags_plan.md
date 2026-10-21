@@ -342,7 +342,7 @@ Status cancelJob(int64_t jobId,
 
 1. Validate engine ready, taxonomy valid, and index non-empty.
 2. Ensure tag rows exist for every label via `createOrGetTag(name, "keyword")`; map label ID → tag ID.
-3. Load label text embeddings; cache them in `Impl` keyed by model ID + revision + taxonomy version. Approximately 350 KB for 168 prompts.
+3. Load label text embeddings; cache them in `Impl` keyed by model ID + revision + taxonomy version. Approximately 450 KB for 225 prompts.
 4. Load candidate content hashes and `smart_tag_state` rows for the current model/taxonomy.
 5. Load all `smart_tag_rejections` into an in-memory set.
 6. For each candidate:
@@ -568,7 +568,7 @@ Existing UI fixtures start at schema v1 and let the server migrate, so no fixtur
 - **Provenance regression:** mitigated by migration backfill, `source != 'clip'` legacy handling in face ownership, and explicit tests that face unassignment never deletes clip tags.
 - **Tag clutter:** mitigated by AI markers, the existing collapsible/searchable keyword group, and a one-click clear.
 - **Job/table coupling:** `semantic_jobs.kind` is additive and existing semantic jobs default to `index`; all old IDs remain valid.
-- **Label-vector encoding cost:** approximately 168 text encodes at job start; cached per model/revision/taxonomy so repeat runs are cheap.
+- **Label-vector encoding cost:** approximately 225 text encodes at job start; cached per model/revision/taxonomy so repeat runs are cheap.
 
 ## 17. Implementation Order
 
