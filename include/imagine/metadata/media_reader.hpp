@@ -33,7 +33,15 @@ struct MediaFileInfo {
 
 class FfmpegHelper {
 public:
+    /// Probes FFmpeg availability. Results are cached briefly (and keyed on the
+    /// resolved binary path) so runtime installs are picked up without restarting
+    /// the process while repeated calls stay cheap.
     static bool isAvailable();
+
+    /// Discards the cached availability result. Intended for tests and for
+    /// explicit configuration reloads.
+    static void resetAvailabilityCache();
+
     static Result<std::string> extractVideoFrame(
         const std::string& videoPath,
         double timeSeconds,

@@ -17,6 +17,7 @@
 #include "imagine/thumbnail/cache.hpp"
 #include "imagine/common/logger.hpp"
 #include "imagine/common/types.hpp"
+#include "imagine/metadata/media_reader.hpp"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -371,6 +372,14 @@ int handleServe(int argc, char** argv) {
 
     std::string effectiveCacheDir = thumbsDir.empty() ? imagine::thumbnail::Cache::defaultCacheDir() : thumbsDir;
     std::string effectivePhotosDir = photosDir.empty() ? "(none / relative to catalog)" : photosDir;
+    const char* envFfmpeg = std::getenv("IMAGINE_FFMPEG_PATH");
+    const bool ffmpegAvailable = imagine::metadata::FfmpegHelper::isAvailable();
+    std::string effectiveFfmpeg;
+    if (envFfmpeg && *envFfmpeg) {
+        effectiveFfmpeg = std::string(envFfmpeg) + (ffmpegAvailable ? " (available)" : " (unavailable)");
+    } else {
+        effectiveFfmpeg = ffmpegAvailable ? "ffmpeg (system PATH)" : "(not found on PATH)";
+    }
 
     auto isSensitive = [](std::string_view name) -> bool {
         return name.find("TOKEN") != std::string_view::npos ||
@@ -482,6 +491,7 @@ int handleServe(int argc, char** argv) {
   Catalog DB: )" << catalogDb << R"(
   Photos Dir: )" << effectivePhotosDir << R"(
   Cache Dir:  )" << effectiveCacheDir << R"(
+  FFmpeg:     )" << effectiveFfmpeg << R"(
   Log File:   )" << (logFile.empty() ? "(none)" : logFile) << R"(
   Log Level:  )" << logLevel << R"(
 ------------------------------------------------------
@@ -507,6 +517,7 @@ int handleServe(int argc, char** argv) {
                      ", host=" + host +
                      ", port=" + std::to_string(port) +
                      ", web-dir=" + webDir +
+                     ", ffmpeg=" + effectiveFfmpeg +
                      ", log-file=" + (logFile.empty() ? "(none)" : logFile) +
                      ", log-level=" + logLevel);
 

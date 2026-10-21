@@ -8,6 +8,8 @@
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/logger.hpp"
 #include "imagine/clip/service.hpp"
+#include "imagine/metadata/media_reader.hpp"
+#include <atomic>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -2300,14 +2302,86 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
 
         std::string thumbPath = cache().getThumbnailPath(hash, size);
         std::error_code ec;
-        if (!std::filesystem::exists(thumbPath, ec)) {
+        if (!std::filesystem::exists(pathFromUtf8(thumbPath), ec)) {
             // Attempt on-demand generation
             auto mediaRes = db().getMediaByHash(hash);
             if (mediaRes.isOk()) {
                 const auto& item = mediaRes.value();
-                if (item.media_type == "video" || item.media_type == "audio") {
+                if (item.media_type == "video") {
+                    static std::atomic<uint64_t> tmpCounter{0};
+                    const std::string videoPath = resolvePhotoPath(item.file_path);
+                    bool generated = false;
+
+                    // Prefer deriving from an already cached large thumbnail
+                    if (cache().hasThumbnail(hash, thumbnail::Cache::LargeSize)) {
+                        auto deriveRes = cache().ensureThumbnail(
+                            cache().getThumbnailPath(hash, thumbnail::Cache::LargeSize), hash, size);
+                        if (deriveRes.isOk()) {
+                            thumbPath = deriveRes.value();
+                            generated = true;
+                            if (item.thumb_small.empty() || item.thumb_large.empty()) {
+                                auto updateRes = db().updateThumbnails(
+                                    item.id,
+                                    thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize),
+                                    thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize));
+                                if (!updateRes.isOk()) {
+                                    IMAGINE_LOG_WARN("Failed to persist video thumbnails for " + hash + ": " +
+                                                     updateRes.message());
+                                }
+                            }
+                        }
+                    }
+
+                    if (!generated && !cache().cacheDir().empty() && metadata::FfmpegHelper::isAvailable()) {
+                        auto cacheDirFs = pathFromUtf8(cache().cacheDir());
+                        std::string tmpFileName = "tmp_ondemand_" + hash + "_" +
+                                                  std::to_string(++tmpCounter) + ".jpg";
+                        std::string tmpThumb = pathToUtf8(cacheDirFs / pathFromUtf8(tmpFileName));
+                        double captureTime = std::min(1.0, item.duration > 0 ? item.duration / 2.0 : 0.0);
+                        auto ffRes = metadata::FfmpegHelper::extractVideoFrame(videoPath, captureTime, tmpThumb);
+                        if (ffRes.isOk()) {
+                            auto dualRes = cache().ensureDualThumbnails(tmpThumb, hash);
+                            if (dualRes.isOk()) {
+                                const std::string& largePath = dualRes.value().second;
+                                const std::string& sizeSource =
+                                    size > thumbnail::Cache::LargeSize ? tmpThumb : largePath;
+                                auto genRes = cache().ensureThumbnail(sizeSource, hash, size);
+                                if (genRes.isOk()) {
+                                    thumbPath = genRes.value();
+                                    ec.clear();
+                                    generated = std::filesystem::is_regular_file(pathFromUtf8(thumbPath), ec) && !ec;
+                                }
+                                if (generated) {
+                                    auto updateRes = db().updateThumbnails(
+                                        item.id,
+                                        thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize),
+                                        thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize));
+                                    if (!updateRes.isOk()) {
+                                        IMAGINE_LOG_WARN("Failed to persist video thumbnails for " + hash + ": " +
+                                                         updateRes.message());
+                                    }
+                                }
+                            } else {
+                                IMAGINE_LOG_WARN("Failed to generate video thumbnails for " + hash + ": " +
+                                                 dualRes.status().message());
+                            }
+                        } else {
+                            IMAGINE_LOG_WARN("Video frame extraction failed for " + hash + " (" + videoPath + "): " +
+                                             ffRes.status().message());
+                        }
+                        ec.clear();
+                        std::filesystem::remove(pathFromUtf8(tmpThumb), ec);
+                    }
+
+                    if (!generated) {
+                        auto procRes = cache().ensureProceduralThumbnails(hash, item.media_type);
+                        if (procRes.isOk()) {
+                            thumbPath = cache().getThumbnailPath(hash, size);
+                        }
+                    }
+                } else if (item.media_type == "audio") {
                     std::string label;
-                    if (item.media_type == "audio" && !item.audio_artist.empty()) {
+                    if (!item.audio_artist.empty()) {
                         label = item.audio_artist + (!item.audio_title.empty() ? " - " + item.audio_title : "");
                     }
                     auto procRes = cache().ensureProceduralThumbnails(hash, item.media_type, label);
@@ -2324,9 +2398,11 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
             }
         }
 
-        if (std::filesystem::exists(thumbPath, ec) && std::filesystem::is_regular_file(thumbPath, ec)) {
-            auto fsize = std::filesystem::file_size(thumbPath, ec);
-            auto mtime = std::filesystem::last_write_time(thumbPath, ec);
+        const auto thumbFsPath = pathFromUtf8(thumbPath);
+        ec.clear();
+        if (std::filesystem::is_regular_file(thumbFsPath, ec) && !ec) {
+            auto fsize = std::filesystem::file_size(thumbFsPath, ec);
+            auto mtime = std::filesystem::last_write_time(thumbFsPath, ec);
             int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
             std::string etag = "\"thumb-v1-" + hash + "_" + std::to_string(size) + "-" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
 
@@ -2338,7 +2414,15 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                 return;
             }
 
-            res.set_file_content(thumbPath, "image/jpeg");
+            // Read via the wide path (thumbFsPath) to guarantee correct file reading on Windows
+            // even if cacheDir or file path contains non-ASCII characters.
+            std::ifstream ifs(thumbFsPath, std::ios::binary);
+            if (ifs) {
+                std::string body((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+                res.set_content(std::move(body), "image/jpeg");
+            } else {
+                res.set_file_content(thumbPath, "image/jpeg");
+            }
         } else {
             sendError(res, "Thumbnail not found", 404);
         }

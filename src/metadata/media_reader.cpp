@@ -11,6 +11,18 @@
 #include <sstream>
 #include <locale>
 #include <functional>
+#include <mutex>
+#include <condition_variable>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace imagine::metadata {
 
@@ -69,6 +81,9 @@ int64_t getFileModifiedTime(const std::string& filePath) {
     return 0;
 }
 
+#if !defined(_WIN32)
+// Only the POSIX implementation still goes through a shell; Windows uses
+// CreateProcessW with explicit argument quoting, where these characters are legal.
 bool hasUnsafeShellChars(const std::string& s) {
     for (unsigned char c : s) {
         if (c < 0x20 || c == '"' || c == '`' || c == '$' || c == ';' ||
@@ -78,6 +93,7 @@ bool hasUnsafeShellChars(const std::string& s) {
     }
     return false;
 }
+#endif
 
 void appendCodePointUtf8(std::string& out, uint32_t cp) {
     if (cp == 0) return;
@@ -148,23 +164,308 @@ std::string decodeId3Text(uint8_t encoding, const uint8_t* data, size_t len) {
     return std::string(reinterpret_cast<const char*>(data), actualLen);
 }
 
+#if defined(_WIN32)
+using FfmpegBinaryPath = std::wstring;
+#else
+using FfmpegBinaryPath = std::string;
+#endif
+
+// Resolves the configured FFmpeg binary, tolerating values wrapped in quotes.
+FfmpegBinaryPath ffmpegBinaryPath() {
+#if defined(_WIN32)
+    const wchar_t* customPath = _wgetenv(L"IMAGINE_FFMPEG_PATH");
+    FfmpegBinaryPath bin = (customPath && *customPath) ? std::wstring(customPath) : std::wstring(L"ffmpeg");
+    if (bin.size() >= 2 && bin.front() == L'"' && bin.back() == L'"') {
+        bin = bin.substr(1, bin.size() - 2);
+    }
+#else
+    const char* customPath = std::getenv("IMAGINE_FFMPEG_PATH");
+    FfmpegBinaryPath bin = (customPath && *customPath) ? std::string(customPath) : std::string("ffmpeg");
+    if (bin.size() >= 2 && bin.front() == '"' && bin.back() == '"') {
+        bin = bin.substr(1, bin.size() - 2);
+    }
+#endif
+    return bin;
+}
+
+struct AvailabilityCache {
+    std::mutex mutex;
+    FfmpegBinaryPath key;
+    bool valid{false};
+    bool result{false};
+    std::chrono::steady_clock::time_point checkedAt{};
+};
+
+AvailabilityCache& availabilityCache() {
+    static AvailabilityCache cache;
+    return cache;
+}
+
+// Long enough to keep repeated thumbnail requests cheap, short enough to pick up
+// an FFmpeg installation without restarting the server.
+constexpr auto kAvailabilityTtl = std::chrono::seconds(5);
+
+// Bounds the number of concurrent FFmpeg processes so a burst of thumbnail
+// requests (or a parallel import) cannot exhaust the process table.
+class ProcessGate {
+public:
+    static constexpr int kMaxConcurrent = 2;
+
+    static ProcessGate& instance() {
+        static ProcessGate gate;
+        return gate;
+    }
+
+    void acquire() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return active_ < kMaxConcurrent; });
+        ++active_;
+    }
+
+    void release() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            --active_;
+        }
+        cv_.notify_one();
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    int active_{0};
+};
+
+class ProcessGateGuard {
+public:
+    ProcessGateGuard() { ProcessGate::instance().acquire(); }
+    ~ProcessGateGuard() { ProcessGate::instance().release(); }
+    ProcessGateGuard(const ProcessGateGuard&) = delete;
+    ProcessGateGuard& operator=(const ProcessGateGuard&) = delete;
+};
+
+#if defined(_WIN32)
+std::wstring quoteArgWindows(const std::wstring& arg) {
+    if (arg.empty()) {
+        return L"\"\"";
+    }
+    bool needsQuotes = false;
+    for (wchar_t c : arg) {
+        if (c == L' ' || c == L'\t' || c == L'\n' || c == L'\v' || c == L'\"') {
+            needsQuotes = true;
+            break;
+        }
+    }
+    if (!needsQuotes) {
+        return arg;
+    }
+
+    std::wstring out = L"\"";
+    size_t numBackslashes = 0;
+    for (size_t i = 0; i < arg.size(); ++i) {
+        wchar_t c = arg[i];
+        if (c == L'\\') {
+            numBackslashes++;
+        } else if (c == L'\"') {
+            out.append(numBackslashes * 2 + 1, L'\\');
+            out.push_back(L'\"');
+            numBackslashes = 0;
+        } else {
+            out.append(numBackslashes, L'\\');
+            numBackslashes = 0;
+            out.push_back(c);
+        }
+    }
+    out.append(numBackslashes * 2, L'\\');
+    out.push_back(L'\"');
+    return out;
+}
+
+int runProcessW(const std::wstring& cmdLine, DWORD timeoutMs = 30000, DWORD* lastError = nullptr, std::string* stdErrOut = nullptr) {
+    if (lastError) *lastError = 0;
+    if (stdErrOut) stdErrOut->clear();
+
+    SECURITY_ATTRIBUTES sa;
+    ZeroMemory(&sa, sizeof(sa));
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hNulIn = CreateFileW(L"NUL", GENERIC_READ,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                &sa, OPEN_EXISTING, 0, NULL);
+    HANDLE hNulOut = CreateFileW(L"NUL", GENERIC_WRITE,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 &sa, OPEN_EXISTING, 0, NULL);
+
+    HANDLE hErrRead = NULL;
+    HANDLE hErrWrite = NULL;
+    if (CreatePipe(&hErrRead, &hErrWrite, &sa, 0)) {
+        SetHandleInformation(hErrRead, HANDLE_FLAG_INHERIT, 0);
+    }
+
+    STARTUPINFOEXW si;
+    ZeroMemory(&si, sizeof(si));
+    si.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+    si.StartupInfo.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+    si.StartupInfo.wShowWindow = SW_HIDE;
+    si.StartupInfo.hStdInput = (hNulIn != INVALID_HANDLE_VALUE) ? hNulIn : NULL;
+    si.StartupInfo.hStdOutput = (hNulOut != INVALID_HANDLE_VALUE) ? hNulOut : NULL;
+    si.StartupInfo.hStdError = (hErrWrite != NULL) ? hErrWrite : ((hNulOut != INVALID_HANDLE_VALUE) ? hNulOut : NULL);
+
+    std::vector<uint8_t> attributeBuffer;
+    bool useHandleList = false;
+#ifdef PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+    std::vector<HANDLE> inheritedHandles;
+    if (si.StartupInfo.hStdInput) inheritedHandles.push_back(si.StartupInfo.hStdInput);
+    if (si.StartupInfo.hStdOutput) inheritedHandles.push_back(si.StartupInfo.hStdOutput);
+    if (si.StartupInfo.hStdError && si.StartupInfo.hStdError != si.StartupInfo.hStdOutput) {
+        inheritedHandles.push_back(si.StartupInfo.hStdError);
+    }
+    if (!inheritedHandles.empty()) {
+        SIZE_T attributeSize = 0;
+        InitializeProcThreadAttributeList(NULL, 1, 0, &attributeSize);
+        attributeBuffer.resize(attributeSize);
+        auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeBuffer.data());
+        if (InitializeProcThreadAttributeList(attributes, 1, 0, &attributeSize)) {
+            if (UpdateProcThreadAttribute(
+                    attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                    inheritedHandles.data(), inheritedHandles.size() * sizeof(HANDLE), NULL, NULL)) {
+                si.lpAttributeList = attributes;
+                useHandleList = true;
+            } else {
+                DeleteProcThreadAttributeList(attributes);
+            }
+        }
+    }
+#endif
+
+    std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
+    cmdBuf.push_back(L'\0');
+
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&pi, sizeof(pi));
+
+    si.StartupInfo.cb = useHandleList
+                            ? static_cast<DWORD>(sizeof(STARTUPINFOEXW))
+                            : static_cast<DWORD>(sizeof(STARTUPINFOW));
+
+    DWORD creationFlags = CREATE_NO_WINDOW;
+    if (useHandleList) {
+        creationFlags |= EXTENDED_STARTUPINFO_PRESENT;
+    }
+
+    BOOL success = CreateProcessW(
+        NULL,
+        cmdBuf.data(),
+        NULL,
+        NULL,
+        TRUE,
+        creationFlags,
+        NULL,
+        NULL,
+        &si.StartupInfo,
+        &pi
+    );
+
+    if (hErrWrite) CloseHandle(hErrWrite);
+    if (hNulIn != INVALID_HANDLE_VALUE) CloseHandle(hNulIn);
+    if (hNulOut != INVALID_HANDLE_VALUE) CloseHandle(hNulOut);
+
+    if (useHandleList) {
+        DeleteProcThreadAttributeList(
+            reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeBuffer.data()));
+    }
+
+    if (!success) {
+        if (lastError) *lastError = GetLastError();
+        if (hErrRead) CloseHandle(hErrRead);
+        return -1;
+    }
+
+    DWORD waitRes = WaitForSingleObject(pi.hProcess, timeoutMs);
+    if (waitRes != WAIT_OBJECT_0) {
+        TerminateProcess(pi.hProcess, 1);
+        WaitForSingleObject(pi.hProcess, 1000);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        if (hErrRead) CloseHandle(hErrRead);
+        return -1;
+    }
+
+    DWORD exitCode = 1;
+    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) {
+        exitCode = 1;
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    // NOTE on pipe buffering: Output is drained after the child exits, which
+    // relies on FFmpeg being invoked with '-v error' or '-version' so that normal
+    // execution produces zero stderr and error diagnostics fit comfortably within
+    // the OS pipe buffer (64 KB on Windows) without blocking the child.
+    if (hErrRead) {
+        if (stdErrOut) {
+            char errBuf[4096];
+            DWORD bytesRead = 0;
+            constexpr size_t kMaxDiagBytes = 64 * 1024;
+            while (stdErrOut->size() < kMaxDiagBytes &&
+                   ReadFile(hErrRead, errBuf, sizeof(errBuf), &bytesRead, NULL) && bytesRead > 0) {
+                stdErrOut->append(errBuf, bytesRead);
+            }
+        }
+        CloseHandle(hErrRead);
+    }
+
+    return static_cast<int>(exitCode);
+}
+#endif
+
 } // anonymous namespace
 
 // --- FfmpegHelper implementation ---
 
 bool FfmpegHelper::isAvailable() {
-    static const bool available = []() {
-        const char* customPath = std::getenv("IMAGINE_FFMPEG_PATH");
-        std::string bin = (customPath && *customPath) ? std::string(customPath) : "ffmpeg";
-        if (hasUnsafeShellChars(bin)) return false;
-#if defined(_WIN32)
-        std::string cmd = "\"" + bin + "\" -version >NUL 2>&1";
-#else
-        std::string cmd = "\"" + bin + "\" -version >/dev/null 2>&1";
+    const FfmpegBinaryPath bin = ffmpegBinaryPath();
+    if (bin.empty()) {
+        return false;
+    }
+#if !defined(_WIN32)
+    // The POSIX implementation still goes through the shell.
+    if (hasUnsafeShellChars(bin)) {
+        return false;
+    }
 #endif
-        return std::system(cmd.c_str()) == 0;
-    }();
+
+    auto& cache = availabilityCache();
+    {
+        std::lock_guard<std::mutex> lock(cache.mutex);
+        const auto now = std::chrono::steady_clock::now();
+        if (cache.valid && cache.key == bin && now - cache.checkedAt < kAvailabilityTtl) {
+            return cache.result;
+        }
+    }
+
+#if defined(_WIN32)
+    const bool available = runProcessW(quoteArgWindows(bin) + L" -version", 5000) == 0;
+#else
+    const std::string cmd = "\"" + bin + "\" -version >/dev/null 2>&1";
+    const bool available = std::system(cmd.c_str()) == 0;
+#endif
+
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(cache.mutex);
+    cache.key = bin;
+    cache.result = available;
+    cache.checkedAt = now;
+    cache.valid = true;
     return available;
+}
+
+void FfmpegHelper::resetAvailabilityCache() {
+    auto& cache = availabilityCache();
+    std::lock_guard<std::mutex> lock(cache.mutex);
+    cache.valid = false;
+    cache.key.clear();
 }
 
 Result<std::string> FfmpegHelper::extractVideoFrame(
@@ -172,38 +473,70 @@ Result<std::string> FfmpegHelper::extractVideoFrame(
     double timeSeconds,
     const std::string& outJpegPath
 ) {
-    std::string bin = "ffmpeg";
-    const char* customPath = std::getenv("IMAGINE_FFMPEG_PATH");
-    if (customPath && *customPath) {
-        bin = customPath;
+    const FfmpegBinaryPath bin = ffmpegBinaryPath();
+    if (bin.empty()) {
+        return Status::invalidArgument("FFmpeg binary path is empty");
     }
+#if !defined(_WIN32)
+    // Windows runs FFmpeg through CreateProcessW, so shell metacharacters in
+    // file names are harmless there; the POSIX path still uses a shell.
     if (hasUnsafeShellChars(bin) || hasUnsafeShellChars(videoPath) || hasUnsafeShellChars(outJpegPath)) {
         return Status::invalidArgument("Unsafe characters in FFmpeg path arguments");
     }
+#endif
 
-    if (!isAvailable()) {
-        return Status::internal("FFmpeg is not available on this system");
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(pathFromUtf8(videoPath), ec) || ec) {
+        return Status::notFound("Video file not found: " + videoPath);
     }
+
+    // FFmpeg writes the frame directly, so the destination directory must exist.
+    const auto outFsPath = pathFromUtf8(outJpegPath);
+    if (outFsPath.has_parent_path()) {
+        std::filesystem::create_directories(outFsPath.parent_path(), ec);
+    }
+
     if (!std::isfinite(timeSeconds) || timeSeconds < 0.0) {
         timeSeconds = 0.0;
     }
 
+    ProcessGateGuard gateGuard;
+
+#if defined(_WIN32)
+    std::wstring videoPathW = pathFromUtf8(videoPath).make_preferred().wstring();
+    std::wstring outJpegPathW = pathFromUtf8(outJpegPath).make_preferred().wstring();
+
+    std::wostringstream ss;
+    ss.imbue(std::locale::classic());
+    ss << quoteArgWindows(bin) << L" -nostdin -v error -ss " << timeSeconds
+       << L" -i " << quoteArgWindows(videoPathW)
+       << L" -vframes 1 -f image2 -y " << quoteArgWindows(outJpegPathW);
+
+    DWORD launchError = 0;
+    std::string stdErrOut;
+    int ret = runProcessW(ss.str(), 30000, &launchError, &stdErrOut);
+    if (ret != 0) {
+        if (launchError != 0) {
+            return Status::internal("Failed to start FFmpeg (Win32 error " + std::to_string(launchError) + ")");
+        }
+        std::string msg = "FFmpeg frame extraction failed with return code " + std::to_string(ret);
+        if (!stdErrOut.empty()) {
+            msg += ": " + stdErrOut;
+        }
+        return Status::internal(msg);
+    }
+#else
     std::ostringstream ss;
     ss.imbue(std::locale::classic());
-    ss << "\"" << bin << "\" -v error -ss " << timeSeconds << " -i \"" << videoPath
-#if defined(_WIN32)
-       << "\" -vframes 1 -f image2 -y \"" << outJpegPath << "\" >NUL 2>&1";
-#else
+    ss << "\"" << bin << "\" -nostdin -v error -ss " << timeSeconds << " -i \"" << videoPath
        << "\" -vframes 1 -f image2 -y \"" << outJpegPath << "\" 2>/dev/null";
-#endif
 
     int ret = std::system(ss.str().c_str());
     if (ret != 0) {
         return Status::internal("FFmpeg frame extraction failed with return code " + std::to_string(ret));
     }
+#endif
 
-    std::error_code ec;
-    auto outFsPath = pathFromUtf8(outJpegPath);
     if (!std::filesystem::exists(outFsPath, ec) || std::filesystem::file_size(outFsPath, ec) == 0) {
         return Status::internal("FFmpeg did not produce a valid output image");
     }

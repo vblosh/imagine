@@ -1,3 +1,4 @@
+#include "imagine/metadata/media_reader.hpp"
 #include <gtest/gtest.h>
 #include "imagine/core/catalog.hpp"
 #include "imagine/server/web_server.hpp"
@@ -1063,6 +1064,90 @@ TEST_F(ServerTest, PhotosOriginalAndThumbnailsEndpoints) {
 
     // 4. /api/thumbnails/:hash/:size not found
     EXPECT_EQ(client.Get("/api/thumbnails/nonexistenthash/256")->status, 404);
+}
+
+TEST_F(ServerTest, VideoOnDemandThumbnailGeneration) {
+    if (!metadata::FfmpegHelper::isAvailable()) {
+        GTEST_SKIP() << "FFmpeg is not installed on this system";
+    }
+
+    httplib::Client client("127.0.0.1", port_);
+
+    std::string videoPath = pathToUtf8(testDir_ / "sample_video.mp4");
+    std::string bin = "ffmpeg";
+    const char* customPath = std::getenv("IMAGINE_FFMPEG_PATH");
+    if (customPath && *customPath) bin = customPath;
+    if (bin.size() >= 2 && bin.front() == '"' && bin.back() == '"') {
+        bin = bin.substr(1, bin.size() - 2);
+    }
+
+#if defined(_WIN32)
+    std::wstring binW = pathFromUtf8(bin).wstring();
+    std::wstring vidW = pathFromUtf8(videoPath).wstring();
+    std::wstring genCmd = LR"(")" + binW + LR"(" -y -v error -f lavfi -i testsrc=duration=2:size=320x240:rate=5 ")" + vidW + LR"(")";
+    _wsystem(genCmd.c_str());
+#else
+    std::string genCmd = R"(")" + bin + R"(" -y -v error -f lavfi -i testsrc=duration=2:size=320x240:rate=5 ")" + videoPath + R"(" 2>/dev/null)";
+    std::system(genCmd.c_str());
+#endif
+
+    std::error_code ec;
+    ASSERT_TRUE(std::filesystem::is_regular_file(pathFromUtf8(videoPath), ec)) << "Failed to generate test video";
+    ASSERT_GT(std::filesystem::file_size(pathFromUtf8(videoPath), ec), 0u);
+
+    MediaItem videoItem;
+    videoItem.file_path = videoPath;
+    videoItem.file_name = "sample_video.mp4";
+    videoItem.media_type = "video";
+    videoItem.duration = 2.0;
+    videoItem.content_hash = "video_hash_ondemand_123";
+    auto addRes = catalog_->db().insertMedia(videoItem);
+    ASSERT_TRUE(addRes.isOk());
+
+    auto thumbRes = client.Get("/api/thumbnails/video_hash_ondemand_123/256");
+    ASSERT_TRUE(thumbRes);
+    EXPECT_EQ(thumbRes->status, 200);
+    EXPECT_EQ(thumbRes->get_header_value("Content-Type"), "image/jpeg");
+    EXPECT_FALSE(thumbRes->body.empty());
+    EXPECT_TRUE(catalog_->cache().hasThumbnail("video_hash_ondemand_123", 256));
+
+    // The database stores cache-relative paths, never absolute ones.
+    auto storedRes = catalog_->db().getMediaByHash("video_hash_ondemand_123");
+    ASSERT_TRUE(storedRes.isOk());
+    EXPECT_EQ(storedRes.value().thumb_small,
+              thumbnail::Cache::getRelativeThumbnailPath("video_hash_ondemand_123", thumbnail::Cache::SmallSize));
+    EXPECT_EQ(storedRes.value().thumb_large,
+              thumbnail::Cache::getRelativeThumbnailPath("video_hash_ondemand_123", thumbnail::Cache::LargeSize));
+
+    // Additional sizes are derived from the cached large frame instead of
+    // triggering another FFmpeg extraction.
+    auto extraRes = client.Get("/api/thumbnails/video_hash_ondemand_123/512");
+    ASSERT_TRUE(extraRes);
+    EXPECT_EQ(extraRes->status, 200);
+    EXPECT_TRUE(catalog_->cache().hasThumbnail("video_hash_ondemand_123", 512));
+}
+
+TEST_F(ServerTest, VideoMissingSourceFallsBackToProcedural) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // No file on disk: extraction cannot succeed, so fallback to procedural thumbnail.
+    MediaItem item;
+    item.file_path = pathToUtf8(testDir_ / "missing_video.mp4");
+    item.file_name = "missing_video.mp4";
+    item.media_type = "video";
+    item.duration = 1.0;
+    item.content_hash = "video_missing_placeholder_1";
+    ASSERT_TRUE(catalog_->db().insertMedia(item).isOk());
+
+    auto res = client.Get("/api/thumbnails/video_missing_placeholder_1/256");
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->status, 200);
+    EXPECT_TRUE(catalog_->cache().hasThumbnail("video_missing_placeholder_1", 256));
+
+    auto extraRes = client.Get("/api/thumbnails/video_missing_placeholder_1/512");
+    ASSERT_TRUE(extraRes);
+    EXPECT_EQ(extraRes->status, 200);
+    EXPECT_TRUE(catalog_->cache().hasThumbnail("video_missing_placeholder_1", 512));
 }
 
 TEST_F(ServerTest, ApiRouterStandaloneWithDbAndCache) {
