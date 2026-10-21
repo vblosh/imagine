@@ -422,28 +422,6 @@ const char* kDefaultTaxonomyJson = R"json({
       ]
     },
     {
-      "id": "architecture",
-      "name": "Architecture",
-      "group": "Places & Travel",
-      "threshold": 0.24,
-      "prompts": [
-        "modern or historic architecture",
-        "architectural building facade",
-        "striking structure and design"
-      ]
-    },
-    {
-      "id": "bridge",
-      "name": "Bridge",
-      "group": "Places & Travel",
-      "threshold": 0.25,
-      "prompts": [
-        "a photo of a bridge",
-        "large suspension bridge over water",
-        "scenic architectural bridge"
-      ]
-    },
-    {
       "id": "street",
       "name": "Street",
       "group": "Places & Travel",
@@ -507,6 +485,215 @@ const char* kDefaultTaxonomyJson = R"json({
         "a photo of a train",
         "railway locomotive on tracks",
         "passenger train traveling"
+      ]
+    },
+    {
+      "id": "architecture",
+      "name": "Architecture",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.24,
+      "prompts": [
+        "modern or historic architecture",
+        "architectural building facade",
+        "striking structure and design"
+      ]
+    },
+    {
+      "id": "bridge",
+      "name": "Bridge",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a photo of a bridge",
+        "large suspension bridge over water",
+        "scenic architectural bridge"
+      ]
+    },
+    {
+      "id": "church",
+      "name": "Church",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a photo of a church building",
+        "historic church with a steeple or bell tower",
+        "chapel or parish church interior with pews and altar"
+      ]
+    },
+    {
+      "id": "cathedral",
+      "name": "Cathedral",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a grand gothic or baroque cathedral",
+        "cathedral facade with tall spires and rose window",
+        "vast cathedral interior with vaulted ceiling and stained glass"
+      ]
+    },
+    {
+      "id": "castle",
+      "name": "Castle",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a medieval castle with towers and turrets",
+        "historic stone castle or royal chateau",
+        "fairy tale castle on a hill or surrounded by a moat"
+      ]
+    },
+    {
+      "id": "fortress",
+      "name": "Fortress",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a military stone fortress or citadel",
+        "defensive fortification with thick ramparts and bastions",
+        "ancient walled fort or coastal battery"
+      ]
+    },
+    {
+      "id": "museum",
+      "name": "Museum",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a museum exhibition hall with display cases",
+        "people viewing exhibits in an art or history museum",
+        "grand museum building or gallery interior"
+      ]
+    },
+    {
+      "id": "palace",
+      "name": "Palace",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a grand royal palace or baroque mansion",
+        "ornate palace facade with formal gardens",
+        "lavish palace hall with chandeliers"
+      ]
+    },
+    {
+      "id": "ruins",
+      "name": "Ruins",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "ancient architectural stone ruins",
+        "archaeological site with weathered columns and walls",
+        "historic ruined temple or amphitheater"
+      ]
+    },
+    {
+      "id": "temple",
+      "name": "Temple",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "an ancient temple or sacred shrine",
+        "traditional pagoda or buddhist temple",
+        "classical stone temple with pillars"
+      ]
+    },
+    {
+      "id": "mosque",
+      "name": "Mosque",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a mosque with domes and minarets",
+        "islamic architecture courtyard and prayer hall",
+        "ornate mosque interior with arches and tilework"
+      ]
+    },
+    {
+      "id": "monument",
+      "name": "Monument",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a historic monument or memorial landmark",
+        "triumphal arch, obelisk or public statue",
+        "stone memorial structure in a plaza"
+      ]
+    },
+    {
+      "id": "skyscraper",
+      "name": "Skyscraper",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a modern glass skyscraper tower",
+        "tall high-rise office buildings in a metropolis",
+        "looking up at a towering skyscraper"
+      ]
+    },
+    {
+      "id": "tower",
+      "name": "Tower",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a freestanding clock tower, bell tower or observation tower",
+        "historic stone watchtower or campanile",
+        "tall landmark tower against the sky"
+      ]
+    },
+    {
+      "id": "lighthouse",
+      "name": "Lighthouse",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a coastal lighthouse on rocks or a pier",
+        "tall striped lighthouse tower by the sea",
+        "maritime beacon tower overlooking the ocean"
+      ]
+    },
+    {
+      "id": "plaza",
+      "name": "Plaza",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.24,
+      "prompts": [
+        "a European town square or public plaza",
+        "open cobblestone piazza surrounded by historic buildings",
+        "pedestrian civic square with a fountain"
+      ]
+    },
+    {
+      "id": "library",
+      "name": "Library",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "a grand library reading room with bookshelves",
+        "historic or modern library interior with tall bookcases",
+        "rows of books in an architectural library"
+      ]
+    },
+    {
+      "id": "stained_glass",
+      "name": "Stained Glass",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.25,
+      "prompts": [
+        "colorful stained glass window in a church or cathedral",
+        "intricate leaded glass art window",
+        "sunlight shining through stained glass"
+      ]
+    },
+    {
+      "id": "colonnade",
+      "name": "Arch & Colonnade",
+      "group": "Architecture & Landmarks",
+      "threshold": 0.24,
+      "prompts": [
+        "architectural stone arches and colonnade",
+        "vaulted arcade, cloister or portico with pillars",
+        "row of classical columns and arches"
       ]
     },
     {

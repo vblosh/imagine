@@ -1049,9 +1049,10 @@ TEST(SmartTagsTest, DefaultTaxonomyIsValidAndHasExpectedLabels) {
     ASSERT_TRUE(taxRes.isOk()) << taxRes.status().message();
     const auto& tax = taxRes.value();
 
-    // Verify label count (~56 labels, we have 58)
-    EXPECT_GE(tax.labels.size(), 50u);
-    EXPECT_LE(tax.labels.size(), 65u);
+    // Verify label count (75 labels)
+    EXPECT_GE(tax.labels.size(), 70u);
+    EXPECT_LE(tax.labels.size(), 85u);
+    EXPECT_EQ(tax.labels.size(), 75u);
 
     // Verify version hash is 16 hex chars
     EXPECT_EQ(tax.version.size(), 16u);
@@ -1091,13 +1092,14 @@ TEST(SmartTagsTest, DefaultTaxonomyIsValidAndHasExpectedLabels) {
         groups.insert(label.group);
     }
 
-    // Verify 8 groups
-    EXPECT_EQ(groups.size(), 8u);
+    // Verify 9 groups
+    EXPECT_EQ(groups.size(), 9u);
     EXPECT_TRUE(groups.count("Nature"));
     EXPECT_TRUE(groups.count("Animals"));
     EXPECT_TRUE(groups.count("Food & Drink"));
     EXPECT_TRUE(groups.count("People & Events"));
     EXPECT_TRUE(groups.count("Places & Travel"));
+    EXPECT_TRUE(groups.count("Architecture & Landmarks"));
     EXPECT_TRUE(groups.count("Activities"));
     EXPECT_TRUE(groups.count("Objects & Home"));
     EXPECT_TRUE(groups.count("Mood & Weather"));
@@ -1108,7 +1110,10 @@ TEST(SmartTagsTest, DefaultTaxonomyIsValidAndHasExpectedLabels) {
         "dog", "cat", "bird", "horse", "wildlife",
         "food", "coffee", "wine", "cake",
         "wedding", "birthday", "concert", "portrait", "party",
-        "city", "architecture", "bridge", "street", "airplane", "car", "bicycle", "boat",
+        "city", "street", "airplane", "car", "bicycle", "boat", "train",
+        "architecture", "bridge", "church", "cathedral", "castle", "fortress", "museum",
+        "palace", "ruins", "temple", "mosque", "monument", "skyscraper", "tower", "lighthouse", "plaza", "library",
+        "stained_glass", "colonnade",
         "camping", "hiking", "swimming", "skiing", "running",
         "book", "instrument", "art", "garden", "interior",
         "night", "autumn", "spring", "summer", "winter", "rain"

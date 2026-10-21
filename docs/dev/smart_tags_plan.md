@@ -252,7 +252,7 @@ struct TagTaxonomy {
 - Optional override: `IMAGINE_SMART_TAGS_TAXONOMY=/path/to/taxonomy.json`.
 - Validation: unique IDs, unique names, non-empty prompts, thresholds in `(0,1]`, at least one label.
 - Load once at service construction; report parse errors through status. Changing the file requires a restart.
-- Initial taxonomy: approximately 58 labels in 8 groups — Nature, Animals, Food & Drink, People & Events, Places & Travel, Activities, Objects & Home, Mood & Weather. Each label has 2–3 prompts and a per-label threshold.
+- Curated taxonomy: 75 labels in 9 groups — Nature, Animals, Food & Drink, People & Events, Places & Travel, Architecture & Landmarks, Activities, Objects & Home, Mood & Weather. Each label has 2–3 prompts and a per-label threshold. Dedicated Architecture & Landmarks group prevents category crowding under per-group caps.
 
 ### Taxonomy JSON example
 
