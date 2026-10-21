@@ -110,6 +110,7 @@ set(IMAGINE_LIB_SOURCES
     src/faces/service.cpp
     src/clip/engine.cpp
     src/clip/tokenizer.cpp
+    src/clip/smart_tags.cpp
     src/clip/service.cpp
     src/concurrency/thread_pool.cpp
     src/core/query.cpp

@@ -362,6 +362,35 @@ export const dom = {
   semanticJobStartBtn: document.getElementById('semanticJobStartBtn'),
   semanticJobStopBtn: document.getElementById('semanticJobStopBtn'),
   cancelSemanticJobBtn: document.getElementById('cancelSemanticJobBtn'),
+  settingsSmartTagsSection: document.getElementById('settingsSmartTagsSection'),
+  settingsSmartTagsStatus: document.getElementById('settingsSmartTagsStatus'),
+  settingsSmartTagsBtn: document.getElementById('settingsSmartTagsBtn'),
+  settingsClearSmartTagsBtn: document.getElementById('settingsClearSmartTagsBtn'),
+  smartTagsModal: document.getElementById('smartTagsModal'),
+  smartTagsBackdrop: document.getElementById('smartTagsBackdrop'),
+  closeSmartTagsJobBtn: document.getElementById('closeSmartTagsJobBtn'),
+  smartTagsJobNotice: document.getElementById('smartTagsJobNotice'),
+  smartTagsJobState: document.getElementById('smartTagsJobState'),
+  smartTagsScanScopeWrap: document.getElementById('smartTagsScanScopeWrap'),
+  smartTagsScanScope: document.getElementById('smartTagsScanScope'),
+  smartTagsSelectedScopeOption: document.getElementById('smartTagsSelectedScopeOption'),
+  smartTagsCatalogScopeOption: document.getElementById('smartTagsCatalogScopeOption'),
+  smartTagsJobProgressWrap: document.getElementById('smartTagsJobProgressWrap'),
+  smartTagsJobProgress: document.getElementById('smartTagsJobProgress'),
+  smartTagsJobCounts: document.getElementById('smartTagsJobCounts'),
+  smartTagsForceOption: document.getElementById('smartTagsForceOption'),
+  smartTagsForce: document.getElementById('smartTagsForce'),
+  smartTagsJobError: document.getElementById('smartTagsJobError'),
+  smartTagsJobStartBtn: document.getElementById('smartTagsJobStartBtn'),
+  smartTagsJobStopBtn: document.getElementById('smartTagsJobStopBtn'),
+  cancelSmartTagsJobBtn: document.getElementById('cancelSmartTagsJobBtn'),
+  clearSmartTagsModal: document.getElementById('clearSmartTagsModal'),
+  clearSmartTagsBackdrop: document.getElementById('clearSmartTagsBackdrop'),
+  closeClearSmartTagsModalBtn: document.getElementById('closeClearSmartTagsModalBtn'),
+  cancelClearSmartTagsBtn: document.getElementById('cancelClearSmartTagsBtn'),
+  confirmClearSmartTagsBtn: document.getElementById('confirmClearSmartTagsBtn'),
+  clearSmartTagsPromptText: document.getElementById('clearSmartTagsPromptText'),
+  clearSmartTagsWarningText: document.getElementById('clearSmartTagsWarningText'),
   newAlbumModal: document.getElementById('newAlbumModal'),
   newAlbumBackdrop: document.getElementById('newAlbumBackdrop'),
   closeNewAlbumModalBtn: document.getElementById('closeNewAlbumModalBtn'),
@@ -515,6 +544,12 @@ export function refreshDomReferences() {
   if (!dom.mapSearchBox) {
     dom.mapSearchBox = document.querySelector('.map-search-box');
   }
+  if (!dom.bottomScrubBar) {
+    dom.bottomScrubBar = document.querySelector('.bottom-scrub-bar');
+  }
+  if (!dom.sidebarResizer) {
+    dom.sidebarResizer = document.getElementById('sidebarResizerRight');
+  }
 }
 
 export function validateRequiredDom() {
@@ -542,6 +577,8 @@ export function showToast(messageOrKey, type = 'info', params = {}) {
   if (!container) {
     container = document.createElement('div');
     container.id = 'toastContainer';
+    container.setAttribute('role', 'status');
+    container.setAttribute('aria-live', 'polite');
     container.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
     document.body.appendChild(container);
   }

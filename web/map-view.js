@@ -124,6 +124,7 @@ export async function initMap() {
     });
 
     state.mapInstance.on('click', async (e) => {
+      if (e && e.originalEvent && e.originalEvent._pinClicked) return;
       if (state.placementMediaIds && state.placementMediaIds.size > 0) {
         const { lat, lng } = e.latlng;
         const ids = Array.from(state.placementMediaIds);
@@ -369,8 +370,11 @@ export function renderMapMarkers(force = false) {
       }
     });
     marker.on('click', (e) => {
-      if (e && e.originalEvent && typeof e.originalEvent.stopPropagation === 'function') {
-        e.originalEvent.stopPropagation();
+      if (e && e.originalEvent) {
+        e.originalEvent._pinClicked = true;
+        if (typeof e.originalEvent.stopPropagation === 'function') {
+          e.originalEvent.stopPropagation();
+        }
       }
       const id = marker.activeMediaId || repItem.id;
       handleCardSelection(id, { shiftKey: false, ctrlKey: false, metaKey: false });
@@ -832,10 +836,14 @@ export function showUnmappedTooltip(item, chipElement) {
     : getOriginalMediaUrl(item);
 
   if (dom.unmappedTooltipImg) {
+    const originalUrl = getOriginalMediaUrl(item);
     dom.unmappedTooltipImg.src = thumbUrl;
     dom.unmappedTooltipImg.alt = item.file_name || 'Photo preview';
     dom.unmappedTooltipImg.onerror = () => {
-      dom.unmappedTooltipImg.src = getOriginalMediaUrl(item);
+      dom.unmappedTooltipImg.onerror = null;
+      if (thumbUrl !== originalUrl) {
+        dom.unmappedTooltipImg.src = originalUrl;
+      }
     };
   }
 
@@ -1187,6 +1195,9 @@ export async function performMapPlaceSearch(rawQuery) {
           const rawJson = await resp.json();
           if (searchId !== currentMapSearchId) return;
           data = Array.isArray(rawJson) ? rawJson : [];
+          if (geocodeCache.size >= 100) {
+            geocodeCache.delete(geocodeCache.keys().next().value);
+          }
           geocodeCache.set(cacheKey, data);
         } else if (resp.status === 429) {
           console.warn('Nominatim rate limit backlog exceeded, request throttled');

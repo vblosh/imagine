@@ -59,18 +59,17 @@ export async function loadMediaData(append = false, { preserveScroll = false } =
     return loadMoreMediaData();
   }
 
+  const fetchId = ++currentLoadMediaId;
   abortCurrentLoadMore();
   abortCurrentMediaLoad();
-
-  const abortController = new AbortController();
-  loadMediaAbortController = abortController;
 
   if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId && !state.activeAlbumId) {
     state.isLoadingMedia = false;
     return { isCategoryView: true, tab: state.activeTab };
   }
 
-  const fetchId = ++currentLoadMediaId;
+  const abortController = new AbortController();
+  loadMediaAbortController = abortController;
   state.isLoadingMedia = true;
   state.mediaOffset = 0;
 

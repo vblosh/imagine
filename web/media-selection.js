@@ -60,10 +60,13 @@ export function handleCardSelection(id, event) {
     // Toggle single item
     if (state.selectedIds.has(id)) {
       state.selectedIds.delete(id);
+      if (state.lastSelectedId === id) {
+        state.lastSelectedId = state.selectedIds.size > 0 ? Array.from(state.selectedIds).pop() : null;
+      }
     } else {
       state.selectedIds.add(id);
+      state.lastSelectedId = id;
     }
-    state.lastSelectedId = id;
   } else if (event.shiftKey && state.lastSelectedId !== null) {
     // Shift-range selection
     const ids = state.mediaItems.map(m => m.id);

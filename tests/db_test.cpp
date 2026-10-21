@@ -153,7 +153,7 @@ TEST(CatalogDbMigrationTest, PersistedV5CatalogUpgradesToV6JobMembership) {
     std::filesystem::remove(path.string() + "-shm", ec);
 }
 
-TEST(CatalogDbMigrationTest, PersistedV7CatalogUpgradesToV8AndReMigrateIsIdempotent) {
+TEST(CatalogDbMigrationTest, PersistedV7CatalogUpgradesToV9AndReMigrateIsIdempotent) {
     const auto path = std::filesystem::temp_directory_path() /
         ("imagine_catalog_v7_upgrade_" + std::to_string(
             std::chrono::system_clock::now().time_since_epoch().count()) + ".db");
@@ -191,12 +191,12 @@ TEST(CatalogDbMigrationTest, PersistedV7CatalogUpgradesToV8AndReMigrateIsIdempot
         CatalogDb upgraded;
         ASSERT_TRUE(upgraded.open(path.string()).isOk());
 
-        // Check schema version is 8
+        // Check schema version is current
         auto versionRes = upgraded.connection().prepare("SELECT MAX(version) FROM schema_version;");
         ASSERT_TRUE(versionRes.isOk());
         auto version = std::move(versionRes.value());
         ASSERT_EQ(version.step(), StepResult::Row);
-        EXPECT_EQ(version.getInt(0), 8);
+        EXPECT_EQ(version.getInt(0), Schema::CurrentVersion);
 
         // Check media items still exist
         EXPECT_TRUE(upgraded.getMediaById(mediaId1).isOk());
@@ -888,8 +888,8 @@ TEST_F(CatalogDbTest, GetAllTagsPhotoCoverPriority) {
     EXPECT_EQ(*concertIt->last_date, 3000);
 }
 
-TEST_F(CatalogDbTest, MigrationV8AndDuplicateDismissals) {
-    EXPECT_EQ(Schema::CurrentVersion, 8);
+TEST_F(CatalogDbTest, MigrationV9AndDuplicateDismissals) {
+    EXPECT_EQ(Schema::CurrentVersion, 9);
 
     MediaItem itemA;
     itemA.file_path = "dup/item_a.jpg";
@@ -1253,3 +1253,494 @@ TEST_F(CatalogDbTest, MergeMediaMetadataRollbackOnMidMergeFailure) {
 }
 
 
+
+namespace imagine::faces {
+Status syncFaceTagOwnership(db::Connection& conn, MediaId mediaId, TagId tagId);
+}
+
+TEST(CatalogDbMigrationTest, PersistedV7CatalogUpgradesToV8SmartTags) {
+    const auto path = std::filesystem::temp_directory_path() /
+        ("imagine_catalog_v7_upgrade_" + std::to_string(
+            std::chrono::system_clock::now().time_since_epoch().count()) + ".db");
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    MediaId mediaId = 0;
+    TagId manualTag = 0;
+    TagId faceTag = 0;
+    {
+        CatalogDb initial;
+        ASSERT_TRUE(initial.open(path.string()).isOk());
+
+        MediaItem media;
+        media.file_path = "persisted/v7_photo.jpg";
+        media.file_name = "v7_photo.jpg";
+        media.content_hash = "v7-hash-123";
+        media.media_type = "photo";
+        mediaId = initial.insertMedia(media).value();
+
+        manualTag = initial.createOrGetTag("Manual Label", "keyword").value();
+        faceTag = initial.createOrGetTag("Alice", "people").value();
+
+        // Simulate v7 catalog:
+        // 1. manual tag has manual = 1
+        ASSERT_TRUE(initial.addTagToMedia(mediaId, manualTag).isOk());
+
+        // 2. face tag has manual = 0
+        auto& conn = initial.connection();
+        ASSERT_TRUE(conn.execute("INSERT OR IGNORE INTO media_tags(media_id, tag_id) VALUES(" +
+                                 std::to_string(mediaId) + "," + std::to_string(faceTag) + ");").isOk());
+        ASSERT_TRUE(conn.execute("INSERT OR REPLACE INTO media_tag_provenance(media_id, tag_id, manual) VALUES(" +
+                                 std::to_string(mediaId) + "," + std::to_string(faceTag) + ", 0);").isOk());
+
+        // 3. insert a semantic job
+        ASSERT_TRUE(conn.execute(
+            "INSERT INTO semantic_jobs(state, scope, model_id, total, processed, skipped, failed, remaining, error, created_at, updated_at) "
+            "VALUES('completed', 'catalog', 'model1', 1, 1, 0, 0, 0, '', 100, 200);"
+        ).isOk());
+
+        // Now revert to a true v7 schema state:
+        ASSERT_TRUE(conn.execute("DROP TABLE IF EXISTS smart_tag_state;").isOk());
+        ASSERT_TRUE(conn.execute("DROP TABLE IF EXISTS smart_tag_rejections;").isOk());
+        ASSERT_TRUE(conn.execute("DROP INDEX IF EXISTS idx_media_tag_provenance_source;").isOk());
+        ASSERT_TRUE(conn.execute("DROP INDEX IF EXISTS idx_semantic_jobs_kind;").isOk());
+
+        // Recreate media_tag_provenance without 'source' column
+        ASSERT_TRUE(conn.execute(R"SQL(
+            CREATE TABLE mtp_old (
+                media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+                tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                manual INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY(media_id, tag_id)
+            );
+            INSERT INTO mtp_old SELECT media_id, tag_id, manual FROM media_tag_provenance;
+            DROP TABLE media_tag_provenance;
+            ALTER TABLE mtp_old RENAME TO media_tag_provenance;
+        )SQL").isOk());
+
+        // Recreate semantic_jobs without 'kind' column
+        ASSERT_TRUE(conn.execute(R"SQL(
+            CREATE TABLE sj_old (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                state TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                model_id TEXT NOT NULL DEFAULT '',
+                total INTEGER NOT NULL DEFAULT 0,
+                processed INTEGER NOT NULL DEFAULT 0,
+                skipped INTEGER NOT NULL DEFAULT 0,
+                failed INTEGER NOT NULL DEFAULT 0,
+                remaining INTEGER NOT NULL DEFAULT 0,
+                error TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO sj_old SELECT id, state, scope, model_id, total, processed, skipped, failed, remaining, error, created_at, updated_at FROM semantic_jobs;
+            DROP TABLE semantic_jobs;
+            ALTER TABLE sj_old RENAME TO semantic_jobs;
+        )SQL").isOk());
+
+        ASSERT_TRUE(conn.execute("DELETE FROM schema_version WHERE version >= 8;").isOk());
+        initial.close();
+    }
+
+    {
+        CatalogDb upgraded;
+        ASSERT_TRUE(upgraded.open(path.string()).isOk());
+
+        auto versionRes = upgraded.connection().prepare("SELECT MAX(version) FROM schema_version;");
+        ASSERT_TRUE(versionRes.isOk());
+        auto version = std::move(versionRes.value());
+        ASSERT_EQ(version.step(), StepResult::Row);
+        EXPECT_EQ(version.getInt(0), Schema::CurrentVersion);
+
+        // Verify backfill: manual=0 was set to source='face'
+        auto provFaceRes = upgraded.connection().prepare(
+            "SELECT source, manual FROM media_tag_provenance WHERE media_id = ? AND tag_id = ?;");
+        ASSERT_TRUE(provFaceRes.isOk());
+        auto provFace = std::move(provFaceRes.value());
+        provFace.bind(1, mediaId);
+        provFace.bind(2, faceTag);
+        ASSERT_EQ(provFace.step(), StepResult::Row);
+        EXPECT_EQ(provFace.getString(0), "face");
+        EXPECT_EQ(provFace.getInt(1), 0);
+
+        // Verify manual=1 has source='manual'
+        auto provManRes = upgraded.connection().prepare(
+            "SELECT source, manual FROM media_tag_provenance WHERE media_id = ? AND tag_id = ?;");
+        ASSERT_TRUE(provManRes.isOk());
+        auto provMan = std::move(provManRes.value());
+        provMan.bind(1, mediaId);
+        provMan.bind(2, manualTag);
+        ASSERT_EQ(provMan.step(), StepResult::Row);
+        EXPECT_EQ(provMan.getString(0), "manual");
+        EXPECT_EQ(provMan.getInt(1), 1);
+
+        // Verify semantic_jobs has kind='index'
+        auto jobRes = upgraded.connection().prepare("SELECT kind FROM semantic_jobs LIMIT 1;");
+        ASSERT_TRUE(jobRes.isOk());
+        auto job = std::move(jobRes.value());
+        ASSERT_EQ(job.step(), StepResult::Row);
+        EXPECT_EQ(job.getString(0), "index");
+
+        // Verify tables exist
+        auto stateRes = upgraded.connection().prepare("SELECT COUNT(*) FROM smart_tag_state;");
+        ASSERT_TRUE(stateRes.isOk());
+        auto stateStmt = std::move(stateRes.value());
+        EXPECT_EQ(stateStmt.step(), StepResult::Row);
+
+        auto rejRes = upgraded.connection().prepare("SELECT COUNT(*) FROM smart_tag_rejections;");
+        ASSERT_TRUE(rejRes.isOk());
+        auto rejStmt = std::move(rejRes.value());
+        EXPECT_EQ(rejStmt.step(), StepResult::Row);
+
+        upgraded.close();
+    }
+    std::filesystem::remove(path, ec);
+    std::filesystem::remove(path.string() + "-wal", ec);
+    std::filesystem::remove(path.string() + "-shm", ec);
+}
+
+TEST_F(CatalogDbTest, ReplaceSmartTagsPreservesManualAndFaceTagsAndUpsertsState) {
+    MediaItem m1;
+    m1.file_path = "photos/photo1.jpg";
+    m1.file_name = "photo1.jpg";
+    m1.content_hash = "hash-photo-1";
+    m1.media_type = "photo";
+    MediaId mid1 = db.insertMedia(m1).value();
+
+    MediaItem m2;
+    m2.file_path = "photos/photo2.jpg";
+    m2.file_name = "photo2.jpg";
+    m2.content_hash = "hash-photo-2";
+    m2.media_type = "photo";
+    MediaId mid2 = db.insertMedia(m2).value();
+
+    TagId tManual = db.createOrGetTag("Landscape", "keyword").value();
+    TagId tFace = db.createOrGetTag("Alice", "people").value();
+    TagId tClip1 = db.createOrGetTag("Mountain", "keyword").value();
+    TagId tClip2 = db.createOrGetTag("Snow", "keyword").value();
+    TagId tClip3 = db.createOrGetTag("Sky", "keyword").value();
+
+    ASSERT_TRUE(db.addTagToMedia(mid1, tManual).isOk());
+
+    // Attach face tag manually with source='face'
+    auto& conn = db.connection();
+    ASSERT_TRUE(conn.execute("INSERT INTO media_tags(media_id, tag_id) VALUES(" +
+                             std::to_string(mid1) + "," + std::to_string(tFace) + ");").isOk());
+    ASSERT_TRUE(conn.execute("INSERT INTO media_tag_provenance(media_id, tag_id, manual, source) VALUES(" +
+                             std::to_string(mid1) + "," + std::to_string(tFace) + ", 0, 'face');").isOk());
+
+    std::vector<SmartTagRecord> records = {
+        {mid1, {tClip1, tClip2}, "hash-photo-1"},
+        {mid2, {tClip2}, "hash-photo-2"}
+    };
+    ASSERT_TRUE(db.replaceSmartTags(records, "clip-vit-b-32", "rev1", "tax-v1").isOk());
+
+    // Check tags on mid1
+    auto tags1 = db.getTagsForMedia(mid1).value();
+    EXPECT_EQ(tags1.size(), 4u);
+    auto findTag = [&](const std::vector<Tag>& tags, TagId id) -> const Tag* {
+        for (const auto& t : tags) if (t.id == id) return &t;
+        return nullptr;
+    };
+    ASSERT_NE(findTag(tags1, tManual), nullptr);
+    EXPECT_EQ(findTag(tags1, tManual)->source, "manual");
+
+    ASSERT_NE(findTag(tags1, tFace), nullptr);
+    EXPECT_EQ(findTag(tags1, tFace)->source, "face");
+
+    ASSERT_NE(findTag(tags1, tClip1), nullptr);
+    EXPECT_EQ(findTag(tags1, tClip1)->source, "clip");
+
+    ASSERT_NE(findTag(tags1, tClip2), nullptr);
+    EXPECT_EQ(findTag(tags1, tClip2)->source, "clip");
+
+    // Check batch get tags
+    auto batchTags = db.getTagsForMediaBatch({mid1, mid2}).value();
+    EXPECT_EQ(batchTags[mid1].size(), 4u);
+    EXPECT_EQ(batchTags[mid2].size(), 1u);
+    EXPECT_EQ(batchTags[mid2][0].source, "clip");
+
+    // Check getAllTags metadata
+    auto allTags = db.getAllTags().value();
+    for (const auto& t : allTags) {
+        if (t.id == tClip2) {
+            EXPECT_EQ(t.ai_count, 2);
+            EXPECT_EQ(t.media_count, 2);
+        } else if (t.id == tClip1) {
+            EXPECT_EQ(t.ai_count, 1);
+            EXPECT_EQ(t.media_count, 1);
+        } else if (t.id == tManual) {
+            EXPECT_EQ(t.ai_count, 0);
+            EXPECT_EQ(t.media_count, 1);
+        } else if (t.id == tFace) {
+            EXPECT_EQ(t.ai_count, 0);
+            EXPECT_EQ(t.media_count, 1);
+        }
+    }
+
+    // Verify smart_tag_state rows
+    auto stateStmtRes = conn.prepare("SELECT content_hash, model_id, model_revision, taxonomy_version, label_count, updated_at FROM smart_tag_state WHERE media_id = ?;");
+    ASSERT_TRUE(stateStmtRes.isOk());
+    auto stateStmt = std::move(stateStmtRes.value());
+    stateStmt.bind(1, mid1);
+    ASSERT_EQ(stateStmt.step(), StepResult::Row);
+    EXPECT_EQ(stateStmt.getString(0), "hash-photo-1");
+    EXPECT_EQ(stateStmt.getString(1), "clip-vit-b-32");
+    EXPECT_EQ(stateStmt.getString(2), "rev1");
+    EXPECT_EQ(stateStmt.getString(3), "tax-v1");
+    EXPECT_EQ(stateStmt.getInt64(4), 2);
+    EXPECT_GT(stateStmt.getInt64(5), 0);
+
+    // Update mid1: drop tClip1, keep tClip2, add tClip3
+    records = {{mid1, {tClip2, tClip3}, "hash-photo-1"}};
+    ASSERT_TRUE(db.replaceSmartTags(records, "clip-vit-b-32", "rev1", "tax-v1").isOk());
+
+    tags1 = db.getTagsForMedia(mid1).value();
+    EXPECT_EQ(tags1.size(), 4u);
+    EXPECT_EQ(findTag(tags1, tClip1), nullptr);
+    ASSERT_NE(findTag(tags1, tClip2), nullptr);
+    ASSERT_NE(findTag(tags1, tClip3), nullptr);
+    ASSERT_NE(findTag(tags1, tManual), nullptr);
+    ASSERT_NE(findTag(tags1, tFace), nullptr);
+
+    // If replaceSmartTags includes a tag that is already manual, manual ownership is preserved
+    records = {{mid1, {tManual, tClip3}, "hash-photo-1"}};
+    ASSERT_TRUE(db.replaceSmartTags(records, "clip-vit-b-32", "rev1", "tax-v1").isOk());
+    tags1 = db.getTagsForMedia(mid1).value();
+    ASSERT_NE(findTag(tags1, tManual), nullptr);
+    EXPECT_EQ(findTag(tags1, tManual)->source, "manual");
+
+    auto provRes = conn.prepare("SELECT manual, source FROM media_tag_provenance WHERE media_id = ? AND tag_id = ?;");
+    ASSERT_TRUE(provRes.isOk());
+    auto prov = std::move(provRes.value());
+    prov.bind(1, mid1);
+    prov.bind(2, tManual);
+    ASSERT_EQ(prov.step(), StepResult::Row);
+    EXPECT_EQ(prov.getInt(0), 1);
+    EXPECT_EQ(prov.getString(1), "manual");
+}
+
+TEST_F(CatalogDbTest, RemoveClipTagRecordsRejectionAndReAddClearsIt) {
+    MediaItem m;
+    m.file_path = "photos/rejection_test.jpg";
+    m.file_name = "rejection_test.jpg";
+    m.content_hash = "rej-hash";
+    m.media_type = "photo";
+    MediaId mid = db.insertMedia(m).value();
+
+    TagId tManual = db.createOrGetTag("Outdoor", "keyword").value();
+    TagId tClip = db.createOrGetTag("Forest", "keyword").value();
+    ASSERT_TRUE(db.addTagToMedia(mid, tManual).isOk());
+
+    std::vector<SmartTagRecord> records = {{mid, {tClip}, "rej-hash"}};
+    ASSERT_TRUE(db.replaceSmartTags(records, "model", "rev", "tax").isOk());
+
+    // Removing manual tag does NOT record a rejection
+    ASSERT_TRUE(db.removeTagFromMedia(mid, tManual).isOk());
+    auto& conn = db.connection();
+    auto countRej = conn.prepare("SELECT COUNT(*) FROM smart_tag_rejections WHERE media_id = ? AND tag_id = ?;");
+    ASSERT_TRUE(countRej.isOk());
+    auto countStmt = std::move(countRej.value());
+    countStmt.bind(1, mid);
+    countStmt.bind(2, tManual);
+    ASSERT_EQ(countStmt.step(), StepResult::Row);
+    EXPECT_EQ(countStmt.getInt64(0), 0);
+
+    // Removing clip tag DOES record rejection
+    ASSERT_TRUE(db.removeTagFromMedia(mid, tClip).isOk());
+    countStmt.reset();
+    countStmt.bind(1, mid);
+    countStmt.bind(2, tClip);
+    ASSERT_EQ(countStmt.step(), StepResult::Row);
+    EXPECT_EQ(countStmt.getInt64(0), 1);
+
+    // Re-adding manually clears rejection and sets source='manual'
+    ASSERT_TRUE(db.addTagToMedia(mid, tClip).isOk());
+    countStmt.reset();
+    countStmt.bind(1, mid);
+    countStmt.bind(2, tClip);
+    ASSERT_EQ(countStmt.step(), StepResult::Row);
+    EXPECT_EQ(countStmt.getInt64(0), 0);
+
+    auto tags = db.getTagsForMedia(mid).value();
+    ASSERT_EQ(tags.size(), 1u);
+    EXPECT_EQ(tags[0].id, tClip);
+    EXPECT_EQ(tags[0].source, "manual");
+
+    // Test replaceTagAssignments also clears rejections
+    records = {{mid, {tClip}, "rej-hash"}};
+    // replaceSmartTags will not downgrade manual
+    ASSERT_TRUE(db.replaceSmartTags(records, "model", "rev", "tax").isOk());
+    // remove tag to create rejection
+    ASSERT_TRUE(conn.execute("INSERT OR REPLACE INTO smart_tag_rejections(media_id, tag_id, rejected_at) VALUES(" +
+                             std::to_string(mid) + "," + std::to_string(tClip) + ", 1234);").isOk());
+    // now call replaceTagAssignments
+    ASSERT_TRUE(db.replaceTagAssignments("Forest", "keyword", {mid}).isOk());
+    countStmt.reset();
+    countStmt.bind(1, mid);
+    countStmt.bind(2, tClip);
+    ASSERT_EQ(countStmt.step(), StepResult::Row);
+    EXPECT_EQ(countStmt.getInt64(0), 0);
+}
+
+TEST_F(CatalogDbTest, ClearSmartTagsLeavesManualAndFaceTagsIntact) {
+    MediaItem m;
+    m.file_path = "photos/clear_test.jpg";
+    m.file_name = "clear_test.jpg";
+    m.content_hash = "clear-hash";
+    m.media_type = "photo";
+    MediaId mid = db.insertMedia(m).value();
+
+    TagId tManual = db.createOrGetTag("Trip", "keyword").value();
+    TagId tFace = db.createOrGetTag("Bob", "people").value();
+    TagId tClip = db.createOrGetTag("Desert", "keyword").value();
+
+    ASSERT_TRUE(db.addTagToMedia(mid, tManual).isOk());
+    auto& conn = db.connection();
+    ASSERT_TRUE(conn.execute("INSERT INTO media_tags(media_id, tag_id) VALUES(" +
+                             std::to_string(mid) + "," + std::to_string(tFace) + ");").isOk());
+    ASSERT_TRUE(conn.execute("INSERT INTO media_tag_provenance(media_id, tag_id, manual, source) VALUES(" +
+                             std::to_string(mid) + "," + std::to_string(tFace) + ", 0, 'face');").isOk());
+
+    std::vector<SmartTagRecord> records = {{mid, {tClip}, "clear-hash"}};
+    ASSERT_TRUE(db.replaceSmartTags(records, "model", "rev", "tax").isOk());
+
+    // Insert a rejection row
+    TagId tRej = db.createOrGetTag("RejectedLabel", "keyword").value();
+    ASSERT_TRUE(conn.execute("INSERT INTO smart_tag_rejections(media_id, tag_id, rejected_at) VALUES(" +
+                             std::to_string(mid) + ", " + std::to_string(tRej) + ", 123);").isOk());
+
+    ASSERT_TRUE(db.clearSmartTags().isOk());
+
+    auto tags = db.getTagsForMedia(mid).value();
+    EXPECT_EQ(tags.size(), 2u);
+    for (const auto& t : tags) {
+        EXPECT_TRUE(t.id == tManual || t.id == tFace);
+        EXPECT_NE(t.source, "clip");
+    }
+
+    auto countState = conn.prepare("SELECT COUNT(*) FROM smart_tag_state;");
+    ASSERT_TRUE(countState.isOk());
+    auto countStateStmt = std::move(countState.value());
+    ASSERT_EQ(countStateStmt.step(), StepResult::Row);
+    EXPECT_EQ(countStateStmt.getInt64(0), 0);
+
+    auto countRej = conn.prepare("SELECT COUNT(*) FROM smart_tag_rejections;");
+    ASSERT_TRUE(countRej.isOk());
+    auto countRejStmt = std::move(countRej.value());
+    ASSERT_EQ(countRejStmt.step(), StepResult::Row);
+    EXPECT_EQ(countRejStmt.getInt64(0), 0);
+
+    auto allTags = db.getAllTags().value();
+    for (const auto& t : allTags) {
+        EXPECT_EQ(t.ai_count, 0);
+    }
+}
+
+TEST_F(CatalogDbTest, MediaInvalidationClearsSmartTagsAndRejections) {
+    MediaItem m;
+    m.file_path = "photos/inval_test.jpg";
+    m.file_name = "inval_test.jpg";
+    m.content_hash = "inval-hash-orig";
+    m.media_type = "photo";
+    m.width = 100;
+    m.height = 100;
+    MediaId mid = db.insertMedia(m).value();
+
+    TagId tManual = db.createOrGetTag("KeepMe", "keyword").value();
+    TagId tClip = db.createOrGetTag("RemoveMe", "keyword").value();
+    ASSERT_TRUE(db.addTagToMedia(mid, tManual).isOk());
+
+    std::vector<SmartTagRecord> records = {{mid, {tClip}, "inval-hash-orig"}};
+    ASSERT_TRUE(db.replaceSmartTags(records, "model", "rev", "tax").isOk());
+
+    auto& conn = db.connection();
+    TagId tRej = db.createOrGetTag("RejectedLabel2", "keyword").value();
+    ASSERT_TRUE(conn.execute("INSERT INTO smart_tag_rejections(media_id, tag_id, rejected_at) VALUES(" +
+                             std::to_string(mid) + ", " + std::to_string(tRej) + ", 555);").isOk());
+
+    // Update geometry/content_hash to trigger invalidation
+    auto changed = db.getMediaById(mid).value();
+    changed.content_hash = "inval-hash-new";
+    ASSERT_TRUE(db.updateMedia(changed).isOk());
+
+    auto tags = db.getTagsForMedia(mid).value();
+    EXPECT_EQ(tags.size(), 1u);
+    EXPECT_EQ(tags[0].id, tManual);
+    EXPECT_EQ(tags[0].source, "manual");
+
+    auto countState = conn.prepare("SELECT COUNT(*) FROM smart_tag_state WHERE media_id = ?;");
+    ASSERT_TRUE(countState.isOk());
+    auto cs = std::move(countState.value());
+    cs.bind(1, mid);
+    ASSERT_EQ(cs.step(), StepResult::Row);
+    EXPECT_EQ(cs.getInt64(0), 0);
+
+    auto countRej = conn.prepare("SELECT COUNT(*) FROM smart_tag_rejections WHERE media_id = ?;");
+    ASSERT_TRUE(countRej.isOk());
+    auto cr = std::move(countRej.value());
+    cr.bind(1, mid);
+    ASSERT_EQ(cr.step(), StepResult::Row);
+    EXPECT_EQ(cr.getInt64(0), 0);
+}
+
+TEST_F(CatalogDbTest, SyncFaceTagOwnershipPreservesClipTags) {
+    MediaItem m;
+    m.file_path = "photos/face_sync_test.jpg";
+    m.file_name = "face_sync_test.jpg";
+    m.content_hash = "face-sync-hash";
+    m.media_type = "photo";
+    MediaId mid = db.insertMedia(m).value();
+
+    TagId tPerson = db.createOrGetTag("Charlie", "people").value();
+
+    // Attach as clip tag
+    auto& conn = db.connection();
+    ASSERT_TRUE(conn.execute("INSERT INTO media_tags(media_id, tag_id) VALUES(" +
+                             std::to_string(mid) + "," + std::to_string(tPerson) + ");").isOk());
+    ASSERT_TRUE(conn.execute("INSERT INTO media_tag_provenance(media_id, tag_id, manual, source) VALUES(" +
+                             std::to_string(mid) + "," + std::to_string(tPerson) + ", 0, 'clip');").isOk());
+
+    // Run syncFaceTagOwnership with 0 faces assigned
+    ASSERT_TRUE(imagine::faces::syncFaceTagOwnership(conn, mid, tPerson).isOk());
+
+    // Verify clip tag is NOT deleted
+    auto tags = db.getTagsForMedia(mid).value();
+    ASSERT_EQ(tags.size(), 1u);
+    EXPECT_EQ(tags[0].id, tPerson);
+    EXPECT_EQ(tags[0].source, "clip");
+
+    // Now assign a face to tPerson
+    ASSERT_TRUE(conn.execute(
+        "INSERT INTO faces(media_id, x, y, width, height, score, landmarks, person_tag_id, created_at, updated_at) "
+        "VALUES(" + std::to_string(mid) + ", 0, 0, 10, 10, 0.9, '[]', " + std::to_string(tPerson) + ", 1, 1);"
+    ).isOk());
+
+    // Now test a separate media item with a new face tag to test assignment
+    MediaItem m2;
+    m2.file_path = "photos/face_sync_test2.jpg";
+    m2.file_name = "face_sync_test2.jpg";
+    m2.content_hash = "face-sync-hash2";
+    m2.media_type = "photo";
+    MediaId mid2 = db.insertMedia(m2).value();
+    TagId tDavid = db.createOrGetTag("David", "people").value();
+
+    ASSERT_TRUE(conn.execute(
+        "INSERT INTO faces(media_id, x, y, width, height, score, landmarks, person_tag_id, created_at, updated_at) "
+        "VALUES(" + std::to_string(mid2) + ", 0, 0, 10, 10, 0.9, '[]', " + std::to_string(tDavid) + ", 1, 1);"
+    ).isOk());
+    int64_t faceId2 = conn.lastInsertRowId();
+
+    ASSERT_TRUE(imagine::faces::syncFaceTagOwnership(conn, mid2, tDavid).isOk());
+    auto tags2 = db.getTagsForMedia(mid2).value();
+    ASSERT_EQ(tags2.size(), 1u);
+    EXPECT_EQ(tags2[0].id, tDavid);
+    EXPECT_EQ(tags2[0].source, "face");
+
+    // Unassign face from mid2
+    ASSERT_TRUE(conn.execute("UPDATE faces SET person_tag_id = NULL WHERE id = " + std::to_string(faceId2) + ";").isOk());
+    ASSERT_TRUE(imagine::faces::syncFaceTagOwnership(conn, mid2, tDavid).isOk());
+    tags2 = db.getTagsForMedia(mid2).value();
+    EXPECT_TRUE(tags2.empty());
+}

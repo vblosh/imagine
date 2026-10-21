@@ -7,7 +7,7 @@ namespace imagine::db {
 
 class Schema {
 public:
-    static constexpr int CurrentVersion = 8;
+    static constexpr int CurrentVersion = 9;
 
     static Status migrate(Connection& conn);
     static Result<int> getCurrentVersion(Connection& conn);
@@ -21,6 +21,7 @@ private:
     static Status applyMigrationV6(Connection& conn);
     static Status applyMigrationV7(Connection& conn);
     static Status applyMigrationV8(Connection& conn);
+    static Status applyMigrationV9(Connection& conn);
 };
 
 } // namespace imagine::db

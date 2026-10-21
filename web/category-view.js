@@ -10,6 +10,7 @@ import { t } from './i18n.js';
 import { icon } from './icons.js';
 import { enterAlbumOrderMode, clearTimelineSelection } from './media-params.js';
 import { saveActiveTagIdsPreference } from './persistence.js';
+import { clearCardMap } from './media-cards.js';
 
 let categoryActionHooks = {
   updateSidebarActive: () => {},
@@ -103,6 +104,7 @@ export function getTagCoverUrl(tag) {
 }
 
 export const albumCoverCache = new Map();
+const albumCoverInFlight = new Map();
 
 function getAlbumCoverKey(album) {
   if (typeof album === 'object' && album !== null) {
@@ -131,22 +133,37 @@ export async function fetchAlbumCover(album) {
   if (albumCoverCache.has(cacheKey)) {
     return albumCoverCache.get(cacheKey);
   }
-  try {
-    const res = await api.get(`/api/media?album_id=${albumId}&limit=1`);
-    const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
-    const item = items[0];
-    if (item) {
-      const url = item.content_hash
-        ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
-        : `/api/photos/${item.id}/original`;
-      albumCoverCache.set(cacheKey, url);
-      return url;
-    }
-    albumCoverCache.set(cacheKey, null);
-  } catch (_) {
-    // Transient failure: do not cache null so it can be retried
+  if (albumCoverInFlight.has(cacheKey)) {
+    return albumCoverInFlight.get(cacheKey);
   }
-  return null;
+  const promise = (async () => {
+    try {
+      const res = await api.get(`/api/media?album_id=${albumId}&limit=1`);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      const item = items[0];
+      if (item) {
+        const url = item.content_hash
+          ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/256`
+          : `/api/photos/${item.id}/original`;
+        if (albumCoverCache.size >= 200) {
+          albumCoverCache.delete(albumCoverCache.keys().next().value);
+        }
+        albumCoverCache.set(cacheKey, url);
+        return url;
+      }
+      if (albumCoverCache.size >= 200) {
+        albumCoverCache.delete(albumCoverCache.keys().next().value);
+      }
+      albumCoverCache.set(cacheKey, null);
+    } catch (_) {
+      // Transient failure: do not cache null so it can be retried
+    } finally {
+      albumCoverInFlight.delete(cacheKey);
+    }
+    return null;
+  })();
+  albumCoverInFlight.set(cacheKey, promise);
+  return promise;
 }
 
 export const DEFAULT_CATEGORY_SORTS = {
@@ -330,7 +347,10 @@ export function renderCategoryView(category) {
   if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
   if (dom.emptyState) dom.emptyState.style.display = 'none';
   if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';
-  if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
+  if (dom.mediaGrid) {
+    dom.mediaGrid.innerHTML = '';
+    clearCardMap();
+  }
 
   // Filter items by category (albums vs tags)
   let items = isAlbum
@@ -404,7 +424,7 @@ export function renderCategoryView(category) {
 
     card.innerHTML = `
       <div class="category-card-thumb-wrapper">
-        ${coverUrl ? `<img src="${coverUrl}" alt="${safeName}" class="category-card-thumb" loading="lazy">` : ''}
+        ${coverUrl ? `<img src="${escapeHtml(coverUrl)}" alt="${safeName}" class="category-card-thumb" loading="lazy">` : ''}
         <div class="category-card-placeholder" style="${coverUrl ? 'display:none;' : ''}">
           ${config.thumbPlaceholderSvg}
         </div>
@@ -480,6 +500,7 @@ export function selectCategoryAlbum(album) {
   state.activeAlbumId = album.id;
   enterAlbumOrderMode();
   state.activeTagIds.clear();
+  saveActiveTagIdsPreference(state.activeTagIds);
   state.activeFolders.clear();
   clearTimelineSelection();
   state.activeMediaType = 'all';
@@ -487,7 +508,10 @@ export function selectCategoryAlbum(album) {
   state.activeLastImported = false;
 
   // Clear previous grid contents immediately so previous photos don't flash
-  if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
+  if (dom.mediaGrid) {
+    dom.mediaGrid.innerHTML = '';
+    clearCardMap();
+  }
   if (dom.emptyState) dom.emptyState.style.display = 'none';
 
   // Transition from category view to photo grid / map
@@ -515,6 +539,7 @@ export function selectCategoryItem(tag) {
   if (!tag) return;
 
   state.activeTagIds.clear();
+  saveActiveTagIdsPreference(state.activeTagIds);
   state.activeTagIds.add(Number(tag.id));
   state.activeFolders.clear();
   clearTimelineSelection();
@@ -525,7 +550,10 @@ export function selectCategoryItem(tag) {
   saveActiveTagIdsPreference(state.activeTagIds);
 
   // Clear previous grid contents immediately so previous person's photos don't flash
-  if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
+  if (dom.mediaGrid) {
+    dom.mediaGrid.innerHTML = '';
+    clearCardMap();
+  }
   if (dom.emptyState) dom.emptyState.style.display = 'none';
 
   // Transition from category view to photo grid / map
@@ -551,17 +579,25 @@ export function selectCategoryItem(tag) {
 
 export function navigateBackToCategory() {
   state.activeTagIds.clear();
+  saveActiveTagIdsPreference(state.activeTagIds);
   state.activeFolders.clear();
   state.activeAlbumId = null;
   saveActiveTagIdsPreference(state.activeTagIds);
-  if (dom.mediaGrid) dom.mediaGrid.innerHTML = '';
+  if (dom.mediaGrid) {
+    dom.mediaGrid.innerHTML = '';
+    clearCardMap();
+  }
   if (dom.emptyState) dom.emptyState.style.display = 'none';
   categoryActionHooks.updateSidebarActive();
   categoryActionHooks.updateFilterLabel();
   renderCategoryView();
 }
 
+let categoryViewInitialized = false;
+
 export function initCategoryView() {
+  if (categoryViewInitialized) return;
+  categoryViewInitialized = true;
   if (dom.categoryBackBtn) {
     dom.categoryBackBtn.addEventListener('click', () => {
       navigateBackToCategory();

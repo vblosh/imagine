@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 #include "imagine/clip/engine.hpp"
 #include "imagine/clip/service.hpp"
+#include "imagine/clip/smart_tags.hpp"
+#include <unordered_set>
+#include <algorithm>
+#include <cmath>
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/db/schema.hpp"
 #include <cstdlib>
@@ -1157,3 +1161,686 @@ TEST(ClipServiceTest, VisualDuplicateScanHelperAndUnionFindGrouping) {
 
 
 
+
+
+TEST(SmartTagsTest, DefaultTaxonomyIsValidAndHasExpectedLabels) {
+    const char* jsonStr = imagine::clip::getDefaultTaxonomyJson();
+    ASSERT_NE(jsonStr, nullptr);
+    EXPECT_GT(std::strlen(jsonStr), 0u);
+
+    auto taxRes = imagine::clip::parseTaxonomyJson(jsonStr);
+    ASSERT_TRUE(taxRes.isOk()) << taxRes.status().message();
+    const auto& tax = taxRes.value();
+
+    // Verify label count (75 labels)
+    EXPECT_GE(tax.labels.size(), 70u);
+    EXPECT_LE(tax.labels.size(), 85u);
+    EXPECT_EQ(tax.labels.size(), 75u);
+
+    // Verify version hash is 16 hex chars
+    EXPECT_EQ(tax.version.size(), 16u);
+    for (char c : tax.version) {
+        EXPECT_TRUE(std::isxdigit(static_cast<unsigned char>(c)));
+    }
+
+    // Verify determinism of version hash
+    auto taxRes2 = imagine::clip::parseTaxonomyJson(jsonStr);
+    ASSERT_TRUE(taxRes2.isOk());
+    EXPECT_EQ(tax.version, taxRes2.value().version);
+
+    // Verify loadTaxonomy defaults match
+    auto taxLoaded = imagine::clip::loadTaxonomy();
+    ASSERT_TRUE(taxLoaded.isOk());
+    EXPECT_EQ(tax.version, taxLoaded.value().version);
+    EXPECT_EQ(tax.labels.size(), taxLoaded.value().labels.size());
+
+    // Verify unique IDs and names
+    std::unordered_set<std::string> ids;
+    std::unordered_set<std::string> names;
+    std::unordered_set<std::string> groups;
+
+    for (const auto& label : tax.labels) {
+        EXPECT_FALSE(label.id.empty());
+        EXPECT_FALSE(label.name.empty());
+        EXPECT_FALSE(label.group.empty());
+        EXPECT_GT(label.threshold, 0.0f);
+        EXPECT_LE(label.threshold, 1.0f);
+        EXPECT_GE(label.prompts.size(), 2u);
+        for (const auto& p : label.prompts) {
+            EXPECT_FALSE(p.empty());
+        }
+
+        EXPECT_TRUE(ids.insert(label.id).second) << "Duplicate id: " << label.id;
+        EXPECT_TRUE(names.insert(label.name).second) << "Duplicate name: " << label.name;
+        groups.insert(label.group);
+    }
+
+    // Verify 9 groups
+    EXPECT_EQ(groups.size(), 9u);
+    EXPECT_TRUE(groups.count("Nature"));
+    EXPECT_TRUE(groups.count("Animals"));
+    EXPECT_TRUE(groups.count("Food & Drink"));
+    EXPECT_TRUE(groups.count("People & Events"));
+    EXPECT_TRUE(groups.count("Places & Travel"));
+    EXPECT_TRUE(groups.count("Architecture & Landmarks"));
+    EXPECT_TRUE(groups.count("Activities"));
+    EXPECT_TRUE(groups.count("Objects & Home"));
+    EXPECT_TRUE(groups.count("Mood & Weather"));
+
+    // Verify presence of key labels
+    const std::vector<std::string> expectedSlugs = {
+        "beach", "mountains", "forest", "lake", "river", "ocean", "sunset", "sunrise", "snow", "flowers", "sky", "clouds",
+        "dog", "cat", "bird", "horse", "wildlife",
+        "food", "coffee", "wine", "cake",
+        "wedding", "birthday", "concert", "portrait", "party",
+        "city", "street", "airplane", "car", "bicycle", "boat", "train",
+        "architecture", "bridge", "church", "cathedral", "castle", "fortress", "museum",
+        "palace", "ruins", "temple", "mosque", "monument", "skyscraper", "tower", "lighthouse", "plaza", "library",
+        "stained_glass", "colonnade",
+        "camping", "hiking", "swimming", "skiing", "running",
+        "book", "instrument", "art", "garden", "interior",
+        "night", "autumn", "spring", "summer", "winter", "rain"
+    };
+    for (const auto& slug : expectedSlugs) {
+        EXPECT_TRUE(ids.count(slug)) << "Missing expected label slug: " << slug;
+    }
+}
+
+TEST(SmartTagsTest, InvalidTaxonomyJsonErrors) {
+    // Malformed JSON syntax
+    auto res1 = imagine::clip::parseTaxonomyJson("{ not valid json ");
+    EXPECT_FALSE(res1.isOk());
+
+    // Root not an object
+    auto res2 = imagine::clip::parseTaxonomyJson("[1, 2, 3]");
+    EXPECT_FALSE(res2.isOk());
+
+    // Missing labels array
+    auto res3 = imagine::clip::parseTaxonomyJson(R"({"version": 1})");
+    EXPECT_FALSE(res3.isOk());
+
+    // Empty labels array
+    auto res4 = imagine::clip::parseTaxonomyJson(R"({"labels": []})");
+    EXPECT_FALSE(res4.isOk());
+
+    // Duplicate label ID
+    auto res5 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "Animals", "prompts": ["a dog"]},
+            {"id": "dog", "name": "Puppy", "group": "Animals", "prompts": ["a puppy"]}
+        ]
+    })");
+    EXPECT_FALSE(res5.isOk());
+
+    // Duplicate label ID (case-insensitive)
+    auto res6 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "Animals", "prompts": ["a dog"]},
+            {"id": "DOG", "name": "Puppy", "group": "Animals", "prompts": ["a puppy"]}
+        ]
+    })");
+    EXPECT_FALSE(res6.isOk());
+
+    // Duplicate label name
+    auto res7 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog1", "name": "Dog", "group": "Animals", "prompts": ["a dog"]},
+            {"id": "dog2", "name": "Dog", "group": "Animals", "prompts": ["a puppy"]}
+        ]
+    })");
+    EXPECT_FALSE(res7.isOk());
+
+    // Empty ID
+    auto res8 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "", "name": "Dog", "group": "Animals", "prompts": ["a dog"]}
+        ]
+    })");
+    EXPECT_FALSE(res8.isOk());
+
+    // Empty Name
+    auto res9 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "", "group": "Animals", "prompts": ["a dog"]}
+        ]
+    })");
+    EXPECT_FALSE(res9.isOk());
+
+    // Empty Group
+    auto res10 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "  ", "prompts": ["a dog"]}
+        ]
+    })");
+    EXPECT_FALSE(res10.isOk());
+
+    // Threshold <= 0
+    auto res11 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "Animals", "threshold": 0.0, "prompts": ["a dog"]}
+        ]
+    })");
+    EXPECT_FALSE(res11.isOk());
+
+    // Threshold > 1
+    auto res12 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "Animals", "threshold": 1.05, "prompts": ["a dog"]}
+        ]
+    })");
+    EXPECT_FALSE(res12.isOk());
+
+    // Threshold not a number
+    auto res13 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "Animals", "threshold": "high", "prompts": ["a dog"]}
+        ]
+    })");
+    EXPECT_FALSE(res13.isOk());
+
+    // Missing prompts array
+    auto res14 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "Animals"}
+        ]
+    })");
+    EXPECT_FALSE(res14.isOk());
+
+    // Empty prompts array
+    auto res15 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "Animals", "prompts": []}
+        ]
+    })");
+    EXPECT_FALSE(res15.isOk());
+
+    // Empty prompt string
+    auto res16 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "Animals", "prompts": [""]}
+        ]
+    })");
+    EXPECT_FALSE(res16.isOk());
+
+    // Non-string prompt
+    auto res17 = imagine::clip::parseTaxonomyJson(R"({
+        "labels": [
+            {"id": "dog", "name": "Dog", "group": "Animals", "prompts": [42]}
+        ]
+    })");
+    EXPECT_FALSE(res17.isOk());
+}
+
+TEST(SmartTagsTest, LoadTaxonomyCustomPathAndEnv) {
+    std::error_code ec;
+    auto tempDir = fs::temp_directory_path() / ("test_taxonomy_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempDir, ec);
+    auto tempFile = tempDir / "custom_taxonomy.json";
+
+    const char* customJson = R"({
+        "labels": [
+            {
+                "id": "sunset_custom",
+                "name": "Custom Sunset",
+                "group": "Nature",
+                "threshold": 0.28,
+                "prompts": ["a stunning golden sunset", "evening red sky"]
+            }
+        ]
+    })";
+    std::ofstream(tempFile) << customJson;
+
+    // Load from explicit custom path
+    auto customRes = imagine::clip::loadTaxonomy(tempFile.string());
+    ASSERT_TRUE(customRes.isOk());
+    EXPECT_EQ(customRes.value().labels.size(), 1u);
+    EXPECT_EQ(customRes.value().labels[0].id, "sunset_custom");
+    EXPECT_FLOAT_EQ(customRes.value().labels[0].threshold, 0.28f);
+
+    // Non-existent file fails
+    auto failRes = imagine::clip::loadTaxonomy((tempDir / "does_not_exist.json").string());
+    EXPECT_FALSE(failRes.isOk());
+
+    // Load via IMAGINE_SMART_TAGS_TAXONOMY environment variable
+    setTestEnv("IMAGINE_SMART_TAGS_TAXONOMY", tempFile.string());
+    auto envRes = imagine::clip::loadTaxonomy();
+    unsetTestEnv("IMAGINE_SMART_TAGS_TAXONOMY");
+    ASSERT_TRUE(envRes.isOk());
+    EXPECT_EQ(envRes.value().labels.size(), 1u);
+    EXPECT_EQ(envRes.value().labels[0].id, "sunset_custom");
+
+    // Clean up
+    fs::remove_all(tempDir, ec);
+}
+
+TEST(SmartTagsTest, MeanPoolAndNormalize) {
+    // Empty input returns empty
+    EXPECT_TRUE(imagine::clip::meanPoolAndNormalize({}).empty());
+
+    // Zero-length embeddings returns empty
+    EXPECT_TRUE(imagine::clip::meanPoolAndNormalize({{}}).empty());
+
+    // Single vector [3.0f, 4.0f] normalized to [0.6f, 0.8f]
+    std::vector<std::vector<float>> v1 = {{3.0f, 4.0f}};
+    auto r1 = imagine::clip::meanPoolAndNormalize(v1);
+    ASSERT_EQ(r1.size(), 2u);
+    EXPECT_NEAR(r1[0], 0.6f, 1e-6f);
+    EXPECT_NEAR(r1[1], 0.8f, 1e-6f);
+    EXPECT_NEAR(r1[0] * r1[0] + r1[1] * r1[1], 1.0f, 1e-6f);
+
+    // Two orthogonal unit vectors [1, 0] and [0, 1]
+    // Mean is [0.5, 0.5], normalized is [1/sqrt(2), 1/sqrt(2)] ~ 0.70710678
+    std::vector<std::vector<float>> v2 = {{1.0f, 0.0f}, {0.0f, 1.0f}};
+    auto r2 = imagine::clip::meanPoolAndNormalize(v2);
+    ASSERT_EQ(r2.size(), 2u);
+    EXPECT_NEAR(r2[0], 0.70710678f, 1e-5f);
+    EXPECT_NEAR(r2[1], 0.70710678f, 1e-5f);
+    EXPECT_NEAR(r2[0] * r2[0] + r2[1] * r2[1], 1.0f, 1e-6f);
+
+    // Three vectors in 3D: [1, 2, 3], [4, 5, 6], [7, 8, 9] -> Mean = [4, 5, 6]
+    // Norm = sqrt(16 + 25 + 36) = sqrt(77) ≈ 8.774964
+    std::vector<std::vector<float>> v3 = {
+        {1.0f, 2.0f, 3.0f},
+        {4.0f, 5.0f, 6.0f},
+        {7.0f, 8.0f, 9.0f}
+    };
+    auto r3 = imagine::clip::meanPoolAndNormalize(v3);
+    ASSERT_EQ(r3.size(), 3u);
+    float norm77 = std::sqrt(77.0f);
+    EXPECT_NEAR(r3[0], 4.0f / norm77, 1e-5f);
+    EXPECT_NEAR(r3[1], 5.0f / norm77, 1e-5f);
+    EXPECT_NEAR(r3[2], 6.0f / norm77, 1e-5f);
+    EXPECT_NEAR(r3[0] * r3[0] + r3[1] * r3[1] + r3[2] * r3[2], 1.0f, 1e-5f);
+
+    // All zero vectors: norm <= 1e-12, returns zeros
+    std::vector<std::vector<float>> vZero = {{0.0f, 0.0f}, {0.0f, 0.0f}};
+    auto rZero = imagine::clip::meanPoolAndNormalize(vZero);
+    ASSERT_EQ(rZero.size(), 2u);
+    EXPECT_FLOAT_EQ(rZero[0], 0.0f);
+    EXPECT_FLOAT_EQ(rZero[1], 0.0f);
+
+    // Inconsistent dimensions returns empty
+    std::vector<std::vector<float>> vMismatch = {{1.0f, 2.0f}, {1.0f}};
+    EXPECT_TRUE(imagine::clip::meanPoolAndNormalize(vMismatch).empty());
+}
+
+TEST(SmartTagsTest, SelectSmartLabelsThresholdFiltering) {
+    std::vector<imagine::clip::TagLabel> labels = {
+        {"beach", "Beach", "Nature", 0.25f, {"beach"}},
+        {"forest", "Forest", "Nature", 0.30f, {"forest"}},
+        {"dog", "Dog", "Animals", 0.20f, {"dog"}}
+    };
+
+    // Label embeddings corresponding to dot products with {0.26f, 0.0f}:
+    // beach: {1.0f, 0.0f} -> dot = 0.26. required = max(0.24, 0.25) = 0.25 -> 0.26 >= 0.25 PASS
+    // forest: {1.0f, 0.0f} -> dot = 0.26. required = max(0.24, 0.30) = 0.30 -> 0.26 < 0.30 FAIL (label threshold)
+    // dog: {0.8f, 0.0f} -> dot = 0.208. required = max(0.24, 0.20) = 0.24 -> 0.208 < 0.24 FAIL (minScore)
+    std::vector<std::vector<float>> labelEmbeddings = {
+        {1.0f, 0.0f},
+        {1.0f, 0.0f},
+        {0.8f, 0.0f}
+    };
+
+    std::vector<float> imageEmbedding = {0.26f, 0.0f};
+
+    imagine::clip::SmartTagOptions options;
+    options.minScore = 0.24f;
+    options.maxLabels = 5;
+    options.maxPerGroup = 5;
+
+    auto selected = imagine::clip::selectSmartLabels(imageEmbedding, labelEmbeddings, labels, options);
+    ASSERT_EQ(selected.size(), 1u);
+    EXPECT_EQ(selected[0].id, "beach");
+    EXPECT_NEAR(selected[0].score, 0.26f, 1e-5f);
+}
+
+TEST(SmartTagsTest, SelectSmartLabelsTopKLimiting) {
+    std::vector<imagine::clip::TagLabel> labels = {
+        {"l1", "Label 1", "Nature", 0.20f, {"p"}},
+        {"l2", "Label 2", "Nature", 0.20f, {"p"}},
+        {"l3", "Label 3", "Animals", 0.20f, {"p"}},
+        {"l4", "Label 4", "Animals", 0.20f, {"p"}},
+        {"l5", "Label 5", "Food", 0.20f, {"p"}}
+    };
+
+    std::vector<std::vector<float>> labelEmbeddings = {
+        {0.9f}, {0.8f}, {0.7f}, {0.6f}, {0.5f}
+    };
+    std::vector<float> imageEmbedding = {1.0f};
+
+    imagine::clip::SmartTagOptions options;
+    options.minScore = 0.20f;
+    options.maxLabels = 2; // Top-2
+    options.maxPerGroup = 5;
+
+    auto selected = imagine::clip::selectSmartLabels(imageEmbedding, labelEmbeddings, labels, options);
+    ASSERT_EQ(selected.size(), 2u);
+    EXPECT_EQ(selected[0].id, "l1");
+    EXPECT_NEAR(selected[0].score, 0.9f, 1e-5f);
+    EXPECT_EQ(selected[1].id, "l2");
+    EXPECT_NEAR(selected[1].score, 0.8f, 1e-5f);
+}
+
+TEST(SmartTagsTest, SelectSmartLabelsPerGroupCap) {
+    std::vector<imagine::clip::TagLabel> labels = {
+        {"n1", "Nature 1", "Nature", 0.20f, {"p"}},
+        {"n2", "Nature 2", "Nature", 0.20f, {"p"}},
+        {"n3", "Nature 3", "Nature", 0.20f, {"p"}},
+        {"n4", "Nature 4", "Nature", 0.20f, {"p"}},
+        {"a1", "Animal 1", "Animals", 0.20f, {"p"}}
+    };
+
+    std::vector<std::vector<float>> labelEmbeddings = {
+        {0.9f}, {0.8f}, {0.7f}, {0.6f}, {0.5f}
+    };
+    std::vector<float> imageEmbedding = {1.0f};
+
+    imagine::clip::SmartTagOptions options;
+    options.minScore = 0.20f;
+    options.maxLabels = 4;
+    options.maxPerGroup = 2; // At most 2 from Nature
+
+    auto selected = imagine::clip::selectSmartLabels(imageEmbedding, labelEmbeddings, labels, options);
+    ASSERT_EQ(selected.size(), 3u);
+    EXPECT_EQ(selected[0].id, "n1");
+    EXPECT_EQ(selected[1].id, "n2");
+    EXPECT_EQ(selected[2].id, "a1");
+}
+
+TEST(SmartTagsTest, SelectSmartLabelsDeterministicTieBreaking) {
+    std::vector<imagine::clip::TagLabel> labels = {
+        {"zebra", "Zebra", "Animals", 0.20f, {"p"}},
+        {"apple", "Apple", "Food", 0.20f, {"p"}},
+        {"mango", "Mango", "Food", 0.20f, {"p"}}
+    };
+
+    std::vector<std::vector<float>> labelEmbeddings = {
+        {0.5f}, {0.5f}, {0.5f}
+    };
+    std::vector<float> imageEmbedding = {1.0f};
+
+    imagine::clip::SmartTagOptions options;
+    options.minScore = 0.20f;
+    options.maxLabels = 2;
+    options.maxPerGroup = 2;
+
+    auto selected = imagine::clip::selectSmartLabels(imageEmbedding, labelEmbeddings, labels, options);
+    ASSERT_EQ(selected.size(), 2u);
+    EXPECT_EQ(selected[0].id, "apple");
+    EXPECT_EQ(selected[1].id, "mango");
+}
+
+TEST(SmartTagsTest, SelectSmartLabelsEmptyAndMismatchedInputs) {
+    std::vector<imagine::clip::TagLabel> labels = {
+        {"beach", "Beach", "Nature", 0.20f, {"p"}}
+    };
+    std::vector<std::vector<float>> labelEmbeddings = {{1.0f, 0.0f}};
+    std::vector<float> imageEmbedding = {1.0f, 0.0f};
+    imagine::clip::SmartTagOptions options;
+
+    // Empty image embedding
+    EXPECT_TRUE(imagine::clip::selectSmartLabels({}, labelEmbeddings, labels, options).empty());
+
+    // Empty label embeddings
+    EXPECT_TRUE(imagine::clip::selectSmartLabels(imageEmbedding, {}, labels, options).empty());
+
+    // Empty labels
+    EXPECT_TRUE(imagine::clip::selectSmartLabels(imageEmbedding, labelEmbeddings, {}, options).empty());
+
+    // maxLabels <= 0
+    options.maxLabels = 0;
+    EXPECT_TRUE(imagine::clip::selectSmartLabels(imageEmbedding, labelEmbeddings, labels, options).empty());
+    options.maxLabels = 3;
+
+    // maxPerGroup <= 0
+    options.maxPerGroup = 0;
+    EXPECT_TRUE(imagine::clip::selectSmartLabels(imageEmbedding, labelEmbeddings, labels, options).empty());
+    options.maxPerGroup = 2;
+
+    // Dimension mismatch between image (2D) and label (3D)
+    std::vector<std::vector<float>> mismatchedEmbeddings = {{1.0f, 0.0f, 0.0f}};
+    EXPECT_TRUE(imagine::clip::selectSmartLabels(imageEmbedding, mismatchedEmbeddings, labels, options).empty());
+}
+
+TEST(SmartTagsTest, LoadSmartTagOptionsFromEnv) {
+    // Clean environment initially
+    unsetTestEnv("IMAGINE_SMART_TAGS_MIN_SCORE");
+    unsetTestEnv("IMAGINE_SMART_TAGS_MAX_LABELS");
+    unsetTestEnv("IMAGINE_SMART_TAGS_MAX_PER_GROUP");
+
+    // Defaults
+    auto opts = imagine::clip::loadSmartTagOptionsFromEnv();
+    EXPECT_FLOAT_EQ(opts.minScore, 0.23f);
+    EXPECT_EQ(opts.maxLabels, 3);
+    EXPECT_EQ(opts.maxPerGroup, 2);
+
+    // Custom valid values
+    setTestEnv("IMAGINE_SMART_TAGS_MIN_SCORE", "0.45");
+    setTestEnv("IMAGINE_SMART_TAGS_MAX_LABELS", "5");
+    setTestEnv("IMAGINE_SMART_TAGS_MAX_PER_GROUP", "4");
+
+    opts = imagine::clip::loadSmartTagOptionsFromEnv();
+    EXPECT_FLOAT_EQ(opts.minScore, 0.45f);
+    EXPECT_EQ(opts.maxLabels, 5);
+    EXPECT_EQ(opts.maxPerGroup, 4);
+
+    // Clamping to upper bounds
+    setTestEnv("IMAGINE_SMART_TAGS_MIN_SCORE", "1.5");
+    setTestEnv("IMAGINE_SMART_TAGS_MAX_LABELS", "99");
+    setTestEnv("IMAGINE_SMART_TAGS_MAX_PER_GROUP", "50");
+
+    opts = imagine::clip::loadSmartTagOptionsFromEnv();
+    EXPECT_FLOAT_EQ(opts.minScore, 1.0f);
+    EXPECT_EQ(opts.maxLabels, 20);
+    EXPECT_EQ(opts.maxPerGroup, 10);
+
+    // Clamping to lower bounds
+    setTestEnv("IMAGINE_SMART_TAGS_MIN_SCORE", "-0.2");
+    setTestEnv("IMAGINE_SMART_TAGS_MAX_LABELS", "0");
+    setTestEnv("IMAGINE_SMART_TAGS_MAX_PER_GROUP", "-3");
+
+    opts = imagine::clip::loadSmartTagOptionsFromEnv();
+    EXPECT_FLOAT_EQ(opts.minScore, 0.0f);
+    EXPECT_EQ(opts.maxLabels, 1);
+    EXPECT_EQ(opts.maxPerGroup, 1);
+
+    // Invalid non-numeric strings fallback to defaults
+    setTestEnv("IMAGINE_SMART_TAGS_MIN_SCORE", "invalid_float");
+    setTestEnv("IMAGINE_SMART_TAGS_MAX_LABELS", "not_an_int");
+    setTestEnv("IMAGINE_SMART_TAGS_MAX_PER_GROUP", "xyz");
+
+    opts = imagine::clip::loadSmartTagOptionsFromEnv();
+    EXPECT_FLOAT_EQ(opts.minScore, 0.23f);
+    EXPECT_EQ(opts.maxLabels, 3);
+    EXPECT_EQ(opts.maxPerGroup, 2);
+
+    // Clean up
+    unsetTestEnv("IMAGINE_SMART_TAGS_MIN_SCORE");
+    unsetTestEnv("IMAGINE_SMART_TAGS_MAX_LABELS");
+    unsetTestEnv("IMAGINE_SMART_TAGS_MAX_PER_GROUP");
+}
+
+
+TEST(ClipServiceSmartTagsTest, StatusAndStartJobWhenNotReady) {
+    std::error_code ec;
+    auto testDb = fs::temp_directory_path() / ("test_clip_st_svc_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+    auto tempCache = fs::temp_directory_path() / ("test_clip_st_cache_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempCache, ec);
+
+    const char* prevEnv = std::getenv("IMAGINE_CLIP_MODEL_DIR");
+    std::string prevModelDir = prevEnv ? prevEnv : "";
+    setTestEnv("IMAGINE_CLIP_MODEL_DIR", (tempCache / "nonexistent_models").string());
+    struct EnvCleanup {
+        std::string prev;
+        ~EnvCleanup() {
+            setTestEnv("IMAGINE_CLIP_MODEL_DIR", prev);
+        }
+    } envCleanup{prevModelDir};
+
+    {
+        imagine::db::CatalogDb db;
+        ASSERT_TRUE(db.open(testDb.string()).isOk());
+
+        imagine::clip::Service svc(db, tempCache.string(), [](const std::string& p) { return p; });
+        auto status = svc.smartTagStatus();
+        EXPECT_TRUE(status.contains("built"));
+        EXPECT_TRUE(status.contains("ready"));
+        EXPECT_FALSE(status["ready"].get<bool>());
+        EXPECT_TRUE(status.contains("taxonomyReady"));
+        EXPECT_TRUE(status["taxonomyReady"].get<bool>());
+        EXPECT_GT(status["labelCount"].get<int64_t>(), 50);
+        EXPECT_EQ(status["indexedPhotos"].get<int64_t>(), 0);
+        EXPECT_EQ(status["labeledPhotos"].get<int64_t>(), 0);
+        EXPECT_EQ(status["tagAssignments"].get<int64_t>(), 0);
+
+        int64_t jobId = 0;
+        auto jobStatus = svc.startSmartTagJob("catalog", {}, false, jobId);
+        EXPECT_FALSE(jobStatus.isOk());
+
+        auto clearStatus = svc.clearSmartTags();
+        EXPECT_TRUE(clearStatus.isOk());
+
+        db.close();
+    }
+
+    fs::remove(testDb, ec);
+    fs::remove(testDb.string() + "-wal", ec);
+    fs::remove(testDb.string() + "-shm", ec);
+    fs::remove_all(tempCache, ec);
+}
+
+TEST(ClipServiceSmartTagsTest, JobOrchestrationAndFailureHandling) {
+    std::error_code ec;
+    auto testDb = fs::temp_directory_path() / ("test_clip_st_orch_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+    auto tempCache = fs::temp_directory_path() / ("test_clip_st_orch_cache_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempCache, ec);
+
+    {
+        imagine::db::CatalogDb db;
+        ASSERT_TRUE(db.open(testDb.string()).isOk());
+
+        // 1. Insert a media item
+        imagine::MediaItem item;
+        item.file_path = (tempCache / "img.jpg").string();
+        item.file_name = "img.jpg";
+        item.file_size = 1000;
+        item.content_hash = "h1";
+        auto addRes = db.insertMedia(item);
+        ASSERT_TRUE(addRes.isOk());
+        imagine::MediaId mid = addRes.value();
+
+        imagine::clip::Service svc(db, tempCache.string(), [](const std::string& p) { return p; });
+        auto statusInfo = svc.status();
+        std::string mId = statusInfo.value("modelId", "clip-vit-base-patch32");
+        std::string mRev = statusInfo.value("modelRevision", "v1");
+
+        // 2. Insert vector in semantic_index_state matching active model
+        std::vector<float> vec(512, 0.05f);
+        {
+            auto stmtRes = db.connection().prepare(
+                "INSERT INTO semantic_index_state (media_id, model_id, model_revision, preprocess_id, vector_dim, embedding, content_hash, indexed_at) "
+                "VALUES (?, ?, ?, 'p1', 512, ?, 'h1', 1000);"
+            );
+            ASSERT_TRUE(stmtRes.isOk());
+            auto stmt = std::move(stmtRes.value());
+            stmt.bind(1, mid);
+            stmt.bind(2, mId);
+            stmt.bind(3, mRev);
+            stmt.bindBlob(4, vec.data(), vec.size() * sizeof(float));
+            ASSERT_EQ(stmt.step(), imagine::db::StepResult::Done);
+        }
+
+        // 3. Test getJob on nonexistent job
+        auto noJob = svc.getJob(999, "tags");
+        EXPECT_FALSE(noJob.isOk());
+        EXPECT_EQ(noJob.status().code(), imagine::StatusCode::NotFound);
+
+        // 4. Insert dummy completed semantic_jobs (1 tags, 1 index)
+        int64_t tagJobId = 0;
+        int64_t indexJobId = 0;
+        {
+            auto ins1 = db.connection().prepare("INSERT INTO semantic_jobs (scope, state, model_id, kind, total, created_at, updated_at) VALUES ('catalog', 'completed', 'clip', 'tags', 1, 100, 100);");
+            ASSERT_TRUE(ins1.isOk());
+            ASSERT_EQ(ins1.value().step(), imagine::db::StepResult::Done);
+            tagJobId = db.connection().lastInsertRowId();
+
+            auto ins2 = db.connection().prepare("INSERT INTO semantic_jobs (scope, state, model_id, kind, total, created_at, updated_at) VALUES ('catalog', 'completed', 'clip', 'index', 1, 100, 100);");
+            ASSERT_TRUE(ins2.isOk());
+            ASSERT_EQ(ins2.value().step(), imagine::db::StepResult::Done);
+            indexJobId = db.connection().lastInsertRowId();
+        }
+
+        // 5. Test kind isolation in getJob
+        EXPECT_FALSE(svc.getJob(indexJobId, "tags").isOk());
+        EXPECT_TRUE(svc.getJob(tagJobId, "tags").isOk());
+
+        // 6. Test kind isolation in cancelJob
+        int64_t activeTagJobId = 0;
+        {
+            auto insActive = db.connection().prepare("INSERT INTO semantic_jobs (scope, state, model_id, kind, total, created_at, updated_at) VALUES ('catalog', 'running', 'clip', 'tags', 1, 100, 100);");
+            ASSERT_TRUE(insActive.isOk());
+            ASSERT_EQ(insActive.value().step(), imagine::db::StepResult::Done);
+            activeTagJobId = db.connection().lastInsertRowId();
+        }
+        EXPECT_FALSE(svc.cancelJob(indexJobId, "tags").isOk());
+        EXPECT_TRUE(svc.cancelJob(activeTagJobId, "tags").isOk());
+
+        // Mark cancelled so single active job slot is free
+        ASSERT_TRUE(db.connection().execute("UPDATE semantic_jobs SET state = 'cancelled' WHERE id = " + std::to_string(activeTagJobId) + ";").isOk());
+
+        // 7. Test runTagJob happy path, incremental skip, and failure handling
+        int64_t testJobId = 0;
+        {
+            auto ins3 = db.connection().prepare("INSERT INTO semantic_jobs (scope, state, model_id, kind, total, created_at, updated_at) VALUES ('catalog', 'running', 'clip', 'tags', 1, 100, 100);");
+            ASSERT_TRUE(ins3.isOk());
+            ASSERT_EQ(ins3.value().step(), imagine::db::StepResult::Done);
+            testJobId = db.connection().lastInsertRowId();
+        }
+
+        bool engineReady = svc.smartTagStatus()["ready"].get<bool>();
+        if (engineReady) {
+            // Happy path: models are available, job processes photo and commits smart_tag_state
+            svc.runTagJobForTest(testJobId, "catalog", {mid}, false);
+            auto completedJob = svc.getJob(testJobId, "tags");
+            ASSERT_TRUE(completedJob.isOk());
+            EXPECT_EQ(completedJob.value()["state"].get<std::string>(), "completed");
+            EXPECT_EQ(completedJob.value()["processed"].get<int64_t>(), 1);
+
+            // Verify smart_tag_state was recorded
+            auto stateCount = db.connection().prepare("SELECT COUNT(*) FROM smart_tag_state WHERE media_id = " + std::to_string(mid) + ";");
+            ASSERT_TRUE(stateCount.isOk());
+            auto& scStmt = stateCount.value();
+            EXPECT_EQ(scStmt.step(), imagine::db::StepResult::Row);
+            EXPECT_EQ(scStmt.getInt64(0), 1);
+
+            // Incremental skip: repeat run skips already labeled photo
+            int64_t skipJobId = 0;
+            {
+                auto insSkip = db.connection().prepare("INSERT INTO semantic_jobs (scope, state, model_id, kind, total, created_at, updated_at) VALUES ('catalog', 'running', 'clip', 'tags', 1, 100, 100);");
+                ASSERT_TRUE(insSkip.isOk());
+                ASSERT_EQ(insSkip.value().step(), imagine::db::StepResult::Done);
+                skipJobId = db.connection().lastInsertRowId();
+            }
+            svc.runTagJobForTest(skipJobId, "catalog", {mid}, false);
+            auto skippedJob = svc.getJob(skipJobId, "tags");
+            ASSERT_TRUE(skippedJob.isOk());
+            EXPECT_EQ(skippedJob.value()["state"].get<std::string>(), "completed");
+            EXPECT_EQ(skippedJob.value()["skipped"].get<int64_t>(), 1);
+            EXPECT_EQ(skippedJob.value()["processed"].get<int64_t>(), 0);
+        } else {
+            // Engine not ready: marks failed without crashing
+            svc.runTagJobForTest(testJobId, "catalog", {mid}, false);
+            auto failedJob = svc.getJob(testJobId, "tags");
+            ASSERT_TRUE(failedJob.isOk());
+            EXPECT_EQ(failedJob.value()["state"].get<std::string>(), "failed");
+            EXPECT_FALSE(failedJob.value()["error"].get<std::string>().empty());
+        }
+
+        db.close();
+    }
+
+    fs::remove(testDb, ec);
+    fs::remove(testDb.string() + "-wal", ec);
+    fs::remove(testDb.string() + "-shm", ec);
+    fs::remove_all(tempCache, ec);
+}

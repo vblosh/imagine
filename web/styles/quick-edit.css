@@ -284,7 +284,8 @@
   color: var(--text-secondary);
 }
 
-.editor-slider-row span:first-child {
+.editor-slider-row > label:first-child,
+.editor-slider-row > span:first-child {
   width: 66px;
   text-align: left;
   white-space: nowrap;

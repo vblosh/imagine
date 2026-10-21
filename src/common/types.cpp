@@ -80,9 +80,13 @@ void to_json(nlohmann::json& j, const Tag& t) {
         {"id", t.id},
         {"name", t.name},
         {"category", t.category},
+        {"ai_count", t.ai_count},
         {"media_count", t.media_count},
         {"cover_hash", t.cover_hash}
     };
+    if (!t.source.empty()) {
+        j["source"] = t.source;
+    }
     if (t.parent_id.has_value()) {
         j["parent_id"] = *t.parent_id;
     } else {
@@ -109,6 +113,8 @@ void from_json(const nlohmann::json& j, Tag& t) {
     t.id = jsonIntOr<TagId>(j, "id", TagId{0});
     t.name = jsonStringOr(j, "name", "");
     t.category = jsonStringOr(j, "category", "keyword");
+    t.source = jsonStringOr(j, "source", "");
+    t.ai_count = jsonIntOr<int64_t>(j, "ai_count", int64_t{0});
     t.media_count = jsonIntOr<int64_t>(j, "media_count", int64_t{0});
     t.cover_hash = jsonStringOr(j, "cover_hash", "");
     if (j.contains("parent_id") && j["parent_id"].is_number_integer()) {

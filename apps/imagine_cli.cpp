@@ -20,6 +20,7 @@
 #include "imagine/metadata/media_reader.hpp"
 
 #ifdef _WIN32
+#include <io.h>
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -28,6 +29,7 @@
 #endif
 #include <windows.h>
 #else
+#include <unistd.h>
 #if defined(__APPLE__)
 #include <crt_externs.h>
 #define environ (*_NSGetEnviron())
@@ -39,8 +41,18 @@ extern "C" char** environ;
 namespace {
 
 static imagine::server::WebServer* g_serverInstance{nullptr};
+static std::atomic<int> g_shutdownSignalCount{0};
 
 void sigHandler(int) {
+    int count = ++g_shutdownSignalCount;
+    if (count > 1) {
+#ifdef _WIN32
+        _write(2, "\nForcefully shutting down...\n", 29);
+#else
+        (void)!write(2, "\nForcefully shutting down...\n", 29);
+#endif
+        std::_Exit(1);
+    }
     std::cout << "\nShutting down server...\n";
     if (g_serverInstance) {
         g_serverInstance->stop();
@@ -398,6 +410,7 @@ int handleServe(int argc, char** argv) {
     }
 
     imagine::server::WebServer webServer(catalog, webDir);
+    g_shutdownSignalCount.store(0);
     g_serverInstance = &webServer;
 
     std::signal(SIGINT, sigHandler);

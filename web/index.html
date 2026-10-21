@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org; connect-src 'self' https://nominatim.openstreetmap.org; font-src 'self'; object-src 'none'; base-uri 'self';">
   <meta name="theme-color" content="#1e1e1e">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -14,7 +15,7 @@
   <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg">
   <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
   <link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
-  <link rel="stylesheet" href="app.css?v=24">
+  <link rel="stylesheet" href="app.css?v=25">
 </head>
 <body>
   <svg xmlns="http://www.w3.org/2000/svg" style="display: none;" id="svgSprite" aria-hidden="true">
@@ -1270,6 +1271,14 @@
               <div id="settingsFaceStatus" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">Status: Checking...</div>
               <button type="button" class="btn btn-secondary btn-sm" id="settingsFaceBtn" data-i18n="rebuild_faces_index">Rebuild faces recognition index</button>
             </div>
+            <div class="form-group" id="settingsSmartTagsSection" style="margin-top: 16px; border-top: 1px solid var(--border-color); padding-top: 16px;">
+              <label data-i18n="smart_tags_title">Smart Tags</label>
+              <div id="settingsSmartTagsStatus" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px;">Status: Checking...</div>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button type="button" class="btn btn-secondary btn-sm" id="settingsSmartTagsBtn" data-i18n="generate_smart_tags">Generate Smart Tags</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="settingsClearSmartTagsBtn" data-i18n="remove_smart_tags">Remove Smart Tags</button>
+              </div>
+            </div>
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" id="clearApiTokenBtn" data-i18n="settings_clear">Clear</button>
@@ -2086,6 +2095,59 @@
       </div>
     </div>
 
+    <!-- Smart Tags Modal -->
+    <div class="modal face-job-modal" id="smartTagsModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="smartTagsTitle">
+      <div class="modal-backdrop" id="smartTagsBackdrop"></div>
+      <div class="modal-dialog face-job-dialog">
+        <div class="modal-header">
+          <h3 id="smartTagsTitle" data-i18n="smart_tags_modal_title">Generate Smart Tags</h3>
+          <button type="button" class="btn-icon-sm" id="closeSmartTagsJobBtn" title="Close" data-i18n-title="close_panel" aria-label="Close smart tags modal" data-i18n-aria-label="close">&times;</button>
+        </div>
+        <div class="modal-body face-job-body">
+          <div class="face-setup-notice" id="smartTagsJobNotice" role="status" hidden></div>
+          <div class="face-job-state" id="smartTagsJobState" role="status" aria-live="polite"></div>
+          <div class="face-scan-scope-wrap" id="smartTagsScanScopeWrap">
+            <label for="smartTagsScanScope" data-i18n="smart_tags_scan_scope_label">Tag</label>
+            <select id="smartTagsScanScope" aria-label="Photos to tag" data-i18n-aria-label="smart_tags_scan_scope_label">
+              <option value="selected" id="smartTagsSelectedScopeOption" data-i18n="face_scope_selected">Selected photos</option>
+              <option value="catalog" id="smartTagsCatalogScopeOption" data-i18n="face_scope_catalog">Entire catalog</option>
+            </select>
+          </div>
+          <div class="face-job-progress-wrap" id="smartTagsJobProgressWrap" hidden>
+            <progress id="smartTagsJobProgress" max="100" value="0" aria-label="Smart tags progress" data-i18n-aria-label="smart_tags_progress_label"></progress>
+            <div class="face-job-counts" id="smartTagsJobCounts"></div>
+          </div>
+          <label class="face-force-option" id="smartTagsForceOption">
+            <input type="checkbox" id="smartTagsForce">
+            <span data-i18n="smart_tags_force_relabel">Re-label all photos (overwrite existing smart tags)</span>
+          </label>
+          <div class="face-job-error" id="smartTagsJobError" role="alert" hidden></div>
+        </div>
+        <div class="modal-footer face-job-footer">
+          <button type="button" class="btn btn-primary" id="smartTagsJobStartBtn" data-i18n="smart_tags_start_scan">Start Tagging</button>
+          <button type="button" class="btn btn-danger-outline" id="smartTagsJobStopBtn" data-i18n="smart_tags_cancel_scan" hidden>Cancel</button>
+          <button type="button" class="btn btn-secondary" id="cancelSmartTagsJobBtn" data-i18n="close">Close</button>
+        </div>
+      </div>
+    </div>
+    <!-- Clear Smart Tags Warning Modal Dialog -->
+    <div class="modal" id="clearSmartTagsModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="clearSmartTagsModalTitle" aria-describedby="clearSmartTagsPromptText clearSmartTagsWarningText">
+      <div class="modal-backdrop" id="clearSmartTagsBackdrop"></div>
+      <div class="modal-dialog" style="width: min(440px, calc(100vw - 28px));">
+        <div class="modal-header">
+          <h3 id="clearSmartTagsModalTitle" data-i18n="remove_smart_tags">Remove Smart Tags</h3>
+          <button type="button" class="btn-icon-sm" id="closeClearSmartTagsModalBtn" title="Close" data-i18n-title="close" aria-label="Close" data-i18n-aria-label="close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="clearSmartTagsPromptText" style="margin-bottom: 8px; font-size: 14px;" data-i18n="smart_tags_clear_confirm">Are you sure you want to remove all smart tags? Manual and face tags will not be affected.</p>
+          <p id="clearSmartTagsWarningText" style="margin-bottom: 0; font-size: 12px; color: var(--text-dim);" data-i18n="smart_tags_clear_warning">This action removes all automatically generated smart tags from the catalog database. The original files on disk will not be deleted.</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="cancelClearSmartTagsBtn" data-i18n="cancel">Cancel</button>
+          <button type="button" class="btn btn-danger" id="confirmClearSmartTagsBtn" data-i18n="remove_smart_tags">Remove Smart Tags</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script type="module" src="app.js?v=25"></script>

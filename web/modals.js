@@ -28,6 +28,11 @@ export function setModalCloseLoupeHandler(fn) {
   modalCloseLoupeHandler = fn;
 }
 
+let modalUpdateLoupeHandler = null;
+export function setModalUpdateLoupeHandler(fn) {
+  modalUpdateLoupeHandler = fn;
+}
+
 // Internal pending state
 let pendingAddToAlbumIds = [];
 let pendingTagTargetMediaIds = [];
@@ -118,15 +123,24 @@ export function hideModal(modalEl) {
   let returnEl = modalReturnFocusMap.get(modalEl);
   modalReturnFocusMap.delete(modalEl);
 
-  // If photos are selected in the media grid, prefer returning focus
-  // to the active photo card so grid keyboard navigation (Enter, Arrows, Escape) continues smoothly
-  if (state.selectedIds && state.selectedIds.size > 0 && dom.mediaGrid) {
+  // If photos are selected in the media grid and no other modal remains open,
+  // prefer returning focus to the active photo card so grid keyboard navigation (Enter, Arrows, Escape) continues smoothly
+  if (state.loupeIndex < 0 && openModalStack.length === 0 && state.selectedIds && state.selectedIds.size > 0 && dom.mediaGrid) {
     const activeCard = dom.mediaGrid.querySelector('.photo-card[tabindex="0"]') ||
       (state.lastSelectedId ? dom.mediaGrid.querySelector(`.photo-card[data-id="${state.lastSelectedId}"]`) : null) ||
       dom.mediaGrid.querySelector('.photo-card.selected');
     if (activeCard && document.contains(activeCard)) {
       returnEl = activeCard;
     }
+  }
+
+  if (state.loupeIndex >= 0) {
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      try {
+        document.activeElement.blur();
+      } catch (_) {}
+    }
+    return;
   }
 
   if (returnEl && typeof returnEl.focus === 'function' && document.contains(returnEl)) {
@@ -552,11 +566,16 @@ export function openTagModal(targetMediaIds = null, mode = 'add') {
 
     if (firstItem) {
       if (dom.tagModalPhotoThumb) {
-        dom.tagModalPhotoThumb.src = firstItem.content_hash
+        const originalUrl = getOriginalMediaUrl(firstItem);
+        const thumbUrl = firstItem.content_hash
           ? `/api/thumbnails/${encodeURIComponent(firstItem.content_hash)}/256`
-          : getOriginalMediaUrl(firstItem);
+          : originalUrl;
+        dom.tagModalPhotoThumb.src = thumbUrl;
         dom.tagModalPhotoThumb.onerror = () => {
-          dom.tagModalPhotoThumb.src = getOriginalMediaUrl(firstItem);
+          dom.tagModalPhotoThumb.onerror = null;
+          if (thumbUrl !== originalUrl) {
+            dom.tagModalPhotoThumb.src = originalUrl;
+          }
         };
       }
       if (dom.tagModalPhotoName) {
@@ -972,25 +991,96 @@ export async function submitDeleteMedia() {
 
   const actuallyDeletedIds = idsToDelete.filter(id => !failedIds.includes(id));
 
-  // If loupe was viewing one of the deleted items, close loupe
-  if (state.loupeIndex >= 0) {
-    const loupeItem = state.mediaItems[state.loupeIndex];
-    if (loupeItem && actuallyDeletedIds.includes(loupeItem.id)) {
-      if (modalCloseLoupeHandler) {
-        modalCloseLoupeHandler();
-      } else if (window.imagineUI?.closeLoupe) {
-        window.imagineUI.closeLoupe();
+  const isLoupeActive = state.loupeIndex >= 0 || (dom.loupeModal && dom.loupeModal.style.display === 'flex');
+  let targetLoupeMediaId = null;
+  let shouldCloseLoupe = false;
+  let activeLoupeItem = null;
+
+  if (isLoupeActive && state.loupeIndex >= 0) {
+    const curIndex = state.loupeIndex;
+    activeLoupeItem = state.mediaItems[curIndex] || null;
+    if (activeLoupeItem && actuallyDeletedIds.includes(activeLoupeItem.id)) {
+      const remainingItems = state.mediaItems.filter(item => !actuallyDeletedIds.includes(item.id));
+      const isOnlyPhoto = remainingItems.length === 0 && (state.totalCount <= actuallyDeletedIds.length || state.totalCount <= 1);
+
+      if (isOnlyPhoto) {
+        shouldCloseLoupe = true;
+      } else if (curIndex === 0) {
+        // First image -> switch to next
+        const nextItems = state.mediaItems.slice(curIndex + 1).filter(item => !actuallyDeletedIds.includes(item.id));
+        if (nextItems.length > 0) {
+          targetLoupeMediaId = nextItems[0].id;
+        } else if (remainingItems.length > 0) {
+          targetLoupeMediaId = remainingItems[0].id;
+        } else {
+          shouldCloseLoupe = true;
+        }
+      } else {
+        // Not first image -> switch to previous
+        const prevItems = state.mediaItems.slice(0, curIndex).filter(item => !actuallyDeletedIds.includes(item.id));
+        if (prevItems.length > 0) {
+          targetLoupeMediaId = prevItems[prevItems.length - 1].id;
+        } else if (remainingItems.length > 0) {
+          targetLoupeMediaId = remainingItems[0].id;
+        } else {
+          shouldCloseLoupe = true;
+        }
       }
     }
   }
 
+  if (shouldCloseLoupe) {
+    if (modalCloseLoupeHandler) {
+      modalCloseLoupeHandler();
+    } else if (window.imagineUI?.closeLoupe) {
+      window.imagineUI.closeLoupe();
+    }
+  }
+
   actuallyDeletedIds.forEach(id => state.selectedIds.delete(id));
+  if (isLoupeActive && targetLoupeMediaId !== null) {
+    state.selectedIds.clear();
+    state.selectedIds.add(targetLoupeMediaId);
+    state.lastSelectedId = targetLoupeMediaId;
+  }
+
   closeDeleteMediaModal();
 
   await loadMedia();
   await loadMetadata();
   updateBatchBar();
   updateInspector();
+
+  if (isLoupeActive && !shouldCloseLoupe) {
+    if (state.mediaItems.length === 0) {
+      if (modalCloseLoupeHandler) {
+        modalCloseLoupeHandler();
+      } else if (window.imagineUI?.closeLoupe) {
+        window.imagineUI.closeLoupe();
+      }
+    } else {
+      let nextIndex = -1;
+      if (targetLoupeMediaId !== null) {
+        nextIndex = state.mediaItems.findIndex(m => m.id === targetLoupeMediaId);
+      } else if (activeLoupeItem) {
+        nextIndex = state.mediaItems.findIndex(m => m.id === activeLoupeItem.id);
+      }
+      if (nextIndex === -1) {
+        nextIndex = Math.max(0, Math.min(state.loupeIndex >= 0 ? state.loupeIndex : 0, state.mediaItems.length - 1));
+      }
+      state.loupeIndex = nextIndex;
+      if (modalUpdateLoupeHandler) {
+        modalUpdateLoupeHandler();
+      } else if (window.imagineUI?.updateLoupeView) {
+        window.imagineUI.updateLoupeView();
+      }
+      if (document.activeElement && typeof document.activeElement.blur === 'function') {
+        try {
+          document.activeElement.blur();
+        } catch (_) {}
+      }
+    }
+  }
 }
 
 // --- Delete Tag Modal ---

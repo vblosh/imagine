@@ -20,6 +20,7 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Auto Events**: Automatically suggest outings and events from selected photos using local timestamps, GPS coordinates, captions, and existing tags.
   - **Face Review & Naming**: Local face detection, cluster grouping, face crop cards, naming, and review suggestions using existing people tags.
   - **Semantic AI Search**: Natural language search and visual similarity ("Find Similar") powered by OpenAI CLIP via ONNX Runtime.
+  - **Smart Tags (AI Auto-Labeling)**: Zero-shot scene, object, activity, and mood labeling; sidebar AI markers, inspector AI badges, and one-click reversible cleanup.
   - **Inspector Panel**: EXIF breakdown (camera, lens, shutter speed, aperture, ISO, focal length, GPS map link), 5-star ratings, pick/reject flags, face boxes, and tag editor.
   - **Quick Edit (Google Photos-Style Editor)**: Non-destructive browser photo editing featuring one-tap Smart Fix (adaptive dynamic range and exposure recovery), Quick Styles (Warm, Cool, B&W Drama), 12 filter presets with blend intensity, crop with aspect ratios, straighten with Auto Horizon leveling, granular light/color adjustments (sharpness and vignette from -100 to +100, press-0 reset), live comparison, 100-step undo/redo, and full-resolution export as copy.
   - **Fullscreen Loupe / Slideshow**: Keyboard-driven full-resolution viewer with file path display, 0–5 star ratings, P/X flags, Arrow navigation, zoom & pan, and quick jump to Editor (`E`).
@@ -36,6 +37,12 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Dual ONNX Encoders**: CLIP ViT-B/32 image and text encoders with built-in Byte Pair Encoding (BPE) tokenizer.
   - **Fast In-Memory Vector Search**: Sub-10ms cosine similarity indexing directly in RAM with embeddings persisted in SQLite.
   - **Seamless Filter Fusion**: Combine semantic queries with star ratings, pick/reject flags, media types, and date ranges.
+- **Smart Tags (Local Zero-Shot Auto-Labeling Engine)**:
+  - **Zero-Shot AI Labeling**: Automatic scene, object, mood, and activity labels (e.g. *"Beach"*, *"Dog"*, *"Mountain"*, *"Wedding"*, *"Sunset"*) derived directly from existing local CLIP ViT-B/32 image vectors.
+  - **Zero New Downloads & No Re-Encoding**: Reuses existing CLIP embeddings and text tokenizer; scores thousands of photos in seconds using pure in-memory vector dot products.
+  - **Rejection Memory**: Removing an AI tag from a photo permanently prevents the tag from reappearing on that photo during future runs.
+  - **Reversible AI Tags & Provenance**: AI tags are marked with an "AI" badge in the Keywords sidebar and Inspector; one-click clear removes only AI-owned tags without affecting manual or face tags.
+  - **Customizable Taxonomy**: Built-in 75-label taxonomy across 9 groups, fully customizable via JSON override (`IMAGINE_SMART_TAGS_TAXONOMY`).
 - **High-Throughput Importer**:
   - Multi-threaded scanning and processing pipeline (`std::jthread` thread pool).
   - Support for Photos (JPEG, PNG, WebP, TIFF, BMP), Videos (MP4, MOV, WebM, MKV, AVI, etc.), and Audio (MP3, FLAC, WAV, AAC, etc.).
@@ -110,6 +117,18 @@ The CLIP engine looks for models in:
 Required files: `image_encoder.onnx`, `text_encoder.onnx`, `vocab.json`, and `merges.txt`.
 
 For indexing instructions, API endpoints, and configuration, see the [Semantic AI Search Guide](docs/semantic-search.md).
+
+### Smart Tags (Local Auto-Labeling)
+
+Smart Tags extends the CLIP engine to provide local, zero-shot photo auto-labeling without additional model downloads or external web services:
+
+- **Zero-Shot Classification**: Automatically scores pre-indexed CLIP image embeddings against mean-pooled, normalized text prompt embeddings across 8 taxonomy groups (Nature, Animals, Food & Drink, People & Events, Places & Travel, Activities, Objects & Home, Mood & Weather).
+- **Zero Re-Encoding**: Classifies thousands of catalog photos in seconds using pure in-memory vector dot products.
+- **Rejection Memory**: Removing an AI-suggested tag from a photo records a rejection, guaranteeing that future labeling runs (including forced re-scans) will never re-apply it unless manually added back.
+- **Reversible AI Provenance**: AI tags are labeled with an "AI" badge in the Keywords sidebar and Inspector panel. A single click clears all AI-generated tags without touching user-created manual tags or face-recognition tags.
+- **Custom Taxonomy**: Easily customize or extend labels, prompts, and score thresholds via a JSON override file (`IMAGINE_SMART_TAGS_TAXONOMY`).
+
+For complete details on workflows, JSON schemas, tuning, and REST endpoints, see the [Smart Tags Guide](docs/smart-tags.md).
 
 ---
 
@@ -237,6 +256,10 @@ Imagine can be configured using environment variables:
 | `IMAGINE_CLIP_MODEL_DIR` | system cache | Path to directory containing CLIP ONNX models and tokenizer files |
 | `IMAGINE_CLIP_DEVICE` | `cpu` | CLIP execution provider: `cpu` or `cuda` |
 | `IMAGINE_CLIP_IDLE_UNLOAD_SEC` | `30` | Seconds before unloading idle CLIP models from RAM (`0` for immediate) |
+| `IMAGINE_SMART_TAGS_TAXONOMY` | *(none)* | Path to custom JSON taxonomy override file |
+| `IMAGINE_SMART_TAGS_MIN_SCORE` | `0.23` | Minimum cosine similarity score threshold for smart tags |
+| `IMAGINE_SMART_TAGS_MAX_LABELS` | `3` | Maximum number of smart tags assigned per photo |
+| `IMAGINE_SMART_TAGS_MAX_PER_GROUP` | `2` | Maximum smart tags assigned from any single taxonomy group |
 | `IMAGINE_FFMPEG_PATH` | `ffmpeg` | Path to FFmpeg binary for video thumbnail extraction |
 
 ---
@@ -255,6 +278,7 @@ imagine/
 │   ├── face-analysis-api.md    # Face analysis REST API endpoint specification
 │   ├── face-analysis-validation.md # InsightFace reference parity validation protocol
 │   ├── semantic-search.md      # CLIP Semantic AI search & visual similarity guide
+│   ├── smart-tags.md           # Smart Tags local zero-shot auto-labeling guide
 │   └── dev/                    # Developer architectural documentation
 │       ├── database_schema.md  # SQLite schema, tables, migrations (v1-v4), indexing
 │       ├── map_view.md         # Map View Leaflet integration and reverse geocoding
@@ -262,6 +286,7 @@ imagine/
 ├── include/imagine/            # Public C++20 header architecture
 │   ├── clip/                   # CLIP Semantic search engine & service
 │   │   ├── engine.hpp          # ONNX Runtime CLIP ViT image/text inference engine
+│   │   ├── smart_tags.hpp      # Smart Tags taxonomy & label scoring model
 │   │   └── service.hpp         # Vector index, background indexing job & search service
 │   ├── faces/                  # Face detection & recognition
 │   │   ├── engine.hpp          # SCRFD detector & ArcFace recognizer inference engine
@@ -275,6 +300,7 @@ imagine/
 │   └── thumbnail/              # Resizer, Rotator, Disk Cache (TurboJPEG / STB)
 ├── src/                        # Implementations for all C++ library modules
 │   ├── clip/                   # CLIP inference, BPE tokenizer & service implementations
+│   │   └── smart_tags.cpp      # Smart tags taxonomy parser and vector scoring model
 │   ├── faces/                  # SCRFD / ArcFace pipeline & face service implementations
 │   ├── common/                 # Logger & types implementations
 │   ├── concurrency/            # Thread pool implementation
@@ -324,6 +350,8 @@ imagine/
 │   ├── face-analysis.js        # Face scan dialog, cluster review grid, naming & suggestions
 │   ├── semantic-search.js      # Natural language search toggle, UI & vector index builder
 │   ├── semantic-status.js      # Semantic AI indexing status & snapshot management
+│   ├── smart-tags.js           # Smart tags modal workflow, scanning, and clear handlers
+│   ├── smart-tags-status.js    # Smart tags status indicators and settings state
 │   ├── category-view.js        # People, Places, Events, and Albums view management
 │   ├── quick-edit.js           # In-browser photo editor (crop, rotate, flip, tonal adjustments)
 │   ├── auto-events.js          # Local metadata event suggestions and review dialog
@@ -352,6 +380,7 @@ imagine/
 - **[Face Analysis REST API](docs/face-analysis-api.md)**: Complete endpoint reference for face scan jobs, identity assignment, group review, and batch operations.
 - **[Face Analysis Reference Validation](docs/face-analysis-validation.md)**: Technical protocol for validating numerical parity against Python InsightFace 0.7.3.
 - **[Semantic AI Search Guide](docs/semantic-search.md)**: CLIP model installation, building the vector search index, natural language query examples, and visual similarity.
-- **[Database Schema Documentation](docs/dev/database_schema.md)**: Relational schema architecture, tables, indexes, and migrations (v1 to v4).
+- **[Database Schema Documentation](docs/dev/database_schema.md)**: Relational schema architecture, tables, indexes, and migrations (v1 to v8).
+- **[Smart Tags Guide](docs/smart-tags.md)**: Local zero-shot auto-labeling, taxonomy configuration, rejection memory, and REST API.
 - **[Map View & Geotagging Developer Guide](docs/dev/map_view.md)**: Leaflet map clustering, spatial queries, and reverse geocoding architecture.
 - **[UI Test Plan](docs/dev/ui_test_plan.md)**: Playwright test architecture, test matrix, and deterministic UI harness.

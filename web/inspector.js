@@ -126,9 +126,13 @@ export function renderInspectorContent(item) {
     ? `/api/thumbnails/${encodeURIComponent(item.content_hash)}/1024?v=2`
     : getOriginalMediaUrl(item);
   if (dom.inspectorImg) {
+    const originalUrl = getOriginalMediaUrl(item);
     dom.inspectorImg.src = previewUrl;
     dom.inspectorImg.onerror = () => {
-      dom.inspectorImg.src = getOriginalMediaUrl(item);
+      dom.inspectorImg.onerror = null;
+      if (previewUrl !== originalUrl) {
+        dom.inspectorImg.src = originalUrl;
+      }
     };
   }
 
@@ -307,8 +311,9 @@ export function renderInspectorTags(item) {
     badge.dataset.category = cat;
     badge.title = `${t('category_label')} ${tag.category || 'keyword'}`;
     const removeLabel = t('remove_tag') || 'Remove tag';
+    const aiMarker = tag.source === 'clip' ? `<span class="tag-ai-marker" title="${escapeHtml(t('tag_ai_source_tooltip'))}">AI</span>` : '';
     badge.innerHTML = `
-      <span>${escapeHtml(tag.name)}</span>
+      <span>${escapeHtml(tag.name)}</span>${aiMarker}
       <button class="remove-tag" title="${escapeHtml(removeLabel)}" aria-label="${escapeHtml(removeLabel)}"><span aria-hidden="true">&times;</span></button>
     `;
     badge.querySelector('.remove-tag').addEventListener('click', async () => {

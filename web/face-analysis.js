@@ -347,7 +347,8 @@ function selectedPhotoIds() {
     .filter(id => Number.isInteger(id) && id > 0)
     .filter(id => {
       const item = mediaById.get(id);
-      return item && (!item.media_type || item.media_type === 'photo');
+      if (!item) return true;
+      return !item.media_type || item.media_type === 'photo';
     });
 }
 
@@ -590,12 +591,36 @@ function scheduleFaceOverlayGeometry(svg, followTransform = false) {
   if (followTransform) tracker.frame = requestAnimationFrame(tick);
 }
 
+function disposeFaceOverlayTracker(svg) {
+  const tracker = faceOverlayTrackers.get(svg);
+  if (tracker) {
+    if (tracker.frame) cancelAnimationFrame(tracker.frame);
+    tracker.abortController?.abort();
+    tracker.resizeObserver?.disconnect();
+    tracker.mutationObserver?.disconnect();
+    faceOverlayTrackers.delete(svg);
+  }
+}
+
 function ensureFaceOverlayTracking(svg, image, wrapper, followTransform = false) {
   if (!svg || !image || !wrapper) return;
+  for (const node of faceOverlayNodes) {
+    if (!node.isConnected) {
+      faceOverlayNodes.delete(node);
+      disposeFaceOverlayTracker(node);
+    }
+  }
   faceOverlayNodes.add(svg);
   if (!faceOverlayResizeListenerBound) {
     window.addEventListener('resize', () => {
-      for (const node of faceOverlayNodes) scheduleFaceOverlayGeometry(node);
+      for (const node of faceOverlayNodes) {
+        if (!node.isConnected) {
+          faceOverlayNodes.delete(node);
+          disposeFaceOverlayTracker(node);
+        } else {
+          scheduleFaceOverlayGeometry(node);
+        }
+      }
     });
     faceOverlayResizeListenerBound = true;
   }
@@ -954,7 +979,9 @@ function renderFaceGrid(schedulePages = true) {
     const topSpacer = document.createElement('div');
     topSpacer.className = 'face-grid-virtual-spacer';
     topSpacer.setAttribute('aria-hidden', 'true');
-    topSpacer.style.height = `${window.startRow * window.rowHeight}px`;
+    topSpacer.style.height = window.startRow > 0
+      ? `${window.startRow * window.rowHeight - window.rowGap}px`
+      : '0px';
     container.appendChild(topSpacer);
     const windowFaces = [];
     const windowRows = [];
@@ -997,7 +1024,10 @@ function renderFaceGrid(schedulePages = true) {
     const bottomSpacer = document.createElement('div');
     bottomSpacer.className = 'face-grid-virtual-spacer';
     bottomSpacer.setAttribute('aria-hidden', 'true');
-    bottomSpacer.style.height = `${Math.max(0, window.totalRows - window.endRow) * window.rowHeight}px`;
+    const remainingRows = Math.max(0, window.totalRows - window.endRow);
+    bottomSpacer.style.height = remainingRows > 0
+      ? `${remainingRows * window.rowHeight - window.rowGap}px`
+      : '0px';
     container.appendChild(bottomSpacer);
     list.scrollTop = requestedScrollTop;
     gridFaces = windowFaces;

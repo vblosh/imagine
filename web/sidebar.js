@@ -354,8 +354,9 @@ export function renderSidebarTags() {
       li.className = 'tag-item' + (state.activeTagIds.has(tag.id) ? ' active' : '');
       li.dataset.tagId = String(tag.id);
       const safeTagName = escapeHtml(tag.name);
+      const aiBadge = Number(tag.ai_count) > 0 ? `<span class="tag-ai-marker" title="${escapeHtml(t('tag_ai_badge_tooltip'))}">AI</span>` : '';
       li.innerHTML = `
-      <span class="tag-name">${safeTagName}</span>
+      <span class="tag-name">${safeTagName}</span>${aiBadge}
       <span class="count-badge">${tag.media_count || 0}</span>
       <button class="delete-tag-btn" title="${escapeHtml(t('delete_tag_title'))}">&times;</button>
     `;

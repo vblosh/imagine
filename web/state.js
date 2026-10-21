@@ -116,7 +116,18 @@ export const state = {
   faceAnalysisAvailable: false,
   faceAnalysisBuilt: false,
   faceIndexSize: 0,
-  faceModelId: ''
+  faceModelId: '',
+  smartTagsAvailable: false,
+  smartTagsBuilt: false,
+  smartTagsTaxonomyReady: false,
+  smartTagIndexedPhotos: 0,
+  smartTagLabeledPhotos: 0,
+  smartTagLabelCount: 0,
+  smartTagsTaxonomyError: '',
+  smartTagsConnectionError: false,
+  get selectedMediaIds() {
+    return this.selectedIds;
+  }
 };
 
 export function getGpsMediaItems() {

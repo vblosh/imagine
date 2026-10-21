@@ -68,6 +68,7 @@ import { navigateBackToCategory } from './category-view.js';
 import { isAutoEventOpen, cancelAutoEventReview } from './auto-events.js';
 import { isDeduplicateOpen, closeDeduplicateModal } from './deduplicate.js';
 import { closeSemanticIndexModal } from './semantic-search.js';
+import { closeSmartTagsModal, closeClearSmartTagsModal } from './smart-tags.js';
 
 export function handleEscapeKey() {
   // 1. Modals (highest priority)
@@ -93,6 +94,16 @@ export function handleEscapeKey() {
   if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
     if (document.activeElement?.blur) document.activeElement.blur();
     closeDeleteMediaModal();
+    return true;
+  }
+  if (dom.clearSmartTagsModal && dom.clearSmartTagsModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeClearSmartTagsModal();
+    return true;
+  }
+  if (dom.smartTagsModal && dom.smartTagsModal.style.display === 'flex') {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeSmartTagsModal();
     return true;
   }
   if (dom.importModal && dom.importModal.style.display === 'flex') {
@@ -269,6 +280,12 @@ export function isAnyBlockingModalOpen() {
   if (dom.deleteMediaModal && (dom.deleteMediaModal.style.display === 'flex' || (dom.deleteMediaModal.style.display !== 'none' && dom.deleteMediaModal.style.display !== ''))) {
     return true;
   }
+  if (dom.clearSmartTagsModal && dom.clearSmartTagsModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.smartTagsModal && dom.smartTagsModal.style.display === 'flex') {
+    return true;
+  }
   if (dom.importModal && dom.importModal.style.display === 'flex') {
     return true;
   }
@@ -369,6 +386,20 @@ export function setupKeyboardShortcuts() {
           active.click();
         } else {
           performCloseQuickEdit();
+        }
+        return;
+      }
+      return;
+    }
+
+    // Clear Smart Tags Modal shortcuts (Enter confirms or cancels depending on focus)
+    if (dom.clearSmartTagsModal && dom.clearSmartTagsModal.style.display === 'flex') {
+      if (!hasModifier && e.key === 'Enter') {
+        e.preventDefault();
+        if (active === dom.cancelClearSmartTagsBtn || active === dom.closeClearSmartTagsModalBtn) {
+          closeClearSmartTagsModal();
+        } else if (active === dom.confirmClearSmartTagsBtn) {
+          dom.confirmClearSmartTagsBtn.click();
         }
         return;
       }

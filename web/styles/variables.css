@@ -44,5 +44,4 @@ body, html {
   font-size: 13px;
   background-color: var(--bg-app);
   color: var(--text-primary);
-  user-select: none;
 }

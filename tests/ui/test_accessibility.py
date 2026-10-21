@@ -23,6 +23,8 @@ def test_modal_dialog_semantics(server, page: Page):
         "batchMoveModal",
         "iosInstallModal",
         "semanticIndexModal",
+        "smartTagsModal",
+        "clearSmartTagsModal",
     ]
 
     for mid in modal_ids:

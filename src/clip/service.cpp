@@ -1,4 +1,5 @@
 #include "imagine/clip/service.hpp"
+#include "imagine/clip/smart_tags.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -309,7 +310,19 @@ struct Service::Impl {
     } index;
     
     std::atomic<bool> cancelRequested{false};
+    std::atomic<bool> stopping{false};
     std::mutex jobStartMutex;
+
+    TagTaxonomy taxonomy;
+    bool taxonomyReady{false};
+    std::string taxonomyError;
+
+    struct LabelCache {
+        std::string key;
+        std::vector<std::vector<float>> embeddings;
+    };
+    mutable std::mutex labelCacheMutex;
+    mutable LabelCache labelCache;
     
     Impl(db::CatalogDb& db, std::string cacheDir, PathResolver res)
         : db(db), cacheDirectory(std::move(cacheDir)), resolver(std::move(res)),
@@ -318,7 +331,17 @@ struct Service::Impl {
               envString("IMAGINE_CLIP_DEVICE", "cpu"),
               4
           },
-          engine(config) {}
+          engine(config) {
+        auto taxRes = loadTaxonomy();
+        if (taxRes.isOk()) {
+            taxonomy = std::move(taxRes.value());
+            taxonomyReady = true;
+            taxonomyError = "";
+        } else {
+            taxonomyReady = false;
+            taxonomyError = taxRes.status().message();
+        }
+    }
 
     int idleUnloadSec{30};
     std::mutex idleMutex;
@@ -331,6 +354,10 @@ struct Service::Impl {
     std::jthread worker;
 
     void idleLoop(std::stop_token stopToken) {
+        std::stop_callback stopWake(stopToken, [this]() {
+            std::lock_guard<std::mutex> wakeLock(idleMutex);
+            idleCv.notify_all();
+        });
         std::unique_lock lock(idleMutex);
         while (!stopToken.stop_requested() && !idleWorkerStop) {
             const bool busy = jobRunning || activeSearchCount > 0;
@@ -387,7 +414,8 @@ Service::Service(db::CatalogDb& db, std::string cacheDirectory, PathResolver res
     }
 }
 
-Service::~Service() {
+void Service::stop() {
+    if (!impl_) return;
     impl_->cancelRequested.store(true);
     {
         std::lock_guard<std::mutex> lock(impl_->idleMutex);
@@ -398,10 +426,16 @@ Service::~Service() {
         impl_->idleWorker.request_stop();
         impl_->idleWorker.join();
     }
+    std::lock_guard<std::mutex> lock(impl_->jobStartMutex);
+    impl_->stopping.store(true);
     if (impl_->worker.joinable()) {
         impl_->worker.request_stop();
         impl_->worker.join();
     }
+}
+
+Service::~Service() {
+    stop();
     impl_->engine.unload();
 }
 
@@ -680,6 +714,9 @@ Result<SearchResult> Service::findSimilar(MediaId mediaId, int limit) {
 
 Status Service::startJob(const std::string& scope, const std::vector<MediaId>& mediaIds, bool force, int64_t& jobId) {
     std::lock_guard<std::mutex> startLock(impl_->jobStartMutex);
+    if (impl_->stopping.load()) {
+        return Status::internal("CLIP service is stopping");
+    }
     
     {
         std::lock_guard<std::mutex> idleLock(impl_->idleMutex);
@@ -687,6 +724,11 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& m
             return Status::alreadyExists("A semantic index job is already running");
         }
     }
+
+    if (impl_->worker.joinable()) {
+        impl_->worker.join();
+    }
+    impl_->cancelRequested.store(false);
 
     std::vector<MediaId> toIndex;
     const auto info = impl_->engine.info();
@@ -702,11 +744,6 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& m
         }
 
         if (!info.ready) return Status::internal("CLIP engine is not ready");
-
-        if (impl_->worker.joinable()) {
-            impl_->worker.join();
-        }
-        impl_->cancelRequested.store(false);
         
         if (scope == "selected") {
             toIndex = mediaIds;
@@ -737,8 +774,8 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& m
         }
         
         auto insRes = conn.prepare(
-            "INSERT INTO semantic_jobs (scope, state, model_id, total, processed, skipped, failed, remaining, created_at, updated_at) "
-            "VALUES (?, 'running', ?, ?, 0, 0, 0, ?, ?, ?);"
+            "INSERT INTO semantic_jobs (scope, state, model_id, kind, total, processed, skipped, failed, remaining, created_at, updated_at) "
+            "VALUES (?, 'running', ?, 'index', ?, 0, 0, 0, ?, ?, ?);"
         );
         if (!insRes.isOk()) return insRes.status();
         auto ins = std::move(insRes.value());
@@ -749,8 +786,13 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& m
         int64_t now = nowSeconds();
         ins.bind(5, now);
         ins.bind(6, now);
-        ins.step();
+        if (ins.step() != StepResult::Done) {
+            return Status::databaseError("Failed to insert semantic index job row");
+        }
         jobId = conn.lastInsertRowId();
+        if (jobId <= 0) {
+            return Status::databaseError("Failed to obtain semantic index job ID");
+        }
     }
     
     {
@@ -766,15 +808,20 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& m
     return Status::ok();
 }
 
-Result<nlohmann::json> Service::getJob(int64_t jobId) const {
+Result<nlohmann::json> Service::getJob(int64_t jobId, const std::string& expectedKind) const {
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
     auto stmtRes = impl_->db.conn_.prepare(
-        "SELECT id, state, scope, total, processed, skipped, failed, remaining, error, model_id FROM semantic_jobs WHERE id=?;"
+        "SELECT id, state, scope, total, processed, skipped, failed, remaining, error, model_id, kind FROM semantic_jobs WHERE id=?;"
     );
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
     stmt.bind(1, jobId);
     if (stmt.step() != StepResult::Row) return Status::notFound("Job not found");
+
+    std::string kind = stmt.getString(10);
+    if (!expectedKind.empty() && kind != expectedKind) {
+        return Status::notFound("Job not found");
+    }
     
     return json{
         {"id", stmt.getInt64(0)},
@@ -786,12 +833,25 @@ Result<nlohmann::json> Service::getJob(int64_t jobId) const {
         {"failed", stmt.getInt64(6)},
         {"remaining", stmt.getInt64(7)},
         {"error", stmt.getString(8)},
-        {"model_id", stmt.getString(9)}
+        {"model_id", stmt.getString(9)},
+        {"kind", kind}
     };
 }
 
-Status Service::cancelJob(int64_t jobId) {
+Status Service::cancelJob(int64_t jobId, const std::string& expectedKind) {
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+    auto checkRes = impl_->db.conn_.prepare("SELECT kind FROM semantic_jobs WHERE id=?;");
+    if (!checkRes.isOk()) return checkRes.status();
+    auto checkStmt = std::move(checkRes.value());
+    checkStmt.bind(1, jobId);
+    if (checkStmt.step() != StepResult::Row) {
+        return Status::notFound("Job not found");
+    }
+    std::string kind = checkStmt.getString(0);
+    if (!expectedKind.empty() && kind != expectedKind) {
+        return Status::notFound("Job not found");
+    }
+
     auto stmtRes = impl_->db.conn_.prepare("UPDATE semantic_jobs SET state='cancelling' WHERE id=? AND state='running';");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
@@ -1307,6 +1367,526 @@ void Service::addMediaVector(MediaId id, const std::vector<float>& embedding) {
 
 void Service::reloadIndex() {
     loadIndex();
+}
+
+
+nlohmann::json Service::smartTagStatus() const {
+    const auto info = impl_->engine.info();
+    int64_t indexedPhotos = 0;
+    int64_t labeledPhotos = 0;
+    int64_t tagAssignments = 0;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        Connection& conn = impl_->db.conn_;
+
+        auto idxStmtRes = conn.prepare(
+            "SELECT COUNT(*) FROM media_items m "
+            "JOIN semantic_index_state s ON m.id = s.media_id AND m.content_hash = s.content_hash "
+            "WHERE m.media_type = 'photo' AND s.model_id = ? AND s.model_revision = ? AND s.vector_dim = ? "
+            "AND s.embedding IS NOT NULL AND (s.error_text IS NULL OR s.error_text = '');"
+        );
+        if (idxStmtRes.isOk()) {
+            auto& stmt = idxStmtRes.value();
+            stmt.bind(1, info.modelId);
+            stmt.bind(2, info.modelRevision);
+            stmt.bind(3, info.vectorDim);
+            if (stmt.step() == StepResult::Row) {
+                indexedPhotos = stmt.getInt64(0);
+            }
+        }
+
+        auto labStmtRes = conn.prepare(
+            "SELECT COUNT(*) FROM smart_tag_state st "
+            "JOIN media_items m ON st.media_id = m.id AND st.content_hash = m.content_hash "
+            "WHERE st.model_id = ? AND st.model_revision = ? AND st.taxonomy_version = ?;"
+        );
+        if (labStmtRes.isOk()) {
+            auto& stmt = labStmtRes.value();
+            stmt.bind(1, info.modelId);
+            stmt.bind(2, info.modelRevision);
+            stmt.bind(3, impl_->taxonomy.version);
+            if (stmt.step() == StepResult::Row) {
+                labeledPhotos = stmt.getInt64(0);
+            }
+        }
+
+        auto assStmtRes = conn.prepare("SELECT COUNT(*) FROM media_tag_provenance WHERE source = 'clip';");
+        if (assStmtRes.isOk()) {
+            auto& stmt = assStmtRes.value();
+            if (stmt.step() == StepResult::Row) {
+                tagAssignments = stmt.getInt64(0);
+            }
+        }
+    }
+
+    return nlohmann::json{
+        {"built", info.built},
+        {"ready", info.ready},
+        {"taxonomyReady", impl_->taxonomyReady},
+        {"taxonomyError", impl_->taxonomyError},
+        {"taxonomyVersion", impl_->taxonomy.version},
+        {"labelCount", static_cast<int64_t>(impl_->taxonomy.labels.size())},
+        {"indexedPhotos", indexedPhotos},
+        {"labeledPhotos", labeledPhotos},
+        {"tagAssignments", tagAssignments},
+        {"modelId", info.modelId}
+    };
+}
+
+Status Service::startSmartTagJob(const std::string& scope, const std::vector<MediaId>& mediaIds, bool force, int64_t& jobId) {
+    std::lock_guard<std::mutex> startLock(impl_->jobStartMutex);
+    if (impl_->stopping.load()) {
+        return Status::internal("CLIP service is stopping");
+    }
+
+    {
+        std::lock_guard<std::mutex> idleLock(impl_->idleMutex);
+        if (impl_->jobRunning) {
+            return Status::alreadyExists("A job is already running");
+        }
+    }
+
+    if (impl_->worker.joinable()) {
+        impl_->worker.join();
+    }
+    impl_->cancelRequested.store(false);
+
+    const auto info = impl_->engine.info();
+    if (!info.ready) return Status::internal("CLIP model unavailable");
+    if (!impl_->taxonomyReady) return Status::internal("Taxonomy not ready: " + impl_->taxonomyError);
+
+    std::vector<MediaId> candidates;
+    {
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        Connection& conn = impl_->db.conn_;
+
+        auto countRes = conn.prepare("SELECT COUNT(*) FROM semantic_jobs WHERE state IN ('running','cancelling');");
+        if (!countRes.isOk()) return countRes.status();
+        auto countStmt = std::move(countRes.value());
+        if (countStmt.step() == StepResult::Row && countStmt.getInt64(0) > 0) {
+            return Status::alreadyExists("A job is already running");
+        }
+
+        auto idxStmtRes = conn.prepare(
+            "SELECT COUNT(*) FROM media_items m "
+            "JOIN semantic_index_state s ON m.id = s.media_id AND m.content_hash = s.content_hash "
+            "WHERE m.media_type = 'photo' AND s.model_id = ? AND s.model_revision = ? "
+            "AND s.embedding IS NOT NULL AND (s.error_text IS NULL OR s.error_text = '');"
+        );
+        if (!idxStmtRes.isOk()) return idxStmtRes.status();
+        auto idxStmt = std::move(idxStmtRes.value());
+        idxStmt.bind(1, info.modelId);
+        idxStmt.bind(2, info.modelRevision);
+        int64_t indexedPhotos = 0;
+        if (idxStmt.step() == StepResult::Row) {
+            indexedPhotos = idxStmt.getInt64(0);
+        }
+        if (indexedPhotos <= 0) {
+            return Status::invalidArgument("Build the search index first (0 photos indexed)");
+        }
+
+        if (scope == "selected") {
+            candidates = mediaIds;
+        } else {
+            auto stmtRes = conn.prepare(R"SQL(
+                SELECT m.id FROM media_items m
+                JOIN semantic_index_state s
+                  ON m.id = s.media_id
+                  AND m.content_hash = s.content_hash
+                  AND s.model_id = ?
+                  AND s.model_revision = ?
+                  AND s.vector_dim = ?
+                  AND s.embedding IS NOT NULL
+                  AND (s.error_text IS NULL OR s.error_text = '')
+                WHERE m.media_type = 'photo'
+                ORDER BY m.id;
+            )SQL");
+            if (!stmtRes.isOk()) return stmtRes.status();
+            auto stmt = std::move(stmtRes.value());
+            stmt.bind(1, info.modelId);
+            stmt.bind(2, info.modelRevision);
+            stmt.bind(3, info.vectorDim);
+            while (stmt.step() == StepResult::Row) {
+                candidates.push_back(stmt.getInt64(0));
+            }
+        }
+
+        auto insRes = conn.prepare(
+            "INSERT INTO semantic_jobs (scope, state, model_id, kind, total, processed, skipped, failed, remaining, created_at, updated_at) "
+            "VALUES (?, 'running', ?, 'tags', ?, 0, 0, 0, ?, ?, ?);"
+        );
+        if (!insRes.isOk()) return insRes.status();
+        auto ins = std::move(insRes.value());
+        ins.bind(1, scope);
+        ins.bind(2, info.modelId);
+        ins.bind(3, static_cast<int64_t>(candidates.size()));
+        ins.bind(4, static_cast<int64_t>(candidates.size()));
+        int64_t now = nowSeconds();
+        ins.bind(5, now);
+        ins.bind(6, now);
+        if (ins.step() != StepResult::Done) {
+            return Status::databaseError("Failed to insert smart tag job row");
+        }
+        jobId = conn.lastInsertRowId();
+        if (jobId <= 0) {
+            return Status::databaseError("Failed to obtain smart tag job ID");
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> idleLock(impl_->idleMutex);
+        impl_->jobRunning = true;
+    }
+    impl_->idleCv.notify_all();
+
+    impl_->worker = std::jthread([this, jobId, scope, candidates = std::move(candidates), force] {
+        runTagJob(jobId, scope, std::move(candidates), force);
+    });
+
+    return Status::ok();
+}
+
+Status Service::clearSmartTags() {
+    std::lock_guard<std::mutex> startLock(impl_->jobStartMutex);
+    {
+        std::lock_guard<std::mutex> idleLock(impl_->idleMutex);
+        if (impl_->jobRunning) {
+            return Status::alreadyExists("A job is currently running");
+        }
+    }
+    {
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        auto countRes = impl_->db.conn_.prepare("SELECT COUNT(*) FROM semantic_jobs WHERE state IN ('running','cancelling');");
+        if (countRes.isOk()) {
+            auto& stmt = countRes.value();
+            if (stmt.step() == StepResult::Row && stmt.getInt64(0) > 0) {
+                return Status::alreadyExists("A job is currently running");
+            }
+        }
+    }
+    return impl_->db.clearSmartTags();
+}
+
+void Service::runTagJobForTest(int64_t jobId, std::string scope, std::vector<MediaId> mediaIds, bool force) {
+    impl_->cancelRequested.store(false);
+    runTagJob(jobId, std::move(scope), std::move(mediaIds), force);
+}
+
+void Service::runTagJob(int64_t jobId, std::string scope, std::vector<MediaId> candidateIds, bool force) {
+    IMAGINE_LOG_INFO("Smart tag job " + std::to_string(jobId) + " started processing " + std::to_string(candidateIds.size()) + " items");
+    {
+        std::lock_guard<std::mutex> lock(impl_->idleMutex);
+        impl_->jobRunning = true;
+    }
+    impl_->idleCv.notify_all();
+
+    struct TagJobGuard {
+        Service::Impl& impl;
+        int64_t jobId;
+        ~TagJobGuard() {
+            {
+                std::lock_guard<std::mutex> lock(impl.idleMutex);
+                impl.jobRunning = false;
+                impl.lastActivityTime = std::chrono::steady_clock::now();
+            }
+            impl.cancelRequested.store(false);
+            impl.idleCv.notify_all();
+        }
+    } guard{*impl_, jobId};
+
+    try {
+        const auto info = impl_->engine.info();
+        if (!info.ready || !impl_->taxonomyReady) {
+            std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+            auto stmtRes = impl_->db.conn_.prepare("UPDATE semantic_jobs SET state='failed', error=?, remaining=0, updated_at=? WHERE id=?;");
+            if (stmtRes.isOk()) {
+                auto& stmt = stmtRes.value();
+                stmt.bind(1, !info.ready ? "CLIP engine is not ready" : impl_->taxonomyError);
+                stmt.bind(2, nowSeconds());
+                stmt.bind(3, jobId);
+                stmt.step();
+            }
+            return;
+        }
+
+        // Lazy tag mapping: only create/fetch tag row when a label is assigned
+        std::unordered_map<std::string, TagId> labelIdToTagId;
+
+        // Compute or load label embeddings from cache
+        std::vector<std::vector<float>> labelEmbeddings;
+        {
+            std::lock_guard<std::mutex> cacheLock(impl_->labelCacheMutex);
+            std::string cacheKey = info.modelId + ":" + info.modelRevision + ":" + impl_->taxonomy.version;
+            if (impl_->labelCache.key == cacheKey && impl_->labelCache.embeddings.size() == impl_->taxonomy.labels.size()) {
+                labelEmbeddings = impl_->labelCache.embeddings;
+            } else {
+                IMAGINE_LOG_INFO("Encoding label prompts for Smart Tags taxonomy (version " + impl_->taxonomy.version + ")...");
+                labelEmbeddings.reserve(impl_->taxonomy.labels.size());
+                for (const auto& label : impl_->taxonomy.labels) {
+                    std::vector<std::vector<float>> promptEmbeddings;
+                    promptEmbeddings.reserve(label.prompts.size());
+                    for (const auto& prompt : label.prompts) {
+                        auto encRes = impl_->engine.encodeText(prompt);
+                        if (!encRes.isOk()) {
+                            IMAGINE_LOG_ERROR("Failed to encode text prompt '" + prompt + "': " + encRes.status().message());
+                            std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+                            auto stmtRes = impl_->db.conn_.prepare("UPDATE semantic_jobs SET state='failed', error=?, remaining=0, updated_at=? WHERE id=?;");
+                            if (stmtRes.isOk()) {
+                                auto& stmt = stmtRes.value();
+                                stmt.bind(1, "Failed to encode text: " + encRes.status().message());
+                                stmt.bind(2, nowSeconds());
+                                stmt.bind(3, jobId);
+                                stmt.step();
+                            }
+                            return;
+                        }
+                        promptEmbeddings.push_back(std::move(encRes.value()));
+                    }
+                    labelEmbeddings.push_back(meanPoolAndNormalize(promptEmbeddings));
+                }
+                impl_->labelCache.key = std::move(cacheKey);
+                impl_->labelCache.embeddings = labelEmbeddings;
+            }
+        }
+
+        std::unordered_map<MediaId, std::string> candidateHashes;
+        std::unordered_set<MediaId> upToDateMediaIds;
+        std::unordered_set<uint64_t> rejections;
+
+        {
+            std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+            Connection& conn = impl_->db.conn_;
+
+            auto rejRes = conn.prepare("SELECT media_id, tag_id FROM smart_tag_rejections;");
+            if (rejRes.isOk()) {
+                auto& rejStmt = rejRes.value();
+                while (rejStmt.step() == StepResult::Row) {
+                    MediaId mid = rejStmt.getInt64(0);
+                    TagId tid = rejStmt.getInt64(1);
+                    uint64_t key = (static_cast<uint64_t>(mid) << 32) | static_cast<uint32_t>(tid);
+                    rejections.insert(key);
+                }
+            }
+
+            for (size_t offset = 0; offset < candidateIds.size(); offset += 500) {
+                size_t chunkEnd = std::min(offset + 500, candidateIds.size());
+                std::string inClause = "(";
+                for (size_t i = offset; i < chunkEnd; ++i) {
+                    inClause += std::to_string(candidateIds[i]);
+                    if (i < chunkEnd - 1) inClause += ",";
+                }
+                inClause += ")";
+                auto hashRes = conn.prepare("SELECT id, content_hash FROM media_items WHERE id IN " + inClause + ";");
+                if (hashRes.isOk()) {
+                    auto& stmt = hashRes.value();
+                    while (stmt.step() == StepResult::Row) {
+                        candidateHashes[stmt.getInt64(0)] = stmt.getString(1);
+                    }
+                }
+            }
+
+            if (!force) {
+                auto stRes = conn.prepare(
+                    "SELECT media_id, content_hash FROM smart_tag_state "
+                    "WHERE model_id = ? AND model_revision = ? AND taxonomy_version = ?;"
+                );
+                if (stRes.isOk()) {
+                    auto& stmt = stRes.value();
+                    stmt.bind(1, info.modelId);
+                    stmt.bind(2, info.modelRevision);
+                    stmt.bind(3, impl_->taxonomy.version);
+                    while (stmt.step() == StepResult::Row) {
+                        MediaId mid = stmt.getInt64(0);
+                        std::string ch = stmt.getString(1);
+                        auto it = candidateHashes.find(mid);
+                        if (it != candidateHashes.end() && it->second == ch) {
+                            upToDateMediaIds.insert(mid);
+                        }
+                    }
+                }
+            }
+        }
+
+        SmartTagOptions options = loadSmartTagOptionsFromEnv();
+
+        int64_t processed = 0;
+        int64_t skipped = 0;
+        int64_t failed = 0;
+        int64_t total = static_cast<int64_t>(candidateIds.size());
+
+        std::vector<db::SmartTagRecord> batchRecords;
+        batchRecords.reserve(200);
+
+        auto flushBatch = [&]() {
+            if (batchRecords.empty()) return;
+            Status st = impl_->db.replaceSmartTags(batchRecords, info.modelId, info.modelRevision, impl_->taxonomy.version);
+            if (st.isOk()) {
+                processed += static_cast<int64_t>(batchRecords.size());
+            } else {
+                IMAGINE_LOG_WARN("Batch replaceSmartTags failed (" + st.message() + "); retrying individually");
+                for (const auto& rec : batchRecords) {
+                    Status singleSt = impl_->db.replaceSmartTags({rec}, info.modelId, info.modelRevision, impl_->taxonomy.version);
+                    if (singleSt.isOk()) {
+                        processed++;
+                    } else {
+                        failed++;
+                    }
+                }
+            }
+            batchRecords.clear();
+
+            std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+            int64_t remaining = std::max<int64_t>(0, total - (processed + skipped + failed));
+            auto upRes = impl_->db.conn_.prepare(
+                "UPDATE semantic_jobs SET processed=?, skipped=?, failed=?, remaining=?, updated_at=? WHERE id=?;"
+            );
+            if (upRes.isOk()) {
+                auto& stmt = upRes.value();
+                stmt.bind(1, processed);
+                stmt.bind(2, skipped);
+                stmt.bind(3, failed);
+                stmt.bind(4, remaining);
+                stmt.bind(5, nowSeconds());
+                stmt.bind(6, jobId);
+                stmt.step();
+            }
+        };
+
+        bool cancelled = false;
+
+        for (size_t i = 0; i < candidateIds.size(); ++i) {
+            if (impl_->cancelRequested.load()) {
+                cancelled = true;
+                if (!batchRecords.empty()) {
+                    flushBatch();
+                }
+                break;
+            }
+
+            MediaId mid = candidateIds[i];
+
+            auto hashIt = candidateHashes.find(mid);
+            if (hashIt == candidateHashes.end()) {
+                failed++;
+                continue;
+            }
+            const std::string& contentHash = hashIt->second;
+
+            if (!force && upToDateMediaIds.find(mid) != upToDateMediaIds.end()) {
+                skipped++;
+                continue;
+            }
+
+            // Always read DB embedding matching current content_hash to prevent stale in-memory vectors
+            int vecDim = 0;
+            std::vector<float> imageVec;
+            {
+                std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+                auto stmtRes = impl_->db.conn_.prepare(
+                    "SELECT embedding, vector_dim FROM semantic_index_state "
+                    "WHERE media_id = ? AND content_hash = ? AND model_id = ? AND model_revision = ? "
+                    "AND vector_dim = ? AND embedding IS NOT NULL AND (error_text IS NULL OR error_text = '');"
+                );
+                if (stmtRes.isOk()) {
+                    auto& stmt = stmtRes.value();
+                    stmt.bind(1, mid);
+                    stmt.bind(2, contentHash);
+                    stmt.bind(3, info.modelId);
+                    stmt.bind(4, info.modelRevision);
+                    stmt.bind(5, info.vectorDim);
+                    if (stmt.step() == StepResult::Row) {
+                        vecDim = stmt.getInt(1);
+                        imageVec = readVector(stmt, 0, vecDim);
+                    }
+                }
+            }
+
+            if (imageVec.empty() || vecDim != info.vectorDim) {
+                skipped++;
+                continue;
+            }
+
+            auto selected = selectSmartLabels(imageVec, labelEmbeddings, impl_->taxonomy.labels, options);
+
+            std::vector<TagId> tagIds;
+            for (const auto& s : selected) {
+                TagId tid = 0;
+                auto tagIdIt = labelIdToTagId.find(s.id);
+                if (tagIdIt != labelIdToTagId.end()) {
+                    tid = tagIdIt->second;
+                } else {
+                    std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+                    auto tagRes = impl_->db.createOrGetTag(s.name, "keyword");
+                    if (!tagRes.isOk()) continue;
+                    tid = tagRes.value();
+                    labelIdToTagId[s.id] = tid;
+                }
+                uint64_t key = (static_cast<uint64_t>(mid) << 32) | static_cast<uint32_t>(tid);
+                if (rejections.find(key) != rejections.end()) {
+                    continue;
+                }
+                tagIds.push_back(tid);
+            }
+
+            batchRecords.push_back(db::SmartTagRecord{mid, std::move(tagIds), contentHash});
+
+            if (batchRecords.size() >= 200) {
+                flushBatch();
+            }
+        }
+
+        if (!batchRecords.empty()) {
+            flushBatch();
+        }
+
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        int64_t remaining = std::max<int64_t>(0, total - (processed + skipped + failed));
+        std::string finalState = cancelled ? "cancelled" : (processed == 0 && failed > 0 ? "failed" : "completed");
+        std::string finalError = (!cancelled && processed == 0 && failed > 0) ? "All candidate media failed to be labeled" : "";
+        auto finalRes = impl_->db.conn_.prepare(
+            "UPDATE semantic_jobs SET state=?, error=?, processed=?, skipped=?, failed=?, remaining=?, updated_at=? WHERE id=?;"
+        );
+        if (finalRes.isOk()) {
+            auto& stmt = finalRes.value();
+            stmt.bind(1, finalState);
+            stmt.bind(2, finalError);
+            stmt.bind(3, processed);
+            stmt.bind(4, skipped);
+            stmt.bind(5, failed);
+            stmt.bind(6, remaining);
+            stmt.bind(7, nowSeconds());
+            stmt.bind(8, jobId);
+            stmt.step();
+        }
+        IMAGINE_LOG_INFO("Smart tag job " + std::to_string(jobId) + " " + finalState + " (processed=" + std::to_string(processed) +
+                         ", skipped=" + std::to_string(skipped) + ", failed=" + std::to_string(failed) + ")");
+    } catch (const std::exception& ex) {
+        IMAGINE_LOG_ERROR("Smart tag job " + std::to_string(jobId) + " failed with exception: " + ex.what());
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        auto finalRes = impl_->db.conn_.prepare(
+            "UPDATE semantic_jobs SET state='failed', error=?, remaining=0, updated_at=? WHERE id=?;"
+        );
+        if (finalRes.isOk()) {
+            auto& stmt = finalRes.value();
+            stmt.bind(1, std::string("Internal error: ") + ex.what());
+            stmt.bind(2, nowSeconds());
+            stmt.bind(3, jobId);
+            stmt.step();
+        }
+    } catch (...) {
+        IMAGINE_LOG_ERROR("Smart tag job " + std::to_string(jobId) + " failed with unknown exception");
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        auto finalRes = impl_->db.conn_.prepare(
+            "UPDATE semantic_jobs SET state='failed', error='Internal error: unknown exception', remaining=0, updated_at=? WHERE id=?;"
+        );
+        if (finalRes.isOk()) {
+            auto& stmt = finalRes.value();
+            stmt.bind(1, nowSeconds());
+            stmt.bind(2, jobId);
+            stmt.step();
+        }
+    }
 }
 
 } // namespace imagine::clip

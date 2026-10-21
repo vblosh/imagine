@@ -371,12 +371,74 @@ Status Schema::applyMigrationV7(Connection& conn) {
     return tx.commit();
 }
 
+static bool columnExists(Connection& conn, const std::string& table, const std::string& column) {
+    auto stmtRes = conn.prepare("PRAGMA table_info(" + table + ");");
+    if (!stmtRes.isOk()) return false;
+    auto stmt = std::move(stmtRes.value());
+    while (stmt.step() == StepResult::Row) {
+        if (stmt.getString(1) == column) {
+            return true;
+        }
+    }
+    return false;
+}
+
 Status Schema::applyMigrationV8(Connection& conn) {
-    // V8 adds a partial index idx_media_content_hash to accelerate exact duplicate scans
+    Transaction tx(conn);
+
+    if (!columnExists(conn, "media_tag_provenance", "source")) {
+        Status s = conn.execute("ALTER TABLE media_tag_provenance ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';");
+        if (!s.isOk()) return s;
+    }
+
+    Status s = conn.execute(R"SQL(
+        UPDATE media_tag_provenance SET source = 'face' WHERE manual = 0 AND source = 'manual';
+        CREATE INDEX IF NOT EXISTS idx_media_tag_provenance_source
+            ON media_tag_provenance(source, media_id);
+    )SQL");
+    if (!s.isOk()) return s;
+
+    if (!columnExists(conn, "semantic_jobs", "kind")) {
+        s = conn.execute("ALTER TABLE semantic_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'index';");
+        if (!s.isOk()) return s;
+    }
+
+    const char* v8_sql = R"SQL(
+        CREATE INDEX IF NOT EXISTS idx_semantic_jobs_kind ON semantic_jobs(kind, state);
+
+        CREATE TABLE IF NOT EXISTS smart_tag_state (
+            media_id         INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+            content_hash     TEXT NOT NULL,
+            model_id         TEXT NOT NULL,
+            model_revision   TEXT NOT NULL,
+            taxonomy_version TEXT NOT NULL,
+            label_count      INTEGER NOT NULL DEFAULT 0,
+            updated_at       INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_smart_tag_state_lookup ON smart_tag_state(model_id, model_revision, taxonomy_version, content_hash);
+
+        CREATE TABLE IF NOT EXISTS smart_tag_rejections (
+            media_id    INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+            tag_id      INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            rejected_at INTEGER NOT NULL,
+            PRIMARY KEY(media_id, tag_id)
+        );
+    )SQL";
+
+    s = conn.execute(v8_sql);
+    if (!s.isOk()) return s;
+    s = conn.execute("INSERT INTO schema_version (version) VALUES (8);");
+    if (!s.isOk()) return s;
+    return tx.commit();
+}
+
+Status Schema::applyMigrationV9(Connection& conn) {
+    // V9 adds a partial index idx_media_content_hash to accelerate exact duplicate scans
     // by skipping empty-hash legacy rows.
     // The existing idx_media_hash from V1 on media_items(content_hash) is retained alongside it
     // so that unbound parameter lookups (e.g. getMediaByHash) remain indexed.
-    const char* v8_sql = R"SQL(
+    const char* v9_sql = R"SQL(
         CREATE INDEX IF NOT EXISTS idx_media_content_hash
             ON media_items(content_hash) WHERE content_hash != '';
 
@@ -393,9 +455,9 @@ Status Schema::applyMigrationV8(Connection& conn) {
     )SQL";
 
     Transaction tx(conn);
-    Status s = conn.execute(v8_sql);
+    Status s = conn.execute(v9_sql);
     if (!s.isOk()) return s;
-    s = conn.execute("INSERT INTO schema_version (version) VALUES (8);");
+    s = conn.execute("INSERT INTO schema_version (version) VALUES (9);");
     if (!s.isOk()) return s;
     return tx.commit();
 }
@@ -461,8 +523,17 @@ Status Schema::migrate(Connection& conn) {
         if (!s.isOk()) return s;
         current = 8;
     }
+    if (current < 9) {
+        IMAGINE_LOG_INFO("Applying database migration v9...");
+        Status s = applyMigrationV9(conn);
+        if (!s.isOk()) return s;
+        current = 9;
+    }
     conn.execute("CREATE INDEX IF NOT EXISTS idx_face_rejections_tag ON face_rejections(tag_id);");
     conn.execute("CREATE INDEX IF NOT EXISTS idx_face_job_media_media ON face_analysis_job_media(media_id);");
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_media_tag_provenance_source ON media_tag_provenance(source, media_id);");
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_semantic_jobs_kind ON semantic_jobs(kind, state);");
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_smart_tag_state_lookup ON smart_tag_state(model_id, model_revision, taxonomy_version, content_hash);");
 
     IMAGINE_LOG_INFO("Database schema up to date at version " + std::to_string(current));
     return Status::ok();
