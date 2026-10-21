@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "imagine/db/catalog_db.hpp"
+#include "imagine/core/deduplicator.hpp"
 #include "imagine/common/logger.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/thumbnail/cache.hpp"
@@ -176,7 +177,7 @@ struct Service::Impl {
         
         void add(MediaId id, const float* embedding, int d) {
             std::unique_lock lock(mutex);
-            if (dim == 0) dim = d;
+            if (dim == 0 || ids.empty()) dim = d;
             if (d != dim) return;
             auto it = std::lower_bound(ids.begin(), ids.end(), id);
             if (it != ids.end() && *it == id) {
@@ -223,9 +224,14 @@ struct Service::Impl {
             return std::vector<float>(start, start + dim);
         }
         
-        std::vector<SearchHit> search(const float* query, int k, int d,
-                                      const std::unordered_set<MediaId>* allowedIds = nullptr) const {
+        bool has(MediaId id) const {
             std::shared_lock lock(mutex);
+            auto it = std::lower_bound(ids.begin(), ids.end(), id);
+            return (it != ids.end() && *it == id);
+        }
+
+        std::vector<SearchHit> searchUnlocked(const float* query, int k, int d,
+                                              const std::unordered_set<MediaId>* allowedIds = nullptr) const {
             if (ids.empty() || dim != d) return {};
             std::vector<SearchHit> hits;
             hits.reserve(allowedIds ? std::min(ids.size(), allowedIds->size()) : ids.size());
@@ -245,6 +251,60 @@ struct Service::Impl {
                           [](const SearchHit& a, const SearchHit& b) { return a.score > b.score; });
             }
             return hits;
+        }
+
+        std::vector<SearchHit> search(const float* query, int k, int d,
+                                      const std::unordered_set<MediaId>* allowedIds = nullptr) const {
+            std::shared_lock lock(mutex);
+            return searchUnlocked(query, k, d, allowedIds);
+        }
+
+        std::vector<VisualDuplicatePair> findDuplicatePairs(
+            float threshold,
+            const std::unordered_set<MediaId>& allowedIds
+        ) const {
+            std::shared_lock lock(mutex);
+            if (ids.size() < 2 || dim <= 0) return {};
+
+            std::vector<size_t> indices;
+            indices.reserve(ids.size());
+            for (size_t i = 0; i < ids.size(); ++i) {
+                if (allowedIds.empty() || allowedIds.count(ids[i])) {
+                    indices.push_back(i);
+                }
+            }
+            if (indices.size() < 2) return {};
+
+            std::unordered_map<uint64_t, float> pairMap;
+            constexpr int kCandidatesPerSeed = 50;
+
+            for (size_t idxA : indices) {
+                MediaId idA = ids[idxA];
+                const float* vecA = &vectors[idxA * dim];
+                auto hits = searchUnlocked(vecA, kCandidatesPerSeed + 1, dim, allowedIds.empty() ? nullptr : &allowedIds);
+                for (const auto& hit : hits) {
+                    if (hit.mediaId == idA) continue;
+                    if (hit.score < threshold) continue;
+                    MediaId low = std::min(idA, hit.mediaId);
+                    MediaId high = std::max(idA, hit.mediaId);
+                    uint64_t key = (static_cast<uint64_t>(low) << 32) | (static_cast<uint64_t>(high) & 0xFFFFFFFFULL);
+                    auto it = pairMap.find(key);
+                    if (it == pairMap.end() || hit.score > it->second) {
+                        pairMap[key] = hit.score;
+                    }
+                }
+            }
+
+            std::vector<VisualDuplicatePair> pairs;
+            pairs.reserve(pairMap.size());
+            for (const auto& [key, sim] : pairMap) {
+                pairs.push_back(VisualDuplicatePair{
+                    static_cast<MediaId>(key >> 32),
+                    static_cast<MediaId>(key & 0xFFFFFFFFULL),
+                    sim
+                });
+            }
+            return pairs;
         }
     } index;
     
@@ -384,6 +444,10 @@ void Service::loadIndex() {
 
 void Service::removeMedia(MediaId mediaId) {
     impl_->index.remove(mediaId);
+}
+
+bool Service::hasMedia(MediaId mediaId) const {
+    return impl_->index.has(mediaId);
 }
 
 nlohmann::json Service::status() const {
@@ -544,13 +608,13 @@ Result<SearchResult> Service::search(const SearchRequest& request) {
 }
 
 Result<SearchResult> Service::findSimilar(MediaId mediaId, int limit) {
-    if (!impl_->engine.info().ready) return Status::internal("CLIP engine is not ready");
     auto t0 = std::chrono::steady_clock::now();
     const int clampedLimit = std::clamp(limit, 1, 1000);
     
     int dim = 0;
     std::vector<float> queryVec = impl_->index.get(mediaId, dim);
     if (queryVec.empty()) {
+        if (!impl_->engine.info().ready) return Status::internal("CLIP engine is not ready");
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
         auto stmtRes = impl_->db.conn_.prepare("SELECT embedding, vector_dim FROM semantic_index_state WHERE media_id=? AND model_id=? AND model_revision=?;");
         if (stmtRes.isOk()) {
@@ -1021,6 +1085,228 @@ void Service::runJob(int64_t jobId, std::string scope, std::vector<MediaId> medi
     } else {
         IMAGINE_LOG_INFO("Semantic index job " + std::to_string(jobId) + " completed successfully");
     }
+}
+
+namespace {
+
+inline std::unordered_set<uint64_t> loadDismissedPairs(db::CatalogDb& db) {
+    std::unordered_set<uint64_t> dismissed;
+    auto res = db.getDismissedDuplicatePairs();
+    if (res.isOk()) {
+        for (const auto& [a, b] : res.value()) {
+            MediaId low = std::min(a, b);
+            MediaId high = std::max(a, b);
+            dismissed.insert((static_cast<uint64_t>(low) << 32) | (static_cast<uint64_t>(high) & 0xFFFFFFFFULL));
+        }
+    }
+    return dismissed;
+}
+
+inline std::unordered_set<MediaId> loadExactDuplicateMembers(db::CatalogDb& db) {
+    std::unordered_set<MediaId> exactIds;
+    auto res = db.findExactDuplicateGroups();
+    if (res.isOk()) {
+        for (const auto& group : res.value()) {
+            exactIds.insert(group.begin(), group.end());
+        }
+    }
+    return exactIds;
+}
+
+struct DisjointSet {
+    std::unordered_map<MediaId, MediaId> parent;
+    MediaId find(MediaId x) {
+        if (!parent.count(x)) parent[x] = x;
+        if (parent[x] == x) return x;
+        return parent[x] = find(parent[x]);
+    }
+    void unite(MediaId x, MediaId y) {
+        MediaId rx = find(x);
+        MediaId ry = find(y);
+        if (rx != ry) {
+            parent[rx] = ry;
+        }
+    }
+};
+
+inline void rankKeeperMembers(std::vector<MediaId>& members, db::CatalogDb& db) {
+    if (members.size() <= 1) return;
+    std::vector<MediaItem> items;
+    items.reserve(members.size());
+    for (MediaId id : members) {
+        auto r = db.getMediaById(id);
+        if (r.isOk()) {
+            items.push_back(r.value());
+        } else {
+            MediaItem dummy;
+            dummy.id = id;
+            items.push_back(dummy);
+        }
+    }
+
+    std::stable_sort(items.begin(), items.end(), core::isBetterKeeper);
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        members[i] = items[i].id;
+    }
+}
+
+} // namespace
+
+std::vector<VisualDuplicatePair> Service::findVisualDuplicatePairs(
+    float threshold,
+    const std::unordered_set<MediaId>& allowedIds
+) const {
+    return impl_->index.findDuplicatePairs(threshold, allowedIds);
+}
+
+std::vector<VisualDuplicateGroup> Service::scanVisualDuplicates(
+    float threshold,
+    int64_t dateWindowSec,
+    const std::unordered_set<MediaId>& allowedIds,
+    const std::unordered_set<MediaId>& exactHashMemberIds
+) const {
+    auto dismissed = loadDismissedPairs(impl_->db);
+    std::unordered_set<MediaId> exactMembers = exactHashMemberIds.empty()
+        ? loadExactDuplicateMembers(impl_->db)
+        : exactHashMemberIds;
+
+    std::vector<MediaId> seedIds;
+    if (!allowedIds.empty()) {
+        seedIds.assign(allowedIds.begin(), allowedIds.end());
+    } else {
+        std::shared_lock lock(impl_->index.mutex);
+        seedIds = impl_->index.ids;
+    }
+    if (seedIds.size() < 2) return {};
+
+    // Candidate generation seeded by nearest-neighbor index search
+    std::unordered_map<uint64_t, float> candidatePairs;
+    constexpr int kCandidatesPerSeed = 50;
+
+    for (MediaId seedId : seedIds) {
+        if (exactMembers.count(seedId)) continue; // exact-group members excluded before visual pass
+
+        int dim = 0;
+        std::vector<float> queryVec = impl_->index.get(seedId, dim);
+        if (queryVec.empty()) continue;
+
+        auto hits = impl_->index.search(
+            queryVec.data(),
+            kCandidatesPerSeed + 1,
+            dim,
+            allowedIds.empty() ? nullptr : &allowedIds
+        );
+
+        for (const auto& hit : hits) {
+            if (hit.mediaId == seedId) continue;
+            if (hit.score < threshold) continue;
+            if (exactMembers.count(hit.mediaId)) continue; // exclude exact-group members
+
+            MediaId low = std::min(seedId, hit.mediaId);
+            MediaId high = std::max(seedId, hit.mediaId);
+            uint64_t key = (static_cast<uint64_t>(low) << 32) | (static_cast<uint64_t>(high) & 0xFFFFFFFFULL);
+
+            if (dismissed.count(key)) continue; // exclude dismissed pairs
+
+            auto it = candidatePairs.find(key);
+            if (it == candidatePairs.end() || hit.score > it->second) {
+                candidatePairs[key] = hit.score;
+            }
+        }
+    }
+
+    if (candidatePairs.empty()) return {};
+
+    std::vector<VisualDuplicatePair> surviving;
+    surviving.reserve(candidatePairs.size());
+
+    std::unordered_map<MediaId, int64_t> dateTakenCache;
+    if (dateWindowSec > 0) {
+        std::unordered_set<MediaId> needed;
+        for (const auto& [key, _] : candidatePairs) {
+            needed.insert(static_cast<MediaId>(key >> 32));
+            needed.insert(static_cast<MediaId>(key & 0xFFFFFFFFULL));
+        }
+        for (MediaId id : needed) {
+            auto m = impl_->db.getMediaById(id);
+            if (m.isOk()) {
+                dateTakenCache[id] = m.value().date_taken;
+            }
+        }
+    }
+
+    for (const auto& [key, sim] : candidatePairs) {
+        MediaId low = static_cast<MediaId>(key >> 32);
+        MediaId high = static_cast<MediaId>(key & 0xFFFFFFFFULL);
+
+        if (dateWindowSec > 0) {
+            auto itA = dateTakenCache.find(low);
+            auto itB = dateTakenCache.find(high);
+            int64_t dtA = (itA != dateTakenCache.end()) ? itA->second : 0;
+            int64_t dtB = (itB != dateTakenCache.end()) ? itB->second : 0;
+            if (dtA != 0 && dtB != 0 && std::abs(dtA - dtB) > dateWindowSec) {
+                continue;
+            }
+        }
+
+        surviving.push_back(VisualDuplicatePair{low, high, sim});
+    }
+
+    if (surviving.empty()) return {};
+
+    DisjointSet ds;
+    for (const auto& p : surviving) {
+        ds.unite(p.a, p.b);
+    }
+
+    std::unordered_map<MediaId, std::vector<MediaId>> clusters;
+    std::unordered_set<MediaId> allParticipants;
+    for (const auto& p : surviving) {
+        allParticipants.insert(p.a);
+        allParticipants.insert(p.b);
+    }
+    for (MediaId id : allParticipants) {
+        clusters[ds.find(id)].push_back(id);
+    }
+
+    std::vector<VisualDuplicateGroup> groups;
+    for (auto& [root, members] : clusters) {
+        if (members.size() < 2) continue;
+
+        float minSim = 1.0f;
+        for (const auto& p : surviving) {
+            if (ds.find(p.a) == root) {
+                minSim = std::min(minSim, p.similarity);
+            }
+        }
+
+        rankKeeperMembers(members, impl_->db);
+        groups.push_back(VisualDuplicateGroup{std::move(members), minSim});
+    }
+
+    std::sort(groups.begin(), groups.end(), [](const VisualDuplicateGroup& a, const VisualDuplicateGroup& b) {
+        if (a.memberIds.size() != b.memberIds.size()) {
+            return a.memberIds.size() > b.memberIds.size();
+        }
+        MediaId kA = a.memberIds.empty() ? 0 : a.memberIds[0];
+        MediaId kB = b.memberIds.empty() ? 0 : b.memberIds[0];
+        return kA < kB;
+    });
+
+    return groups;
+}
+
+void Service::addMediaVector(MediaId id, const float* embedding, int dim) {
+    impl_->index.add(id, embedding, dim);
+}
+
+void Service::addMediaVector(MediaId id, const std::vector<float>& embedding) {
+    impl_->index.add(id, embedding.data(), static_cast<int>(embedding.size()));
+}
+
+void Service::reloadIndex() {
+    loadIndex();
 }
 
 } // namespace imagine::clip

@@ -204,6 +204,7 @@ import {
 } from './modals.js';
 import { handleEscapeKey, setupKeyboardShortcuts } from './keyboard.js';
 import { setupAutoEventListeners } from './auto-events.js';
+import { setupDeduplicateListeners } from './deduplicate.js';
 import { renderCategoryView, initCategoryView, navigateBackToCategory } from './category-view.js';
 import { initFaceAnalysis, openFaceAnalysisDialog, refreshFaceStatus, updateSettingsFaceStatus } from './face-analysis.js';
 import {
@@ -266,6 +267,7 @@ export function setupEventListeners() {
   initModalSemantics();
   initCategoryView();
   setupAutoEventListeners();
+  setupDeduplicateListeners();
 
   bindGridHandlers();
   bindSidebarHandlers();

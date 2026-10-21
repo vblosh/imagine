@@ -1,0 +1,376 @@
+/* IMAGINE - Deduplicate Stylesheet */
+
+.deduplicate-dialog {
+  max-width: 960px;
+  width: 92vw;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px color-mix(in srgb, var(--bg-app) 80%, transparent);
+}
+
+.deduplicate-header-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.deduplicate-scan-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background-color: var(--bg-topbar);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 12px;
+}
+
+.dedup-scope-badge {
+  padding: 3px 8px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.dedup-scan-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-left: auto;
+}
+
+.dedup-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-primary);
+}
+
+.dedup-checkbox-label.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dedup-threshold-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dedup-threshold-slider {
+  width: 90px;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}
+
+.dedup-threshold-val {
+  font-variant-numeric: tabular-nums;
+  min-width: 40px;
+  color: var(--text-secondary);
+}
+
+.dedup-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 16px;
+  min-height: 240px;
+  max-height: calc(88vh - 140px);
+}
+
+.dedup-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  gap: 12px;
+}
+
+.dedup-state.dedup-error {
+  color: var(--reject-color);
+}
+
+.dedup-summary-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+}
+
+.dedup-summary-metrics {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.dedup-reclaimable-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background-color: color-mix(in srgb, var(--pick-color) 15%, transparent);
+  color: var(--pick-color);
+  border: 1px solid color-mix(in srgb, var(--pick-color) 30%, transparent);
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dedup-summary-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dedup-groups-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dedup-group-card {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 12px;
+  transition: border-color 0.15s ease;
+}
+
+.dedup-group-card.excluded {
+  opacity: 0.6;
+}
+
+.dedup-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 8px;
+}
+
+.dedup-group-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dedup-group-checkbox {
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-color);
+}
+
+.dedup-group-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.dedup-match-badge {
+  padding: 2px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dedup-match-badge.exact {
+  background-color: color-mix(in srgb, var(--accent-color) 18%, transparent);
+  color: var(--accent-color);
+  border: 1px solid color-mix(in srgb, var(--accent-color) 40%, transparent);
+}
+
+.dedup-match-badge.visual {
+  background-color: color-mix(in srgb, var(--gold-star) 18%, transparent);
+  color: var(--gold-star);
+  border: 1px solid color-mix(in srgb, var(--gold-star) 40%, transparent);
+}
+
+.dedup-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dedup-members-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.dedup-member-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 8px;
+  gap: 6px;
+}
+
+.dedup-member-card.is-keeper {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 1px var(--accent-color);
+}
+
+.dedup-thumb-wrap {
+  position: relative;
+  width: 100%;
+  height: 130px;
+  background-color: var(--bg-input);
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dedup-thumb-wrap img {
+  width: 100%;
+  height: 130px;
+  object-fit: cover;
+  display: block;
+}
+
+.dedup-loupe-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background-color: color-mix(in srgb, var(--bg-app) 70%, transparent);
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  color: var(--text-primary);
+  opacity: 0.8;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.dedup-loupe-btn:hover {
+  opacity: 1;
+  background-color: var(--bg-card-hover);
+}
+
+.dedup-keeper-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.dedup-keeper-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dedup-keeper-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  background-color: var(--accent-color);
+  color: var(--text-primary);
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dedup-swap-btn {
+  font-size: 11px;
+  padding: 2px 6px;
+}
+
+.dedup-meta-pills {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+}
+
+.dedup-filename {
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dedup-pills-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dedup-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.dedup-pill.pill-flag {
+  color: var(--pick-color);
+  border-color: color-mix(in srgb, var(--pick-color) 30%, transparent);
+}
+
+.dedup-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  background-color: var(--bg-topbar);
+  border-top: 1px solid var(--border-color);
+}
+
+.dedup-footer-options {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.dedup-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}

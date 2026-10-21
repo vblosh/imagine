@@ -66,6 +66,7 @@ import {
 } from './quick-edit.js';
 import { navigateBackToCategory } from './category-view.js';
 import { isAutoEventOpen, cancelAutoEventReview } from './auto-events.js';
+import { isDeduplicateOpen, closeDeduplicateModal } from './deduplicate.js';
 import { closeSemanticIndexModal } from './semantic-search.js';
 
 export function handleEscapeKey() {
@@ -77,6 +78,11 @@ export function handleEscapeKey() {
   }
   if (isAutoEventOpen()) {
     cancelAutoEventReview();
+    return true;
+  }
+  if (isDeduplicateOpen()) {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeDeduplicateModal();
     return true;
   }
   if (dom.deleteTagModal && dom.deleteTagModal.style.display === 'flex') {

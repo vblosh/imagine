@@ -371,6 +371,35 @@ Status Schema::applyMigrationV7(Connection& conn) {
     return tx.commit();
 }
 
+Status Schema::applyMigrationV8(Connection& conn) {
+    // V8 adds a partial index idx_media_content_hash to accelerate exact duplicate scans
+    // by skipping empty-hash legacy rows.
+    // The existing idx_media_hash from V1 on media_items(content_hash) is retained alongside it
+    // so that unbound parameter lookups (e.g. getMediaByHash) remain indexed.
+    const char* v8_sql = R"SQL(
+        CREATE INDEX IF NOT EXISTS idx_media_content_hash
+            ON media_items(content_hash) WHERE content_hash != '';
+
+        CREATE TABLE IF NOT EXISTS duplicate_dismissals (
+            media_id_a   INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+            media_id_b   INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+            dismissed_at INTEGER NOT NULL,
+            PRIMARY KEY (media_id_a, media_id_b),
+            CHECK (media_id_a < media_id_b)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_dup_dismissals_b
+            ON duplicate_dismissals(media_id_b);
+    )SQL";
+
+    Transaction tx(conn);
+    Status s = conn.execute(v8_sql);
+    if (!s.isOk()) return s;
+    s = conn.execute("INSERT INTO schema_version (version) VALUES (8);");
+    if (!s.isOk()) return s;
+    return tx.commit();
+}
+
 Status Schema::migrate(Connection& conn) {
     auto verResult = getCurrentVersion(conn);
     if (!verResult.isOk()) {
@@ -425,6 +454,12 @@ Status Schema::migrate(Connection& conn) {
         Status s = applyMigrationV7(conn);
         if (!s.isOk()) return s;
         current = 7;
+    }
+    if (current < 8) {
+        IMAGINE_LOG_INFO("Applying database migration v8...");
+        Status s = applyMigrationV8(conn);
+        if (!s.isOk()) return s;
+        current = 8;
     }
     conn.execute("CREATE INDEX IF NOT EXISTS idx_face_rejections_tag ON face_rejections(tag_id);");
     conn.execute("CREATE INDEX IF NOT EXISTS idx_face_job_media_media ON face_analysis_job_media(media_id);");

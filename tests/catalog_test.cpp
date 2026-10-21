@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "imagine/core/catalog.hpp"
+#include "imagine/core/deduplicator.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include <filesystem>
 
@@ -404,5 +405,210 @@ TEST_F(CatalogClassTest, DeleteMediaGuardsUnsetPhotosDir) {
     EXPECT_TRUE(std::filesystem::exists(sampleImg));
 }
 
+namespace imagine::core {
+void setClipEvictionHook(std::function<void(MediaId)> hook);
+}
 
+TEST(DeduplicatorTest, KeeperRankingRules) {
+    // 1. Flag priority: Pick (1) > Unflagged (0) > Reject (-1)
+    {
+        MediaItem a; a.id = 10; a.flag = FlagState::Pick;
+        MediaItem b; b.id = 5; b.flag = FlagState::Unflagged;
+        EXPECT_TRUE(isBetterKeeper(a, b));
+        EXPECT_EQ(rankKeeper({a, b}), 10);
 
+        MediaItem c; c.id = 2; c.flag = FlagState::Reject;
+        EXPECT_TRUE(isBetterKeeper(b, c));
+        EXPECT_EQ(rankKeeper({b, c}), 5);
+    }
+
+    // 2. Resolution: larger width * height wins
+    {
+        MediaItem a; a.id = 1; a.width = 4000; a.height = 3000; // 12MP
+        MediaItem b; b.id = 2; b.width = 1920; b.height = 1080; // ~2MP
+        EXPECT_TRUE(isBetterKeeper(a, b));
+        EXPECT_FALSE(isBetterKeeper(b, a));
+        EXPECT_EQ(rankKeeper({b, a}), 1);
+    }
+
+    // 3. File size: larger file_size wins
+    {
+        MediaItem a; a.id = 1; a.file_size = 5000000;
+        MediaItem b; b.id = 2; b.file_size = 2000000;
+        EXPECT_TRUE(isBetterKeeper(a, b));
+        EXPECT_FALSE(isBetterKeeper(b, a));
+        EXPECT_EQ(rankKeeper({b, a}), 1);
+    }
+
+    // 4. Metadata completeness: caption, GPS, tag count, date_taken != 0 bonus
+    {
+        MediaItem complete; complete.id = 1;
+        complete.caption = "Sunset";
+        complete.exif.has_gps = true;
+        complete.tags = {Tag{1, "beach", "keyword"}, Tag{2, "summer", "keyword"}};
+        complete.date_taken = 1700000000;
+
+        MediaItem sparse; sparse.id = 2;
+        sparse.date_taken = 0; // undated
+
+        EXPECT_TRUE(isBetterKeeper(complete, sparse));
+        EXPECT_EQ(rankKeeper({sparse, complete}), 1);
+
+        // Pre-1970 negative dates earn the date_taken != 0 bonus
+        MediaItem pre1970; pre1970.id = 3;
+        pre1970.date_taken = -631152000; // 1950, != 0 bonus
+        MediaItem undated; undated.id = 4;
+        undated.date_taken = 0; // 0, no bonus
+        EXPECT_TRUE(isBetterKeeper(pre1970, undated));
+    }
+
+    // 5. Path cleanliness: clean library path outranks messy one
+    {
+        MediaItem clean; clean.id = 1;
+        clean.file_path = "photos/2026/vacation/beach.jpg";
+
+        MediaItem copy; copy.id = 2;
+        copy.file_path = "photos/2026/vacation/beach_copy.jpg";
+
+        MediaItem exportItem; exportItem.id = 3;
+        exportItem.file_path = "export/beach.jpg";
+
+        MediaItem numItem; numItem.id = 4;
+        numItem.file_path = "photos/beach (1).jpg";
+
+        MediaItem urlItem; urlItem.id = 5;
+        urlItem.file_path = "photos/beach%20photo.jpg";
+
+        MediaItem copyrightItem; copyrightItem.id = 6;
+        copyrightItem.file_path = "photos/copyright.jpg";
+
+        MediaItem tempItem; tempItem.id = 7;
+        tempItem.file_path = "photos/temperature.jpg";
+
+        EXPECT_TRUE(isBetterKeeper(clean, copy));
+        EXPECT_TRUE(isBetterKeeper(clean, exportItem));
+        EXPECT_TRUE(isBetterKeeper(clean, numItem));
+        EXPECT_TRUE(isBetterKeeper(clean, urlItem));
+        // Path segment check: copyright.jpg and temperature.jpg should not be penalized by "copy" or "temp"
+        EXPECT_TRUE(isBetterKeeper(copyrightItem, copy));
+        EXPECT_TRUE(isBetterKeeper(tempItem, copy));
+    }
+
+    // 6. Earliest-id tiebreak: lowest id wins
+    {
+        MediaItem a; a.id = 3;
+        MediaItem b; b.id = 7;
+        EXPECT_TRUE(isBetterKeeper(a, b));
+        EXPECT_FALSE(isBetterKeeper(b, a));
+        EXPECT_EQ(rankKeeper({b, a}), 3);
+    }
+
+    // sortDuplicateGroup puts keeper at index 0
+    {
+        MediaItem a; a.id = 10; a.file_size = 100;
+        MediaItem b; b.id = 20; b.file_size = 500;
+        MediaItem c; c.id = 30; c.flag = FlagState::Pick; // wins
+        std::vector<MediaItem> group = {a, b, c};
+        sortDuplicateGroup(group);
+        EXPECT_EQ(group[0].id, 30);
+    }
+}
+
+TEST_F(CatalogClassTest, SharedThumbnailPreservedOnDelete) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+
+    std::string hashShared = "shared_thumb_hash_12345";
+
+    // Item 1
+    MediaItem item1;
+    item1.file_path = sampleImg;
+    item1.file_name = "photo.jpg";
+    item1.file_size = 1000;
+    item1.content_hash = hashShared;
+    item1.date_taken = 1000;
+    auto ins1 = cat.db().insertMedia(item1);
+    ASSERT_TRUE(ins1.isOk());
+    MediaId id1 = ins1.value();
+
+    // Item 2 sharing the same content_hash
+    std::string sampleImg2 = (testDir / "photo_dup.jpg").string();
+    std::filesystem::copy_file(sampleImg, sampleImg2);
+    MediaItem item2;
+    item2.file_path = sampleImg2;
+    item2.file_name = "photo_dup.jpg";
+    item2.file_size = 1000;
+    item2.content_hash = hashShared;
+    item2.date_taken = 1000;
+    auto ins2 = cat.db().insertMedia(item2);
+    ASSERT_TRUE(ins2.isOk());
+    MediaId id2 = ins2.value();
+
+    // Create thumbnail in cache for hashShared
+    ASSERT_TRUE(cat.cache().ensureDualThumbnails(sampleImg, hashShared).isOk());
+    EXPECT_TRUE(cat.cache().hasThumbnail(hashShared, 256));
+
+    // Delete item2: since item1 still shares hashShared, thumbnail must be PRESERVED
+    ASSERT_TRUE(cat.deleteMedia(id2, false).isOk());
+    EXPECT_TRUE(cat.cache().hasThumbnail(hashShared, 256));
+
+    // Delete item1: no more items share hashShared, thumbnail should be CLEARED
+    ASSERT_TRUE(cat.deleteMedia(id1, false).isOk());
+    EXPECT_FALSE(cat.cache().hasThumbnail(hashShared, 256));
+}
+
+TEST_F(CatalogClassTest, HardlinkDeleteEntryOnly) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+
+    // Create a hardlink
+    std::string hlImg = (testDir / "photo_hardlink.jpg").string();
+    std::error_code ec;
+    std::filesystem::create_hard_link(sampleImg, hlImg, ec);
+    if (ec) {
+        GTEST_SKIP() << "Hard links not supported: " << ec.message();
+    }
+
+    MediaItem item1;
+    item1.file_path = sampleImg;
+    item1.file_name = "photo.jpg";
+    item1.file_size = 1000;
+    item1.content_hash = "h_hl_1";
+    auto id1 = cat.db().insertMedia(item1).value();
+
+    MediaItem item2;
+    item2.file_path = hlImg;
+    item2.file_name = "photo_hardlink.jpg";
+    item2.file_size = 1000;
+    item2.content_hash = "h_hl_1";
+    auto id2 = cat.db().insertMedia(item2).value();
+
+    // Delete item2 from disk: directory entry for item2 is unlinked, item1 on disk stays intact
+    ASSERT_TRUE(cat.deleteMedia(id2, true).isOk());
+    EXPECT_FALSE(std::filesystem::exists(hlImg));
+    EXPECT_TRUE(std::filesystem::exists(sampleImg));
+    EXPECT_TRUE(cat.getMedia(id1).isOk());
+}
+
+TEST_F(CatalogClassTest, ClipEvictionHookCalledOnDelete) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+
+    MediaItem item;
+    item.file_path = sampleImg;
+    item.file_name = "photo.jpg";
+    item.file_size = 1000;
+    item.content_hash = "h_clip_evict";
+    auto id = cat.db().insertMedia(item).value();
+
+    MediaId evictedId = 0;
+    setClipEvictionHook([&evictedId](MediaId mid) {
+        evictedId = mid;
+    });
+
+    ASSERT_TRUE(cat.deleteMedia(id, false).isOk());
+    EXPECT_EQ(evictedId, id);
+
+    // Reset hook
+    setClipEvictionHook(nullptr);
+}

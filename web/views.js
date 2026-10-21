@@ -64,6 +64,7 @@ import {
 import { updateRovingTabindex } from './grid-a11y.js';
 import { loadMediaData, loadMoreMediaData, loadMetadataData } from './media-fetch.js';
 import { clearFilterPreferences } from './persistence.js';
+import { setDeduplicateActionHooks, openDeduplicateModal } from './deduplicate.js';
 
 const LAST_IMPORTED_TAG_NAME = 'Last Imported';
 const LAST_IMPORTED_TAG_CATEGORY = 'keyword';
@@ -268,6 +269,14 @@ export function initViews() {
     renderTimeline,
     openDeleteTagModal,
     clearAllFilters,
+    openDeduplicateModal,
+  });
+
+  setDeduplicateActionHooks({
+    loadMedia,
+    loadMetadata,
+    updateInspector,
+    openLoupeForMedia,
   });
 
   setTimelineActionHooks({

@@ -89,6 +89,12 @@ public:
         const std::vector<std::string>& params
     );
 
+    // Deduplication
+    Result<std::vector<std::vector<MediaId>>> findExactDuplicateGroups(const std::vector<MediaId>& mediaIds = {});
+    Status mergeMediaMetadata(MediaId keeperId, MediaId sourceId);
+    Status dismissDuplicatePair(MediaId a, MediaId b);
+    Result<std::vector<std::pair<MediaId, MediaId>>> getDismissedDuplicatePairs();
+
     Status runInTransaction(std::function<Status()> fn);
 
     Connection& connection() { return conn_; }

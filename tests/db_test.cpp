@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "imagine/db/catalog_db.hpp"
 #include "imagine/db/connection.hpp"
+#include "imagine/db/schema.hpp"
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -129,7 +130,7 @@ TEST(CatalogDbMigrationTest, PersistedV5CatalogUpgradesToV6JobMembership) {
         ASSERT_TRUE(versionRes.isOk());
         auto version = std::move(versionRes.value());
         ASSERT_EQ(version.step(), StepResult::Row);
-        EXPECT_EQ(version.getInt(0), 7);
+        EXPECT_EQ(version.getInt(0), Schema::CurrentVersion);
         EXPECT_TRUE(upgraded.getMediaById(mediaId).isOk());
         auto existingJobRes = upgraded.connection().prepare("SELECT state FROM face_analysis_jobs WHERE id=?;");
         ASSERT_TRUE(existingJobRes.isOk());
@@ -147,6 +148,77 @@ TEST(CatalogDbMigrationTest, PersistedV5CatalogUpgradesToV6JobMembership) {
         EXPECT_EQ(membership.step(), StepResult::Done);
         upgraded.close();
     }
+    std::filesystem::remove(path, ec);
+    std::filesystem::remove(path.string() + "-wal", ec);
+    std::filesystem::remove(path.string() + "-shm", ec);
+}
+
+TEST(CatalogDbMigrationTest, PersistedV7CatalogUpgradesToV8AndReMigrateIsIdempotent) {
+    const auto path = std::filesystem::temp_directory_path() /
+        ("imagine_catalog_v7_upgrade_" + std::to_string(
+            std::chrono::system_clock::now().time_since_epoch().count()) + ".db");
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+
+    MediaId mediaId1 = 0;
+    MediaId mediaId2 = 0;
+    {
+        CatalogDb initial;
+        ASSERT_TRUE(initial.open(path.string()).isOk());
+        MediaItem media1;
+        media1.file_path = "persisted/photo1.jpg";
+        media1.file_name = "photo1.jpg";
+        media1.content_hash = "hash_v7_1";
+        media1.media_type = "photo";
+        mediaId1 = initial.insertMedia(media1).value();
+
+        MediaItem media2;
+        media2.file_path = "persisted/photo2.jpg";
+        media2.file_name = "photo2.jpg";
+        media2.content_hash = "hash_v7_1";
+        media2.media_type = "photo";
+        mediaId2 = initial.insertMedia(media2).value();
+
+        // Roll back schema to V7 state:
+        // Drop duplicate_dismissals table and V8 partial index, delete schema_version >= 8
+        ASSERT_TRUE(initial.connection().execute("DROP TABLE IF EXISTS duplicate_dismissals;").isOk());
+        ASSERT_TRUE(initial.connection().execute("DROP INDEX IF EXISTS idx_media_content_hash;").isOk());
+        ASSERT_TRUE(initial.connection().execute("DELETE FROM schema_version WHERE version >= 8;").isOk());
+        initial.close();
+    }
+
+    {
+        CatalogDb upgraded;
+        ASSERT_TRUE(upgraded.open(path.string()).isOk());
+
+        // Check schema version is 8
+        auto versionRes = upgraded.connection().prepare("SELECT MAX(version) FROM schema_version;");
+        ASSERT_TRUE(versionRes.isOk());
+        auto version = std::move(versionRes.value());
+        ASSERT_EQ(version.step(), StepResult::Row);
+        EXPECT_EQ(version.getInt(0), 8);
+
+        // Check media items still exist
+        EXPECT_TRUE(upgraded.getMediaById(mediaId1).isOk());
+        EXPECT_TRUE(upgraded.getMediaById(mediaId2).isOk());
+
+        // Check duplicate dismissals table works
+        EXPECT_TRUE(upgraded.dismissDuplicatePair(mediaId1, mediaId2).isOk());
+        auto dismissed = upgraded.getDismissedDuplicatePairs();
+        ASSERT_TRUE(dismissed.isOk());
+        ASSERT_EQ(dismissed.value().size(), 1u);
+
+        // Test idempotent re-migrate: calling Schema::migrate again should succeed without error
+        EXPECT_TRUE(Schema::migrate(upgraded.connection()).isOk());
+
+        // Verify again after re-migrate
+        auto dismissedAfter = upgraded.getDismissedDuplicatePairs();
+        ASSERT_TRUE(dismissedAfter.isOk());
+        ASSERT_EQ(dismissedAfter.value().size(), 1u);
+
+        upgraded.close();
+    }
+
     std::filesystem::remove(path, ec);
     std::filesystem::remove(path.string() + "-wal", ec);
     std::filesystem::remove(path.string() + "-shm", ec);
@@ -815,4 +887,369 @@ TEST_F(CatalogDbTest, GetAllTagsPhotoCoverPriority) {
     ASSERT_TRUE(concertIt->last_date.has_value());
     EXPECT_EQ(*concertIt->last_date, 3000);
 }
+
+TEST_F(CatalogDbTest, MigrationV8AndDuplicateDismissals) {
+    EXPECT_EQ(Schema::CurrentVersion, 8);
+
+    MediaItem itemA;
+    itemA.file_path = "dup/item_a.jpg";
+    itemA.file_name = "item_a.jpg";
+    itemA.content_hash = "hash_exact_1";
+    itemA.file_size = 1000;
+    auto idA = db.insertMedia(itemA).value();
+
+    MediaItem itemB;
+    itemB.file_path = "dup/item_b.jpg";
+    itemB.file_name = "item_b.jpg";
+    itemB.content_hash = "hash_exact_1";
+    itemB.file_size = 1000;
+    auto idB = db.insertMedia(itemB).value();
+
+    EXPECT_NE(idA, idB);
+    MediaId minId = std::min(idA, idB);
+    MediaId maxId = std::max(idA, idB);
+
+    // Initial dismissals should be empty
+    auto initialPairs = db.getDismissedDuplicatePairs();
+    ASSERT_TRUE(initialPairs.isOk());
+    EXPECT_TRUE(initialPairs.value().empty());
+
+    // Dismiss with inverted order: should canonicalize minId < maxId
+    ASSERT_TRUE(db.dismissDuplicatePair(maxId, minId).isOk());
+
+    auto pairs = db.getDismissedDuplicatePairs();
+    ASSERT_TRUE(pairs.isOk());
+    ASSERT_EQ(pairs.value().size(), 1u);
+    EXPECT_EQ(pairs.value()[0].first, minId);
+    EXPECT_EQ(pairs.value()[0].second, maxId);
+
+    // Idempotent dismiss
+    EXPECT_TRUE(db.dismissDuplicatePair(minId, maxId).isOk());
+    EXPECT_EQ(db.getDismissedDuplicatePairs().value().size(), 1u);
+
+    // Reject self-dismissal
+    EXPECT_FALSE(db.dismissDuplicatePair(minId, minId).isOk());
+
+    // Foreign key cascade: deleting itemA should remove the dismissal pair
+    ASSERT_TRUE(db.deleteMedia(idA).isOk());
+    auto afterDelete = db.getDismissedDuplicatePairs();
+    ASSERT_TRUE(afterDelete.isOk());
+    EXPECT_TRUE(afterDelete.value().empty());
+}
+
+TEST_F(CatalogDbTest, FindExactDuplicateGroups) {
+    // 3 items with hash1, size 1000
+    MediaItem item1;
+    item1.file_path = "group1/1.jpg";
+    item1.file_name = "1.jpg";
+    item1.content_hash = "sha256_group1";
+    item1.file_size = 1000;
+    auto id1 = db.insertMedia(item1).value();
+
+    MediaItem item2;
+    item2.file_path = "group1/2.jpg";
+    item2.file_name = "2.jpg";
+    item2.content_hash = "sha256_group1";
+    item2.file_size = 1000;
+    auto id2 = db.insertMedia(item2).value();
+
+    MediaItem item3;
+    item3.file_path = "group1/3.jpg";
+    item3.file_name = "3.jpg";
+    item3.content_hash = "sha256_group1";
+    item3.file_size = 1000;
+    auto id3 = db.insertMedia(item3).value();
+
+    // 2 items with hash2, size 2000
+    MediaItem item4;
+    item4.file_path = "group2/4.jpg";
+    item4.file_name = "4.jpg";
+    item4.content_hash = "sha256_group2";
+    item4.file_size = 2000;
+    auto id4 = db.insertMedia(item4).value();
+
+    MediaItem item5;
+    item5.file_path = "group2/5.jpg";
+    item5.file_name = "5.jpg";
+    item5.content_hash = "sha256_group2";
+    item5.file_size = 2000;
+    auto id5 = db.insertMedia(item5).value();
+
+    // 1 item with hash1 but different size (should NOT group with group1)
+    MediaItem itemTrunc;
+    itemTrunc.file_path = "group1/trunc.jpg";
+    itemTrunc.file_name = "trunc.jpg";
+    itemTrunc.content_hash = "sha256_group1";
+    itemTrunc.file_size = 500;
+    auto idTrunc = db.insertMedia(itemTrunc).value();
+
+    // 1 item with unique hash
+    MediaItem itemUnique;
+    itemUnique.file_path = "unique/u.jpg";
+    itemUnique.file_name = "u.jpg";
+    itemUnique.content_hash = "sha256_unique";
+    itemUnique.file_size = 1000;
+    auto idUnique = db.insertMedia(itemUnique).value();
+
+    // 1 item with empty hash (legacy, should be excluded by partial index)
+    MediaItem itemEmptyHash;
+    itemEmptyHash.file_path = "legacy/empty.jpg";
+    itemEmptyHash.file_name = "empty.jpg";
+    itemEmptyHash.content_hash = "";
+    itemEmptyHash.file_size = 1000;
+    db.insertMedia(itemEmptyHash);
+
+    // Global scan: returns groups largest-first
+    auto groupsRes = db.findExactDuplicateGroups();
+    ASSERT_TRUE(groupsRes.isOk());
+    const auto& groups = groupsRes.value();
+    ASSERT_EQ(groups.size(), 2u);
+
+    // First group has 3 members (id1, id2, id3)
+    EXPECT_EQ(groups[0].size(), 3u);
+    EXPECT_EQ(groups[0][0], id1);
+    EXPECT_EQ(groups[0][1], id2);
+    EXPECT_EQ(groups[0][2], id3);
+
+    // Second group has 2 members (id4, id5)
+    EXPECT_EQ(groups[1].size(), 2u);
+    EXPECT_EQ(groups[1][0], id4);
+    EXPECT_EQ(groups[1][1], id5);
+
+    // Scoped scan: restrict to id1, id2, idTrunc, idUnique
+    auto scopedRes = db.findExactDuplicateGroups({id1, id2, idTrunc, idUnique});
+    ASSERT_TRUE(scopedRes.isOk());
+    const auto& scopedGroups = scopedRes.value();
+    ASSERT_EQ(scopedGroups.size(), 1u);
+    EXPECT_EQ(scopedGroups[0].size(), 2u);
+    EXPECT_EQ(scopedGroups[0][0], id1);
+    EXPECT_EQ(scopedGroups[0][1], id2);
+}
+
+TEST_F(CatalogDbTest, MergeMediaMetadataAndCovers) {
+    // 1. Create keeper and source items
+    MediaItem keeper;
+    keeper.file_path = "photos/keeper.jpg";
+    keeper.file_name = "keeper.jpg";
+    keeper.content_hash = "hash_merge";
+    keeper.file_size = 10000;
+    keeper.rating = 0; // empty
+    keeper.flag = FlagState::Unflagged; // empty
+    keeper.date_taken = 0; // empty
+    keeper.caption = ""; // empty
+    keeper.exif.has_gps = false; // empty
+    auto keeperId = db.insertMedia(keeper).value();
+
+    MediaItem source;
+    source.file_path = "photos/source.jpg";
+    source.file_name = "source.jpg";
+    source.content_hash = "hash_merge";
+    source.file_size = 10000;
+    source.rating = 5;
+    source.flag = FlagState::Pick;
+    source.date_taken = 1710000000;
+    source.exif.date_taken_str = "2024:03:09 12:00:00";
+    source.caption = "Family Reunion";
+    source.exif.has_gps = true;
+    source.exif.latitude = 37.7749;
+    source.exif.longitude = -122.4194;
+    source.exif.altitude = 15.0;
+    auto sourceId = db.insertMedia(source).value();
+
+    // 2. Tags setup
+    auto tagVacation = db.createOrGetTag("Vacation", "keyword").value();
+    auto tagPeople = db.createOrGetTag("People", "keyword").value();
+    // Keeper has tagVacation (provenance: auto, manual=0)
+    ASSERT_TRUE(db.addTagToMedia(keeperId, tagVacation).isOk());
+    ASSERT_TRUE(db.connection().execute(
+        "UPDATE media_tag_provenance SET manual = 0 WHERE media_id = " +
+        std::to_string(keeperId) + " AND tag_id = " + std::to_string(tagVacation) + ";").isOk());
+    // Source has tagVacation (provenance: manual=1) and tagPeople (provenance: auto, manual=0)
+    ASSERT_TRUE(db.addTagToMedia(sourceId, tagVacation).isOk());
+    ASSERT_TRUE(db.addTagToMedia(sourceId, tagPeople).isOk());
+    ASSERT_TRUE(db.connection().execute(
+        "UPDATE media_tag_provenance SET manual = 0 WHERE media_id = " +
+        std::to_string(sourceId) + " AND tag_id = " + std::to_string(tagPeople) + ";").isOk());
+
+    // 3. Album setup
+    // Album 1: source only at pos 0 -> keeper should take its place at pos 0
+    auto album1 = db.createAlbum("Album 1").value();
+    ASSERT_TRUE(db.addMediaToAlbum(album1, sourceId, 0).isOk());
+
+    // Album 2: keeper at pos 0, source at pos 1, thirdItem at pos 2 -> source deleted, thirdItem compacted to pos 1
+    MediaItem thirdItem;
+    thirdItem.file_path = "photos/third.jpg";
+    thirdItem.file_name = "third.jpg";
+    thirdItem.content_hash = "hash_third";
+    auto thirdId = db.insertMedia(thirdItem).value();
+
+    auto album2 = db.createAlbum("Album 2").value();
+    ASSERT_TRUE(db.addMediaToAlbum(album2, keeperId, 0).isOk());
+    ASSERT_TRUE(db.addMediaToAlbum(album2, sourceId, 1).isOk());
+    ASSERT_TRUE(db.addMediaToAlbum(album2, thirdId, 2).isOk());
+
+    // Album 3: cover is sourceId -> should be re-pointed to keeperId
+    auto album3 = db.createAlbum("Album 3").value();
+    ASSERT_TRUE(db.addMediaToAlbum(album3, sourceId, 0).isOk());
+    ASSERT_TRUE(db.setAlbumCover(album3, sourceId).isOk());
+    EXPECT_EQ(db.getAlbumById(album3).value().cover_media_id, sourceId);
+
+    // 4. Perform merge
+    ASSERT_TRUE(db.mergeMediaMetadata(keeperId, sourceId).isOk());
+
+    // 5. Verify keeper inherited empty fields
+    auto mergedKeeper = db.getMediaById(keeperId).value();
+    EXPECT_EQ(mergedKeeper.rating, 5);
+    EXPECT_EQ(mergedKeeper.flag, FlagState::Pick);
+    EXPECT_EQ(mergedKeeper.date_taken, 1710000000);
+    EXPECT_EQ(mergedKeeper.exif.date_taken_str, "2024:03:09 12:00:00");
+    EXPECT_EQ(mergedKeeper.caption, "Family Reunion");
+    EXPECT_TRUE(mergedKeeper.exif.has_gps);
+    EXPECT_DOUBLE_EQ(mergedKeeper.exif.latitude, 37.7749);
+    EXPECT_DOUBLE_EQ(mergedKeeper.exif.longitude, -122.4194);
+    EXPECT_DOUBLE_EQ(mergedKeeper.exif.altitude, 15.0);
+
+    // 6. Verify tags unioned and tag provenance manual = MAX(existing, excluded)
+    auto keeperTags = db.getTagsForMedia(keeperId).value();
+    EXPECT_EQ(keeperTags.size(), 2u);
+
+    auto checkProv = [&](MediaId mid, TagId tid) -> int {
+        auto stmtRes = db.connection().prepare("SELECT manual FROM media_tag_provenance WHERE media_id = ? AND tag_id = ?;");
+        if (!stmtRes.isOk()) return -1;
+        auto stmt = std::move(stmtRes.value());
+        stmt.bind(1, mid);
+        stmt.bind(2, tid);
+        if (stmt.step() == StepResult::Row) return stmt.getInt(0);
+        return -1;
+    };
+    // tagVacation: keeper was manual=0, source was manual=1 -> MAX is 1
+    EXPECT_EQ(checkProv(keeperId, tagVacation), 1);
+    // tagPeople: keeper was absent, source was manual=0 -> inherited as 0
+    EXPECT_EQ(checkProv(keeperId, tagPeople), 0);
+
+    // 7. Verify album 1 membership (update-in-place)
+    auto album1Media = db.getMediaInAlbum(album1).value();
+    ASSERT_EQ(album1Media.size(), 1u);
+    EXPECT_EQ(album1Media[0].id, keeperId);
+
+    // 8. Verify album 2 membership (delete + compact)
+    auto album2Media = db.getMediaInAlbum(album2).value();
+    ASSERT_EQ(album2Media.size(), 2u);
+    EXPECT_EQ(album2Media[0].id, keeperId);
+    EXPECT_EQ(album2Media[1].id, thirdId);
+
+    // 9. Verify album 3 cover re-pointed
+    auto album3Obj = db.getAlbumById(album3).value();
+    ASSERT_TRUE(album3Obj.cover_media_id.has_value());
+    EXPECT_EQ(*album3Obj.cover_media_id, keeperId);
+}
+
+TEST_F(CatalogDbTest, MergeMediaMetadataPre1970Dates) {
+    // Pre-1970 negative dates are valid and should not be treated as empty
+    int64_t pre1970Timestamp = -631152000; // year 1950
+
+    // Case A: Keeper has pre-1970 date; source has modern date -> keeper is NOT overwritten
+    MediaItem keeperA;
+    keeperA.file_path = "pre1970/a.jpg";
+    keeperA.file_name = "a.jpg";
+    keeperA.content_hash = "hash_preA";
+    keeperA.date_taken = pre1970Timestamp;
+    keeperA.exif.date_taken_str = "1950:01:01 00:00:00";
+    auto idKA = db.insertMedia(keeperA).value();
+
+    MediaItem sourceA;
+    sourceA.file_path = "pre1970/srcA.jpg";
+    sourceA.file_name = "srcA.jpg";
+    sourceA.content_hash = "hash_preA";
+    sourceA.date_taken = 1700000000;
+    sourceA.exif.date_taken_str = "2023:11:14 22:13:20";
+    auto idSA = db.insertMedia(sourceA).value();
+
+    ASSERT_TRUE(db.mergeMediaMetadata(idKA, idSA).isOk());
+    auto resA = db.getMediaById(idKA).value();
+    EXPECT_EQ(resA.date_taken, pre1970Timestamp);
+    EXPECT_EQ(resA.exif.date_taken_str, "1950:01:01 00:00:00");
+
+    // Case B: Keeper has 0 (empty); source has pre-1970 date -> keeper inherits pre-1970 date
+    MediaItem keeperB;
+    keeperB.file_path = "pre1970/b.jpg";
+    keeperB.file_name = "b.jpg";
+    keeperB.content_hash = "hash_preB";
+    keeperB.date_taken = 0; // empty
+    auto idKB = db.insertMedia(keeperB).value();
+
+    MediaItem sourceB;
+    sourceB.file_path = "pre1970/srcB.jpg";
+    sourceB.file_name = "srcB.jpg";
+    sourceB.content_hash = "hash_preB";
+    sourceB.date_taken = pre1970Timestamp;
+    sourceB.exif.date_taken_str = "1950:01:01 00:00:00";
+    auto idSB = db.insertMedia(sourceB).value();
+
+    ASSERT_TRUE(db.mergeMediaMetadata(idKB, idSB).isOk());
+    auto resB = db.getMediaById(idKB).value();
+    EXPECT_EQ(resB.date_taken, pre1970Timestamp);
+    EXPECT_EQ(resB.exif.date_taken_str, "1950:01:01 00:00:00");
+}
+
+TEST_F(CatalogDbTest, MergeMediaMetadataRollbackOnMidMergeFailure) {
+    // 1. Setup keeper and source
+    MediaItem keeper;
+    keeper.file_path = "photos/keeper_rollback.jpg";
+    keeper.file_name = "keeper_rollback.jpg";
+    keeper.content_hash = "hash_rb";
+    keeper.rating = 1;
+    keeper.caption = "Original Keeper Caption";
+    auto keeperId = db.insertMedia(keeper).value();
+
+    MediaItem source;
+    source.file_path = "photos/source_rollback.jpg";
+    source.file_name = "source_rollback.jpg";
+    source.content_hash = "hash_rb";
+    source.rating = 5;
+    source.caption = "Source Caption";
+    auto sourceId = db.insertMedia(source).value();
+
+    auto tagSource = db.createOrGetTag("RollbackTag", "keyword").value();
+    ASSERT_TRUE(db.addTagToMedia(sourceId, tagSource).isOk());
+
+    auto album = db.createAlbum("Rollback Album").value();
+    ASSERT_TRUE(db.addMediaToAlbum(album, sourceId, 0).isOk());
+    ASSERT_TRUE(db.setAlbumCover(album, sourceId).isOk());
+
+    // 2. Install a trigger that causes failure when updating album cover (late in mergeMediaMetadata)
+    ASSERT_TRUE(db.connection().execute(
+        "CREATE TRIGGER abort_cover_update BEFORE UPDATE OF cover_media_id ON albums "
+        "BEGIN SELECT RAISE(ABORT, 'Simulated mid-merge album cover failure'); END;").isOk());
+
+    // 3. Attempt merge: should fail mid-merge
+    Status mergeStatus = db.mergeMediaMetadata(keeperId, sourceId);
+    EXPECT_FALSE(mergeStatus.isOk());
+
+    // 4. Verify transaction rolled back:
+    // Keeper metadata must remain unchanged
+    auto keeperAfter = db.getMediaById(keeperId).value();
+    EXPECT_EQ(keeperAfter.rating, 1);
+    EXPECT_EQ(keeperAfter.caption, "Original Keeper Caption");
+
+    // Keeper must not have the tag from source
+    auto keeperTags = db.getTagsForMedia(keeperId).value();
+    EXPECT_TRUE(keeperTags.empty());
+
+    // Album cover must still be sourceId
+    auto albumObj = db.getAlbumById(album).value();
+    ASSERT_TRUE(albumObj.cover_media_id.has_value());
+    EXPECT_EQ(*albumObj.cover_media_id, sourceId);
+
+    // 5. Clean up trigger and verify merge succeeds cleanly
+    ASSERT_TRUE(db.connection().execute("DROP TRIGGER abort_cover_update;").isOk());
+    ASSERT_TRUE(db.mergeMediaMetadata(keeperId, sourceId).isOk());
+
+    auto keeperSuccess = db.getMediaById(keeperId).value();
+    EXPECT_EQ(keeperSuccess.caption, "Original Keeper Caption"); // keeper caption not empty, retained
+    EXPECT_EQ(keeperSuccess.rating, 1); // keeper rating not 0, retained
+    auto keeperTagsSuccess = db.getTagsForMedia(keeperId).value();
+    EXPECT_EQ(keeperTagsSuccess.size(), 1u);
+}
+
 

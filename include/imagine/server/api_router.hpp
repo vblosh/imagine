@@ -47,6 +47,8 @@ public:
     void setAllowedOrigin(std::string origin);
     std::string allowedOrigin() const;
 
+    clip::Service* clipService() const { return clipService_.get(); }
+
 private:
     void registerCorsHandler(httplib::Server& server);
     void registerMediaRoutes(httplib::Server& server);
@@ -60,6 +62,7 @@ private:
     void registerGeocodeRoutes(httplib::Server& server);
     void registerFaceRoutes(httplib::Server& server);
     void registerSemanticRoutes(httplib::Server& server);
+    void registerDuplicateRoutes(httplib::Server& server);
     void registerAccessLog(httplib::Server& server);
 
     bool checkAuth(const httplib::Request& req, httplib::Response& res) const;

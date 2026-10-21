@@ -1407,3 +1407,6 @@ export async function submitBatchMove() {
   }
 }
 
+export { openDeduplicateModal, closeDeduplicateModal, isDeduplicateOpen } from './deduplicate.js';
+
+

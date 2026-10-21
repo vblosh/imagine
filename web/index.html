@@ -79,6 +79,7 @@
     <symbol id="icon-sliders" viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></symbol>
     <symbol id="icon-filter" viewBox="0 0 24 24"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></symbol>
     <symbol id="icon-horizon" viewBox="0 0 24 24"><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="5" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="19"/><circle cx="12" cy="12" r="1.5"/><path d="M5 16l2-8"/><path d="M19 8l-2 8"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
   </svg>
   <div id="app" class="elements-app">
     <!-- Top Bar -->
@@ -227,6 +228,11 @@
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-minus-circle"></use></svg>
               <span data-i18n="nav_unrated">Unrated</span>
               <span class="count-badge" id="totalUnratedCount">0</span>
+            </li>
+            <li class="menu-item" data-filter="duplicates" id="navDuplicates">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-copy"></use></svg>
+              <span data-i18n="dedup_sidebar_title">Duplicates</span>
+              <span class="count-badge" id="totalDuplicatesCount">0</span>
             </li>
           </ul>
         </div>
@@ -411,6 +417,10 @@
             <button type="button" class="btn btn-sm" id="batchAutoEventBtn" data-i18n-title="auto_event_title" title="Suggest events for selected photos">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-calendar-check"></use></svg>
               <span data-i18n="auto_event">Auto Event</span>
+            </button>
+            <button type="button" class="btn btn-sm" id="batchDeduplicateBtn" data-i18n-title="dedup_find_duplicates_selection" title="Find duplicates in selection">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-copy"></use></svg>
+              <span data-i18n="dedup_toolbar_btn">Find Duplicates</span>
             </button>
             <button type="button" class="btn btn-sm" id="batchAddAlbumBtn" data-i18n="add_to_album" title="Add to Album" data-i18n-title="add_to_album">Add to Album</button>
             <button type="button" class="btn btn-sm" id="batchDateBtn" data-i18n="date" title="Adjust date & time" data-i18n-title="batch_date_btn_title">Date</button>
@@ -1787,6 +1797,83 @@
           <button type="button" class="btn btn-secondary" id="cancelAutoEventsBtn" data-i18n="cancel">Cancel</button>
           <button type="button" class="btn btn-secondary" id="retryAutoEventsBtn" style="display: none;" data-i18n="auto_event_retry">Retry failed assignments</button>
           <button type="button" class="btn btn-primary" id="applyAutoEventsBtn" style="display: none;" data-i18n="auto_event_apply">Apply Events</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Deduplicate Photos Modal -->
+    <div class="modal" id="deduplicateModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="deduplicateModalTitle">
+      <div class="modal-backdrop" id="deduplicateBackdrop"></div>
+      <div class="modal-dialog deduplicate-dialog">
+        <div class="modal-header">
+          <div class="deduplicate-header-wrap">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-copy"></use></svg>
+            <h3 id="deduplicateModalTitle" data-i18n="dedup_modal_title">Deduplicate Photos</h3>
+          </div>
+          <button type="button" class="btn-icon-sm" id="closeDeduplicateModalBtn" title="Close" data-i18n-title="close_panel">&times;</button>
+        </div>
+
+        <!-- Scan Header Bar -->
+        <div class="deduplicate-scan-bar" id="deduplicateScanBar">
+          <span class="dedup-scope-badge" id="dedupScopeLabel" data-i18n="dedup_scope_all">Scope: Entire catalog</span>
+          <div class="dedup-scan-options">
+            <label class="dedup-checkbox-label" id="dedupExactToggleLabel">
+              <input type="checkbox" id="dedupExactToggle" checked>
+              <span data-i18n="dedup_exact_match">Exact match</span>
+            </label>
+            <label class="dedup-checkbox-label" id="dedupVisualToggleLabel" title="Visual similarity requires CLIP model" data-i18n-title="dedup_visual_disabled_tooltip">
+              <input type="checkbox" id="dedupVisualToggle">
+              <span data-i18n="dedup_visual_match">Visual similarity</span>
+            </label>
+            <div class="dedup-threshold-wrap" id="dedupThresholdWrap">
+              <input type="range" class="dedup-threshold-slider" id="dedupVisualThresholdSlider" min="95.0" max="99.5" step="0.5" value="97.5" aria-label="Visual similarity threshold" data-i18n-aria-label="dedup_visual_threshold">
+              <span class="dedup-threshold-val" id="dedupVisualThresholdValue">97.5%</span>
+            </div>
+            <button type="button" class="btn btn-sm btn-primary" id="dedupScanBtn" data-i18n="dedup_scan_btn">Scan for Duplicates</button>
+          </div>
+        </div>
+
+        <!-- Modal Body -->
+        <div class="modal-body dedup-body" id="deduplicateBody">
+          <div class="dedup-state" id="dedupLoading" style="display: none;" data-i18n="dedup_scanning">Scanning for duplicate photos...</div>
+          <div class="dedup-state" id="dedupEmpty" style="display: none;" data-i18n="dedup_no_duplicates">No duplicate photos found.</div>
+          <div class="dedup-state dedup-error" id="dedupError" style="display: none;"></div>
+
+          <div class="dedup-review-container" id="dedupReviewContainer" style="display: none;">
+            <!-- Summary Banner -->
+            <div class="dedup-summary-banner" id="dedupSummaryBanner">
+              <div class="dedup-summary-metrics">
+                <span id="dedupSummaryCount">0 duplicate groups</span>
+                <span class="dedup-reclaimable-badge" id="dedupSummaryReclaimable">0 B reclaimable</span>
+              </div>
+              <div class="dedup-summary-actions">
+                <button type="button" class="btn btn-xs btn-secondary" id="dedupSelectAllBtn" data-i18n="dedup_select_all">Select All</button>
+                <button type="button" class="btn btn-xs btn-secondary" id="dedupDeselectAllBtn" data-i18n="dedup_deselect_all">Deselect All</button>
+                <button type="button" class="btn btn-xs btn-secondary" id="dedupDismissAllBtn" data-i18n="dedup_dismiss_all">Dismiss All</button>
+              </div>
+            </div>
+
+            <!-- Groups List -->
+            <div class="dedup-groups-list" id="dedupGroupsList"></div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="dedup-footer modal-footer" id="dedupFooter">
+          <div class="dedup-footer-options">
+            <label class="dedup-checkbox-label">
+              <input type="checkbox" id="dedupMergeMetadataCheckbox" checked>
+              <span data-i18n="dedup_merge_metadata">Merge metadata into keeper</span>
+            </label>
+            <label class="dedup-checkbox-label">
+              <input type="checkbox" id="dedupDeleteFromDiskCheckbox">
+              <span data-i18n="dedup_delete_from_disk">Delete duplicates from disk</span>
+            </label>
+          </div>
+          <div class="dedup-footer-actions">
+            <button type="button" class="btn btn-secondary" id="cancelDeduplicateBtn" data-i18n="cancel">Cancel</button>
+            <button type="button" class="btn btn-primary" id="dedupResolveBtn" disabled data-i18n="dedup_resolve_groups">Resolve 0 Groups</button>
+          </div>
         </div>
       </div>
     </div>
