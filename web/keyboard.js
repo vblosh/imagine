@@ -66,7 +66,7 @@ import {
 } from './quick-edit.js';
 import { navigateBackToCategory } from './category-view.js';
 import { isAutoEventOpen, cancelAutoEventReview } from './auto-events.js';
-import { isDeduplicateOpen, closeDeduplicateModal } from './deduplicate.js';
+import { isDeduplicateOpen, closeDeduplicateModal, isResetWarningOpen, closeResetWarningModal } from './deduplicate.js';
 import { closeSemanticIndexModal } from './semantic-search.js';
 import { closeSmartTagsModal, closeClearSmartTagsModal } from './smart-tags.js';
 
@@ -79,6 +79,11 @@ export function handleEscapeKey() {
   }
   if (isAutoEventOpen()) {
     cancelAutoEventReview();
+    return true;
+  }
+  if (isResetWarningOpen()) {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeResetWarningModal();
     return true;
   }
   if (isDeduplicateOpen()) {
@@ -327,6 +332,12 @@ export function isAnyBlockingModalOpen() {
   }
   const faceGridModal = document.getElementById('faceGridModal');
   if (faceGridModal && faceGridModal.style.display === 'flex') {
+    return true;
+  }
+  if (isResetWarningOpen()) {
+    return true;
+  }
+  if (isDeduplicateOpen()) {
     return true;
   }
   return false;

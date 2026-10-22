@@ -33,6 +33,8 @@ import {
   loadMedia,
   loadMoreMedia,
   loadMetadata,
+  cancelInFlightMediaLoads,
+  getCurrentLoadMediaId,
   renderGrid,
   appendMediaToGrid,
   handleCardSelection,
@@ -510,65 +512,84 @@ export function setupEventListeners() {
   }
 
   if (dom.inspectorFindSimilarBtn) {
+    let similarRequestId = 0;
+    let similarAbortController = null;
     dom.inspectorFindSimilarBtn.addEventListener('click', async () => {
       const id = getActiveInspectorMediaId();
       if (id === null) return;
-      const simRes = await findSimilarMedia(id);
-      if (simRes && Array.isArray(simRes.media_items)) {
-        if (state.searchDebounceTimer) {
-          clearTimeout(state.searchDebounceTimer);
-          state.searchDebounceTimer = null;
-        }
-        state.searchText = '';
-        if (dom.searchInput) dom.searchInput.value = '';
 
-        if (!state.semanticSearchActive) {
-          state.semanticSearchSnapshot = {
-            activeTab: state.activeTab,
-            activeAlbumId: state.activeAlbumId,
-            activeTagId: state.activeTagId,
-            activeTagIds: new Set(state.activeTagIds),
-            activeFolders: new Set(state.activeFolders),
-            activeMediaType: state.activeMediaType,
-            activeStatusFilter: state.activeStatusFilter,
-            activeTimelinePeriod: state.activeTimelinePeriod ? { ...state.activeTimelinePeriod } : null,
-            sortBy: state.sortBy,
-            sortDesc: state.sortDesc
-          };
-        }
-        state.semanticSearchActive = true;
-        state.semanticSearchQuery = `Similar to photo #${id}`;
+      if (similarAbortController) {
+        similarAbortController.abort();
+      }
+      similarAbortController = new AbortController();
+      const signal = similarAbortController.signal;
+      const currentReqId = ++similarRequestId;
+      const loadSerial = cancelInFlightMediaLoads();
 
-        const scoreMap = new Map();
-        if (Array.isArray(simRes.items)) {
-          simRes.items.forEach(it => {
-            if (it && it.mediaId != null) scoreMap.set(it.mediaId, it.score);
-          });
+      try {
+        const simRes = await findSimilarMedia(id, 50, { signal });
+        if (currentReqId !== similarRequestId || getCurrentLoadMediaId() !== loadSerial) {
+          return;
         }
-
-        const seenIds = new Set();
-        const items = [];
-        for (const raw of simRes.media_items) {
-          const item = normalizeMediaItem(raw);
-          if (item && !seenIds.has(item.id)) {
-            seenIds.add(item.id);
-            item.rank = items.length + 1;
-            const score = scoreMap.has(item.id) ? scoreMap.get(item.id) : (raw.score ?? raw.similarity_score);
-            if (score !== undefined) item.similarity_score = score;
-            items.push(item);
+        if (simRes && Array.isArray(simRes.media_items)) {
+          if (state.searchDebounceTimer) {
+            clearTimeout(state.searchDebounceTimer);
+            state.searchDebounceTimer = null;
           }
+          state.searchText = '';
+          if (dom.searchInput) dom.searchInput.value = '';
+
+          if (!state.semanticSearchActive) {
+            state.semanticSearchSnapshot = {
+              activeTab: state.activeTab,
+              activeAlbumId: state.activeAlbumId,
+              activeTagId: state.activeTagId,
+              activeTagIds: new Set(state.activeTagIds),
+              activeFolders: new Set(state.activeFolders),
+              activeMediaType: state.activeMediaType,
+              activeStatusFilter: state.activeStatusFilter,
+              activeTimelinePeriod: state.activeTimelinePeriod ? { ...state.activeTimelinePeriod } : null,
+              sortBy: state.sortBy,
+              sortDesc: state.sortDesc
+            };
+          }
+          state.semanticSearchActive = true;
+          state.semanticSearchQuery = `Similar to photo #${id}`;
+
+          const scoreMap = new Map();
+          if (Array.isArray(simRes.items)) {
+            simRes.items.forEach(it => {
+              if (it && it.mediaId != null) scoreMap.set(it.mediaId, it.score);
+            });
+          }
+
+          const seenIds = new Set();
+          const items = [];
+          for (const raw of simRes.media_items) {
+            const item = normalizeMediaItem(raw);
+            if (item && !seenIds.has(item.id)) {
+              seenIds.add(item.id);
+              item.rank = items.length + 1;
+              const score = scoreMap.has(item.id) ? scoreMap.get(item.id) : (raw.score ?? raw.similarity_score);
+              if (score !== undefined) item.similarity_score = score;
+              items.push(item);
+            }
+          }
+
+          state.mediaItems = items;
+          invalidateGpsCache();
+          state.totalCount = items.length;
+          state.mediaOffset = items.length;
+
+          syncSemanticSearchUI();
+          renderGrid();
+          showToast(t('toast_similar_found', { count: items.length }), 'info');
+        } else {
+          showToast(t('toast_similar_none'), 'info');
         }
-
-        state.mediaItems = items;
-        invalidateGpsCache();
-        state.totalCount = items.length;
-        state.mediaOffset = items.length;
-
-        syncSemanticSearchUI();
-        renderGrid();
-        showToast(t('toast_similar_found', { count: items.length }), 'info');
-      } else {
-        showToast(t('toast_similar_none'), 'info');
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.error('Find similar error:', err);
       }
     });
   }
@@ -2000,7 +2021,8 @@ export async function init() {
     await switchViewMode('map');
   }
 
-  await Promise.all([loadMetadata(), loadMedia()]);
+  await loadMetadata();
+  await loadMedia();
 }
 
 // Start app when DOM ready

@@ -190,6 +190,9 @@ export function refreshAfterMetadataLoad() {
   if (dom.totalUnratedCount) {
     dom.totalUnratedCount.textContent = state.stats.total_unrated || 0;
   }
+  if (dom.totalDuplicatesCount) {
+    dom.totalDuplicatesCount.textContent = state.stats.total_duplicates || 0;
+  }
 }
 
 export async function loadMedia(append = false, options = {}) {

@@ -4664,7 +4664,8 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
             for (MediaId mid : eg) {
                 if (mediaMap.count(mid)) itemsJson.push_back(mediaMap[mid]);
             }
-            g["items"] = std::move(itemsJson);
+            g["items"] = itemsJson;
+            g["photos"] = std::move(itemsJson);
             g["min_similarity"] = 1.0;
             groupsJson.push_back(std::move(g));
         }
@@ -4678,7 +4679,8 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
             for (MediaId mid : vg.memberIds) {
                 if (mediaMap.count(mid)) itemsJson.push_back(mediaMap[mid]);
             }
-            g["items"] = std::move(itemsJson);
+            g["items"] = itemsJson;
+            g["photos"] = std::move(itemsJson);
             g["min_similarity"] = std::round(vg.minSimilarity * 1000.0) / 1000.0;
             groupsJson.push_back(std::move(g));
         }
@@ -4723,6 +4725,19 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
             return;
         }
 
+        bool globalDeleteFromDisk = false;
+        if (body.contains("delete_from_disk") && body["delete_from_disk"].is_boolean()) {
+            globalDeleteFromDisk = body["delete_from_disk"].get<bool>();
+        } else if (req.has_param("delete_from_disk")) {
+            std::string val = req.get_param_value("delete_from_disk");
+            globalDeleteFromDisk = (val == "true" || val == "1");
+        }
+
+        bool globalMergeMetadata = true;
+        if (body.contains("merge_metadata") && body["merge_metadata"].is_boolean()) {
+            globalMergeMetadata = body["merge_metadata"].get<bool>();
+        }
+
         int totalMergedCount = 0;
         int totalDeletedCount = 0;
         int64_t totalFreedBytes = 0;
@@ -4740,6 +4755,16 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
             if (!groupEl["remove"].is_array()) {
                 groupResults.push_back({{"status", 400}, {"error", "Invalid remove list"}});
                 continue;
+            }
+
+            bool groupDeleteFromDisk = globalDeleteFromDisk;
+            if (groupEl.contains("delete_from_disk") && groupEl["delete_from_disk"].is_boolean()) {
+                groupDeleteFromDisk = groupEl["delete_from_disk"].get<bool>();
+            }
+
+            bool groupMergeMetadata = globalMergeMetadata;
+            if (groupEl.contains("merge_metadata") && groupEl["merge_metadata"].is_boolean()) {
+                groupMergeMetadata = groupEl["merge_metadata"].get<bool>();
             }
 
             MediaId keeperId = groupEl["keeper"].get<MediaId>();
@@ -4778,12 +4803,15 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
                     }
 
                     MediaItem loser = loserRes.value();
-                    Status mergeStatus = db().mergeMediaMetadata(keeperId, loserId);
-                    if (!mergeStatus.isOk()) {
-                        return mergeStatus;
+                    if (groupMergeMetadata) {
+                        Status mergeStatus = db().mergeMediaMetadata(keeperId, loserId);
+                        if (!mergeStatus.isOk()) {
+                            return mergeStatus;
+                        }
                     }
 
-                    Status delStatus = catalog_ ? catalog_->deleteMedia(loserId, false) : db().deleteMedia(loserId);
+                    Status delStatus = catalog_ ? catalog_->deleteMedia(loserId, groupDeleteFromDisk)
+                                                : (groupDeleteFromDisk ? Status::internal("Catalog is required to delete files from disk") : db().deleteMedia(loserId));
                     if (!delStatus.isOk()) {
                         return delStatus;
                     }
@@ -4877,6 +4905,17 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
         }
 
         sendJson(res, {{"status", "ok"}, {"dismissed", dismissedCount}});
+    });
+
+    // POST /api/media/duplicates/dismissals/reset
+    server.Post("/api/media/duplicates/dismissals/reset", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        auto resetRes = db().clearDismissedDuplicatePairs();
+        if (!resetRes.isOk()) {
+            sendError(res, "Failed to reset duplicate dismissals: " + resetRes.status().message(), 500);
+            return;
+        }
+        sendJson(res, {{"status", "ok"}, {"cleared", resetRes.value()}});
     });
 }
 

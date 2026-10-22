@@ -1838,6 +1838,7 @@
               <input type="range" class="dedup-threshold-slider" id="dedupVisualThresholdSlider" min="95.0" max="99.5" step="0.5" value="97.5" aria-label="Visual similarity threshold" data-i18n-aria-label="dedup_visual_threshold">
               <span class="dedup-threshold-val" id="dedupVisualThresholdValue">97.5%</span>
             </div>
+            <button type="button" class="btn btn-sm btn-secondary" id="dedupResetDismissalsBtn" data-i18n="dedup_reset_dismissals">Reset Dismissals</button>
             <button type="button" class="btn btn-sm btn-primary" id="dedupScanBtn" data-i18n="dedup_scan_btn">Scan for Duplicates</button>
           </div>
         </div>
@@ -1845,7 +1846,10 @@
         <!-- Modal Body -->
         <div class="modal-body dedup-body" id="deduplicateBody">
           <div class="dedup-state" id="dedupLoading" style="display: none;" data-i18n="dedup_scanning">Scanning for duplicate photos...</div>
-          <div class="dedup-state" id="dedupEmpty" style="display: none;" data-i18n="dedup_no_duplicates">No duplicate photos found.</div>
+          <div class="dedup-state" id="dedupEmpty" style="display: none;">
+            <span data-i18n="dedup_no_duplicates">No duplicate photos found.</span>
+            <button type="button" class="btn btn-sm btn-secondary" id="dedupResetDismissalsEmptyBtn" data-i18n="dedup_reset_dismissals">Reset Dismissals</button>
+          </div>
           <div class="dedup-state dedup-error" id="dedupError" style="display: none;"></div>
 
           <div class="dedup-review-container" id="dedupReviewContainer" style="display: none;">
@@ -1883,6 +1887,35 @@
             <button type="button" class="btn btn-secondary" id="cancelDeduplicateBtn" data-i18n="cancel">Cancel</button>
             <button type="button" class="btn btn-primary" id="dedupResolveBtn" disabled data-i18n="dedup_resolve_groups">Resolve 0 Groups</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Deduplicate Reset Dismissals Warning Modal Dialog -->
+    <div class="modal dedup-reset-warning-modal" id="dedupResetWarningModal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="dedupResetWarningTitle" aria-describedby="dedupResetWarningPrompt dedupResetWarningDesc">
+      <div class="modal-backdrop" id="dedupResetWarningBackdrop"></div>
+      <div class="modal-dialog dedup-reset-warning-dialog">
+        <div class="modal-header">
+          <div class="dedup-reset-warning-header-wrap">
+            <svg class="dedup-reset-warning-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+              <line x1="12" y1="9" x2="12" y2="13"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+            <h3 id="dedupResetWarningTitle" data-i18n="dedup_reset_warning_title">Reset Duplicate Dismissals?</h3>
+          </div>
+          <button type="button" class="btn-icon-sm" id="closeDedupResetWarningBtn" title="Close" data-i18n-title="close_panel">&times;</button>
+        </div>
+        <div class="modal-body dedup-reset-warning-body">
+          <p id="dedupResetWarningPrompt" class="dedup-reset-warning-prompt" data-i18n="dedup_reset_warning_prompt">Are you sure you want to reset all dismissed duplicate pairs?</p>
+          <div class="dedup-reset-warning-banner">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            <p id="dedupResetWarningDesc" class="dedup-reset-warning-desc" data-i18n="dedup_reset_warning_desc">This clears all previously dismissed duplicate pairs in this catalog so future scans will detect them again. No files on disk will be deleted or changed.</p>
+          </div>
+        </div>
+        <div class="modal-footer dedup-reset-warning-footer">
+          <button type="button" class="btn btn-secondary" id="cancelDedupResetWarningBtn" data-i18n="cancel">Cancel</button>
+          <button type="button" class="btn btn-warning" id="confirmDedupResetWarningBtn" data-i18n="dedup_reset_dismissals">Reset Dismissals</button>
         </div>
       </div>
     </div>

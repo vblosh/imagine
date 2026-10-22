@@ -109,6 +109,7 @@ public:
     Status mergeMediaMetadata(MediaId keeperId, MediaId sourceId);
     Status dismissDuplicatePair(MediaId a, MediaId b);
     Result<std::vector<std::pair<MediaId, MediaId>>> getDismissedDuplicatePairs();
+    Result<int> clearDismissedDuplicatePairs();
 
     Status runInTransaction(std::function<Status()> fn);
 

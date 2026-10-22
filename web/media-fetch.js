@@ -18,6 +18,7 @@ import { t } from './i18n.js';
 import { buildMediaParams, prepareAlbumOrderMode, syncAlbumOrderSortOption, isAlbumOrderMode } from './media-params.js';
 import { performSemanticSearch } from './semantic-search.js';
 import { restoreSemanticSnapshot } from './semantic-status.js';
+import { saveActiveFoldersPreference, saveActiveTagIdsPreference } from './persistence.js';
 
 let currentLoadMediaId = 0;
 let loadMediaAbortController = null;
@@ -25,6 +26,19 @@ let loadMoreAbortController = null;
 
 export function getCurrentLoadMediaId() {
   return currentLoadMediaId;
+}
+
+export function bumpCurrentLoadMediaId() {
+  return ++currentLoadMediaId;
+}
+
+export function cancelInFlightMediaLoads() {
+  const serial = ++currentLoadMediaId;
+  abortCurrentMediaLoad();
+  abortCurrentLoadMore();
+  state.isLoadingMedia = false;
+  state.isLoadingMore = false;
+  return serial;
 }
 
 export function abortCurrentMediaLoad() {
@@ -346,20 +360,30 @@ export async function loadMetadataData() {
     state.tags = Array.isArray(tags) ? tags.map(normalizeTag).filter(Boolean) : [];
     state.albums = Array.isArray(albums) ? albums.map(normalizeAlbum).filter(Boolean) : [];
     state.allFolders = new Set(Array.isArray(folders) ? folders.filter(Boolean).map(f => f.replace(/\\/g, '/')) : []);
+    let foldersPruned = false;
     if (state.activeFolders) {
       for (const f of Array.from(state.activeFolders)) {
         if (!state.allFolders.has(f)) {
           state.activeFolders.delete(f);
+          foldersPruned = true;
         }
       }
     }
+    let tagsPruned = false;
     if (state.activeTagIds) {
       const tagIdSet = new Set(state.tags.map(t => t.id));
       for (const tid of Array.from(state.activeTagIds)) {
         if (!tagIdSet.has(tid)) {
           state.activeTagIds.delete(tid);
+          tagsPruned = true;
         }
       }
+    }
+    if (foldersPruned) {
+      saveActiveFoldersPreference(state.activeFolders);
+    }
+    if (tagsPruned) {
+      saveActiveTagIdsPreference(state.activeTagIds);
     }
     state.timelineData = Array.isArray(timeline)
       ? timeline.map(normalizeTimelineEntry).filter(Boolean)

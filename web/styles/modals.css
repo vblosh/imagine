@@ -59,6 +59,7 @@
 #clearSmartTagsModal,
 #faceForceWarningModal,
 #faceScanBusyModal,
+#dedupResetWarningModal,
 .modal:has(.discard-changes-dialog) {
   z-index: 2100;
 }

@@ -28,6 +28,7 @@ TEST_F(CatalogDbTest, OpenAndCheckSchema) {
     auto statsRes = db.getStats();
     ASSERT_TRUE(statsRes.isOk());
     EXPECT_EQ(statsRes.value().total_media, 0);
+    EXPECT_EQ(statsRes.value().total_duplicates, 0);
 }
 
 TEST_F(CatalogDbTest, InsertAndRetrieveMedia) {
@@ -998,6 +999,8 @@ TEST_F(CatalogDbTest, FindExactDuplicateGroups) {
     itemEmptyHash.content_hash = "";
     itemEmptyHash.file_size = 1000;
     db.insertMedia(itemEmptyHash);
+
+    EXPECT_EQ(db.getStats().value().total_duplicates, 2);
 
     // Global scan: returns groups largest-first
     auto groupsRes = db.findExactDuplicateGroups();

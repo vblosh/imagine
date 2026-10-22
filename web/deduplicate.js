@@ -3,7 +3,7 @@
  * Pure Vanilla JavaScript (Offline-ready, no dependencies)
  */
 
-import { api, escapeHtml, formatBytes, formatDate } from './api.js';
+import { api, escapeHtml, formatBytes, formatDate, getOriginalMediaUrl, normalizeMediaItem } from './api.js';
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { t, onLanguageChange } from './i18n.js';
@@ -27,8 +27,24 @@ export function isDeduplicateOpen() {
   return Boolean(dom.deduplicateModal && dom.deduplicateModal.style.display === 'flex');
 }
 
+export function isResetWarningOpen() {
+  return Boolean(dom.dedupResetWarningModal && dom.dedupResetWarningModal.style.display === 'flex');
+}
+
+export function closeResetWarningModal() {
+  if (resetWarningResolver) {
+    const res = resetWarningResolver;
+    resetWarningResolver = null;
+    res(false);
+  }
+  if (dom.dedupResetWarningModal) {
+    dom.dedupResetWarningModal.style.display = 'none';
+  }
+}
+
 export function closeDeduplicateModal() {
   if (review && review.resolving) return;
+  closeResetWarningModal();
   review = null;
   requestSerial += 1;
   if (dom.deduplicateModal) {
@@ -88,16 +104,30 @@ function updateSummaryBanner() {
 }
 
 function updateBadgeCount(count) {
+  const safeCount = Number.isFinite(Number(count)) ? Number(count) : 0;
   if (dom.totalDuplicatesCount) {
-    dom.totalDuplicatesCount.textContent = String(count || 0);
+    dom.totalDuplicatesCount.textContent = String(safeCount);
+  }
+  if (state.stats) {
+    state.stats.total_duplicates = safeCount;
   }
 }
 
+function setScanAndResetButtonsDisabled(disabled) {
+  if (dom.dedupScanBtn) dom.dedupScanBtn.disabled = disabled;
+  if (dom.dedupResetDismissalsBtn) dom.dedupResetDismissalsBtn.disabled = disabled;
+  if (dom.dedupResetDismissalsEmptyBtn) dom.dedupResetDismissalsEmptyBtn.disabled = disabled;
+}
+
 function getPhotoThumb(photo) {
+  if (!photo) return '';
   if (photo.content_hash) {
     return `/api/thumbnails/${encodeURIComponent(photo.content_hash)}/256`;
   }
-  return photo.thumb_small || photo.thumb_large || '';
+  if (photo.thumb_small) return photo.thumb_small;
+  if (photo.thumb_large) return photo.thumb_large;
+  const isImage = !photo.media_type || photo.media_type === 'photo' || photo.media_type === 'image';
+  return isImage ? getOriginalMediaUrl(photo) : '';
 }
 
 function computeGroupReclaimable(group) {
@@ -184,7 +214,7 @@ export async function scanDuplicates() {
   const serial = ++requestSerial;
   review.scanning = true;
   setDialogState('loading');
-  if (dom.dedupScanBtn) dom.dedupScanBtn.disabled = true;
+  setScanAndResetButtonsDisabled(true);
 
   try {
     const payload = {};
@@ -206,29 +236,62 @@ export async function scanDuplicates() {
       rawGroups = rawGroups.filter(g => g.type !== 'exact');
     }
 
+    const catalogMediaMap = new Map((state.mediaItems || []).map(m => [Number(m.id), m]));
+    const makePlaceholderPhoto = (id) => normalizeMediaItem({
+      id,
+      file_name: String(id),
+      file_size: 0,
+      width: 0,
+      height: 0,
+      date_taken: 0,
+      media_type: 'photo'
+    }) || { id, file_name: String(id), file_size: 0, width: 0, height: 0, date_taken: 0, media_type: 'photo' };
+
     // Hydrate photo records
     review.groups = rawGroups.map(group => {
-      const memberIds = (group.members || []).map(Number);
-      const keeperId = group.keeper != null ? Number(group.keeper) : memberIds[0];
-      const photos = (group.photos && group.photos.length)
+      const memberIds = (group.members || []).map(Number).filter(id => Number.isFinite(id) && id > 0);
+      const rawList = (Array.isArray(group.photos) && group.photos.length > 0)
         ? group.photos
-        : memberIds.map(id => {
-            const cached = state.mediaItems.find(m => m.id === id);
-            return cached || { id, file_name: String(id), file_size: 0, width: 0, height: 0, date_taken: 0 };
-          });
+        : (Array.isArray(group.items) && group.items.length > 0)
+          ? group.items
+          : [];
+
+      const photoMap = new Map();
+      for (const p of rawList) {
+        if (!p) continue;
+        const norm = normalizeMediaItem(p);
+        const mid = Number(norm ? norm.id : p.id);
+        if (Number.isFinite(mid) && mid > 0) {
+          photoMap.set(mid, norm || makePlaceholderPhoto(mid));
+        }
+      }
+
+      const effectiveIds = memberIds.length > 0
+        ? memberIds
+        : rawList.map(p => Number(p && p.id)).filter(id => Number.isFinite(id) && id > 0);
+      const keeperId = group.keeper != null ? Number(group.keeper) : effectiveIds[0];
+
+      const photos = effectiveIds.map(id => {
+        if (photoMap.has(id) && photoMap.get(id)) {
+          return photoMap.get(id);
+        }
+        const cached = catalogMediaMap.get(id);
+        const normCached = cached ? normalizeMediaItem(cached) : null;
+        return normCached || makePlaceholderPhoto(id);
+      });
 
       return {
         type: group.type || 'exact',
         keeper: keeperId,
-        members: memberIds,
+        members: effectiveIds,
         min_similarity: typeof group.min_similarity === 'number' ? group.min_similarity : 1.0,
         enabled: true,
         photos,
       };
     });
 
-    const exactCount = review.groups.filter(g => g.type === 'exact').length;
-    updateBadgeCount(exactCount);
+    const totalGroupsCount = review.groups.length;
+    updateBadgeCount(totalGroupsCount);
 
     if (review.groups.length === 0) {
       setDialogState('empty');
@@ -241,7 +304,7 @@ export async function scanDuplicates() {
     setDialogState('error', error.message || String(error));
   } finally {
     if (review) review.scanning = false;
-    if (dom.dedupScanBtn) dom.dedupScanBtn.disabled = false;
+    setScanAndResetButtonsDisabled(false);
   }
 }
 
@@ -291,7 +354,7 @@ function renderReview() {
 
       return `<div class="dedup-member-card${isKeeper ? ' is-keeper' : ''}" data-media-id="${photo.id}">
         <div class="dedup-thumb-wrap" data-media-id="${photo.id}">
-          ${thumb ? `<img src="${escapeHtml(thumb)}" alt="${safeFileName}" loading="lazy">` : ''}
+          ${thumb ? `<img src="${escapeHtml(thumb)}" alt="${safeFileName}" loading="lazy" data-media-id="${photo.id}">` : ''}
           <button type="button" class="dedup-loupe-btn" data-media-id="${photo.id}" title="${escapeHtml(t('dedup_loupe_tooltip'))}">
             <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-expand-arrows"></use></svg>
           </button>
@@ -403,6 +466,29 @@ function bindReviewEvents() {
       await dismissGroup(idx);
     });
   });
+
+  // Thumbnail fallback on error (fallback to original photo URL if cached thumbnail is missing)
+  dom.dedupGroupsList.querySelectorAll('.dedup-thumb-wrap img').forEach(img => {
+    img.addEventListener('error', () => {
+      const mediaId = Number(img.dataset.mediaId);
+      if (!Number.isFinite(mediaId)) return;
+      let photo = null;
+      if (review && review.groups) {
+        for (const g of review.groups) {
+          const found = g.photos && g.photos.find(p => Number(p && p.id) === mediaId);
+          if (found) { photo = found; break; }
+        }
+      }
+      const isImage = !photo || !photo.media_type || photo.media_type === 'photo' || photo.media_type === 'image';
+      if (!isImage) return;
+
+      const fallbackUrl = photo ? getOriginalMediaUrl(photo) : `/api/photos/${mediaId}/original`;
+      const currentSrcAttr = img.getAttribute('src');
+      if (fallbackUrl && currentSrcAttr !== fallbackUrl && img.src !== new URL(fallbackUrl, window.location.href).href) {
+        img.src = fallbackUrl;
+      }
+    }, { once: true });
+  });
 }
 
 async function dismissGroup(groupIndex) {
@@ -422,8 +508,8 @@ async function dismissGroup(groupIndex) {
     }
     review.groups.splice(groupIndex, 1);
     showToast(t('dedup_toast_dismissed'), 'info');
-    const exactCount = review.groups.filter(g => g.type === 'exact').length;
-    updateBadgeCount(exactCount);
+    const totalGroupsCount = review.groups.length;
+    updateBadgeCount(totalGroupsCount);
     renderReview();
   } catch (error) {
     showToast(error.message || String(error), 'error');
@@ -466,8 +552,8 @@ async function resolveGroups() {
     actionHooks.updateInspector();
 
     showToast(t('dedup_toast_resolved'), 'success');
-    const exactCount = review.groups.filter(g => g.type === 'exact').length;
-    updateBadgeCount(exactCount);
+    const totalGroupsCount = review.groups.length;
+    updateBadgeCount(totalGroupsCount);
 
     if (review.groups.length === 0) {
       closeDeduplicateModal();
@@ -481,6 +567,52 @@ async function resolveGroups() {
       review.resolving = false;
       if (dom.cancelDeduplicateBtn) dom.cancelDeduplicateBtn.disabled = false;
       updateResolveButton();
+    }
+  }
+}
+
+let resettingDismissals = false;
+let resetWarningResolver = null;
+
+export function openResetWarningModal() {
+  if (!dom.dedupResetWarningModal) return Promise.resolve(false);
+
+  if (dom.dedupResetWarningPrompt) {
+    dom.dedupResetWarningPrompt.textContent = t('dedup_reset_warning_prompt') || 'Are you sure you want to reset all dismissed duplicate pairs?';
+  }
+  if (dom.dedupResetWarningDesc) {
+    dom.dedupResetWarningDesc.textContent = t('dedup_reset_warning_desc') || 'This clears all previously dismissed duplicate pairs in this catalog so future scans will detect them again. No files on disk will be deleted or changed.';
+  }
+
+  return new Promise(resolve => {
+    resetWarningResolver = resolve;
+    dom.dedupResetWarningModal.style.display = 'flex';
+    dom.cancelDedupResetWarningBtn?.focus();
+  });
+}
+
+export async function resetDismissals() {
+  if (!isDeduplicateOpen() || resettingDismissals) return;
+  if (review && (review.scanning || review.resolving)) return;
+
+  const confirmed = await openResetWarningModal();
+  if (!confirmed) return;
+
+  resettingDismissals = true;
+  setScanAndResetButtonsDisabled(true);
+
+  try {
+    await api.post('/api/media/duplicates/dismissals/reset', {});
+    showToast(t('dedup_toast_dismissals_reset'), 'info');
+    if (isDeduplicateOpen() && review) {
+      await scanDuplicates();
+    }
+  } catch (error) {
+    showToast(error.message || String(error), 'error');
+  } finally {
+    resettingDismissals = false;
+    if (isDeduplicateOpen()) {
+      setScanAndResetButtonsDisabled(Boolean(review && review.scanning));
     }
   }
 }
@@ -502,6 +634,31 @@ export function setupDeduplicateListeners() {
   dom.dedupScanBtn?.addEventListener('click', () => {
     scanDuplicates();
   });
+
+  // Reset dismissals button
+  dom.dedupResetDismissalsBtn?.addEventListener('click', () => {
+    resetDismissals();
+  });
+  dom.dedupResetDismissalsEmptyBtn?.addEventListener('click', () => {
+    resetDismissals();
+  });
+
+  // Reset Warning Dialog buttons
+  const dismissWarningModal = (accepted) => {
+    if (resetWarningResolver) {
+      const res = resetWarningResolver;
+      resetWarningResolver = null;
+      res(accepted);
+    }
+    if (dom.dedupResetWarningModal) {
+      dom.dedupResetWarningModal.style.display = 'none';
+    }
+  };
+
+  dom.closeDedupResetWarningBtn?.addEventListener('click', () => dismissWarningModal(false));
+  dom.cancelDedupResetWarningBtn?.addEventListener('click', () => dismissWarningModal(false));
+  dom.dedupResetWarningBackdrop?.addEventListener('click', () => dismissWarningModal(false));
+  dom.confirmDedupResetWarningBtn?.addEventListener('click', () => dismissWarningModal(true));
 
   // Threshold slider
   dom.dedupVisualThresholdSlider?.addEventListener('input', (e) => {

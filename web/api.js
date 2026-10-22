@@ -291,7 +291,8 @@ export function normalizeCatalogStats(raw) {
       total_tags: 0,
       total_albums: 0,
       earliest_date: 0,
-      latest_date: 0
+      latest_date: 0,
+      total_duplicates: 0
     };
   }
   return {
@@ -309,7 +310,8 @@ export function normalizeCatalogStats(raw) {
     total_tags: Number.isFinite(Number(raw.total_tags)) ? Number(raw.total_tags) : 0,
     total_albums: Number.isFinite(Number(raw.total_albums)) ? Number(raw.total_albums) : 0,
     earliest_date: Number.isFinite(Number(raw.earliest_date)) ? Number(raw.earliest_date) : 0,
-    latest_date: Number.isFinite(Number(raw.latest_date)) ? Number(raw.latest_date) : 0
+    latest_date: Number.isFinite(Number(raw.latest_date)) ? Number(raw.latest_date) : 0,
+    total_duplicates: Number.isFinite(Number(raw.total_duplicates)) ? Number(raw.total_duplicates) : 0
   };
 }
 

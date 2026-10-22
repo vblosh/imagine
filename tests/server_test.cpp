@@ -4898,8 +4898,20 @@ TEST_F(ServerTest, DuplicateEndpointsScanResolveAndDismissFlow) {
     EXPECT_EQ(rescan->status, 200);
     EXPECT_TRUE(nlohmann::json::parse(rescan->body)["groups"].empty());
 
-    // 4. Resolve duplicates: clear dismissal table first
-    catalog_->db().connection().execute("DELETE FROM duplicate_dismissals;");
+    // 4. Reset dismissals endpoint
+    auto resetRes = client.Post("/api/media/duplicates/dismissals/reset", "{}", "application/json");
+    ASSERT_TRUE(resetRes);
+    EXPECT_EQ(resetRes->status, 200);
+    auto resetJson = nlohmann::json::parse(resetRes->body);
+    EXPECT_EQ(resetJson["cleared"].get<int>(), 1);
+
+    // Rescan after reset: duplicate group is found again!
+    auto rescanAfterReset = client.Post("/api/media/duplicates/scan", "{}", "application/json");
+    ASSERT_TRUE(rescanAfterReset);
+    EXPECT_EQ(rescanAfterReset->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(rescanAfterReset->body)["groups"].size(), 1u);
+
+    // 5. Resolve duplicates
 
     // Test per-item error reporting: unknown keeper produces 404 group error without crashing
     nlohmann::json mixedResolve = {
@@ -4935,6 +4947,58 @@ TEST_F(ServerTest, DuplicateEndpointsScanResolveAndDismissFlow) {
     auto keeperJson = nlohmann::json::parse(keeperMediaRes->body);
     auto keeperTags = catalog_->db().getTagsForMedia(id1).value();
     EXPECT_EQ(keeperTags.size(), 2u);
+}
+
+TEST_F(ServerTest, DuplicateResolveWithDeleteFromDisk) {
+    catalog_->setPhotosDir(testDir_.string());
+    httplib::Client client("127.0.0.1", port_);
+
+    std::filesystem::path fKeeper = testDir_ / "dup_keeper.jpg";
+    std::filesystem::path fLoser = testDir_ / "dup_loser.jpg";
+
+    {
+        std::ofstream ofs1(fKeeper); ofs1 << "dup image data";
+        std::ofstream ofs2(fLoser); ofs2 << "dup image data";
+    }
+
+    ASSERT_TRUE(std::filesystem::exists(fKeeper));
+    ASSERT_TRUE(std::filesystem::exists(fLoser));
+
+    MediaItem mKeeper;
+    mKeeper.file_path = fKeeper.string(); mKeeper.file_name = "dup_keeper.jpg";
+    mKeeper.content_hash = "exact_dup_disk_hash";
+    mKeeper.file_size = 14; mKeeper.width = 1000; mKeeper.height = 1000;
+    mKeeper.media_type = "photo";
+
+    MediaItem mLoser;
+    mLoser.file_path = fLoser.string(); mLoser.file_name = "dup_loser.jpg";
+    mLoser.content_hash = "exact_dup_disk_hash";
+    mLoser.file_size = 14; mLoser.width = 800; mLoser.height = 800;
+    mLoser.media_type = "photo";
+
+    MediaId keeperId = catalog_->db().insertMedia(mKeeper).value();
+    MediaId loserId = catalog_->db().insertMedia(mLoser).value();
+
+    nlohmann::json resolveBody = {
+        {"delete_from_disk", true},
+        {"groups", {
+            {{"keeper", keeperId}, {"remove", {loserId}}, {"delete_from_disk", true}}
+        }}
+    };
+
+    auto resolveRes = client.Post("/api/media/duplicates/resolve", resolveBody.dump(), "application/json");
+    ASSERT_TRUE(resolveRes);
+    EXPECT_EQ(resolveRes->status, 200);
+
+    // Loser should be removed from DB
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(loserId))->status, 404);
+    // Keeper should remain in DB
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(keeperId))->status, 200);
+
+    // Loser file on disk MUST BE DELETED
+    EXPECT_FALSE(std::filesystem::exists(fLoser));
+    // Keeper file on disk MUST REMAIN INTACT
+    EXPECT_TRUE(std::filesystem::exists(fKeeper));
 }
 
 TEST_F(ServerTest, DuplicateVisualScanAndDateWindowHandling) {

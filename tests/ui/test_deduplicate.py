@@ -15,6 +15,7 @@ SAMPLE_DUPLICATE_SCAN_RESPONSE = {
                     "id": 1,
                     "file_name": "photo1.jpg",
                     "file_path": "/photos/photo1.jpg",
+                    "content_hash": "hash_photo1",
                     "file_size": 2048000,
                     "width": 1920,
                     "height": 1080,
@@ -26,6 +27,7 @@ SAMPLE_DUPLICATE_SCAN_RESPONSE = {
                     "id": 2,
                     "file_name": "photo1_copy.jpg",
                     "file_path": "/photos/photo1_copy.jpg",
+                    "content_hash": "hash_photo1",
                     "file_size": 2048000,
                     "width": 1920,
                     "height": 1080,
@@ -45,6 +47,7 @@ SAMPLE_DUPLICATE_SCAN_RESPONSE = {
                     "id": 3,
                     "file_name": "beach.jpg",
                     "file_path": "/photos/beach.jpg",
+                    "content_hash": "hash_beach",
                     "file_size": 1500000,
                     "width": 1600,
                     "height": 1200,
@@ -56,6 +59,7 @@ SAMPLE_DUPLICATE_SCAN_RESPONSE = {
                     "id": 4,
                     "file_name": "beach_edit.jpg",
                     "file_path": "/photos/beach_edit.jpg",
+                    "content_hash": "hash_beach_edit",
                     "file_size": 1200000,
                     "width": 1600,
                     "height": 1200,
@@ -165,10 +169,13 @@ def test_deduplicate_scan_exact_and_visual(server, page: Page):
     expect(second_group.locator(".dedup-match-badge.visual")).to_be_visible()
     expect(second_group.locator(".dedup-match-badge.visual")).to_contain_text("98.2%")
 
-    # Metadata pills
+    # Metadata pills and thumbnail
     first_member = first_group.locator(".dedup-member-card").nth(0)
     expect(first_member.locator(".dedup-filename")).to_have_text("photo1.jpg")
     expect(first_member.locator(".dedup-pill.pill-flag")).to_be_visible()
+    thumb_img = first_member.locator(".dedup-thumb-wrap img")
+    expect(thumb_img).to_be_visible()
+    assert thumb_img.get_attribute("src") in ["/api/thumbnails/hash_photo1/256", "/api/photos/1/original"]
 
     page.locator("#closeDeduplicateModalBtn").click()
 
@@ -416,3 +423,133 @@ def test_deduplicate_escape_key(server, page: Page):
 
     page.keyboard.press("Escape")
     expect(modal).to_be_hidden()
+
+
+def test_deduplicate_thumbnails_from_items_schema_and_fallback(server, page: Page):
+    """Test thumbnails are rendered correctly when backend returns 'items', and error fallback works."""
+    items_scan_response = {
+        "groups": [
+            {
+                "type": "exact",
+                "keeper": 101,
+                "members": [101, 102],
+                "min_similarity": 1.0,
+                "items": [
+                    {
+                        "id": 101,
+                        "file_name": "pic1.jpg",
+                        "file_path": "/photos/pic1.jpg",
+                        "content_hash": "hash_pic1",
+                        "file_size": 100000,
+                        "width": 1000,
+                        "height": 1000,
+                        "date_taken": 1700000000,
+                        "flag": 0,
+                        "tags": []
+                    },
+                    {
+                        "id": 102,
+                        "file_name": "pic2.jpg",
+                        "file_path": "/photos/pic2.jpg",
+                        "content_hash": "",
+                        "file_size": 100000,
+                        "width": 1000,
+                        "height": 1000,
+                        "date_taken": 1700000000,
+                        "flag": 0,
+                        "tags": []
+                    }
+                ]
+            }
+        ],
+        "media_scanned": 2
+    }
+
+    import base64
+    valid_gif = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+
+    page.route("**/api/thumbnails/**", lambda route: route.fulfill(
+        status=200,
+        content_type="image/gif",
+        body=valid_gif
+    ))
+
+    page.route("**/api/media/duplicates/scan", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps(items_scan_response)
+    ))
+
+    page.goto(server["url"])
+    page.locator("#navDuplicates").click()
+    page.locator("#dedupScanBtn").click()
+
+    expect(page.locator(".dedup-group-card")).to_have_count(1)
+    cards = page.locator(".dedup-member-card")
+    expect(cards).to_have_count(2)
+
+    # Member 1 has content_hash -> thumbnail URL uses /api/thumbnails/:hash/256
+    img1 = cards.nth(0).locator(".dedup-thumb-wrap img")
+    expect(img1).to_be_visible()
+    expect(img1).to_have_attribute("src", "/api/thumbnails/hash_pic1/256")
+
+    # Member 2 has no content_hash -> falls back to original photo URL
+    img2 = cards.nth(1).locator(".dedup-thumb-wrap img")
+    expect(img2).to_be_visible()
+    expect(img2).to_have_attribute("src", "/api/photos/102/original")
+
+    # Simulate an image loading error on Member 1 (e.g. 404 from thumbnail cache)
+    img1.evaluate("el => el.dispatchEvent(new Event('error'))")
+    expect(img1).to_have_attribute("src", "/api/photos/101/original")
+
+
+def test_deduplicate_reset_dismissals(server, page: Page):
+    """Test clicking Reset Dismissals calls the reset API endpoint and triggers a scan."""
+    reset_called = {"count": 0}
+    scan_called = {"count": 0}
+
+    def handle_reset(route):
+        reset_called["count"] += 1
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok", "cleared": 3}))
+
+    def handle_scan(route):
+        scan_called["count"] += 1
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(SAMPLE_DUPLICATE_SCAN_RESPONSE))
+
+    page.route("**/api/media/duplicates/dismissals/reset", handle_reset)
+    page.route("**/api/media/duplicates/scan", handle_scan)
+
+    page.goto(server["url"])
+    page.locator("#navDuplicates").click()
+
+    reset_btn = page.locator("#dedupResetDismissalsBtn")
+    expect(reset_btn).to_be_visible()
+    expect(reset_btn).to_have_text("Reset Dismissals")
+
+    warning_modal = page.locator("#dedupResetWarningModal")
+    expect(warning_modal).to_be_hidden()
+
+    # 1. Clicking Reset Dismissals opens styled warning dialog
+    reset_btn.click()
+    expect(warning_modal).to_be_visible()
+    expect(page.locator("#dedupResetWarningTitle")).to_contain_text("Reset Duplicate Dismissals?")
+    expect(page.locator("#dedupResetWarningPrompt")).to_be_visible()
+
+    # 2. Clicking Cancel closes dialog without making the reset request
+    page.locator("#cancelDedupResetWarningBtn").click()
+    expect(warning_modal).to_be_hidden()
+    assert reset_called["count"] == 0
+    assert scan_called["count"] == 0
+
+    # 3. Clicking Reset Dismissals again and clicking Confirm makes request and scans
+    reset_btn.click()
+    expect(warning_modal).to_be_visible()
+    page.locator("#confirmDedupResetWarningBtn").click()
+    expect(warning_modal).to_be_hidden()
+
+    expect(page.locator("#dedupReviewContainer")).to_be_visible()
+    assert reset_called["count"] == 1
+    assert scan_called["count"] == 1
+    expect(page.locator(".dedup-group-card")).to_have_count(2)
+
+

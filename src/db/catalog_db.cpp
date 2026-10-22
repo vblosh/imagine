@@ -1679,6 +1679,27 @@ Result<CatalogStats> CatalogDb::getStats() {
         }
     }
 
+    // exact duplicate groups count
+    {
+        const char* dupSql = R"SQL(
+            SELECT COUNT(*)
+            FROM (
+                SELECT 1
+                FROM media_items
+                WHERE content_hash != ""
+                GROUP BY content_hash, file_size
+                HAVING COUNT(*) > 1
+            );
+        )SQL";
+        auto dupStmtRes = conn_.prepare(dupSql);
+        if (dupStmtRes.isOk()) {
+            auto dupStmt = std::move(dupStmtRes.value());
+            if (dupStmt.step() == StepResult::Row) {
+                s.total_duplicates = dupStmt.getInt64(0);
+            }
+        }
+    }
+
     return s;
 }
 
@@ -2068,6 +2089,18 @@ Result<std::vector<std::pair<MediaId, MediaId>>> CatalogDb::getDismissedDuplicat
         return Status::databaseError("Failed to read dismissed duplicate pairs: " + conn_.lastErrorMessage());
     }
     return result;
+}
+
+Result<int> CatalogDb::clearDismissedDuplicatePairs() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const char* sql = "DELETE FROM duplicate_dismissals;";
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+    if (stmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to clear dismissed duplicate pairs: " + conn_.lastErrorMessage());
+    }
+    return conn_.changes();
 }
 
 Status CatalogDb::mergeMediaMetadata(MediaId keeperId, MediaId sourceId) {

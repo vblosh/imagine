@@ -48,6 +48,7 @@ export {
   abortCurrentMediaLoad,
   abortCurrentLoadMore,
   getCurrentLoadMediaId,
+  cancelInFlightMediaLoads,
 } from './media-fetch.js';
 
 export {
