@@ -150,6 +150,7 @@ setSidebarPersistenceHooks({
   saveActiveTagIdsPreference,
   saveActiveTabPreference,
   saveNavFilterPreference,
+  clearFilterPreferences,
 });
 
 export function saveSearchPreference(text) {

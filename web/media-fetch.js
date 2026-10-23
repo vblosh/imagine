@@ -92,6 +92,11 @@ export async function loadMediaData(append = false, { preserveScroll = false } =
     const isSemantic = Boolean(
       state.semanticSearchEnabled && state.searchText && state.semanticSearchAvailable
     );
+    if (!isSemantic && state.semanticSearchActive) {
+      state.semanticSearchActive = false;
+      state.semanticSearchQuery = '';
+      restoreSemanticSnapshot();
+    }
     const pageLimit = albumOrderMode ? 1000 : isSemantic ? 100 : state.mediaLimit;
     const params = {
       ...buildMediaParams(),
@@ -110,6 +115,7 @@ export async function loadMediaData(append = false, { preserveScroll = false } =
           activeFolders: new Set(state.activeFolders),
           activeMediaType: state.activeMediaType,
           activeStatusFilter: state.activeStatusFilter,
+          activeLastImported: state.activeLastImported,
           activeTimelinePeriod: state.activeTimelinePeriod ? { ...state.activeTimelinePeriod } : null,
           sortBy: state.sortBy,
           sortDesc: state.sortDesc,
@@ -117,15 +123,20 @@ export async function loadMediaData(append = false, { preserveScroll = false } =
       }
       state.semanticSearchActive = true;
       state.semanticSearchQuery = state.searchText;
+
+      const semanticFilters = { ...params };
+      delete semanticFilters.search;
+      delete semanticFilters.sort;
+      delete semanticFilters.limit;
+      delete semanticFilters.offset;
+      if (!semanticFilters.media_type || semanticFilters.media_type === 'all') {
+        semanticFilters.media_type = 'photo';
+      }
       res = await performSemanticSearch(state.searchText, pageLimit, {
+        filters: semanticFilters,
         signal: abortController.signal,
       });
     } else {
-      if (state.semanticSearchActive) {
-        state.semanticSearchActive = false;
-        state.semanticSearchQuery = '';
-        restoreSemanticSnapshot();
-      }
       res = await api.get('/api/media', params, { signal: abortController.signal });
     }
     if (fetchId !== currentLoadMediaId) return null;

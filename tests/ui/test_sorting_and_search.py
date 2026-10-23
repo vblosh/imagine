@@ -3,6 +3,7 @@ Deterministic UI tests for Sorting and Search functionality.
 """
 
 import json
+import re
 import time
 from playwright.sync_api import Page, expect
 
@@ -493,4 +494,81 @@ def test_escape_key_closes_semantic_search_grid(server, page: Page):
     expect(page.locator(".photo-card")).to_have_count(6)
     expect(page.locator(".date-group")).to_have_count(3)
 
+
+def test_semantic_search_respects_filter_and_runs_on_all_photos_when_cleared(server, page: Page):
+    """Semantic search respects active filters, and when filters are cleared runs on all photos."""
+    page.route("**/api/semantic/status*", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"ready": True, "built": True, "indexSize": 6, "modelId": "clip-vit-base"})
+    ))
+
+    semantic_calls = []
+
+    def handle_semantic_search(route):
+        post_data = route.request.post_data_json or {}
+        semantic_calls.append(post_data)
+        filters = post_data.get("filters", {})
+
+        # If flag filter is set to picks (1)
+        if filters.get("flag") == 1:
+            media_items = [
+                {"id": 1, "file_name": "beach.bmp", "date_taken": 1768000000, "flag": 1, "similarity_score": 0.95},
+            ]
+            items = [{"mediaId": 1, "score": 0.95}]
+        elif filters.get("media_type") == "video":
+            media_items = []
+            items = []
+        else:
+            # All photos
+            media_items = [
+                {"id": 1, "file_name": "beach.bmp", "date_taken": 1768000000, "flag": 1, "similarity_score": 0.95},
+                {"id": 4, "file_name": "sunset.bmp", "date_taken": 1770000000, "flag": 0, "similarity_score": 0.90},
+            ]
+            items = [{"mediaId": 1, "score": 0.95}, {"mediaId": 4, "score": 0.90}]
+
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"items": items, "media_items": media_items, "total": len(items)})
+        )
+
+    page.route("**/api/semantic/search*", handle_semantic_search)
+    page.goto(server["url"])
+
+    # 1. Filter by Picks
+    page.locator("#navPicks").click()
+    page.wait_for_timeout(100)
+
+    # 2. Turn on semantic search and search for "golden beach"
+    page.locator("#semanticToggle").click()
+    page.locator("#searchInput").fill("golden beach")
+    page.locator("#searchInput").press("Enter")
+
+    expect(page.locator("#semanticSearchToolbar")).to_be_visible()
+    expect(page.locator(".photo-card")).to_have_count(1)
+    expect(page.locator(".photo-card").first.locator(".card-filename")).to_have_text("beach.bmp")
+
+    assert len(semantic_calls) >= 1
+    last_call = semantic_calls[-1]
+    assert last_call["query"] == "golden beach"
+    assert last_call["filters"]["flag"] == 1
+    assert last_call["filters"]["media_type"] == "photo"
+
+    # 3. Clear filter by clicking "All Media" in the sidebar
+    page.locator("#navAllMedia").click()
+    page.wait_for_timeout(200)
+
+    # Now semantic search runs on all photos
+    expect(page.locator(".photo-card")).to_have_count(2)
+    last_call2 = semantic_calls[-1]
+    assert last_call2["query"] == "golden beach"
+    assert "flag" not in last_call2["filters"]
+    assert last_call2["filters"]["media_type"] == "photo"
+
+    # 4. Press Escape to close search: snapshot should not restore the old Picks filter
+    page.keyboard.press("Escape")
+    expect(page.locator("#semanticSearchToolbar")).to_be_hidden()
+    expect(page.locator("#navAllMedia")).to_have_class(re.compile(r"\bactive\b"))
+    expect(page.locator("#navPicks")).not_to_have_class(re.compile(r"\bactive\b"))
 

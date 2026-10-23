@@ -1025,6 +1025,17 @@ TEST(ClipServiceTest, SearchAndFindSimilarClampingAndDateFilters) {
         ASSERT_TRUE(simZero.isOk());
         EXPECT_LE(simZero.value().items.size(), 1u);
 
+        // Test filterMediaIds with empty allowedMediaIds returns early
+        imagine::clip::SearchRequest sreqEmpty;
+        sreqEmpty.query = "vintage";
+        sreqEmpty.filterMediaIds = true;
+        sreqEmpty.allowedMediaIds = {};
+        auto emptyRes = svc.search(sreqEmpty);
+        ASSERT_TRUE(emptyRes.isOk());
+        EXPECT_TRUE(emptyRes.value().items.empty());
+
+
+
         db.close();
     }
 

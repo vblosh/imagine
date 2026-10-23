@@ -14,7 +14,7 @@ import { initGridAccessibility, updateRovingTabindex } from './grid-a11y.js';
 import { updateSidebarActive } from './sidebar.js';
 import { renderTimeline } from './timeline.js';
 import { isWholeYearPeriod, isSingleMonthPeriod } from './timeline-range.js';
-import { clearFilterPreferences, saveActiveTabPreference } from './persistence.js';
+import { clearFilterPreferences, saveActiveTabPreference, saveSearchPreference } from './persistence.js';
 import { restoreSemanticSnapshot } from './semantic-status.js';
 
 let viewsOrchestrator = null;
@@ -455,11 +455,16 @@ export async function closeSemanticSearch() {
   await loadMedia();
 }
 
-export function clearAllFilters() {
-  state.semanticSearchActive = false;
-  state.semanticSearchQuery = '';
-  state.semanticSearchSnapshot = null;
-  syncSemanticSearchUI();
+export function clearAllFilters(options = {}) {
+  const preserveSearch = options?.preserveSearch ?? Boolean(state.searchText);
+  if (preserveSearch) {
+    state.semanticSearchSnapshot = null;
+  } else {
+    state.semanticSearchActive = false;
+    state.semanticSearchQuery = '';
+    state.semanticSearchSnapshot = null;
+    syncSemanticSearchUI();
+  }
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;
   state.activeLastImported = false;
@@ -468,13 +473,15 @@ export function clearAllFilters() {
   state.activeFolders.clear();
   state.lastSidebarClickedItem = null;
   clearTimelineSelection();
-  if (state.searchDebounceTimer) {
-    clearTimeout(state.searchDebounceTimer);
-    state.searchDebounceTimer = null;
+  if (!preserveSearch) {
+    if (state.searchDebounceTimer) {
+      clearTimeout(state.searchDebounceTimer);
+      state.searchDebounceTimer = null;
+    }
+    state.searchText = '';
+    if (dom.searchInput) dom.searchInput.value = '';
   }
   state.activeTab = 'media';
-  state.searchText = '';
-  if (dom.searchInput) dom.searchInput.value = '';
   if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'none';
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'none';
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'flex';
@@ -490,6 +497,9 @@ export function clearAllFilters() {
   updateSidebarActive();
   renderTimeline();
   clearFilterPreferences();
+  if (preserveSearch && state.searchText) {
+    saveSearchPreference(state.searchText);
+  }
   saveActiveTabPreference('media');
   loadMedia();
 }

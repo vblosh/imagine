@@ -5356,3 +5356,79 @@ TEST_F(ServerTest, ApiRouterAndWebServerGracefulStop) {
     EXPECT_FALSE(ws.isRunning());
     EXPECT_LT(elapsed, 3000);
 }
+
+TEST_F(ServerTest, SemanticSearchFilterValidationAndPhotoOnlySemantics) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Invalid rating returns 400
+    {
+        nlohmann::json body = {
+            {"query", "mountain"},
+            {"filters", {{"rating", 99}}}
+        };
+        auto res = client.Post("/api/semantic/search", body.dump(), "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+    }
+
+    // 2. Invalid date_from returns 400
+    {
+        nlohmann::json body = {
+            {"query", "mountain"},
+            {"filters", {{"date_from", "invalid_timestamp"}}}
+        };
+        auto res = client.Post("/api/semantic/search", body.dump(), "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+    }
+
+    // 3. Invalid media_type returns 400
+    {
+        nlohmann::json body = {
+            {"query", "mountain"},
+            {"filters", {{"media_type", "unknown_type"}}}
+        };
+        auto res = client.Post("/api/semantic/search", body.dump(), "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+    }
+
+    // 4. Invalid folders JSON array returns 400
+    {
+        nlohmann::json body = {
+            {"query", "mountain"},
+            {"filters", {{"folders", "[unclosed_json"}}}
+        };
+        auto res = client.Post("/api/semantic/search", body.dump(), "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+    }
+
+    // 5. Non-photo media_type ('video') returns 200 with 0 items (short-circuit)
+    {
+        nlohmann::json body = {
+            {"query", "mountain"},
+            {"filters", {{"media_type", "video"}}}
+        };
+        auto res = client.Post("/api/semantic/search", body.dump(), "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+        auto j = nlohmann::json::parse(res->body);
+        EXPECT_TRUE(j["items"].empty());
+        EXPECT_TRUE(j["media_items"].empty());
+    }
+
+    // 6. Explicitly empty media_ids returns 200 with 0 items (short-circuit)
+    {
+        nlohmann::json body = {
+            {"query", "mountain"},
+            {"filters", {{"media_ids", nlohmann::json::array()}}}
+        };
+        auto res = client.Post("/api/semantic/search", body.dump(), "application/json");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+        auto j = nlohmann::json::parse(res->body);
+        EXPECT_TRUE(j["items"].empty());
+        EXPECT_TRUE(j["media_items"].empty());
+    }
+}

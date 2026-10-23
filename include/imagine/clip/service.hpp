@@ -28,6 +28,8 @@ struct SearchRequest {
     int64_t dateFrom{0};
     int64_t dateTo{0};
     std::optional<std::string> mediaType;
+    std::vector<MediaId> allowedMediaIds;
+    bool filterMediaIds{false};
 };
 
 struct SearchResult {

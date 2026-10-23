@@ -198,7 +198,7 @@ Returns the operational status of the CLIP engine and current index size.
 ```
 
 ### `POST /api/semantic/search`
-Searches the catalog using natural language text.
+Searches the catalog using natural language text. Semantic search operates on photos only; passing non-photo media filters (such as `"video"` or `"audio"`) yields zero results. When filters are omitted or cleared, search executes across all photos in the catalog.
 
 **Request Body:**
 ```json
@@ -206,19 +206,43 @@ Searches the catalog using natural language text.
   "query": "vintage car in the snow",
   "limit": 50,
   "filters": {
-    "ratingMin": 3,
-    "dateFrom": 1704067200,
-    "dateTo": 1735689600,
-    "mediaType": "photo"
+    "media_type": "photo",
+    "rating": 3,
+    "max_rating": 5,
+    "date_from": 1704067200,
+    "date_to": 1735689600,
+    "flag": 1,
+    "album_id": 2,
+    "folders": ["vacation/2026"],
+    "tag_ids": [12, 15],
+    "tag_folder_mode": false,
+    "last_imported": false,
+    "allowed_ids": [101, 102, 103]
   }
 }
 ```
 
+Supported filter keys in `filters`:
+- `media_type` / `mediaType`: `'photo'` (default), `'video'`, `'audio'`, or `'all'`.
+- `rating` / `min_rating` / `ratingMin`: Minimum rating (0–5).
+- `max_rating` / `ratingMax`: Maximum rating (0–5).
+- `date_from` / `dateFrom`: Earliest timestamp in seconds.
+- `date_to` / `dateTo`: Latest timestamp in seconds.
+- `flag`: Flag state (`-1` reject, `0` unflagged, `1` pick).
+- `not_flag` / `notFlag`: Flag state to exclude.
+- `album_id` / `albumId`: Restrict to a specific album.
+- `folders` / `folder`: Single folder string or array of folder paths.
+- `tag_ids` / `tagIds` / `tag_id` / `tagId`: Array or comma-separated list of tag IDs.
+- `tag_folder_mode` / `tagFolderMode`: `true` or `"or"` for OR mode between tags and folders.
+- `tag_category` / `category`: Tag category name.
+- `last_imported` / `lastImported`: Restrict to the latest imported batch.
+- `media_ids` / `allowed_ids`: Array of explicit media item IDs to restrict candidate scope.
+
 **Response:**
 ```json
 {
-  "model_id": "clip-vit-base-patch32",
-  "duration_ms": 3.82,
+  "model": "clip-vit-base-patch32",
+  "elapsedMs": 3.82,
   "items": [
     { "media_id": 142, "score": 0.312 },
     { "media_id": 89, "score": 0.284 }

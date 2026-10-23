@@ -4075,24 +4075,387 @@ void ApiRouter::registerSemanticRoutes(httplib::Server& server) {
                 sendError(res, "Limit must be between 1 and 1000", 400);
                 return;
             }
+            core::QueryCriteria criteria;
+            criteria.media_type = "photo"; // Semantic search operates on photos only
+            bool hasCriteriaFilters = false;
+            std::vector<MediaId> explicitIds;
+            bool hasExplicitIds = false;
+
             if (body.contains("filters") && body["filters"].is_object()) {
-                auto& f = body["filters"];
-                if (f.contains("dateFrom")) {
-                    if (f["dateFrom"].is_number()) {
-                        sreq.dateFrom = f["dateFrom"].get<int64_t>();
-                    } else if (f["dateFrom"].is_string()) {
-                        try { sreq.dateFrom = std::stoll(f["dateFrom"].get<std::string>()); } catch (...) {}
+                const auto& f = body["filters"];
+
+                if (f.contains("media_type") || f.contains("mediaType")) {
+                    const auto& mtJson = f.contains("media_type") ? f["media_type"] : f["mediaType"];
+                    if (!mtJson.is_string()) {
+                        sendError(res, "Query parameter 'media_type' must be 'photo', 'video', or 'audio'", 400);
+                        return;
+                    }
+                    std::string mtVal = mtJson.get<std::string>();
+                    if (mtVal.empty() || mtVal == "all" || mtVal == "photo") {
+                        criteria.media_type = "photo";
+                    } else if (mtVal == "video" || mtVal == "audio") {
+                        criteria.media_type = mtVal;
+                    } else {
+                        sendError(res, "Query parameter 'media_type' must be 'photo', 'video', or 'audio'", 400);
+                        return;
                     }
                 }
-                if (f.contains("dateTo")) {
-                    if (f["dateTo"].is_number()) {
-                        sreq.dateTo = f["dateTo"].get<int64_t>();
-                    } else if (f["dateTo"].is_string()) {
-                        try { sreq.dateTo = std::stoll(f["dateTo"].get<std::string>()); } catch (...) {}
+
+                auto parseDateVal = [&](const nlohmann::json& val, int64_t& out) -> bool {
+                    if (val.is_number_integer()) {
+                        out = val.get<int64_t>();
+                        return true;
+                    } else if (val.is_string()) {
+                        const std::string s = val.get<std::string>();
+                        if (s.empty()) return false;
+                        char* endPtr = nullptr;
+                        out = std::strtoll(s.c_str(), &endPtr, 10);
+                        return (endPtr == s.c_str() + s.size());
+                    }
+                    return false;
+                };
+
+                if (f.contains("date_from") || f.contains("dateFrom")) {
+                    const auto& val = f.contains("date_from") ? f["date_from"] : f["dateFrom"];
+                    int64_t df = 0;
+                    if (!parseDateVal(val, df)) {
+                        sendError(res, "Filter 'date_from' must be a valid integer timestamp", 400);
+                        return;
+                    }
+                    criteria.date_from = df;
+                    hasCriteriaFilters = true;
+                }
+
+                if (f.contains("date_to") || f.contains("dateTo")) {
+                    const auto& val = f.contains("date_to") ? f["date_to"] : f["dateTo"];
+                    int64_t dt = 0;
+                    if (!parseDateVal(val, dt)) {
+                        sendError(res, "Filter 'date_to' must be a valid integer timestamp", 400);
+                        return;
+                    }
+                    criteria.date_to = dt;
+                    hasCriteriaFilters = true;
+                }
+
+                auto parseRatingVal = [&](const nlohmann::json& val, int32_t& out) -> bool {
+                    if (val.is_number_integer()) {
+                        out = val.get<int32_t>();
+                        return (out >= 0 && out <= 5);
+                    } else if (val.is_string()) {
+                        int32_t v = 0;
+                        if (parseInt(val.get<std::string>(), v) && v >= 0 && v <= 5) {
+                            out = v;
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+
+                if (f.contains("min_rating") || f.contains("ratingMin") || f.contains("rating")) {
+                    const auto& val = f.contains("min_rating") ? f["min_rating"] : (f.contains("ratingMin") ? f["ratingMin"] : f["rating"]);
+                    int32_t r = 0;
+                    if (!parseRatingVal(val, r)) {
+                        sendError(res, "Filter 'rating' must be an integer between 0 and 5", 400);
+                        return;
+                    }
+                    criteria.min_rating = r;
+                    hasCriteriaFilters = true;
+                }
+
+                if (f.contains("max_rating") || f.contains("ratingMax")) {
+                    const auto& val = f.contains("max_rating") ? f["max_rating"] : f["ratingMax"];
+                    int32_t r = 0;
+                    if (!parseRatingVal(val, r)) {
+                        sendError(res, "Filter 'max_rating' must be an integer between 0 and 5", 400);
+                        return;
+                    }
+                    criteria.max_rating = r;
+                    hasCriteriaFilters = true;
+                }
+
+                if (criteria.min_rating.has_value() && criteria.max_rating.has_value() &&
+                    *criteria.min_rating > *criteria.max_rating) {
+                    sendError(res, "'rating' cannot be greater than 'max_rating'", 400);
+                    return;
+                }
+
+                auto parseFlagVal = [&](const nlohmann::json& val, FlagState& out) -> bool {
+                    int v = 0;
+                    if (val.is_number_integer()) {
+                        v = val.get<int>();
+                    } else if (val.is_string() && parseInt(val.get<std::string>(), v)) {
+                    } else {
+                        return false;
+                    }
+                    if (v >= -1 && v <= 1) {
+                        out = static_cast<FlagState>(v);
+                        return true;
+                    }
+                    return false;
+                };
+
+                if (f.contains("flag")) {
+                    FlagState st = FlagState::Unflagged;
+                    if (!parseFlagVal(f["flag"], st)) {
+                        sendError(res, "Filter 'flag' must be -1, 0, or 1", 400);
+                        return;
+                    }
+                    criteria.flag = st;
+                    hasCriteriaFilters = true;
+                }
+
+                if (f.contains("not_flag") || f.contains("notFlag")) {
+                    const auto& val = f.contains("not_flag") ? f["not_flag"] : f["notFlag"];
+                    FlagState st = FlagState::Unflagged;
+                    if (!parseFlagVal(val, st)) {
+                        sendError(res, "Filter 'not_flag' must be -1, 0, or 1", 400);
+                        return;
+                    }
+                    criteria.not_flag = st;
+                    hasCriteriaFilters = true;
+                }
+
+                if (criteria.flag.has_value() && criteria.not_flag.has_value() &&
+                    criteria.flag == criteria.not_flag) {
+                    sendError(res, "'flag' and 'not_flag' cannot have the same value", 400);
+                    return;
+                }
+
+                if (f.contains("album_id") || f.contains("albumId")) {
+                    const auto& val = f.contains("album_id") ? f["album_id"] : f["albumId"];
+                    AlbumId aid = 0;
+                    if (val.is_number_integer()) {
+                        aid = val.get<AlbumId>();
+                    } else if (val.is_string() && parseInt(val.get<std::string>(), aid)) {
+                    } else {
+                        sendError(res, "Filter 'album_id' must be an integer", 400);
+                        return;
+                    }
+                    criteria.album_id = aid;
+                    hasCriteriaFilters = true;
+                }
+
+                if (f.contains("folders")) {
+                    if (f["folders"].is_array()) {
+                        for (const auto& item : f["folders"]) {
+                            if (!item.is_string()) {
+                                sendError(res, "Folder path in 'folders' must be a string", 400);
+                                return;
+                            }
+                            std::string path = item.get<std::string>();
+                            if (path.size() > kMaxFolderLength) {
+                                sendError(res, "Folder path exceeds maximum length", 400);
+                                return;
+                            }
+                            criteria.folders.push_back(std::move(path));
+                        }
+                        if (!criteria.folders.empty()) hasCriteriaFilters = true;
+                    } else if (f["folders"].is_string()) {
+                        std::string s = f["folders"].get<std::string>();
+                        if (!s.empty()) {
+                            if (s.front() == '[') {
+                                try {
+                                    auto parsed = nlohmann::json::parse(s);
+                                    if (!parsed.is_array()) {
+                                        sendError(res, "Filter 'folders' must be an array or string", 400);
+                                        return;
+                                    }
+                                    for (const auto& item : parsed) {
+                                        if (!item.is_string()) {
+                                            sendError(res, "Folder path in 'folders' must be a string", 400);
+                                            return;
+                                        }
+                                        std::string path = item.get<std::string>();
+                                        if (path.size() > kMaxFolderLength) {
+                                            sendError(res, "Folder path exceeds maximum length", 400);
+                                            return;
+                                        }
+                                        criteria.folders.push_back(std::move(path));
+                                    }
+                                } catch (...) {
+                                    sendError(res, "Invalid JSON format for 'folders'", 400);
+                                    return;
+                                }
+                            } else {
+                                if (s.size() > kMaxFolderLength) {
+                                    sendError(res, "Folder path exceeds maximum length", 400);
+                                    return;
+                                }
+                                criteria.folders.push_back(std::move(s));
+                            }
+                            if (!criteria.folders.empty()) hasCriteriaFilters = true;
+                        }
+                    } else {
+                        sendError(res, "Filter 'folders' must be an array or string", 400);
+                        return;
+                    }
+                } else if (f.contains("folder")) {
+                    if (!f["folder"].is_string()) {
+                        sendError(res, "Filter 'folder' must be a string", 400);
+                        return;
+                    }
+                    std::string path = f["folder"].get<std::string>();
+                    if (path.size() > kMaxFolderLength) {
+                        sendError(res, "Folder path exceeds maximum length", 400);
+                        return;
+                    }
+                    criteria.folder = std::move(path);
+                    hasCriteriaFilters = true;
+                }
+
+                if (f.contains("tag_ids") || f.contains("tagIds")) {
+                    const auto& val = f.contains("tag_ids") ? f["tag_ids"] : f["tagIds"];
+                    if (val.is_array()) {
+                        for (const auto& tid : val) {
+                            if (!tid.is_number_integer()) {
+                                sendError(res, "Tag ID in 'tag_ids' must be an integer", 400);
+                                return;
+                            }
+                            criteria.tag_ids.push_back(tid.get<TagId>());
+                        }
+                        if (!criteria.tag_ids.empty()) hasCriteriaFilters = true;
+                    } else if (val.is_string()) {
+                        std::stringstream ss(val.get<std::string>());
+                        std::string item;
+                        while (std::getline(ss, item, ',')) {
+                            TagId tid = 0;
+                            if (parseInt(item, tid)) {
+                                criteria.tag_ids.push_back(tid);
+                            } else if (!item.empty()) {
+                                sendError(res, "Tag ID in 'tag_ids' must be an integer", 400);
+                                return;
+                            }
+                        }
+                        if (!criteria.tag_ids.empty()) hasCriteriaFilters = true;
+                    } else {
+                        sendError(res, "Filter 'tag_ids' must be an array or comma-separated string", 400);
+                        return;
+                    }
+                } else if (f.contains("tag_id") || f.contains("tagId")) {
+                    const auto& val = f.contains("tag_id") ? f["tag_id"] : f["tagId"];
+                    if (val.is_array()) {
+                        for (const auto& tid : val) {
+                            if (!tid.is_number_integer()) {
+                                sendError(res, "Tag ID in 'tag_id' must be an integer", 400);
+                                return;
+                            }
+                            criteria.tag_ids.push_back(tid.get<TagId>());
+                        }
+                        if (!criteria.tag_ids.empty()) hasCriteriaFilters = true;
+                    } else if (val.is_number_integer()) {
+                        criteria.tag_ids.push_back(val.get<TagId>());
+                        hasCriteriaFilters = true;
+                    } else if (val.is_string()) {
+                        TagId tid = 0;
+                        if (!parseInt(val.get<std::string>(), tid)) {
+                            sendError(res, "Filter 'tag_id' must be an integer", 400);
+                            return;
+                        }
+                        criteria.tag_ids.push_back(tid);
+                        hasCriteriaFilters = true;
+                    } else {
+                        sendError(res, "Filter 'tag_id' must be an integer or array", 400);
+                        return;
                     }
                 }
-                if (f.contains("ratingMin") && f["ratingMin"].is_number()) sreq.ratingMin = f["ratingMin"].get<int32_t>();
-                if (f.contains("mediaType") && f["mediaType"].is_string()) sreq.mediaType = f["mediaType"].get<std::string>();
+
+                if (f.contains("tag_folder_mode") || f.contains("tagFolderMode")) {
+                    const auto& val = f.contains("tag_folder_mode") ? f["tag_folder_mode"] : f["tagFolderMode"];
+                    if (val.is_boolean()) {
+                        criteria.tag_folder_or_mode = val.get<bool>();
+                    } else if (val.is_string()) {
+                        std::string m = val.get<std::string>();
+                        criteria.tag_folder_or_mode = (m == "or" || m == "1" || m == "true");
+                    }
+                }
+
+                if (f.contains("tag_category") || f.contains("tagCategory") || f.contains("category")) {
+                    const auto& val = f.contains("tag_category") ? f["tag_category"] : (f.contains("tagCategory") ? f["tagCategory"] : f["category"]);
+                    if (!val.is_string()) {
+                        sendError(res, "Filter 'tag_category' must be a string", 400);
+                        return;
+                    }
+                    std::string cat = val.get<std::string>();
+                    if (cat.size() > kMaxCategoryLength) {
+                        sendError(res, "Tag category exceeds maximum length", 400);
+                        return;
+                    }
+                    criteria.tag_category = std::move(cat);
+                    hasCriteriaFilters = true;
+                }
+
+                if (f.contains("last_imported") || f.contains("lastImported")) {
+                    const auto& val = f.contains("last_imported") ? f["last_imported"] : f["lastImported"];
+                    if (val.is_boolean()) {
+                        criteria.last_imported = val.get<bool>();
+                        if (criteria.last_imported) hasCriteriaFilters = true;
+                    } else if (val.is_string()) {
+                        std::string v = val.get<std::string>();
+                        criteria.last_imported = (v == "1" || v == "true");
+                        if (criteria.last_imported) hasCriteriaFilters = true;
+                    } else {
+                        sendError(res, "Filter 'last_imported' must be a boolean", 400);
+                        return;
+                    }
+                }
+
+                if (f.contains("media_ids") || f.contains("mediaIds") || f.contains("allowed_ids") || f.contains("allowedIds")) {
+                    const auto& val = f.contains("media_ids") ? f["media_ids"] : (f.contains("mediaIds") ? f["mediaIds"] : (f.contains("allowed_ids") ? f["allowed_ids"] : f["allowedIds"]));
+                    if (!val.is_array()) {
+                        sendError(res, "Filter 'media_ids' must be an array of IDs", 400);
+                        return;
+                    }
+                    hasExplicitIds = true;
+                    for (const auto& mid : val) {
+                        if (mid.is_number_integer()) explicitIds.push_back(mid.get<MediaId>());
+                    }
+                }
+            }
+
+            if (criteria.media_type.has_value() && *criteria.media_type != "photo") {
+                // Semantic search operates on photos only; video/audio filters yield 0 results immediately
+                sreq.filterMediaIds = true;
+                sreq.allowedMediaIds = {};
+            } else if (hasExplicitIds && explicitIds.empty()) {
+                sreq.filterMediaIds = true;
+                sreq.allowedMediaIds = {};
+            } else if (hasCriteriaFilters) {
+                // Query matching media items without running the full COUNT(*)
+                criteria.limit = 0;
+                criteria.offset = 0;
+                criteria.sort_by = "id";
+                auto queryRes = core::QueryBuilder::executeQuery(db(), criteria);
+                if (!queryRes.isOk()) {
+                    sendStatusError(res, queryRes.status());
+                    return;
+                }
+                std::vector<MediaId> allowedIds;
+                allowedIds.reserve(queryRes.value().size());
+                for (const auto& item : queryRes.value()) {
+                    allowedIds.push_back(item.id);
+                }
+                if (hasExplicitIds) {
+                    std::unordered_set<MediaId> expSet(explicitIds.begin(), explicitIds.end());
+                    std::vector<MediaId> intersected;
+                    for (MediaId id : allowedIds) {
+                        if (expSet.count(id)) intersected.push_back(id);
+                    }
+                    allowedIds = std::move(intersected);
+                }
+                sreq.filterMediaIds = true;
+                sreq.allowedMediaIds = std::move(allowedIds);
+            } else if (hasExplicitIds) {
+                // Explicit IDs provided without criteria: verify they are photos
+                std::vector<MediaId> verifiedPhotoIds;
+                verifiedPhotoIds.reserve(explicitIds.size());
+                for (MediaId id : explicitIds) {
+                    auto mRes = db().getMediaById(id);
+                    if (mRes.isOk() && mRes.value().media_type == "photo") {
+                        verifiedPhotoIds.push_back(id);
+                    }
+                }
+                sreq.filterMediaIds = true;
+                sreq.allowedMediaIds = std::move(verifiedPhotoIds);
             }
             
             auto result = clipService_->search(sreq);

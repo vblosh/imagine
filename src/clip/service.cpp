@@ -450,9 +450,10 @@ void Service::loadIndex() {
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
     
     auto stmtRes = impl_->db.conn_.prepare(
-        "SELECT media_id, embedding, vector_dim FROM semantic_index_state "
-        "WHERE embedding IS NOT NULL AND (error_text IS NULL OR error_text = '') AND model_id = ? AND model_revision = ? "
-        "ORDER BY media_id;"
+        "SELECT s.media_id, s.embedding, s.vector_dim FROM semantic_index_state s "
+        "JOIN media_items m ON s.media_id = m.id AND m.media_type = 'photo' "
+        "WHERE s.embedding IS NOT NULL AND (s.error_text IS NULL OR s.error_text = '') AND s.model_id = ? AND s.model_revision = ? "
+        "ORDER BY s.media_id;"
     );
     if (!stmtRes.isOk()) return;
     auto stmt = std::move(stmtRes.value());
@@ -541,17 +542,30 @@ Result<SearchResult> Service::search(const SearchRequest& request) {
 
     auto t0 = std::chrono::steady_clock::now();
     const int limit = std::clamp(request.limit, 1, 1000);
+
+    if (request.filterMediaIds && request.allowedMediaIds.empty()) {
+        auto t1 = std::chrono::steady_clock::now();
+        return SearchResult{
+            impl_->engine.info().modelId,
+            std::chrono::duration<double, std::milli>(t1 - t0).count(),
+            {}
+        };
+    }
     
     auto encodeRes = impl_->engine.encodeText(request.query);
     if (!encodeRes.isOk()) return encodeRes.status();
     const auto& queryVec = encodeRes.value();
     
-    const bool hasFilters = request.ratingMin.has_value() || request.dateFrom != 0 ||
-                            request.dateTo != 0 || request.mediaType.has_value();
+    const bool hasMediaTypeFilter = request.mediaType.has_value() && *request.mediaType != "photo";
+    const bool hasFilters = request.filterMediaIds ||
+                            request.ratingMin.has_value() || request.dateFrom != 0 ||
+                            request.dateTo != 0 || hasMediaTypeFilter;
 
     std::unordered_set<MediaId> matchingFilterIds;
-    if (hasFilters) {
-        std::string sql = "SELECT id FROM media_items WHERE 1=1";
+    if (request.filterMediaIds) {
+        matchingFilterIds.insert(request.allowedMediaIds.begin(), request.allowedMediaIds.end());
+    } else if (hasFilters) {
+        std::string sql = "SELECT id FROM media_items WHERE media_type = 'photo'";
         if (request.ratingMin.has_value()) {
             sql += " AND rating >= " + std::to_string(*request.ratingMin);
         }
@@ -561,14 +575,14 @@ Result<SearchResult> Service::search(const SearchRequest& request) {
         if (request.dateTo != 0) {
             sql += " AND date_taken != 0 AND date_taken <= " + std::to_string(request.dateTo);
         }
-        if (request.mediaType.has_value()) {
+        if (hasMediaTypeFilter) {
             sql += " AND media_type = ?";
         }
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
         auto stmtRes = impl_->db.conn_.prepare(sql);
         if (!stmtRes.isOk()) return stmtRes.status();
         auto stmt = std::move(stmtRes.value());
-        if (request.mediaType.has_value()) stmt.bind(1, *request.mediaType);
+        if (hasMediaTypeFilter) stmt.bind(1, *request.mediaType);
         while (stmt.step() == StepResult::Row) {
             matchingFilterIds.insert(stmt.getInt64(0));
         }
@@ -617,7 +631,7 @@ Result<SearchResult> Service::search(const SearchRequest& request) {
         }
         inClause += ")";
         
-        std::string sql = "SELECT id FROM media_items WHERE id IN " + inClause;
+        std::string sql = "SELECT id FROM media_items WHERE media_type = 'photo' AND id IN " + inClause;
         
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
         auto stmtRes = impl_->db.conn_.prepare(sql);
