@@ -1084,7 +1084,7 @@ TEST_F(ServerTest, VideoOnDemandThumbnailGeneration) {
 #if defined(_WIN32)
     std::wstring binW = pathFromUtf8(bin).wstring();
     std::wstring vidW = pathFromUtf8(videoPath).wstring();
-    std::wstring genCmd = LR"(")" + binW + LR"(" -y -v error -f lavfi -i testsrc=duration=2:size=320x240:rate=5 ")" + vidW + LR"(")";
+    std::wstring genCmd = LR"("")" + binW + LR"(" -y -v error -f lavfi -i testsrc=duration=2:size=320x240:rate=5 ")" + vidW + LR"("")";
     _wsystem(genCmd.c_str());
 #else
     std::string genCmd = R"(")" + bin + R"(" -y -v error -f lavfi -i testsrc=duration=2:size=320x240:rate=5 ")" + videoPath + R"(" 2>/dev/null)";
