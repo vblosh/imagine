@@ -62,6 +62,8 @@ public:
     Status setDateTaken(MediaId id, int64_t dateTaken, const std::string& dateTakenStr = "");
     Status setGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
     Status deleteMedia(MediaId id, bool deleteFromDisk = false);
+    Result<size_t> clearThumbnailCache(bool dryRun = false);
+    Result<size_t> clearVideoThumbnailCache(bool dryRun = false);
 
     // Tags
     Status addTag(MediaId id, const std::string& tagName, const std::string& category = "keyword");

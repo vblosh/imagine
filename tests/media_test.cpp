@@ -1622,7 +1622,7 @@ TEST(MediaTest, FfmpegHelperSpacesAndUnicodePaths) {
 #if defined(_WIN32)
     std::wstring binW = pathFromUtf8(bin).wstring();
     std::wstring vidW = pathFromUtf8(videoPath).wstring();
-    std::wstring genCmd = LR"(")" + binW + LR"(" -y -v error -f lavfi -i testsrc=duration=2:size=160x120:rate=1 ")" + vidW + LR"(")";
+    std::wstring genCmd = LR"("")" + binW + LR"(" -y -v error -f lavfi -i testsrc=duration=2:size=160x120:rate=1 ")" + vidW + LR"("")";
     _wsystem(genCmd.c_str());
 #else
     std::string genCmd = R"(")" + bin + R"(" -y -v error -f lavfi -i testsrc=duration=2:size=160x120:rate=1 ")" + videoPath + R"(" 2>/dev/null)";

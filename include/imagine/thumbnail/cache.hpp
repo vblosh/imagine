@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <utility>
 #include <mutex>
 #include "imagine/common/error.hpp"
@@ -57,9 +58,38 @@ public:
         const std::string& label = ""
     );
 
+    /// Marks a video thumbnail pair as a procedural placeholder, meaning the real
+    /// frame could not be extracted (FFmpeg missing/failed) and extraction should
+    /// be retried later. See shouldRetryPlaceholder().
+    Status setPlaceholderMarker(const std::string& hash) const;
+    Status clearPlaceholderMarker(const std::string& hash) const;
+    bool hasPlaceholderMarker(const std::string& hash) const;
+
+    /// Returns true when a placeholder marker exists and has not been written for
+    /// at least minAgeSeconds. The age acts as a back-off so a failing extraction
+    /// is not retried on every single request.
+    bool shouldRetryPlaceholder(const std::string& hash, int minAgeSeconds) const;
+
+    /// Clears all cached thumbnails in the cache directory.
+    /// If dryRun is true, counts files that would be removed without deleting.
+    /// Returns the number of files deleted (or found, if dryRun).
+    Result<size_t> clearAll(bool dryRun = false) const;
+
+    /// Clears all cached thumbnails (small, large, custom sizes, marker) for a specific hash.
+    /// If dryRun is true, counts files that would be removed without deleting.
+    /// Returns the number of files deleted (or found, if dryRun).
+    Result<size_t> clearThumbnail(const std::string& hash, bool dryRun = false) const;
+
+    /// Clears all cached thumbnails for a list of hashes.
+    /// If dryRun is true, counts files that would be removed without deleting.
+    /// Returns the total number of files deleted (or found, if dryRun).
+    Result<size_t> clearThumbnails(const std::vector<std::string>& hashes, bool dryRun = false) const;
+
     static std::string defaultCacheDir();
 
 private:
+    std::string placeholderMarkerPath(const std::string& hash) const;
+
     std::string cacheDir_;
     mutable std::mutex mutex_;
 };

@@ -1679,6 +1679,27 @@ Result<CatalogStats> CatalogDb::getStats() {
         }
     }
 
+    // exact duplicate groups count
+    {
+        const char* dupSql = R"SQL(
+            SELECT COUNT(*)
+            FROM (
+                SELECT 1
+                FROM media_items
+                WHERE content_hash != ""
+                GROUP BY content_hash, file_size
+                HAVING COUNT(*) > 1
+            );
+        )SQL";
+        auto dupStmtRes = conn_.prepare(dupSql);
+        if (dupStmtRes.isOk()) {
+            auto dupStmt = std::move(dupStmtRes.value());
+            if (dupStmt.step() == StepResult::Row) {
+                s.total_duplicates = dupStmt.getInt64(0);
+            }
+        }
+    }
+
     return s;
 }
 
@@ -1775,6 +1796,27 @@ Result<int64_t> CatalogDb::countMedia(
         return Status::databaseError("Failed to count media: " + conn_.lastErrorMessage());
     }
     return 0;
+}
+
+Result<std::vector<std::string>> CatalogDb::getMediaHashesByType(const std::string& mediaType) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const std::string sql = "SELECT content_hash FROM media_items WHERE media_type = ? AND content_hash != '';";
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) {
+        return Result<std::vector<std::string>>::failure(stmtRes.status());
+    }
+    auto& stmt = stmtRes.value();
+    stmt.bind(1, mediaType);
+    std::vector<std::string> hashes;
+    StepResult stepRes;
+    while ((stepRes = stmt.step()) == StepResult::Row) {
+        hashes.push_back(stmt.getString(0));
+    }
+    return hashes;
+}
+
+Result<std::vector<std::string>> CatalogDb::getVideoHashes() {
+    return getMediaHashesByType("video");
 }
 
 Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const std::string& thumbsDir) {
@@ -1915,6 +1957,364 @@ Result<int64_t> CatalogDb::makePathsRelative(const std::string& photosDir, const
     if (!commitStatus.isOk()) return commitStatus;
 
     return static_cast<int64_t>(updates.size());
+}
+
+Result<std::vector<std::vector<MediaId>>> CatalogDb::findExactDuplicateGroups(const std::vector<MediaId>& mediaIds) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    std::string sql;
+    std::vector<MediaId> uniqueIds;
+
+    if (mediaIds.empty()) {
+        sql = R"SQL(
+            SELECT m.id, m.content_hash, m.file_size
+            FROM media_items m
+            JOIN (
+                SELECT content_hash, file_size, COUNT(*) AS cnt
+                FROM media_items
+                WHERE content_hash != ''
+                GROUP BY content_hash, file_size
+                HAVING COUNT(*) > 1
+            ) g ON m.content_hash = g.content_hash AND m.file_size = g.file_size
+            WHERE m.content_hash != ''
+            ORDER BY g.cnt DESC, g.file_size DESC, m.content_hash ASC, m.id ASC;
+        )SQL";
+    } else {
+        std::unordered_set<MediaId> idSet(mediaIds.begin(), mediaIds.end());
+        uniqueIds.assign(idSet.begin(), idSet.end());
+        if (uniqueIds.size() < 2) {
+            return std::vector<std::vector<MediaId>>{};
+        }
+
+        std::string placeholders;
+        for (size_t i = 0; i < uniqueIds.size(); ++i) {
+            if (i > 0) placeholders += ",";
+            placeholders += "?";
+        }
+
+        sql = "SELECT m.id, m.content_hash, m.file_size "
+              "FROM media_items m "
+              "JOIN ("
+              "  SELECT content_hash, file_size, COUNT(*) AS cnt "
+              "  FROM media_items "
+              "  WHERE content_hash != '' AND id IN (" + placeholders + ") "
+              "  GROUP BY content_hash, file_size "
+              "  HAVING COUNT(*) > 1 "
+              ") g ON m.content_hash = g.content_hash AND m.file_size = g.file_size "
+              "WHERE m.id IN (" + placeholders + ") "
+              "ORDER BY g.cnt DESC, g.file_size DESC, m.content_hash ASC, m.id ASC;";
+    }
+
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+
+    if (!uniqueIds.empty()) {
+        int idx = 1;
+        for (MediaId id : uniqueIds) {
+            stmt.bind(idx++, id);
+        }
+        for (MediaId id : uniqueIds) {
+            stmt.bind(idx++, id);
+        }
+    }
+
+    std::vector<std::vector<MediaId>> groups;
+    std::string currentHash;
+    int64_t currentSize = -1;
+    std::vector<MediaId> currentGroup;
+
+    StepResult sr;
+    while ((sr = stmt.step()) == StepResult::Row) {
+        MediaId id = stmt.getInt64(0);
+        std::string hash = stmt.getString(1);
+        int64_t size = stmt.getInt64(2);
+
+        if (hash != currentHash || size != currentSize) {
+            if (!currentGroup.empty()) {
+                groups.push_back(std::move(currentGroup));
+                currentGroup.clear();
+            }
+            currentHash = hash;
+            currentSize = size;
+        }
+        currentGroup.push_back(id);
+    }
+
+    if (sr == StepResult::Error) {
+        return Status::databaseError("Failed to find exact duplicate groups: " + conn_.lastErrorMessage());
+    }
+
+    if (!currentGroup.empty()) {
+        groups.push_back(std::move(currentGroup));
+    }
+
+    return groups;
+}
+
+Status CatalogDb::dismissDuplicatePair(MediaId a, MediaId b) {
+    if (a == b) {
+        return Status::invalidArgument("Cannot dismiss duplicate pair with identical IDs");
+    }
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    MediaId idA = std::min(a, b);
+    MediaId idB = std::max(a, b);
+    int64_t now = currentUnixTime();
+
+    const char* sql = "INSERT OR IGNORE INTO duplicate_dismissals (media_id_a, media_id_b, dismissed_at) VALUES (?, ?, ?);";
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+    stmt.bind(1, idA);
+    stmt.bind(2, idB);
+    stmt.bind(3, now);
+    if (stmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to dismiss duplicate pair: " + conn_.lastErrorMessage());
+    }
+    return Status::ok();
+}
+
+Result<std::vector<std::pair<MediaId, MediaId>>> CatalogDb::getDismissedDuplicatePairs() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const char* sql = "SELECT media_id_a, media_id_b FROM duplicate_dismissals ORDER BY media_id_a ASC, media_id_b ASC;";
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+
+    std::vector<std::pair<MediaId, MediaId>> result;
+    StepResult sr;
+    while ((sr = stmt.step()) == StepResult::Row) {
+        result.emplace_back(stmt.getInt64(0), stmt.getInt64(1));
+    }
+    if (sr == StepResult::Error) {
+        return Status::databaseError("Failed to read dismissed duplicate pairs: " + conn_.lastErrorMessage());
+    }
+    return result;
+}
+
+Result<int> CatalogDb::clearDismissedDuplicatePairs() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    const char* sql = "DELETE FROM duplicate_dismissals;";
+    auto stmtRes = conn_.prepare(sql);
+    if (!stmtRes.isOk()) return stmtRes.status();
+    auto stmt = std::move(stmtRes.value());
+    if (stmt.step() != StepResult::Done) {
+        return Status::databaseError("Failed to clear dismissed duplicate pairs: " + conn_.lastErrorMessage());
+    }
+    return conn_.changes();
+}
+
+Status CatalogDb::mergeMediaMetadata(MediaId keeperId, MediaId sourceId) {
+    if (keeperId == sourceId) {
+        return Status::ok();
+    }
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
+
+    auto keeperRes = getMediaById(keeperId);
+    if (!keeperRes.isOk()) return keeperRes.status();
+    auto sourceRes = getMediaById(sourceId);
+    if (!sourceRes.isOk()) return sourceRes.status();
+
+    MediaItem keeper = std::move(keeperRes.value());
+    const MediaItem& source = sourceRes.value();
+
+    bool keeperUpdated = false;
+
+    // 1. Inherit rating only when target empty (0)
+    if (keeper.rating == 0 && source.rating != 0) {
+        keeper.rating = source.rating;
+        keeperUpdated = true;
+    }
+
+    // 2. Inherit flag only when target empty (Unflagged)
+    if (keeper.flag == FlagState::Unflagged && source.flag != FlagState::Unflagged) {
+        keeper.flag = source.flag;
+        keeperUpdated = true;
+    }
+
+    // 3. Inherit date_taken only when target empty (keeper.date_taken == 0).
+    // Invariant: Never overwrite keeper when keeper.date_taken != 0.
+    // Negative pre-1970 timestamps are valid non-zero timestamps and are preserved, never overwritten.
+    if (keeper.date_taken == 0 && source.date_taken != 0) {
+        keeper.date_taken = source.date_taken;
+        keeper.exif.date_taken_str = source.exif.date_taken_str;
+        keeperUpdated = true;
+    }
+
+    // 4. Inherit GPS only when target empty (has_gps == false)
+    if (!keeper.exif.has_gps && source.exif.has_gps) {
+        keeper.exif.has_gps = true;
+        keeper.exif.latitude = source.exif.latitude;
+        keeper.exif.longitude = source.exif.longitude;
+        keeper.exif.altitude = source.exif.altitude;
+        keeperUpdated = true;
+    }
+
+    // 5. Inherit caption / title / description if target empty
+    if (keeper.caption.empty() && !source.caption.empty()) {
+        keeper.caption = source.caption;
+        keeperUpdated = true;
+    }
+    if (keeper.audio_title.empty() && !source.audio_title.empty()) {
+        keeper.audio_title = source.audio_title;
+        keeperUpdated = true;
+    }
+    if (keeper.audio_artist.empty() && !source.audio_artist.empty()) {
+        keeper.audio_artist = source.audio_artist;
+        keeperUpdated = true;
+    }
+    if (keeper.audio_album.empty() && !source.audio_album.empty()) {
+        keeper.audio_album = source.audio_album;
+        keeperUpdated = true;
+    }
+    if (keeper.audio_genre.empty() && !source.audio_genre.empty()) {
+        keeper.audio_genre = source.audio_genre;
+        keeperUpdated = true;
+    }
+    if (keeper.exif.camera_make.empty() && !source.exif.camera_make.empty()) {
+        keeper.exif.camera_make = source.exif.camera_make;
+        keeperUpdated = true;
+    }
+    if (keeper.exif.camera_model.empty() && !source.exif.camera_model.empty()) {
+        keeper.exif.camera_model = source.exif.camera_model;
+        keeperUpdated = true;
+    }
+    if (keeper.exif.lens.empty() && !source.exif.lens.empty()) {
+        keeper.exif.lens = source.exif.lens;
+        keeperUpdated = true;
+    }
+
+    if (keeperUpdated) {
+        Status s = updateMedia(keeper);
+        if (!s.isOk()) return s;
+    }
+
+    // 6. Union tags and provenance (following getTagsForMediaBatch pattern)
+    auto tagsBatchRes = getTagsForMediaBatch({keeperId, sourceId});
+    if (!tagsBatchRes.isOk()) return tagsBatchRes.status();
+
+    {
+        auto tagInsertRes = conn_.prepare(
+            "INSERT OR IGNORE INTO media_tags (media_id, tag_id) "
+            "SELECT ?, tag_id FROM media_tags WHERE media_id = ?;");
+        if (!tagInsertRes.isOk()) return tagInsertRes.status();
+        auto tagInsert = std::move(tagInsertRes.value());
+        tagInsert.bind(1, keeperId);
+        tagInsert.bind(2, sourceId);
+        if (tagInsert.step() != StepResult::Done) {
+            return Status::databaseError("Failed to union tags: " + conn_.lastErrorMessage());
+        }
+    }
+
+    {
+        auto provRes = conn_.prepare(
+            "INSERT INTO media_tag_provenance (media_id, tag_id, manual) "
+            "SELECT ?, tag_id, manual FROM media_tag_provenance WHERE media_id = ? "
+            "ON CONFLICT(media_id, tag_id) DO UPDATE SET manual = MAX(media_tag_provenance.manual, excluded.manual);");
+        if (!provRes.isOk()) return provRes.status();
+        auto prov = std::move(provRes.value());
+        prov.bind(1, keeperId);
+        prov.bind(2, sourceId);
+        if (prov.step() != StepResult::Done) {
+            return Status::databaseError("Failed to union tag provenance: " + conn_.lastErrorMessage());
+        }
+    }
+
+    // 7. Album memberships preserving position (update-in-place if keeper absent else delete+compact)
+    {
+        auto albStmtRes = conn_.prepare("SELECT album_id, position FROM album_media WHERE media_id = ? ORDER BY album_id ASC;");
+        if (!albStmtRes.isOk()) return albStmtRes.status();
+        auto albStmt = std::move(albStmtRes.value());
+        albStmt.bind(1, sourceId);
+
+        struct AlbumRef {
+            AlbumId albumId;
+            int64_t position;
+        };
+        std::vector<AlbumRef> sourceAlbums;
+        StepResult sr;
+        while ((sr = albStmt.step()) == StepResult::Row) {
+            sourceAlbums.push_back({albStmt.getInt64(0), albStmt.getInt64(1)});
+        }
+        if (sr == StepResult::Error) {
+            return Status::databaseError("Failed to query source album memberships: " + conn_.lastErrorMessage());
+        }
+
+        for (const auto& ar : sourceAlbums) {
+            auto checkKeeperRes = conn_.prepare("SELECT 1 FROM album_media WHERE album_id = ? AND media_id = ?;");
+            if (!checkKeeperRes.isOk()) return checkKeeperRes.status();
+            auto checkKeeper = std::move(checkKeeperRes.value());
+            checkKeeper.bind(1, ar.albumId);
+            checkKeeper.bind(2, keeperId);
+            bool keeperPresent = (checkKeeper.step() == StepResult::Row);
+
+            if (!keeperPresent) {
+                auto updatePlaceRes = conn_.prepare(
+                    "UPDATE album_media SET media_id = ? WHERE album_id = ? AND media_id = ?;");
+                if (!updatePlaceRes.isOk()) return updatePlaceRes.status();
+                auto updatePlace = std::move(updatePlaceRes.value());
+                updatePlace.bind(1, keeperId);
+                updatePlace.bind(2, ar.albumId);
+                updatePlace.bind(3, sourceId);
+                if (updatePlace.step() != StepResult::Done) {
+                    return Status::databaseError("Failed to update album media membership: " + conn_.lastErrorMessage());
+                }
+            } else {
+                auto delRes = conn_.prepare("DELETE FROM album_media WHERE album_id = ? AND media_id = ?;");
+                if (!delRes.isOk()) return delRes.status();
+                auto del = std::move(delRes.value());
+                del.bind(1, ar.albumId);
+                del.bind(2, sourceId);
+                if (del.step() != StepResult::Done) {
+                    return Status::databaseError("Failed to delete source album membership: " + conn_.lastErrorMessage());
+                }
+
+                auto compReadRes = conn_.prepare("SELECT media_id FROM album_media WHERE album_id = ? ORDER BY position ASC, media_id ASC;");
+                if (!compReadRes.isOk()) return compReadRes.status();
+                auto compRead = std::move(compReadRes.value());
+                compRead.bind(1, ar.albumId);
+
+                std::vector<MediaId> compactIds;
+                StepResult compSr;
+                while ((compSr = compRead.step()) == StepResult::Row) {
+                    compactIds.push_back(compRead.getInt64(0));
+                }
+                if (compSr == StepResult::Error) {
+                    return Status::databaseError("Failed to read album members for compaction: " + conn_.lastErrorMessage());
+                }
+
+                auto compUpRes = conn_.prepare("UPDATE album_media SET position = ? WHERE album_id = ? AND media_id = ?;");
+                if (!compUpRes.isOk()) return compUpRes.status();
+                auto compUp = std::move(compUpRes.value());
+                for (size_t pos = 0; pos < compactIds.size(); ++pos) {
+                    compUp.reset();
+                    compUp.bind(1, static_cast<int64_t>(pos));
+                    compUp.bind(2, ar.albumId);
+                    compUp.bind(3, compactIds[pos]);
+                    if (compUp.step() != StepResult::Done) {
+                        return Status::databaseError("Failed to compact album media position: " + conn_.lastErrorMessage());
+                    }
+                }
+            }
+        }
+    }
+
+    // 8. Re-point covers: update albums where cover_media_id == sourceId to keeperId
+    {
+        auto coverRes = conn_.prepare("UPDATE albums SET cover_media_id = ? WHERE cover_media_id = ?;");
+        if (!coverRes.isOk()) return coverRes.status();
+        auto coverStmt = std::move(coverRes.value());
+        coverStmt.bind(1, keeperId);
+        coverStmt.bind(2, sourceId);
+        if (coverStmt.step() != StepResult::Done) {
+            return Status::databaseError("Failed to re-point album covers: " + conn_.lastErrorMessage());
+        }
+    }
+
+    return tx.commit();
 }
 
 Status CatalogDb::runInTransaction(std::function<Status()> fn) {

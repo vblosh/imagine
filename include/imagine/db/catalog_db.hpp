@@ -48,6 +48,8 @@ public:
     Status updateGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
     Status deleteMedia(MediaId id);
     Result<int64_t> makePathsRelative(const std::string& photosDir, const std::string& thumbsDir = "");
+    Result<std::vector<std::string>> getVideoHashes();
+    Result<std::vector<std::string>> getMediaHashesByType(const std::string& mediaType);
 
     // Tags
     Result<TagId> createOrGetTag(const std::string& name, const std::string& category = "keyword", std::optional<TagId> parent_id = std::nullopt);
@@ -101,6 +103,13 @@ public:
         const std::string& whereClause,
         const std::vector<std::string>& params
     );
+
+    // Deduplication
+    Result<std::vector<std::vector<MediaId>>> findExactDuplicateGroups(const std::vector<MediaId>& mediaIds = {});
+    Status mergeMediaMetadata(MediaId keeperId, MediaId sourceId);
+    Status dismissDuplicatePair(MediaId a, MediaId b);
+    Result<std::vector<std::pair<MediaId, MediaId>>> getDismissedDuplicatePairs();
+    Result<int> clearDismissedDuplicatePairs();
 
     Status runInTransaction(std::function<Status()> fn);
 

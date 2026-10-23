@@ -720,28 +720,60 @@ Status Catalog::setGps(MediaId id, bool hasGps, double latitude, double longitud
     return db_->updateGps(id, hasGps, latitude, longitude, altitude);
 }
 
+namespace {
+std::function<void(MediaId)> gClipEvictionHook = nullptr;
+}
+
+void setClipEvictionHook(std::function<void(MediaId)> hook) {
+    gClipEvictionHook = std::move(hook);
+}
+
 Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
     std::unique_lock<std::shared_mutex> lock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
 
-    std::string filePath;
-    if (deleteFromDisk) {
-        auto itemRes = db_->getMediaById(id);
-        if (!itemRes.isOk()) {
-            return itemRes.status();
+    auto itemRes = db_->getMediaById(id);
+    if (!itemRes.isOk()) {
+        return itemRes.status();
+    }
+    const auto item = itemRes.value();
+
+    std::string filePath = resolvePhotoPathInternal(item.file_path);
+    if (deleteFromDisk && !filePath.empty()) {
+        std::string effPhotosDir = photosDir_;
+        if (effPhotosDir.empty() && importer_) {
+            effPhotosDir = importer_->photosDir();
         }
-        filePath = resolvePhotoPathInternal(itemRes.value().file_path);
-        if (!filePath.empty()) {
-            std::string effPhotosDir = photosDir_;
-            if (effPhotosDir.empty() && importer_) {
-                effPhotosDir = importer_->photosDir();
-            }
-            if (effPhotosDir.empty() || !Importer::isInsideRootDir(filePath, effPhotosDir)) {
-                IMAGINE_LOG_WARN("Refusing to delete file outside photos directory: " + filePath);
-                return Status::invalidArgument("Cannot delete file outside photos directory: " + filePath);
-            }
+        if (effPhotosDir.empty() || !Importer::isInsideRootDir(filePath, effPhotosDir)) {
+            IMAGINE_LOG_WARN("Refusing to delete file outside photos directory: " + filePath);
+            return Status::invalidArgument("Cannot delete file outside photos directory: " + filePath);
+        }
+    }
+
+    // Shared content_hash thumbnail guard via COUNT(*) check:
+    // Before unlinking files, compare the victim content_hash against remaining rows.
+    // If countMedia fails or returns > 0, treat as shared to fail-safe and preserve cached thumbnails.
+    bool sharedThumbnail = false;
+    if (!item.content_hash.empty()) {
+        auto countRes = db_->countMedia("content_hash = ? AND id != ?", {item.content_hash, std::to_string(id)});
+        if (!countRes.isOk() || countRes.value() > 0) {
+            sharedThumbnail = true;
+        }
+    }
+
+    // Same-path and hardlink disk deletion guards:
+    // 1. If another catalog entry references the exact same file path, we must NOT unlink
+    //    the file from disk because the other item still uses it.
+    // 2. For distinct hardlinks on disk (different file paths sharing the same inode),
+    //    std::filesystem::remove safely unlinks only this directory entry and leaves
+    //    the sibling hardlink intact.
+    bool pathStillReferencedInDb = false;
+    if (deleteFromDisk && !filePath.empty()) {
+        auto otherItemsRes = db_->queryMedia("file_path = ? AND id != ?", {item.file_path, std::to_string(id)}, "", 0, 0);
+        if (otherItemsRes.isOk() && !otherItemsRes.value().empty()) {
+            pathStillReferencedInDb = true;
         }
     }
 
@@ -750,7 +782,18 @@ Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
         return s;
     }
 
-    if (deleteFromDisk && !filePath.empty()) {
+    // CLIP eviction call if available
+    if (gClipEvictionHook) {
+        gClipEvictionHook(id);
+    }
+
+    // Shared-render thumbnail check: if another row shares the hash, keep the shared thumbnail bytes
+    if (!sharedThumbnail && cache_ && !item.content_hash.empty()) {
+        cache_->clearThumbnail(item.content_hash);
+    }
+
+    // Disk deletion: unlinks directory entry only if no other media row references the same path
+    if (deleteFromDisk && !filePath.empty() && !pathStillReferencedInDb) {
         std::error_code ec;
         if (!std::filesystem::remove(pathFromUtf8(filePath), ec)) {
             if (ec) {
@@ -760,6 +803,26 @@ Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
     }
 
     return Status::ok();
+}
+
+Result<size_t> Catalog::clearThumbnailCache(bool dryRun) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !cache_) {
+        return Result<size_t>::failure(Status::invalidArgument("Catalog is not open"));
+    }
+    return cache_->clearAll(dryRun);
+}
+
+Result<size_t> Catalog::clearVideoThumbnailCache(bool dryRun) {
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (!isOpen_ || !cache_ || !db_) {
+        return Result<size_t>::failure(Status::invalidArgument("Catalog is not open"));
+    }
+    auto hashesRes = db_->getVideoHashes();
+    if (!hashesRes.isOk()) {
+        return Result<size_t>::failure(hashesRes.status());
+    }
+    return cache_->clearThumbnails(hashesRes.value(), dryRun);
 }
 
 Status Catalog::addTag(MediaId id, const std::string& tagName, const std::string& category) {

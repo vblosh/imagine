@@ -104,6 +104,7 @@ Commands:
   relocate            Make media and thumbnail paths in catalog relative
   list                List and query media in the catalog
   stats               Display catalog statistics and metrics
+  clean-cache         Clear cached thumbnails (default: video thumbnails; --all for all)
   tag <id> <name>     Attach a keyword tag to an item
   geotag <id> <lat> <lon> Set GPS coordinates for an item
   delete <id...>      Delete one or more items from the catalog
@@ -129,6 +130,16 @@ Options for 'serve':
   --log-file <path>   Path to log file (default: none; set explicitly or via IMAGINE_LOG_FILE)
   --log-level <level> Log level: debug, info, warn, error, none (default: info)
   --no-log-file       Disable writing log to file
+  --clean-cache       Clear entire thumbnail cache on startup
+  --clean-videos      Clear video thumbnails on startup to regenerate with FFmpeg
+
+Options for 'clean-cache':
+  --catalog <db>      Path to SQLite catalog database (default: catalog.db)
+  --thumbs-dir <dir>  Path to thumbnail cache directory (default: system cache)
+  --thumbs <dir>      Alias for --thumbs-dir
+  --videos-only       Only remove thumbnails for video items (default)
+  --all               Remove all cached thumbnails (photos, videos, audio)
+  --dry-run           Report number of thumbnails without deleting
 
 Options for 'relocate':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
@@ -267,6 +278,8 @@ int handleServe(int argc, char** argv) {
     std::string webDir = "web";
     std::string logFile = "";
     std::string logLevel = "info";
+    bool cleanCache = false;
+    bool cleanVideos = false;
 
     const char* envPhotos = std::getenv("IMAGINE_PHOTOS_DIR");
     if (envPhotos && *envPhotos) {
@@ -317,6 +330,10 @@ int handleServe(int argc, char** argv) {
             logLevel = argv[++i];
         } else if (arg == "--no-log-file") {
             logFile = "";
+        } else if (arg == "--clean-cache") {
+            cleanCache = true;
+        } else if (arg == "--clean-videos") {
+            cleanVideos = true;
         }
     }
 
@@ -374,6 +391,22 @@ int handleServe(int argc, char** argv) {
     if (!status.isOk()) {
         std::cerr << "Error opening catalog database: " << status.message() << "\n";
         return 1;
+    }
+
+    if (cleanCache) {
+        auto res = catalog.clearThumbnailCache();
+        if (res.isOk()) {
+            std::cout << "Cleared entire thumbnail cache (" << res.value() << " file(s) removed).\n";
+        } else {
+            std::cerr << "Warning: Failed to clear thumbnail cache: " << res.status().message() << "\n";
+        }
+    } else if (cleanVideos) {
+        auto res = catalog.clearVideoThumbnailCache();
+        if (res.isOk()) {
+            std::cout << "Cleared video thumbnail cache (" << res.value() << " file(s) removed).\n";
+        } else {
+            std::cerr << "Warning: Failed to clear video thumbnail cache: " << res.status().message() << "\n";
+        }
     }
 
     imagine::server::WebServer webServer(catalog, webDir);
@@ -912,6 +945,90 @@ int handleGeotag(int argc, char** argv) {
     return 0;
 }
 
+int handleCleanCache(int argc, char** argv) {
+    std::string catalogDb = getCatalogDbDefault();
+    std::string thumbsDir = "";
+    bool all = false;
+    bool videosOnlyFlag = false;
+    bool dryRun = false;
+
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--catalog" && i + 1 < argc) {
+            catalogDb = argv[++i];
+        } else if ((arg == "--thumbs-dir" || arg == "--thumbs") && i + 1 < argc) {
+            thumbsDir = argv[++i];
+        } else if (arg == "--all") {
+            all = true;
+        } else if (arg == "--videos-only") {
+            videosOnlyFlag = true;
+        } else if (arg == "--dry-run") {
+            dryRun = true;
+        }
+    }
+
+    if (all && videosOnlyFlag) {
+        std::cerr << "Error: --all and --videos-only are mutually exclusive." << "\n";
+        return 1;
+    }
+    // Default (no flags) cleans video thumbnails only; --all selects everything.
+
+    if (all) {
+        imagine::thumbnail::Cache cache(thumbsDir);
+        std::cout << (dryRun ? "[Dry Run] Scanning" : "Cleaning")
+                  << " all thumbnail files from cache ("
+                  << cache.cacheDir() << ")...\n";
+        auto res = cache.clearAll(dryRun);
+        if (!res.isOk()) {
+            std::cerr << "Error cleaning cache: " << res.status().message() << "\n";
+            return 1;
+        }
+        if (dryRun) {
+            std::cout << "Found " << res.value() << " thumbnail file(s) that would be removed.\n";
+        } else {
+            std::cout << "Successfully cleared " << res.value() << " thumbnail file(s) from cache.\n";
+        }
+        return 0;
+    }
+
+    imagine::core::Catalog catalog;
+    auto status = catalog.open(catalogDb, thumbsDir);
+    if (!status.isOk()) {
+        std::cerr << "Error opening catalog database '" << catalogDb << "': " << status.message() << "\n";
+        return 1;
+    }
+
+    auto hashesRes = catalog.db().getVideoHashes();
+    if (!hashesRes.isOk()) {
+        std::cerr << "Error querying video hashes: " << hashesRes.status().message() << "\n";
+        return 1;
+    }
+
+    const auto& hashes = hashesRes.value();
+    std::cout << "Found " << hashes.size() << " video item(s) in catalog.\n";
+    if (hashes.empty()) {
+        std::cout << "No video thumbnails to clean.\n";
+        return 0;
+    }
+
+    std::cout << (dryRun ? "[Dry Run] Scanning" : "Cleaning")
+              << " thumbnails for " << hashes.size() << " video(s) from cache ("
+              << catalog.cache().cacheDir() << ")...\n";
+
+    auto res = catalog.clearVideoThumbnailCache(dryRun);
+    if (!res.isOk()) {
+        std::cerr << "Error cleaning video thumbnails: " << res.status().message() << "\n";
+        return 1;
+    }
+
+    if (dryRun) {
+        std::cout << "Found " << res.value() << " video thumbnail file(s) that would be removed.\n";
+    } else {
+        std::cout << "Successfully cleared " << res.value() << " video thumbnail file(s) from cache.\n";
+    }
+    return 0;
+}
+
 int handleRelocate(int argc, char** argv) {
     std::string catalogDb = getCatalogDbDefault();
     std::string photosDir = "";
@@ -998,6 +1115,8 @@ int main(int argc, char** argv) {
         return handleImport(argc, argv);
     } else if (command == "serve") {
         return handleServe(argc, argv);
+    } else if (command == "clean-cache" || command == "clear-cache") {
+        return handleCleanCache(argc, argv);
     } else if (command == "relocate") {
         return handleRelocate(argc, argv);
     } else if (command == "list") {

@@ -185,6 +185,7 @@ struct CatalogStats {
     int64_t total_albums{0};
     int64_t earliest_date{0};
     int64_t latest_date{0};
+    int64_t total_duplicates{0};
 };
 
 struct TimelineEntry {

@@ -265,7 +265,8 @@ void to_json(nlohmann::json& j, const CatalogStats& s) {
         {"total_tags", s.total_tags},
         {"total_albums", s.total_albums},
         {"earliest_date", s.earliest_date},
-        {"latest_date", s.latest_date}
+        {"latest_date", s.latest_date},
+        {"total_duplicates", s.total_duplicates}
     };
 }
 
@@ -284,6 +285,7 @@ void from_json(const nlohmann::json& j, CatalogStats& s) {
     s.total_albums = jsonIntOr<int64_t>(j, "total_albums", int64_t{0});
     s.earliest_date = jsonIntOr<int64_t>(j, "earliest_date", int64_t{0});
     s.latest_date = jsonIntOr<int64_t>(j, "latest_date", int64_t{0});
+    s.total_duplicates = jsonIntOr<int64_t>(j, "total_duplicates", int64_t{0});
 }
 
 void to_json(nlohmann::json& j, const TimelineEntry& t) {

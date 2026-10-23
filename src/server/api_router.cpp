@@ -7,6 +7,7 @@
 #include "imagine/metadata/hasher.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/logger.hpp"
+#include "imagine/core/deduplicator.hpp"
 #include "imagine/clip/service.hpp"
 #include "imagine/metadata/media_reader.hpp"
 #include <atomic>
@@ -582,6 +583,7 @@ void ApiRouter::registerRoutes(httplib::Server& server) {
     registerGeocodeRoutes(server);
     registerFaceRoutes(server);
     registerSemanticRoutes(server);
+    registerDuplicateRoutes(server);
     registerSmartTagRoutes(server);
 }
 
@@ -2313,7 +2315,42 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
 
         std::string thumbPath = cache().getThumbnailPath(hash, size);
         std::error_code ec;
-        if (!std::filesystem::exists(pathFromUtf8(thumbPath), ec)) {
+        // Match Cache::hasThumbnail: zero-byte files count as missing.
+        bool thumbExists = std::filesystem::is_regular_file(pathFromUtf8(thumbPath), ec) && !ec &&
+                           std::filesystem::file_size(pathFromUtf8(thumbPath), ec) > 0 && !ec;
+        ec.clear();
+
+        // A procedural video placeholder is retried once FFmpeg is usable again.
+        // The marker age acts as a back-off so a failing extraction is not retried
+        // on every request. The marker is the cheap hot-path check; the expensive
+        // pixel-signature fallback runs only for video items with no marker
+        // (legacy placeholders), so photo/audio hits never pay for a JPEG decode.
+        constexpr int kPlaceholderRetrySeconds = 300;
+        bool isPlaceholder = false;
+        bool placeholderServed = false;
+        if (thumbExists && metadata::FfmpegHelper::isAvailable() &&
+            cache().hasPlaceholderMarker(hash)) {
+            isPlaceholder = cache().shouldRetryPlaceholder(hash, kPlaceholderRetrySeconds);
+            placeholderServed = !isPlaceholder;
+        }
+
+        if (isPlaceholder) {
+            cache().clearThumbnail(hash);
+            thumbExists = false;
+        } else if (thumbExists && metadata::FfmpegHelper::isAvailable() &&
+                   !cache().hasPlaceholderMarker(hash)) {
+            // Legacy placeholder without a marker: resolve the media type first so
+            // only video items pay for the signature decode. A match is cleared so
+            // the miss path below regenerates (and marks) it now.
+            if (auto legacyMedia = db().getMediaByHash(hash);
+                legacyMedia.isOk() && legacyMedia.value().media_type == "video" &&
+                thumbnail::Generator::isProceduralThumbnail(thumbPath, "video")) {
+                cache().clearThumbnail(hash);
+                thumbExists = false;
+            }
+        }
+
+        if (!thumbExists) {
             // Attempt on-demand generation
             auto mediaRes = db().getMediaByHash(hash);
             if (mediaRes.isOk()) {
@@ -2323,23 +2360,17 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                     const std::string videoPath = resolvePhotoPath(item.file_path);
                     bool generated = false;
 
-                    // Prefer deriving from an already cached large thumbnail
-                    if (cache().hasThumbnail(hash, thumbnail::Cache::LargeSize)) {
+                    // Prefer deriving the requested size from an already cached frame
+                    // instead of paying for another FFmpeg extraction.
+                    bool largeIsPlaceholder = cache().hasPlaceholderMarker(hash) ||
+                        thumbnail::Generator::isProceduralThumbnail(
+                            cache().getThumbnailPath(hash, thumbnail::Cache::LargeSize), "video");
+                    if (!largeIsPlaceholder && cache().hasThumbnail(hash, thumbnail::Cache::LargeSize)) {
                         auto deriveRes = cache().ensureThumbnail(
                             cache().getThumbnailPath(hash, thumbnail::Cache::LargeSize), hash, size);
                         if (deriveRes.isOk()) {
                             thumbPath = deriveRes.value();
                             generated = true;
-                            if (item.thumb_small.empty() || item.thumb_large.empty()) {
-                                auto updateRes = db().updateThumbnails(
-                                    item.id,
-                                    thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::SmallSize),
-                                    thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize));
-                                if (!updateRes.isOk()) {
-                                    IMAGINE_LOG_WARN("Failed to persist video thumbnails for " + hash + ": " +
-                                                     updateRes.message());
-                                }
-                            }
                         }
                     }
 
@@ -2359,8 +2390,8 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                                 auto genRes = cache().ensureThumbnail(sizeSource, hash, size);
                                 if (genRes.isOk()) {
                                     thumbPath = genRes.value();
-                                    ec.clear();
-                                    generated = std::filesystem::is_regular_file(pathFromUtf8(thumbPath), ec) && !ec;
+                                    thumbExists = std::filesystem::is_regular_file(pathFromUtf8(thumbPath), ec) && !ec;
+                                    generated = thumbExists;
                                 }
                                 if (generated) {
                                     auto updateRes = db().updateThumbnails(
@@ -2371,6 +2402,7 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                                         IMAGINE_LOG_WARN("Failed to persist video thumbnails for " + hash + ": " +
                                                          updateRes.message());
                                     }
+                                    cache().clearPlaceholderMarker(hash);
                                 }
                             } else {
                                 IMAGINE_LOG_WARN("Failed to generate video thumbnails for " + hash + ": " +
@@ -2387,7 +2419,14 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                     if (!generated) {
                         auto procRes = cache().ensureProceduralThumbnails(hash, item.media_type);
                         if (procRes.isOk()) {
-                            thumbPath = cache().getThumbnailPath(hash, size);
+                            auto sizeRes = cache().ensureThumbnail(procRes.value().second, hash, size);
+                            thumbPath = sizeRes.isOk() ? sizeRes.value()
+                                                       : cache().getThumbnailPath(hash, size);
+                            auto markerRes = cache().setPlaceholderMarker(hash);
+                            if (!markerRes.isOk()) {
+                                IMAGINE_LOG_WARN("Failed to mark video thumbnail as placeholder for " + hash + ": " +
+                                                 markerRes.message());
+                            }
                         }
                     }
                 } else if (item.media_type == "audio") {
@@ -2397,7 +2436,9 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                     }
                     auto procRes = cache().ensureProceduralThumbnails(hash, item.media_type, label);
                     if (procRes.isOk()) {
-                        thumbPath = cache().getThumbnailPath(hash, size);
+                        auto sizeRes = cache().ensureThumbnail(procRes.value().second, hash, size);
+                        thumbPath = sizeRes.isOk() ? sizeRes.value()
+                                                   : cache().getThumbnailPath(hash, size);
                     }
                 } else {
                     std::string photoPath = resolvePhotoPath(item.file_path);
@@ -2413,11 +2454,19 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         ec.clear();
         if (std::filesystem::is_regular_file(thumbFsPath, ec) && !ec) {
             auto fsize = std::filesystem::file_size(thumbFsPath, ec);
+            if (ec) { fsize = 0; ec.clear(); }
             auto mtime = std::filesystem::last_write_time(thumbFsPath, ec);
             int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
-            std::string etag = "\"thumb-v1-" + hash + "_" + std::to_string(size) + "-" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
+            std::string etag = "\"thumb-v2-" + hash + "_" + std::to_string(size) + "-" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";
 
-            res.set_header("Cache-Control", "public, max-age=31536000, immutable");
+            // No signature decode here: placeholder state is already tracked above and
+            // the fallback path (re)sets the marker when it serves a placeholder.
+            placeholderServed = placeholderServed || cache().hasPlaceholderMarker(hash);
+            if (placeholderServed) {
+                res.set_header("Cache-Control", "no-cache, must-revalidate");
+            } else {
+                res.set_header("Cache-Control", "public, max-age=31536000, immutable");
+            }
             res.set_header("ETag", etag);
 
             if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {
@@ -4371,6 +4420,502 @@ void ApiRouter::registerSmartTagRoutes(httplib::Server& server) {
         } else {
             sendStatusError(res, status);
         }
+    });
+}
+
+namespace {
+
+using db::StepResult;
+
+inline void rankKeeperCandidateIds(std::vector<MediaId>& members, db::CatalogDb& db) {
+    if (members.size() <= 1) return;
+    std::vector<MediaItem> items;
+    items.reserve(members.size());
+    for (MediaId id : members) {
+        auto r = db.getMediaById(id);
+        if (r.isOk()) {
+            items.push_back(r.value());
+        } else {
+            MediaItem dummy;
+            dummy.id = id;
+            items.push_back(dummy);
+        }
+    }
+
+    std::stable_sort(items.begin(), items.end(), core::isBetterKeeper);
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        members[i] = items[i].id;
+    }
+}
+
+} // namespace
+
+void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
+    // POST /api/media/duplicates/scan
+    server.Post("/api/media/duplicates/scan", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+
+        nlohmann::json body = nlohmann::json::object();
+        if (!req.body.empty()) {
+            try {
+                body = nlohmann::json::parse(req.body);
+            } catch (const std::exception& ex) {
+                sendError(res, std::string("Invalid JSON: ") + ex.what(), 400);
+                return;
+            }
+        }
+
+        std::vector<MediaId> scopeIds;
+        std::unordered_set<MediaId> scopeSet;
+        if (body.contains("media_ids")) {
+            if (!body["media_ids"].is_array()) {
+                sendError(res, "media_ids must be an array of integers", 400);
+                return;
+            }
+            if (body["media_ids"].size() > kMaxBatchSize) {
+                sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+                return;
+            }
+            for (const auto& el : body["media_ids"]) {
+                if (!el.is_number_integer() || el.get<int64_t>() <= 0) {
+                    sendError(res, "media_ids must contain positive integers", 400);
+                    return;
+                }
+                MediaId id = el.get<MediaId>();
+                scopeIds.push_back(id);
+                scopeSet.insert(id);
+            }
+        }
+
+        double visualThreshold = 0.97;
+        if (body.contains("similarity_threshold")) {
+            if (!body["similarity_threshold"].is_number()) {
+                sendError(res, "similarity_threshold must be a number", 400);
+                return;
+            }
+            visualThreshold = body["similarity_threshold"].get<double>();
+        } else if (body.contains("visual_threshold")) {
+            if (!body["visual_threshold"].is_number()) {
+                sendError(res, "visual_threshold must be a number", 400);
+                return;
+            }
+            visualThreshold = body["visual_threshold"].get<double>();
+        }
+        if (!std::isfinite(visualThreshold) || visualThreshold <= 0.0 || visualThreshold > 1.0) {
+            sendError(res, "similarity_threshold must be a finite number between 0.0 and 1.0", 400);
+            return;
+        }
+
+        int64_t dateWindowSec = 86400;
+        if (body.contains("date_window_sec")) {
+            if (!body["date_window_sec"].is_number_integer() || body["date_window_sec"].get<int64_t>() < 0) {
+                sendError(res, "date_window_sec must be a non-negative integer", 400);
+                return;
+            }
+            dateWindowSec = body["date_window_sec"].get<int64_t>();
+        }
+
+        std::unordered_set<uint64_t> dismissedPairs;
+        auto disRes = db().getDismissedDuplicatePairs();
+        if (disRes.isOk()) {
+            for (const auto& [a, b] : disRes.value()) {
+                MediaId low = std::min(a, b);
+                MediaId high = std::max(a, b);
+                dismissedPairs.insert((static_cast<uint64_t>(low) << 32) | (static_cast<uint64_t>(high) & 0xFFFFFFFFULL));
+            }
+        }
+
+        // 1. Exact duplicate pass
+        std::vector<std::vector<MediaId>> exactDuplicateGroups;
+        std::unordered_set<MediaId> exactMemberIds;
+        auto exactRes = db().findExactDuplicateGroups(scopeIds);
+        if (exactRes.isOk()) {
+            for (auto& members : exactRes.value()) {
+                if (members.size() < 2) continue;
+
+                // Exclude dismissed pairs within this exact group
+                std::unordered_map<MediaId, MediaId> parent;
+                auto findRoot = [&](auto& self, MediaId x) -> MediaId {
+                    if (!parent.count(x)) parent[x] = x;
+                    if (parent[x] == x) return x;
+                    return parent[x] = self(self, parent[x]);
+                };
+                auto unite = [&](MediaId x, MediaId y) {
+                    MediaId rx = findRoot(findRoot, x);
+                    MediaId ry = findRoot(findRoot, y);
+                    if (rx != ry) parent[rx] = ry;
+                };
+
+                for (size_t i = 0; i < members.size(); ++i) {
+                    for (size_t j = i + 1; j < members.size(); ++j) {
+                        MediaId a = members[i];
+                        MediaId b = members[j];
+                        if (a > b) std::swap(a, b);
+                        uint64_t packed = (static_cast<uint64_t>(a) << 32) | (static_cast<uint64_t>(b) & 0xFFFFFFFFULL);
+                        if (!dismissedPairs.count(packed)) {
+                            unite(a, b);
+                        }
+                    }
+                }
+
+                std::unordered_map<MediaId, std::vector<MediaId>> clusters;
+                for (MediaId m : members) {
+                    if (parent.count(m)) {
+                        clusters[findRoot(findRoot, m)].push_back(m);
+                    }
+                }
+
+                for (auto& [root, clusterMembers] : clusters) {
+                    if (clusterMembers.size() >= 2) {
+                        rankKeeperCandidateIds(clusterMembers, db());
+                        for (MediaId mid : clusterMembers) {
+                            exactMemberIds.insert(mid);
+                        }
+                        exactDuplicateGroups.push_back(std::move(clusterMembers));
+                    }
+                }
+            }
+        }
+
+        // Sort exact groups largest-first
+        std::sort(exactDuplicateGroups.begin(), exactDuplicateGroups.end(),
+                  [](const std::vector<MediaId>& a, const std::vector<MediaId>& b) {
+                      return a.size() > b.size();
+                  });
+
+        // 2. Visual duplicate pass
+        std::vector<clip::VisualDuplicateGroup> visualGroups;
+        if (clipService_) {
+            visualGroups = clipService_->scanVisualDuplicates(
+                static_cast<float>(visualThreshold),
+                dateWindowSec,
+                scopeSet,
+                exactMemberIds
+            );
+        }
+
+        // Compute media scanned
+        int mediaScanned = 0;
+        if (!scopeSet.empty()) {
+            mediaScanned = static_cast<int>(scopeSet.size());
+        } else {
+            auto countRes = db().countMedia("", {});
+            if (countRes.isOk()) {
+                mediaScanned = static_cast<int>(countRes.value());
+            }
+        }
+
+        // Hydration: batch load metadata and tags
+        std::vector<MediaId> allMemberIds;
+        for (const auto& eg : exactDuplicateGroups) {
+            allMemberIds.insert(allMemberIds.end(), eg.begin(), eg.end());
+        }
+        for (const auto& vg : visualGroups) {
+            allMemberIds.insert(allMemberIds.end(), vg.memberIds.begin(), vg.memberIds.end());
+        }
+
+        std::unordered_map<MediaId, std::vector<Tag>> batchTags;
+        if (!allMemberIds.empty()) {
+            auto batchRes = db().getTagsForMediaBatch(allMemberIds);
+            if (batchRes.isOk()) {
+                batchTags = std::move(batchRes.value());
+            }
+        }
+
+        std::unordered_map<MediaId, MediaItem> mediaMap;
+        if (!allMemberIds.empty()) {
+            std::unordered_set<MediaId> uniqueIds(allMemberIds.begin(), allMemberIds.end());
+            std::vector<MediaId> deduplicatedIds(uniqueIds.begin(), uniqueIds.end());
+            constexpr size_t kBatchChunkSize = 500;
+            for (size_t chunkStart = 0; chunkStart < deduplicatedIds.size(); chunkStart += kBatchChunkSize) {
+                size_t chunkEnd = std::min(chunkStart + kBatchChunkSize, deduplicatedIds.size());
+                size_t count = chunkEnd - chunkStart;
+                std::string whereClause = "id IN (";
+                std::vector<std::string> params;
+                params.reserve(count);
+                for (size_t i = 0; i < count; ++i) {
+                    if (i > 0) whereClause += ",";
+                    whereClause += "?";
+                    params.push_back(std::to_string(deduplicatedIds[chunkStart + i]));
+                }
+                whereClause += ")";
+                auto itemsRes = db().queryMedia(whereClause, params, "", 0, 0);
+                if (itemsRes.isOk()) {
+                    for (auto& item : itemsRes.value()) {
+                        auto mid = item.id;
+                        auto it = batchTags.find(mid);
+                        if (it != batchTags.end()) {
+                            item.tags = it->second;
+                        }
+                        mediaMap[mid] = std::move(item);
+                    }
+                }
+            }
+        }
+
+        nlohmann::json groupsJson = nlohmann::json::array();
+        for (const auto& eg : exactDuplicateGroups) {
+            nlohmann::json g;
+            g["type"] = "exact";
+            g["keeper"] = eg.empty() ? 0 : eg[0];
+            g["members"] = eg;
+            nlohmann::json itemsJson = nlohmann::json::array();
+            for (MediaId mid : eg) {
+                if (mediaMap.count(mid)) itemsJson.push_back(mediaMap[mid]);
+            }
+            g["items"] = itemsJson;
+            g["photos"] = std::move(itemsJson);
+            g["min_similarity"] = 1.0;
+            groupsJson.push_back(std::move(g));
+        }
+
+        for (const auto& vg : visualGroups) {
+            nlohmann::json g;
+            g["type"] = "visual";
+            g["keeper"] = vg.memberIds.empty() ? 0 : vg.memberIds[0];
+            g["members"] = vg.memberIds;
+            nlohmann::json itemsJson = nlohmann::json::array();
+            for (MediaId mid : vg.memberIds) {
+                if (mediaMap.count(mid)) itemsJson.push_back(mediaMap[mid]);
+            }
+            g["items"] = itemsJson;
+            g["photos"] = std::move(itemsJson);
+            g["min_similarity"] = std::round(vg.minSimilarity * 1000.0) / 1000.0;
+            groupsJson.push_back(std::move(g));
+        }
+
+        nlohmann::json responseJson = {
+            {"groups", std::move(groupsJson)},
+            {"media_scanned", mediaScanned}
+        };
+        sendJson(res, responseJson);
+    });
+
+    // POST /api/media/duplicates/resolve
+    server.Post("/api/media/duplicates/resolve", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+
+        nlohmann::json body;
+        try {
+            body = nlohmann::json::parse(req.body);
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what(), 400);
+            return;
+        }
+
+        if (!body.contains("groups") || !body["groups"].is_array()) {
+            sendError(res, "Missing or invalid 'groups' array", 400);
+            return;
+        }
+
+        if (body["groups"].size() > kMaxBatchSize) {
+            sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+            return;
+        }
+
+        size_t totalRemoveItems = 0;
+        for (const auto& g : body["groups"]) {
+            if (g.contains("remove") && g["remove"].is_array()) {
+                totalRemoveItems += g["remove"].size();
+            }
+        }
+        if (totalRemoveItems > kMaxBatchSize) {
+            sendError(res, "Total remove items exceed maximum limit of " + std::to_string(kMaxBatchSize), 400);
+            return;
+        }
+
+        bool globalDeleteFromDisk = false;
+        if (body.contains("delete_from_disk") && body["delete_from_disk"].is_boolean()) {
+            globalDeleteFromDisk = body["delete_from_disk"].get<bool>();
+        } else if (req.has_param("delete_from_disk")) {
+            std::string val = req.get_param_value("delete_from_disk");
+            globalDeleteFromDisk = (val == "true" || val == "1");
+        }
+
+        bool globalMergeMetadata = true;
+        if (body.contains("merge_metadata") && body["merge_metadata"].is_boolean()) {
+            globalMergeMetadata = body["merge_metadata"].get<bool>();
+        }
+
+        int totalMergedCount = 0;
+        int totalDeletedCount = 0;
+        int64_t totalFreedBytes = 0;
+        nlohmann::json groupResults = nlohmann::json::array();
+
+        for (const auto& groupEl : body["groups"]) {
+            if (!groupEl.is_object() || !groupEl.contains("keeper") || !groupEl.contains("remove")) {
+                groupResults.push_back({{"status", 400}, {"error", "Invalid group structure"}});
+                continue;
+            }
+            if (!groupEl["keeper"].is_number_integer() || groupEl["keeper"].get<int64_t>() <= 0) {
+                groupResults.push_back({{"status", 400}, {"error", "Invalid keeper media ID"}});
+                continue;
+            }
+            if (!groupEl["remove"].is_array()) {
+                groupResults.push_back({{"status", 400}, {"error", "Invalid remove list"}});
+                continue;
+            }
+
+            bool groupDeleteFromDisk = globalDeleteFromDisk;
+            if (groupEl.contains("delete_from_disk") && groupEl["delete_from_disk"].is_boolean()) {
+                groupDeleteFromDisk = groupEl["delete_from_disk"].get<bool>();
+            }
+
+            bool groupMergeMetadata = globalMergeMetadata;
+            if (groupEl.contains("merge_metadata") && groupEl["merge_metadata"].is_boolean()) {
+                groupMergeMetadata = groupEl["merge_metadata"].get<bool>();
+            }
+
+            MediaId keeperId = groupEl["keeper"].get<MediaId>();
+            const auto& removeList = groupEl["remove"];
+
+            auto keeperRes = catalog_ ? catalog_->getMedia(keeperId) : db().getMediaById(keeperId);
+            if (!keeperRes.isOk()) {
+                groupResults.push_back({{"keeper", keeperId}, {"status", 404}, {"error", "Keeper media not found"}});
+                continue;
+            }
+
+            size_t keeperTagsBefore = 0;
+            if (auto tr = db().getTagsForMedia(keeperId); tr.isOk()) {
+                keeperTagsBefore = tr.value().size();
+            }
+
+            int64_t groupFreedBytes = 0;
+            std::vector<MediaId> groupRemoved;
+            std::vector<nlohmann::json> groupItemErrors;
+
+            Status txStatus = db().runInTransaction([&]() -> Status {
+                for (const auto& removeEl : removeList) {
+                    if (!removeEl.is_number_integer() || removeEl.get<int64_t>() <= 0) {
+                        groupItemErrors.push_back({{"id", 0}, {"status", 400}, {"error", "Invalid remove media ID"}});
+                        continue;
+                    }
+                    MediaId loserId = removeEl.get<MediaId>();
+                    if (loserId == keeperId) {
+                        groupItemErrors.push_back({{"id", loserId}, {"status", 400}, {"error", "Cannot remove keeper"}});
+                        continue;
+                    }
+                    auto loserRes = catalog_ ? catalog_->getMedia(loserId) : db().getMediaById(loserId);
+                    if (!loserRes.isOk()) {
+                        groupItemErrors.push_back({{"id", loserId}, {"status", 404}, {"error", "Remove media not found"}});
+                        continue;
+                    }
+
+                    MediaItem loser = loserRes.value();
+                    if (groupMergeMetadata) {
+                        Status mergeStatus = db().mergeMediaMetadata(keeperId, loserId);
+                        if (!mergeStatus.isOk()) {
+                            return mergeStatus;
+                        }
+                    }
+
+                    Status delStatus = catalog_ ? catalog_->deleteMedia(loserId, groupDeleteFromDisk)
+                                                : (groupDeleteFromDisk ? Status::internal("Catalog is required to delete files from disk") : db().deleteMedia(loserId));
+                    if (!delStatus.isOk()) {
+                        return delStatus;
+                    }
+
+                    groupFreedBytes += loser.file_size;
+                    groupRemoved.push_back(loserId);
+                }
+                return Status::ok();
+            });
+
+            if (txStatus.isOk()) {
+                if (clipService_) {
+                    for (MediaId loserId : groupRemoved) {
+                        clipService_->removeMedia(loserId);
+                    }
+                }
+                totalMergedCount += 1;
+                totalDeletedCount += static_cast<int>(groupRemoved.size());
+                totalFreedBytes += groupFreedBytes;
+
+                size_t keeperTagsAfter = 0;
+                if (auto tr = db().getTagsForMedia(keeperId); tr.isOk()) {
+                    keeperTagsAfter = tr.value().size();
+                }
+                int groupMergedTags = static_cast<int>(keeperTagsAfter > keeperTagsBefore ? keeperTagsAfter - keeperTagsBefore : 0);
+
+                nlohmann::json gr = {
+                    {"keeper", keeperId},
+                    {"removed", groupRemoved},
+                    {"merged_tags", groupMergedTags},
+                    {"freed_bytes", groupFreedBytes},
+                    {"status", 200}
+                };
+                if (!groupItemErrors.empty()) {
+                    gr["errors"] = groupItemErrors;
+                }
+                groupResults.push_back(std::move(gr));
+            } else {
+                groupResults.push_back({
+                    {"keeper", keeperId},
+                    {"status", 500},
+                    {"error", "Failed to resolve group: " + txStatus.message()}
+                });
+            }
+        }
+
+        nlohmann::json resJson = {
+            {"status", "ok"},
+            {"merged_count", totalMergedCount},
+            {"deleted_count", totalDeletedCount},
+            {"freed_bytes", totalFreedBytes},
+            {"merged", totalMergedCount},
+            {"deleted", totalDeletedCount},
+            {"groups", std::move(groupResults)}
+        };
+        sendJson(res, resJson);
+    });
+
+    // POST /api/media/duplicates/dismiss
+    server.Post("/api/media/duplicates/dismiss", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+
+        nlohmann::json body;
+        try {
+            body = nlohmann::json::parse(req.body);
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid JSON: ") + ex.what(), 400);
+            return;
+        }
+
+        if (!body.contains("pairs") || !body["pairs"].is_array()) {
+            sendError(res, "Missing or invalid 'pairs' array", 400);
+            return;
+        }
+
+        if (body["pairs"].size() > kMaxBatchSize) {
+            sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
+            return;
+        }
+
+        int dismissedCount = 0;
+        for (const auto& pairEl : body["pairs"]) {
+            if (!pairEl.is_array() || pairEl.size() != 2) continue;
+            if (!pairEl[0].is_number_integer() || !pairEl[1].is_number_integer()) continue;
+            MediaId a = pairEl[0].get<MediaId>();
+            MediaId b = pairEl[1].get<MediaId>();
+            if (a <= 0 || b <= 0 || a == b) continue;
+            if (db().dismissDuplicatePair(a, b).isOk()) {
+                dismissedCount++;
+            }
+        }
+
+        sendJson(res, {{"status", "ok"}, {"dismissed", dismissedCount}});
+    });
+
+    // POST /api/media/duplicates/dismissals/reset
+    server.Post("/api/media/duplicates/dismissals/reset", [this](const httplib::Request& req, httplib::Response& res) {
+        if (!checkAuth(req, res)) return;
+        auto resetRes = db().clearDismissedDuplicatePairs();
+        if (!resetRes.isOk()) {
+            sendError(res, "Failed to reset duplicate dismissals: " + resetRes.status().message(), 500);
+            return;
+        }
+        sendJson(res, {{"status", "ok"}, {"cleared", resetRes.value()}});
     });
 }
 

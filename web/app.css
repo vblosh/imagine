@@ -14,6 +14,7 @@
 @import 'styles/quick-edit.css';
 @import 'styles/modals.css';
 @import 'styles/map.css';
+@import 'styles/deduplicate.css';
 @import 'styles/responsive.css';
 
 /* Smart Tags AI Marker Badge */

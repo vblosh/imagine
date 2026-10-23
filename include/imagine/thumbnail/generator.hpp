@@ -39,6 +39,8 @@ public:
         const std::string& title = "",
         int size = 256
     );
+    static bool isProceduralThumbnail(const ImageBuffer& img, const std::string& mediaType = "video");
+    static bool isProceduralThumbnail(const std::string& filePath, const std::string& mediaType = "video");
     static Result<ImageBuffer> loadImageFromMemoryTurboJpeg(
         const uint8_t* data,
         size_t size,

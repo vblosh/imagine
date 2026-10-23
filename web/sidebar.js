@@ -30,6 +30,7 @@ let actionHooks = {
   renderTimeline: () => {},
   openDeleteTagModal: () => {},
   clearAllFilters: () => {},
+  openDeduplicateModal: () => {},
 };
 
 export function setSidebarActionHooks(hooks) {
@@ -740,6 +741,13 @@ export function bindSidebarHandlers() {
       updateSidebarActive();
       actionHooks.renderTimeline();
       actionHooks.loadMedia();
+    });
+  }
+  if (dom.navDuplicates) {
+    dom.navDuplicates.addEventListener('click', () => {
+      if (typeof actionHooks.openDeduplicateModal === 'function') {
+        actionHooks.openDeduplicateModal();
+      }
     });
   }
 }

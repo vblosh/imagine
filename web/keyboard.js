@@ -45,7 +45,9 @@ import {
   loupeZoomIn,
   loupeZoomOut,
   resetLoupeZoom,
-  toggleLoupePlayback
+  toggleLoupePlayback,
+  getCurrentLoupeItem,
+  isLoupeActionDisabled
 } from './loupe.js';
 import {
   quickEditState,
@@ -66,28 +68,57 @@ import {
 } from './quick-edit.js';
 import { navigateBackToCategory } from './category-view.js';
 import { isAutoEventOpen, cancelAutoEventReview } from './auto-events.js';
+import { isDeduplicateOpen, closeDeduplicateModal, isResetWarningOpen, closeResetWarningModal } from './deduplicate.js';
 import { closeSemanticIndexModal } from './semantic-search.js';
 import { closeSmartTagsModal, closeClearSmartTagsModal } from './smart-tags.js';
 
 export function handleEscapeKey() {
-  // 1. Modals (highest priority)
+  // 1. Over-Loupe confirmation / warning dialogs (highest priority)
   if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
     if (document.activeElement?.blur) document.activeElement.blur();
     hideDiscardModal();
     return true;
   }
+  if (dom.deleteMediaModal && (dom.deleteMediaModal.style.display === 'flex' || (dom.deleteMediaModal.style.display !== 'none' && dom.deleteMediaModal.style.display !== ''))) {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeDeleteMediaModal();
+    return true;
+  }
+
+  // 1b. Quick Edit Mode (cancel crop or exit quick edit)
+  if (quickEditState.isOpen) {
+    if (quickEditState.activeMode) {
+      cancelMode();
+      return true;
+    }
+    closeQuickEdit(true);
+    return true;
+  }
+
+  // 1c. Fullscreen Loupe Viewer (closes before background modals like deduplicate)
+  if (state.loupeIndex >= 0 || (dom.loupeModal && dom.loupeModal.style.display === 'flex')) {
+    closeLoupe();
+    return true;
+  }
+
+  // 2. Modals
   if (isAutoEventOpen()) {
     cancelAutoEventReview();
+    return true;
+  }
+  if (isResetWarningOpen()) {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeResetWarningModal();
+    return true;
+  }
+  if (isDeduplicateOpen()) {
+    if (document.activeElement?.blur) document.activeElement.blur();
+    closeDeduplicateModal();
     return true;
   }
   if (dom.deleteTagModal && dom.deleteTagModal.style.display === 'flex') {
     if (document.activeElement?.blur) document.activeElement.blur();
     closeDeleteTagModal();
-    return true;
-  }
-  if (dom.deleteMediaModal && dom.deleteMediaModal.style.display === 'flex') {
-    if (document.activeElement?.blur) document.activeElement.blur();
-    closeDeleteMediaModal();
     return true;
   }
   if (dom.clearSmartTagsModal && dom.clearSmartTagsModal.style.display === 'flex') {
@@ -175,22 +206,6 @@ export function handleEscapeKey() {
     return true;
   }
 
-  // 1b. Quick Edit Mode (cancel crop or exit quick edit)
-  if (quickEditState.isOpen) {
-    if (quickEditState.activeMode) {
-      cancelMode();
-      return true;
-    }
-    closeQuickEdit(true);
-    return true;
-  }
-
-  // 2. Fullscreen Loupe Viewer
-  if (state.loupeIndex >= 0 || (dom.loupeModal && dom.loupeModal.style.display === 'flex')) {
-    closeLoupe();
-    return true;
-  }
-
   // 3. Map search results dropdown list
   if (dom.mapSearchResults && dom.mapSearchResults.style.display !== 'none') {
     dom.mapSearchResults.style.display = 'none';
@@ -261,6 +276,16 @@ export function handleEscapeKey() {
   return false;
 }
 
+export function isModalOverLoupeOpen() {
+  if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
+    return true;
+  }
+  if (dom.deleteMediaModal && (dom.deleteMediaModal.style.display === 'flex' || (dom.deleteMediaModal.style.display !== 'none' && dom.deleteMediaModal.style.display !== ''))) {
+    return true;
+  }
+  return false;
+}
+
 export function isAnyBlockingModalOpen() {
   if (dom.discardChangesModal && dom.discardChangesModal.style.display === 'flex') {
     return true;
@@ -321,6 +346,12 @@ export function isAnyBlockingModalOpen() {
   }
   const faceGridModal = document.getElementById('faceGridModal');
   if (faceGridModal && faceGridModal.style.display === 'flex') {
+    return true;
+  }
+  if (isResetWarningOpen()) {
+    return true;
+  }
+  if (isDeduplicateOpen()) {
     return true;
   }
   return false;
@@ -401,7 +432,12 @@ export function setupKeyboardShortcuts() {
     }
 
     // Suppress shortcuts behind any open modal dialog
-    if (isAnyBlockingModalOpen()) {
+    const isLoupeActive = state.loupeIndex >= 0 || (dom.loupeModal && dom.loupeModal.style.display === 'flex');
+    if (isLoupeActive) {
+      if (isModalOverLoupeOpen()) {
+        return;
+      }
+    } else if (isAnyBlockingModalOpen()) {
       return;
     }
 
@@ -494,7 +530,8 @@ export function setupKeyboardShortcuts() {
     if (state.loupeIndex >= 0) {
       if (!hasModifier && (e.key === 'e' || e.key === 'E')) {
         e.preventDefault();
-        const item = state.mediaItems[state.loupeIndex];
+        if (isLoupeActionDisabled()) return;
+        const item = getCurrentLoupeItem();
         if (item && item.media_type !== 'video' && item.media_type !== 'audio') {
           openQuickEdit();
         }
@@ -524,29 +561,34 @@ export function setupKeyboardShortcuts() {
         e.preventDefault();
         toggleLoupePlayback();
       } else if (!hasModifier && e.key >= '0' && e.key <= '5') {
-        const item = state.mediaItems[state.loupeIndex];
+        if (isLoupeActionDisabled()) return;
+        const item = getCurrentLoupeItem();
         if (item) {
           const rating = parseInt(e.key, 10);
           updateItemRating(item.id, rating);
           showToast(rating === 0 ? t('toast_rating_cleared') : t('toast_rating_value', { rating }), 'info');
         }
       } else if (!hasModifier && (e.key === 'Delete' || e.key === 'Backspace')) {
-        const item = state.mediaItems[state.loupeIndex];
+        if (isLoupeActionDisabled()) return;
+        const item = getCurrentLoupeItem();
         if (item) openDeleteMediaModal([item.id]);
       } else if (!hasModifier && (e.key === 'x' || e.key === 'X')) {
-        const item = state.mediaItems[state.loupeIndex];
+        if (isLoupeActionDisabled()) return;
+        const item = getCurrentLoupeItem();
         if (item) {
           toggleItemFlag(item.id, -1);
           showToast(item.flag === -1 ? t('toast_flag_reject') : t('toast_flag_cleared'), 'info');
         }
       } else if (!hasModifier && (e.key === 'p' || e.key === 'P')) {
-        const item = state.mediaItems[state.loupeIndex];
+        if (isLoupeActionDisabled()) return;
+        const item = getCurrentLoupeItem();
         if (item) {
           toggleItemFlag(item.id, 1);
           showToast(item.flag === 1 ? t('toast_flag_pick') : t('toast_flag_cleared'), 'info');
         }
       } else if (!hasModifier && (e.key === 'u' || e.key === 'U')) {
-        const item = state.mediaItems[state.loupeIndex];
+        if (isLoupeActionDisabled()) return;
+        const item = getCurrentLoupeItem();
         if (item) {
           updateItemFlag(item.id, 0);
           showToast(t('toast_flag_cleared'), 'info');

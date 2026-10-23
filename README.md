@@ -16,6 +16,7 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Media Grid**: Smooth, responsive thumbnail layout with dynamic zoom slider (120px–360px).
   - **Timeline Scrubber**: Interactive histogram of photos by year and month with range-filtering capabilities.
   - **Sidebars**: Collapsible Folders tree, Standard/Smart Albums, and Tag categories (People, Places, Events, Keywords).
+  - **Duplicate Review & Resolution**: Dedicated "Duplicates" entry point with live count badge, guided two-pass detection modal (exact SHA-256 and visual CLIP similarity), side-by-side comparison cards, intelligent keeper scoring (`rankKeeper`), keeper swapping, Loupe previews, pair dismissals, and lossless metadata merge-before-delete.
   - **Map View & Geotagging**: Leaflet map view with spatial clustering, photo pinning, and reverse geocoding via OpenStreetMap Nominatim proxy.
   - **Auto Events**: Automatically suggest outings and events from selected photos using local timestamps, GPS coordinates, captions, and existing tags.
   - **Face Review & Naming**: Local face detection, cluster grouping, face crop cards, naming, and review suggestions using existing people tags.
@@ -43,6 +44,13 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Rejection Memory**: Removing an AI tag from a photo permanently prevents the tag from reappearing on that photo during future runs.
   - **Reversible AI Tags & Provenance**: AI tags are marked with an "AI" badge in the Keywords sidebar and Inspector; one-click clear removes only AI-owned tags without affecting manual or face tags.
   - **Customizable Taxonomy**: Built-in 75-label taxonomy across 9 groups, fully customizable via JSON override (`IMAGINE_SMART_TAGS_TAXONOMY`).
+- **Two-Pass Deduplication & Consolidation Engine**:
+  - **Exact Duplicate Detection (SHA-256)**: Instant bit-for-bit duplicate matching on `(content_hash, file_size)` using a partial SQLite index without requiring neural models.
+  - **Visual Near-Duplicate Detection (CLIP ViT)**: Discovers visually identical re-exports, crops, and re-compressed copies using CLIP ViT embeddings with Union-Find clustering, tunable similarity thresholds (`>= 0.97`), and temporal `date_taken` window filtering.
+  - **Deterministic Keeper Ranking**: Multi-attribute ranking scoring flagged status, pixel resolution, file size, metadata completeness (GPS, tags, captions, date), and path cleanliness.
+  - **Lossless Metadata Merge-Before-Delete**: Automatically merges tags and album memberships (preserving sequence order) and backfills missing metadata to the keeper prior to deletion.
+  - **Deletion Safeguards**: Enforces hardlink/same-inode equivalence checks, protects shared-render thumbnails, evicts deleted items from the CLIP vector index, and supports catalog-only removal or physical disk deletion.
+  - **Persistent Pair Dismissals**: Suppresses user-dismissed pairs in future scans via canonical SQLite dismissal records with one-click reset support.
 - **High-Throughput Importer**:
   - Multi-threaded scanning and processing pipeline (`std::jthread` thread pool).
   - Support for Photos (JPEG, PNG, WebP, TIFF, BMP), Videos (MP4, MOV, WebM, MKV, AVI, etc.), and Audio (MP3, FLAC, WAV, AAC, etc.).
@@ -132,6 +140,57 @@ For complete details on workflows, JSON schemas, tuning, and REST endpoints, see
 
 ---
 
+## Deduplication & Consolidation Engine
+
+Imagine provides a robust, two-pass photo deduplication and consolidation system. It detects identical file copies as well as visually similar re-exports and crops, automatically selects the highest quality "keeper" using deterministic multi-factor ranking, losslessly consolidates metadata, and offers an interactive review dialog in the Web UI.
+
+### Two-Pass Detection Architecture
+1. **Exact Duplicate Pass (SHA-256)**:
+   - Groups files with identical cryptographic SHA-256 hashes (`content_hash`) and matching byte sizes.
+   - Accelerated by a partial SQLite B-tree index (`WHERE content_hash != ''`).
+   - Runs 100% offline with zero neural model overhead.
+2. **Visual Near-Duplicate Pass (CLIP ViT)**:
+   - Discovers near-identical renders, re-compressed JPEGs, resized variants, and crops using CLIP ViT-B/32 vector embeddings.
+   - Evaluates candidate pairs above a configurable cosine similarity threshold (default: `>= 0.97`).
+   - Restrained by a configurable `date_taken` temporal window (default: within 24 hours / 86,400s) to prevent clustering visually similar scenes captured months apart.
+   - Uses Union-Find graph clustering to assemble distinct duplicate clusters.
+   - Candidate pairs previously dismissed by the user are automatically filtered out.
+
+### Automated Keeper Ranking (`rankKeeper`)
+Each duplicate group automatically elects a recommended **keeper** based on a deterministic 6-tier scoring hierarchy:
+1. **Flag Status**: Flagged photos (Picks / Favorites) always outrank unflagged or rejected photos.
+2. **Resolution**: Higher pixel area (`width * height`) wins.
+3. **File Size**: Larger file sizes win (proxy for lower compression and higher image detail).
+4. **Metadata Completeness**: Evaluates presence of captions, EXIF GPS coordinates, existing tags, and valid capture timestamps (`date_taken != 0`, preserving valid pre-1970 dates).
+5. **Path Cleanliness**: Clean library paths outrank filenames containing duplicate artifacts like `copy`, `export`, `(1)`, `temp`, or percent-encoded characters (`%20`).
+6. **Earliest ID Tiebreaker**: Lowest `MediaId` ensures stable, repeatable group ordering across scans.
+
+> **Manual Override**: The Web UI lets you swap the chosen keeper with a single click before executing resolution.
+
+### Lossless Merge-Before-Delete
+Deletion never discards user work or catalog organization:
+- **Metadata Union**: Tags and album memberships (preserving sequence order) from duplicate candidates are automatically merged into the keeper.
+- **Field Backfilling**: Empty metadata fields on the keeper (captions, GPS coordinates, missing capture timestamps) are backfilled from duplicates.
+- **Guarded Deletions**:
+  - **Shared Thumbnails**: If another catalog item shares the same content hash, thumbnail cache files are kept intact.
+  - **Hardlink Inode Safety**: Checks `std::filesystem::equivalent` to avoid truncating data shared across hardlinks.
+  - **Vector Index Eviction**: Automatically evicts deleted items from the in-memory CLIP vector index to prevent ghost search results.
+  - **Optional Disk Deletion**: Choose between unlinking the duplicate files from disk or removing them only from the catalog database.
+
+### Review Workflow & REST API
+- **Web UI Review**:
+  - **Entry Points**: Accessible from the sidebar ("Duplicates" with live counter badge) or from the selection toolbar ("Find duplicates in selection").
+  - **Interactive Review**: Side-by-side thumbnail grid, Loupe preview button, keeper-swap controls, similarity pill (`100%` for exact, cosine % for visual), metadata pills (resolution, size, date, flags, tags), batch resolve ("Resolve all keepers"), pair dismissal, and dismissal reset warning dialog.
+- **REST Endpoints**:
+  - `POST /api/media/duplicates/scan`: Scans catalog or specified `media_ids` with custom `visual_threshold` and `date_window_sec`.
+  - `POST /api/media/duplicates/resolve`: Executes atomic metadata merge, removes non-keeper items, and optionally unlinks files from disk (`delete_from_disk`).
+  - `POST /api/media/duplicates/dismiss`: Records persistent pair exclusions in `duplicate_dismissals`.
+  - `POST /api/media/duplicates/dismissals/reset`: Clears all previously dismissed duplicate pairs.
+
+For complete developer details, database schemas, and migration specs, see the [Deduplication Developer Guide](docs/dev/deduplicate.md).
+
+---
+
 ## Quick Start
 
 ### 1. Build
@@ -174,7 +233,7 @@ ctest --test-dir build --output-on-failure
 # Or run C++ unit tests directly (14 test suites):
 ./build/imagine_tests
 
-# Or run the deterministic Playwright UI test suite (28 test suites):
+# Or run the deterministic Playwright UI test suite (32 test suites):
 ./tests/ui/run_ui_tests.sh
 
 # Run reference numerical validation against Python InsightFace 0.7.3:
@@ -280,7 +339,8 @@ imagine/
 │   ├── semantic-search.md      # CLIP Semantic AI search & visual similarity guide
 │   ├── smart-tags.md           # Smart Tags local zero-shot auto-labeling guide
 │   └── dev/                    # Developer architectural documentation
-│       ├── database_schema.md  # SQLite schema, tables, migrations (v1-v4), indexing
+│       ├── database_schema.md  # SQLite schema, tables, migrations (v1-v8), indexing
+│       ├── deduplicate.md      # Exact & visual duplicate detection, keeper ranking & consolidation design
 │       ├── map_view.md         # Map View Leaflet integration and reverse geocoding
 │       └── ui_test_plan.md     # Deterministic UI test harness architecture
 ├── include/imagine/            # Public C++20 header architecture
@@ -293,7 +353,8 @@ imagine/
 │   │   └── service.hpp         # Face clustering, identity suggestions & job management
 │   ├── common/                 # Common utilities (Types, Error, Logger)
 │   ├── concurrency/            # ThreadPool (std::jthread worker pool)
-│   ├── core/                   # Core catalog facade, importer, query engine & event suggestions
+│   ├── core/                   # Core catalog facade, importer, query engine, deduplicator & event suggestions
+│   │   └── deduplicator.hpp    # Domain types, keeper ranking heuristics & scan options
 │   ├── db/                     # SQLite RAII Connection, Schema, CatalogDb
 │   ├── metadata/               # SHA-256 Hasher, EXIF Reader, Media Reader
 │   ├── server/                 # REST API Router, Web Server, MIME Types
@@ -304,7 +365,8 @@ imagine/
 │   ├── faces/                  # SCRFD / ArcFace pipeline & face service implementations
 │   ├── common/                 # Logger & types implementations
 │   ├── concurrency/            # Thread pool implementation
-│   ├── core/                   # Catalog, importer, query & event suggestions implementations
+│   ├── core/                   # Catalog, importer, query, deduplicator & event suggestions implementations
+│   │   └── deduplicator.cpp    # Deduplicator engine implementation
 │   ├── db/                     # SQLite connection, schema & database implementations
 │   ├── metadata/               # EXIF reader, SHA-256 hasher & media reader implementations
 │   ├── server/                 # REST API router & HTTP web server implementations
@@ -347,6 +409,7 @@ imagine/
 │   ├── leaflet-loader.js       # Deferred Leaflet mapping library loader
 │   ├── loupe.js                # Fullscreen viewer with pan/zoom & slideshow
 │   ├── modals.js               # Modal dialogs (Import, Album, Tag, Delete, Settings)
+│   ├── deduplicate.js          # Duplicate detection modal, comparison grid, keeper swapping & resolution
 │   ├── face-analysis.js        # Face scan dialog, cluster review grid, naming & suggestions
 │   ├── semantic-search.js      # Natural language search toggle, UI & vector index builder
 │   ├── semantic-status.js      # Semantic AI indexing status & snapshot management
@@ -364,7 +427,7 @@ imagine/
 │   ├── manifest.webmanifest    # Progressive Web App manifest
 │   └── vendor/leaflet/         # Embedded Leaflet mapping library assets
 ├── tests/                      # Automated test suites
-│   ├── ui/                     # Deterministic Playwright UI test suites (28 suites)
+│   ├── ui/                     # Deterministic Playwright UI test suites (32 suites)
 │   ├── fixtures/               # Test image assets (JPEG with EXIF, lossless reference PNGs)
 │   ├── web_server_benchmark.py # Web server concurrency benchmark script
 │   └── *.cpp                   # C++ unit tests (14 test suites covering DB, server, CLIP, faces, etc.)
@@ -380,6 +443,7 @@ imagine/
 - **[Face Analysis REST API](docs/face-analysis-api.md)**: Complete endpoint reference for face scan jobs, identity assignment, group review, and batch operations.
 - **[Face Analysis Reference Validation](docs/face-analysis-validation.md)**: Technical protocol for validating numerical parity against Python InsightFace 0.7.3.
 - **[Semantic AI Search Guide](docs/semantic-search.md)**: CLIP model installation, building the vector search index, natural language query examples, and visual similarity.
+- **[Deduplication Developer Guide](docs/dev/deduplicate.md)**: Two-pass duplicate detection architecture, keeper ranking heuristics, lossless metadata merge-before-delete, and REST API specification.
 - **[Database Schema Documentation](docs/dev/database_schema.md)**: Relational schema architecture, tables, indexes, and migrations (v1 to v8).
 - **[Smart Tags Guide](docs/smart-tags.md)**: Local zero-shot auto-labeling, taxonomy configuration, rejection memory, and REST API.
 - **[Map View & Geotagging Developer Guide](docs/dev/map_view.md)**: Leaflet map clustering, spatial queries, and reverse geocoding architecture.

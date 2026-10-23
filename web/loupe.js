@@ -15,8 +15,35 @@ export const LOUPE_MIN_ZOOM = 1.0;
 export const LOUPE_MAX_ZOOM = 5.0;
 export const LOUPE_ZOOM_STEPS = [1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0];
 
-export function openLoupeForMedia(id) {
-  const idx = state.mediaItems.findIndex(m => m.id === id);
+let loupeCustomItems = null;
+let loupeDisabledActions = false;
+
+export function isLoupeActionDisabled() {
+  return loupeDisabledActions;
+}
+
+export function getLoupeItems() {
+  return (Array.isArray(loupeCustomItems) && loupeCustomItems.length > 0)
+    ? loupeCustomItems
+    : (state.mediaItems || []);
+}
+
+export function getCurrentLoupeItem() {
+  const items = getLoupeItems();
+  if (state.loupeIndex >= 0 && state.loupeIndex < items.length) {
+    return items[state.loupeIndex];
+  }
+  return null;
+}
+
+export function openLoupeForMedia(id, options = {}) {
+  const customList = (options && Array.isArray(options.items) && options.items.length > 0)
+    ? options.items
+    : null;
+  loupeCustomItems = customList;
+  loupeDisabledActions = Boolean(options && (options.fromDeduplicate || options.disableActions));
+  const items = getLoupeItems();
+  const idx = items.findIndex(m => Number(m.id) === Number(id));
   if (idx === -1) return;
   state.loupeIndex = idx;
   state.loupeShowOriginal = false;
@@ -34,6 +61,29 @@ export function closeLoupe() {
       return;
     }
     closeQuickEdit(false);
+  }
+  loupeCustomItems = null;
+  loupeDisabledActions = false;
+  if (dom.loupeDeleteBtn) {
+    dom.loupeDeleteBtn.style.display = '';
+    dom.loupeDeleteBtn.disabled = false;
+  }
+  if (dom.loupeQuickEditBtn) {
+    dom.loupeQuickEditBtn.style.display = '';
+    dom.loupeQuickEditBtn.disabled = false;
+  }
+  if (dom.loupeRating) {
+    dom.loupeRating.style.display = '';
+  }
+  if (dom.loupeFlag) {
+    dom.loupeFlag.style.display = '';
+  }
+  const faceToggleLabel = dom.loupeFaceToggleContainer || dom.loupeFaceOverlayToggle?.closest('.face-overlay-toggle');
+  if (faceToggleLabel) {
+    faceToggleLabel.style.display = '';
+  }
+  if (dom.loupeFaceOverlay) {
+    dom.loupeFaceOverlay.style.display = '';
   }
   state.loupeIndex = -1;
   state.loupeShowOriginal = false;
@@ -60,8 +110,9 @@ export function closeLoupe() {
 
 export function loadLoupeOriginal() {
   state.loupeShowOriginal = true;
-  if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return;
-  const item = state.mediaItems[state.loupeIndex];
+  const items = getLoupeItems();
+  if (state.loupeIndex < 0 || state.loupeIndex >= items.length) return;
+  const item = items[state.loupeIndex];
   if (!item || item.media_type === 'video' || item.media_type === 'audio') return;
   if (!dom.loupeImg) return;
 
@@ -82,8 +133,9 @@ export function updateLoupeView() {
     }
     closeQuickEdit(false);
   }
-  if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return;
-  const item = state.mediaItems[state.loupeIndex];
+  const items = getLoupeItems();
+  if (state.loupeIndex < 0 || state.loupeIndex >= items.length) return;
+  const item = items[state.loupeIndex];
 
   // Stop previous video/audio
   if (dom.loupeVideo) {
@@ -173,9 +225,44 @@ export function updateLoupeView() {
       dom.loupeZoomControls.style.display = 'flex';
     }
     if (dom.loupeQuickEditBtn) {
-      dom.loupeQuickEditBtn.style.display = '';
-      dom.loupeQuickEditBtn.disabled = false;
+      if (loupeDisabledActions) {
+        dom.loupeQuickEditBtn.style.display = 'none';
+        dom.loupeQuickEditBtn.disabled = true;
+      } else {
+        dom.loupeQuickEditBtn.style.display = '';
+        dom.loupeQuickEditBtn.disabled = false;
+      }
     }
+  }
+
+  if (dom.loupeDeleteBtn) {
+    if (loupeDisabledActions) {
+      dom.loupeDeleteBtn.style.display = 'none';
+      dom.loupeDeleteBtn.disabled = true;
+    } else {
+      dom.loupeDeleteBtn.style.display = '';
+      dom.loupeDeleteBtn.disabled = false;
+    }
+  }
+
+  if (dom.loupeRating) {
+    dom.loupeRating.style.display = loupeDisabledActions ? 'none' : '';
+  }
+
+  if (dom.loupeFlag) {
+    dom.loupeFlag.style.display = loupeDisabledActions ? 'none' : '';
+  }
+
+  const faceToggleLabel = dom.loupeFaceToggleContainer || dom.loupeFaceOverlayToggle?.closest('.face-overlay-toggle');
+  if (faceToggleLabel) {
+    faceToggleLabel.style.display = loupeDisabledActions ? 'none' : '';
+  }
+
+  if (loupeDisabledActions && dom.loupeFaceOverlay) {
+    dom.loupeFaceOverlay.setAttribute('hidden', '');
+    dom.loupeFaceOverlay.style.display = 'none';
+  } else if (!loupeDisabledActions && dom.loupeFaceOverlay) {
+    dom.loupeFaceOverlay.style.display = '';
   }
 
   if (dom.loupeFileName) {
@@ -183,15 +270,17 @@ export function updateLoupeView() {
     dom.loupeFileName.title = item.file_path || item.file_name || '';
   }
   if (dom.loupeIndex) {
-    if (state.semanticSearchActive) {
+    if (loupeCustomItems) {
+      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${items.length}`;
+    } else if (state.semanticSearchActive) {
       const rank = item.rank || (state.loupeIndex + 1);
       const queryStr = state.semanticSearchQuery ? ` • "${state.semanticSearchQuery}"` : '';
-      const formatted = t('rank_loupe_format', { rank, total: state.mediaItems.length });
+      const formatted = t('rank_loupe_format', { rank, total: items.length });
       dom.loupeIndex.textContent = `${formatted}${queryStr}`;
-    } else if (state.totalCount > state.mediaItems.length) {
-      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length} (${state.totalCount} ${t('total')})`;
+    } else if (state.totalCount > items.length) {
+      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${items.length} (${state.totalCount} ${t('total')})`;
     } else {
-      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${state.mediaItems.length}`;
+      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${items.length}`;
     }
   }
 
@@ -201,8 +290,9 @@ export function updateLoupeView() {
 }
 
 export function toggleLoupePlayback() {
-  if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return false;
-  const item = state.mediaItems[state.loupeIndex];
+  const items = getLoupeItems();
+  if (state.loupeIndex < 0 || state.loupeIndex >= items.length) return false;
+  const item = items[state.loupeIndex];
   if (!item) return false;
 
   if (item.media_type === 'video' && dom.loupeVideo) {
@@ -341,7 +431,10 @@ export function resetLoupeZoom() {
 }
 
 export function updateLoupeControls() {
-  const item = state.mediaItems[state.loupeIndex];
+  if (loupeDisabledActions) return;
+  const items = getLoupeItems();
+  if (state.loupeIndex < 0 || state.loupeIndex >= items.length) return;
+  const item = items[state.loupeIndex];
   if (!item) return;
 
   if (dom.loupeRating) {
@@ -363,9 +456,10 @@ export async function loupeNext() {
     closeQuickEdit(true);
     return;
   }
-  if (state.mediaItems.length === 0) return;
-  if (state.loupeIndex === state.mediaItems.length - 1 && state.mediaItems.length < state.totalCount && !state.isLoadingMore) {
-    const prevLen = state.mediaItems.length;
+  const items = getLoupeItems();
+  if (items.length === 0) return;
+  if (!loupeCustomItems && state.loupeIndex === items.length - 1 && items.length < state.totalCount && !state.isLoadingMore) {
+    const prevLen = items.length;
     const prevIndex = state.loupeIndex;
     await (window.imagineUI?.loadMoreMedia ? window.imagineUI.loadMoreMedia() : loadMoreMedia());
     if (state.loupeIndex < 0 || state.loupeIndex !== prevIndex) return;
@@ -375,7 +469,7 @@ export async function loupeNext() {
       return;
     }
   }
-  state.loupeIndex = (state.loupeIndex + 1) % state.mediaItems.length;
+  state.loupeIndex = (state.loupeIndex + 1) % items.length;
   updateLoupeView();
 }
 
@@ -384,7 +478,10 @@ export function loupePrev() {
     closeQuickEdit(true);
     return;
   }
-  if (state.mediaItems.length === 0) return;
-  state.loupeIndex = (state.loupeIndex - 1 + state.mediaItems.length) % state.mediaItems.length;
+  const items = getLoupeItems();
+  if (items.length === 0) return;
+  state.loupeIndex = (state.loupeIndex - 1 + items.length) % items.length;
   updateLoupeView();
 }
+
+

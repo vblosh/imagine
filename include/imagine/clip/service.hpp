@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 #include <nlohmann/json.hpp>
 #include "imagine/common/error.hpp"
@@ -34,6 +35,32 @@ struct SearchResult {
     double elapsedMs{0.0};
     std::vector<SearchHit> items;
 };
+
+struct VisualDuplicatePair {
+    MediaId a{0};
+    MediaId b{0};
+    float similarity{0.0f};
+};
+
+struct VisualDuplicateGroup {
+    std::vector<MediaId> memberIds;
+    float minSimilarity{1.0f};
+};
+
+inline void to_json(nlohmann::json& j, const VisualDuplicatePair& pair) {
+    j = nlohmann::json{
+        {"a", pair.a},
+        {"b", pair.b},
+        {"similarity", pair.similarity}
+    };
+}
+
+inline void to_json(nlohmann::json& j, const VisualDuplicateGroup& group) {
+    j = nlohmann::json{
+        {"members", group.memberIds},
+        {"minSimilarity", group.minSimilarity}
+    };
+}
 
 inline void to_json(nlohmann::json& j, const SearchHit& hit) {
     j = nlohmann::json{
@@ -67,6 +94,23 @@ public:
     Result<SearchResult> search(const SearchRequest& request);
     Result<SearchResult> findSimilar(MediaId mediaId, int limit = 20);
     void removeMedia(MediaId mediaId);
+    bool hasMedia(MediaId mediaId) const;
+
+    void addMediaVector(MediaId id, const float* embedding, int dim);
+    void addMediaVector(MediaId id, const std::vector<float>& embedding);
+    void reloadIndex();
+
+    std::vector<VisualDuplicatePair> findVisualDuplicatePairs(
+        float threshold = 0.97f,
+        const std::unordered_set<MediaId>& allowedIds = {}
+    ) const;
+
+    std::vector<VisualDuplicateGroup> scanVisualDuplicates(
+        float threshold = 0.97f,
+        int64_t dateWindowSec = 86400,
+        const std::unordered_set<MediaId>& allowedIds = {},
+        const std::unordered_set<MediaId>& exactHashMemberIds = {}
+    ) const;
 
     void stop();
 

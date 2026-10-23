@@ -1035,6 +1035,132 @@ TEST(ClipServiceTest, SearchAndFindSimilarClampingAndDateFilters) {
     fs::remove_all(tempModels, ec);
 }
 
+TEST(ClipServiceTest, VisualDuplicateScanHelperAndUnionFindGrouping) {
+    std::error_code ec;
+    auto testDb = fs::temp_directory_path() / ("test_clip_dedup_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");
+    auto tempCache = fs::temp_directory_path() / ("test_clip_dedup_cache_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(tempCache, ec);
+
+    {
+        imagine::db::CatalogDb db;
+        ASSERT_TRUE(db.open(testDb.string()).isOk());
+
+        imagine::MediaItem m1;
+        m1.file_path = "photo1.jpg"; m1.file_name = "photo1.jpg"; m1.content_hash = "h1";
+        m1.width = 1000; m1.height = 1000; m1.file_size = 500000; m1.date_taken = 1000;
+        m1.media_type = "photo";
+
+        imagine::MediaItem m2;
+        m2.file_path = "photo2_copy.jpg"; m2.file_name = "photo2_copy.jpg"; m2.content_hash = "h2";
+        m2.width = 800; m2.height = 800; m2.file_size = 400000; m2.date_taken = 2000;
+        m2.media_type = "photo";
+
+        imagine::MediaItem m3;
+        m3.file_path = "photo3.jpg"; m3.file_name = "photo3.jpg"; m3.content_hash = "h3";
+        m3.width = 1200; m3.height = 1200; m3.file_size = 600000; m3.date_taken = 5000;
+        m3.media_type = "photo";
+
+        imagine::MediaItem m4;
+        m4.file_path = "photo4.jpg"; m4.file_name = "photo4.jpg"; m4.content_hash = "h4";
+        m4.width = 1000; m4.height = 1000; m4.file_size = 500000; m4.date_taken = 6000;
+        m4.media_type = "photo";
+
+        imagine::MediaId id1 = db.insertMedia(m1).value();
+        imagine::MediaId id2 = db.insertMedia(m2).value();
+        imagine::MediaId id3 = db.insertMedia(m3).value();
+        imagine::MediaId id4 = db.insertMedia(m4).value();
+
+        imagine::clip::Service svc(db, tempCache.string(), [](const std::string& p) { return p; });
+
+        std::vector<float> v1 = {1.0f, 0.0f, 0.0f, 0.0f};
+        std::vector<float> v2 = {0.98f, 0.198997f, 0.0f, 0.0f};
+        std::vector<float> v3 = {0.0f, 1.0f, 0.0f, 0.0f};
+        std::vector<float> v4 = {0.0f, 0.99f, 0.141067f, 0.0f};
+
+        svc.addMediaVector(id1, v1);
+        svc.addMediaVector(id2, v2);
+        svc.addMediaVector(id3, v3);
+        svc.addMediaVector(id4, v4);
+
+        // 1. findVisualDuplicatePairs helper
+        auto pairs = svc.findVisualDuplicatePairs(0.97f);
+        ASSERT_EQ(pairs.size(), 2u);
+        std::sort(pairs.begin(), pairs.end(), [](const auto& p1, const auto& p2) {
+            return std::tie(p1.a, p1.b) < std::tie(p2.a, p2.b);
+        });
+        EXPECT_EQ(pairs[0].a, id1);
+        EXPECT_EQ(pairs[0].b, id2);
+        EXPECT_NEAR(pairs[0].similarity, 0.98f, 0.01f);
+        EXPECT_EQ(pairs[1].a, id3);
+        EXPECT_EQ(pairs[1].b, id4);
+        EXPECT_NEAR(pairs[1].similarity, 0.99f, 0.01f);
+
+        // Filter with allowedIds
+        auto filteredPairs = svc.findVisualDuplicatePairs(0.97f, {id1, id3});
+        EXPECT_TRUE(filteredPairs.empty());
+
+        // 2. scanVisualDuplicates grouping with keeper ranking
+        auto groups = svc.scanVisualDuplicates(0.97f, 86400);
+        ASSERT_EQ(groups.size(), 2u);
+        bool foundGroup1 = false;
+        bool foundGroup2 = false;
+        for (const auto& g : groups) {
+            ASSERT_EQ(g.memberIds.size(), 2u);
+            if (g.memberIds[0] == id1 || g.memberIds[1] == id1) {
+                foundGroup1 = true;
+                EXPECT_EQ(g.memberIds[0], id1);
+                EXPECT_EQ(g.memberIds[1], id2);
+                EXPECT_NEAR(g.minSimilarity, 0.98f, 0.01f);
+            } else if (g.memberIds[0] == id3 || g.memberIds[1] == id3) {
+                foundGroup2 = true;
+                EXPECT_EQ(g.memberIds[0], id3);
+                EXPECT_EQ(g.memberIds[1], id4);
+                EXPECT_NEAR(g.minSimilarity, 0.99f, 0.01f);
+            }
+        }
+        EXPECT_TRUE(foundGroup1);
+        EXPECT_TRUE(foundGroup2);
+
+        // 3. Dismissal exclusion: dismiss (id1, id2)
+        {
+            auto stmtRes = db.connection().prepare(
+                "INSERT INTO duplicate_dismissals (media_id_a, media_id_b, dismissed_at) VALUES (?, ?, ?);"
+            );
+            ASSERT_TRUE(stmtRes.isOk());
+            auto stmt = std::move(stmtRes.value());
+            stmt.bind(1, std::min(id1, id2));
+            stmt.bind(2, std::max(id1, id2));
+            stmt.bind(3, 1000);
+            stmt.step();
+        }
+
+        auto groupsAfterDismissal = svc.scanVisualDuplicates(0.97f, 86400);
+        ASSERT_EQ(groupsAfterDismissal.size(), 1u);
+        EXPECT_EQ(groupsAfterDismissal[0].memberIds[0], id3);
+
+        // 4. Exact hash member exclusion
+        auto groupsWithExactExclude = svc.scanVisualDuplicates(0.97f, 86400, {}, {id3});
+        EXPECT_TRUE(groupsWithExactExclude.empty());
+
+        // 5. Date window check: update id4 date_taken to far future
+        ASSERT_TRUE(db.updateDateTaken(id4, 200000, "").isOk());
+        auto groupsDateWindow = svc.scanVisualDuplicates(0.97f, 86400);
+        EXPECT_TRUE(groupsDateWindow.empty());
+
+        // Zero date window disables date window check
+        auto groupsNoWindow = svc.scanVisualDuplicates(0.97f, 0);
+        ASSERT_EQ(groupsNoWindow.size(), 1u);
+        EXPECT_EQ(groupsNoWindow[0].memberIds[0], id3);
+
+        db.close();
+    }
+
+    fs::remove(testDb, ec);
+    fs::remove(testDb.string() + "-wal", ec);
+    fs::remove(testDb.string() + "-shm", ec);
+    fs::remove_all(tempCache, ec);
+}
+
 
 
 

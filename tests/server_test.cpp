@@ -1084,7 +1084,7 @@ TEST_F(ServerTest, VideoOnDemandThumbnailGeneration) {
 #if defined(_WIN32)
     std::wstring binW = pathFromUtf8(bin).wstring();
     std::wstring vidW = pathFromUtf8(videoPath).wstring();
-    std::wstring genCmd = LR"(")" + binW + LR"(" -y -v error -f lavfi -i testsrc=duration=2:size=320x240:rate=5 ")" + vidW + LR"(")";
+    std::wstring genCmd = LR"("")" + binW + LR"(" -y -v error -f lavfi -i testsrc=duration=2:size=320x240:rate=5 ")" + vidW + LR"("")";
     _wsystem(genCmd.c_str());
 #else
     std::string genCmd = R"(")" + bin + R"(" -y -v error -f lavfi -i testsrc=duration=2:size=320x240:rate=5 ")" + videoPath + R"(" 2>/dev/null)";
@@ -1110,6 +1110,7 @@ TEST_F(ServerTest, VideoOnDemandThumbnailGeneration) {
     EXPECT_EQ(thumbRes->get_header_value("Content-Type"), "image/jpeg");
     EXPECT_FALSE(thumbRes->body.empty());
     EXPECT_TRUE(catalog_->cache().hasThumbnail("video_hash_ondemand_123", 256));
+    EXPECT_FALSE(catalog_->cache().hasPlaceholderMarker("video_hash_ondemand_123"));
 
     // The database stores cache-relative paths, never absolute ones.
     auto storedRes = catalog_->db().getMediaByHash("video_hash_ondemand_123");
@@ -1127,10 +1128,11 @@ TEST_F(ServerTest, VideoOnDemandThumbnailGeneration) {
     EXPECT_TRUE(catalog_->cache().hasThumbnail("video_hash_ondemand_123", 512));
 }
 
-TEST_F(ServerTest, VideoMissingSourceFallsBackToProcedural) {
+TEST_F(ServerTest, VideoMissingSourceFallsBackToRetryablePlaceholder) {
     httplib::Client client("127.0.0.1", port_);
 
-    // No file on disk: extraction cannot succeed, so fallback to procedural thumbnail.
+    // No file on disk: extraction can never succeed, so the procedural
+    // placeholder must be cached and marked for a later retry.
     MediaItem item;
     item.file_path = pathToUtf8(testDir_ / "missing_video.mp4");
     item.file_name = "missing_video.mp4";
@@ -1143,7 +1145,9 @@ TEST_F(ServerTest, VideoMissingSourceFallsBackToProcedural) {
     ASSERT_TRUE(res);
     EXPECT_EQ(res->status, 200);
     EXPECT_TRUE(catalog_->cache().hasThumbnail("video_missing_placeholder_1", 256));
+    EXPECT_TRUE(catalog_->cache().hasPlaceholderMarker("video_missing_placeholder_1"));
 
+    // Arbitrary sizes are materialized from the placeholder instead of 404ing.
     auto extraRes = client.Get("/api/thumbnails/video_missing_placeholder_1/512");
     ASSERT_TRUE(extraRes);
     EXPECT_EQ(extraRes->status, 200);
@@ -4725,6 +4729,409 @@ TEST_F(ServerTest, AccessLogOutput) {
 
     logger.setConsoleEnabled(true);
     logger.setLevel(origLevel);
+}
+
+TEST_F(ServerTest, DuplicateEndpointsValidationAndAuth) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Auth enforcement
+    server_->setApiToken("test-dedup-token");
+    httplib::Headers authHeader = {{"Authorization", "Bearer test-dedup-token"}};
+
+    // Unauthorized without token
+    EXPECT_EQ(client.Post("/api/media/duplicates/scan", "{}", "application/json")->status, 401);
+    EXPECT_EQ(client.Post("/api/media/duplicates/resolve", "{}", "application/json")->status, 401);
+    EXPECT_EQ(client.Post("/api/media/duplicates/dismiss", "{}", "application/json")->status, 401);
+
+    // Authorized with token
+    auto authScan = client.Post("/api/media/duplicates/scan", authHeader, "{}", "application/json");
+    ASSERT_TRUE(authScan);
+    EXPECT_EQ(authScan->status, 200);
+
+    server_->setApiToken("");
+
+    // 2. Validation: /scan
+    // similarity_threshold out of bounds or non-numeric
+    {
+        nlohmann::json badThresh1 = {{"similarity_threshold", -0.5}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", badThresh1.dump(), "application/json")->status, 400);
+
+        nlohmann::json badThresh2 = {{"similarity_threshold", 1.5}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", badThresh2.dump(), "application/json")->status, 400);
+
+        nlohmann::json badThresh3 = {{"similarity_threshold", "invalid"}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", badThresh3.dump(), "application/json")->status, 400);
+
+        nlohmann::json badZero = {{"visual_threshold", 0.0}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", badZero.dump(), "application/json")->status, 400);
+
+        nlohmann::json badInf = {{"visual_threshold", "inf"}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", badInf.dump(), "application/json")->status, 400);
+
+        nlohmann::json badNan = {{"visual_threshold", "nan"}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", badNan.dump(), "application/json")->status, 400);
+
+        nlohmann::json badTooHigh = {{"visual_threshold", 1.05}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", badTooHigh.dump(), "application/json")->status, 400);
+    }
+
+    // date_window_sec validation
+    {
+        nlohmann::json badDateSec1 = {{"date_window_sec", "not_a_num"}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", badDateSec1.dump(), "application/json")->status, 400);
+
+        nlohmann::json badDateSec2 = {{"date_window_sec", -10}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", badDateSec2.dump(), "application/json")->status, 400);
+    }
+
+    // media_ids validation
+    {
+        nlohmann::json notArray = {{"media_ids", "not_an_array"}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/scan", notArray.dump(), "application/json")->status, 400);
+
+        std::vector<int64_t> hugeBatch(1001, 1);
+        nlohmann::json overCap = {{"media_ids", hugeBatch}};
+        auto resOver = client.Post("/api/media/duplicates/scan", overCap.dump(), "application/json");
+        ASSERT_TRUE(resOver);
+        EXPECT_EQ(resOver->status, 400);
+    }
+
+    // 3. Validation: /resolve
+    {
+        EXPECT_EQ(client.Post("/api/media/duplicates/resolve", "invalid json", "application/json")->status, 400);
+        EXPECT_EQ(client.Post("/api/media/duplicates/resolve", "{}", "application/json")->status, 400);
+
+        std::vector<nlohmann::json> hugeGroups(1001, {{"keeper", 1}, {"remove", {2}}});
+        nlohmann::json overCapGroups = {{"groups", hugeGroups}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/resolve", overCapGroups.dump(), "application/json")->status, 400);
+
+        std::vector<int64_t> rem1(600, 2);
+        std::vector<int64_t> rem2(500, 3);
+        nlohmann::json overTotalRemove = {
+            {"groups", {
+                {{"keeper", 1}, {"remove", rem1}},
+                {{"keeper", 4}, {"remove", rem2}}
+            }}
+        };
+        EXPECT_EQ(client.Post("/api/media/duplicates/resolve", overTotalRemove.dump(), "application/json")->status, 400);
+    }
+
+    // 4. Validation: /dismiss
+    {
+        EXPECT_EQ(client.Post("/api/media/duplicates/dismiss", "invalid json", "application/json")->status, 400);
+        EXPECT_EQ(client.Post("/api/media/duplicates/dismiss", "{}", "application/json")->status, 400);
+
+        std::vector<std::vector<int64_t>> hugePairs(1001, {1, 2});
+        nlohmann::json overCapPairs = {{"pairs", hugePairs}};
+        EXPECT_EQ(client.Post("/api/media/duplicates/dismiss", overCapPairs.dump(), "application/json")->status, 400);
+    }
+}
+
+TEST_F(ServerTest, DuplicateEndpointsScanResolveAndDismissFlow) {
+    httplib::Client client("127.0.0.1", port_);
+
+    // 1. Insert 3 media items: m1 and m2 are exact duplicates (same hash and file_size)
+    MediaItem m1;
+    m1.file_path = "img1.jpg"; m1.file_name = "img1.jpg";
+    m1.content_hash = "exact_hash_12345";
+    m1.file_size = 50000;
+    m1.width = 1200; m1.height = 800;
+    m1.date_taken = 1000;
+    m1.media_type = "photo";
+
+    MediaItem m2;
+    m2.file_path = "img2_copy.jpg"; m2.file_name = "img2_copy.jpg";
+    m2.content_hash = "exact_hash_12345";
+    m2.file_size = 50000;
+    m2.width = 800; m2.height = 600;
+    m2.date_taken = 2000;
+    m2.media_type = "photo";
+
+    MediaItem m3;
+    m3.file_path = "img3_distinct.jpg"; m3.file_name = "img3_distinct.jpg";
+    m3.content_hash = "distinct_hash_99999";
+    m3.file_size = 80000;
+    m3.width = 1000; m3.height = 1000;
+    m3.date_taken = 3000;
+    m3.media_type = "photo";
+
+    MediaId id1 = catalog_->db().insertMedia(m1).value();
+    MediaId id2 = catalog_->db().insertMedia(m2).value();
+    MediaId id3 = catalog_->db().insertMedia(m3).value();
+
+    // Add tags to m2 (loser) to test metadata merge into m1 (keeper)
+    TagId tagLandscape = catalog_->db().createOrGetTag("Landscape", "keyword").value();
+    TagId tagVacation = catalog_->db().createOrGetTag("Vacation", "keyword").value();
+    ASSERT_TRUE(catalog_->db().addTagToMedia(id2, tagLandscape).isOk());
+    ASSERT_TRUE(catalog_->db().addTagToMedia(id2, tagVacation).isOk());
+
+    // 2. Scan duplicates
+    auto scanRes = client.Post("/api/media/duplicates/scan", "{}", "application/json");
+    ASSERT_TRUE(scanRes);
+    ASSERT_EQ(scanRes->status, 200);
+    auto scanJson = nlohmann::json::parse(scanRes->body);
+
+    EXPECT_EQ(scanJson["media_scanned"].get<int>(), 3);
+    ASSERT_EQ(scanJson["groups"].size(), 1u);
+    const auto& grp = scanJson["groups"][0];
+    EXPECT_EQ(grp["type"], "exact");
+    EXPECT_EQ(grp["min_similarity"], 1.0);
+    EXPECT_EQ(grp["keeper"].get<MediaId>(), id1); // m1 elected keeper (1200x800 > 800x600, cleaner path)
+    ASSERT_EQ(grp["members"].size(), 2u);
+    EXPECT_EQ(grp["members"][0].get<MediaId>(), id1);
+    EXPECT_EQ(grp["members"][1].get<MediaId>(), id2);
+    ASSERT_EQ(grp["items"].size(), 2u);
+    EXPECT_EQ(grp["items"][0]["id"].get<MediaId>(), id1);
+    EXPECT_EQ(grp["items"][1]["id"].get<MediaId>(), id2);
+
+    // 3. Dismiss pair (id1, id2)
+    nlohmann::json dismissPayload = {{"pairs", {{id1, id2}}}};
+    auto disRes = client.Post("/api/media/duplicates/dismiss", dismissPayload.dump(), "application/json");
+    ASSERT_TRUE(disRes);
+    EXPECT_EQ(disRes->status, 200);
+    auto disJson = nlohmann::json::parse(disRes->body);
+    EXPECT_EQ(disJson["dismissed"].get<int>(), 1);
+
+    // Rescan: duplicate pair is now dismissed, so zero duplicate groups returned
+    auto rescan = client.Post("/api/media/duplicates/scan", "{}", "application/json");
+    ASSERT_TRUE(rescan);
+    EXPECT_EQ(rescan->status, 200);
+    EXPECT_TRUE(nlohmann::json::parse(rescan->body)["groups"].empty());
+
+    // 4. Reset dismissals endpoint
+    auto resetRes = client.Post("/api/media/duplicates/dismissals/reset", "{}", "application/json");
+    ASSERT_TRUE(resetRes);
+    EXPECT_EQ(resetRes->status, 200);
+    auto resetJson = nlohmann::json::parse(resetRes->body);
+    EXPECT_EQ(resetJson["cleared"].get<int>(), 1);
+
+    // Rescan after reset: duplicate group is found again!
+    auto rescanAfterReset = client.Post("/api/media/duplicates/scan", "{}", "application/json");
+    ASSERT_TRUE(rescanAfterReset);
+    EXPECT_EQ(rescanAfterReset->status, 200);
+    EXPECT_EQ(nlohmann::json::parse(rescanAfterReset->body)["groups"].size(), 1u);
+
+    // 5. Resolve duplicates
+
+    // Test per-item error reporting: unknown keeper produces 404 group error without crashing
+    nlohmann::json mixedResolve = {
+        {"groups", {
+            {{"keeper", 999999}, {"remove", {id3}}},
+            {{"keeper", id1}, {"remove", {id2}}}
+        }}
+    };
+    auto resolveRes = client.Post("/api/media/duplicates/resolve", mixedResolve.dump(), "application/json");
+    ASSERT_TRUE(resolveRes);
+    ASSERT_EQ(resolveRes->status, 200);
+    auto resolveJson = nlohmann::json::parse(resolveRes->body);
+
+    EXPECT_EQ(resolveJson["merged_count"].get<int>(), 1);
+    EXPECT_EQ(resolveJson["deleted_count"].get<int>(), 1);
+    EXPECT_EQ(resolveJson["freed_bytes"].get<int64_t>(), 50000);
+    ASSERT_EQ(resolveJson["groups"].size(), 2u);
+    // First group failed with 404
+    EXPECT_EQ(resolveJson["groups"][0]["status"], 404);
+    // Second group succeeded with 200
+    EXPECT_EQ(resolveJson["groups"][1]["status"], 200);
+    EXPECT_EQ(resolveJson["groups"][1]["keeper"].get<MediaId>(), id1);
+    EXPECT_EQ(resolveJson["groups"][1]["removed"][0].get<MediaId>(), id2);
+    EXPECT_EQ(resolveJson["groups"][1]["merged_tags"].get<int>(), 2);
+
+    // Verify loser id2 was deleted
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(id2))->status, 404);
+
+    // Verify keeper id1 received merged tags
+    auto keeperMediaRes = client.Get("/api/media/" + std::to_string(id1));
+    ASSERT_TRUE(keeperMediaRes);
+    ASSERT_EQ(keeperMediaRes->status, 200);
+    auto keeperJson = nlohmann::json::parse(keeperMediaRes->body);
+    auto keeperTags = catalog_->db().getTagsForMedia(id1).value();
+    EXPECT_EQ(keeperTags.size(), 2u);
+}
+
+TEST_F(ServerTest, DuplicateResolveWithDeleteFromDisk) {
+    catalog_->setPhotosDir(testDir_.string());
+    httplib::Client client("127.0.0.1", port_);
+
+    std::filesystem::path fKeeper = testDir_ / "dup_keeper.jpg";
+    std::filesystem::path fLoser = testDir_ / "dup_loser.jpg";
+
+    {
+        std::ofstream ofs1(fKeeper); ofs1 << "dup image data";
+        std::ofstream ofs2(fLoser); ofs2 << "dup image data";
+    }
+
+    ASSERT_TRUE(std::filesystem::exists(fKeeper));
+    ASSERT_TRUE(std::filesystem::exists(fLoser));
+
+    MediaItem mKeeper;
+    mKeeper.file_path = fKeeper.string(); mKeeper.file_name = "dup_keeper.jpg";
+    mKeeper.content_hash = "exact_dup_disk_hash";
+    mKeeper.file_size = 14; mKeeper.width = 1000; mKeeper.height = 1000;
+    mKeeper.media_type = "photo";
+
+    MediaItem mLoser;
+    mLoser.file_path = fLoser.string(); mLoser.file_name = "dup_loser.jpg";
+    mLoser.content_hash = "exact_dup_disk_hash";
+    mLoser.file_size = 14; mLoser.width = 800; mLoser.height = 800;
+    mLoser.media_type = "photo";
+
+    MediaId keeperId = catalog_->db().insertMedia(mKeeper).value();
+    MediaId loserId = catalog_->db().insertMedia(mLoser).value();
+
+    nlohmann::json resolveBody = {
+        {"delete_from_disk", true},
+        {"groups", {
+            {{"keeper", keeperId}, {"remove", {loserId}}, {"delete_from_disk", true}}
+        }}
+    };
+
+    auto resolveRes = client.Post("/api/media/duplicates/resolve", resolveBody.dump(), "application/json");
+    ASSERT_TRUE(resolveRes);
+    EXPECT_EQ(resolveRes->status, 200);
+
+    // Loser should be removed from DB
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(loserId))->status, 404);
+    // Keeper should remain in DB
+    EXPECT_EQ(client.Get("/api/media/" + std::to_string(keeperId))->status, 200);
+
+    // Loser file on disk MUST BE DELETED
+    EXPECT_FALSE(std::filesystem::exists(fLoser));
+    // Keeper file on disk MUST REMAIN INTACT
+    EXPECT_TRUE(std::filesystem::exists(fKeeper));
+}
+
+TEST_F(ServerTest, DuplicateVisualScanAndDateWindowHandling) {
+    httplib::Client client("127.0.0.1", port_);
+    ASSERT_TRUE(server_->router() != nullptr);
+    ASSERT_TRUE(server_->router()->clipService() != nullptr);
+
+    // Insert 3 photos with distinct hashes/sizes so exact pass ignores them
+    MediaItem v1;
+    v1.file_path = "vis1.jpg"; v1.file_name = "vis1.jpg";
+    v1.content_hash = "vis_hash_11111";
+    v1.file_size = 60000;
+    v1.width = 1920; v1.height = 1080;
+    v1.date_taken = 100000;
+    v1.media_type = "photo";
+
+    MediaItem v2;
+    v2.file_path = "vis2.jpg"; v2.file_name = "vis2.jpg";
+    v2.content_hash = "vis_hash_22222";
+    v2.file_size = 40000;
+    v2.width = 1280; v2.height = 720;
+    v2.date_taken = 200000; // diff: 100,000s
+    v2.media_type = "photo";
+
+    MediaItem v3;
+    v3.file_path = "vis3.jpg"; v3.file_name = "vis3.jpg";
+    v3.content_hash = "vis_hash_33333";
+    v3.file_size = 50000;
+    v3.width = 1000; v3.height = 1000;
+    v3.date_taken = 0; // undated
+    v3.media_type = "photo";
+
+    MediaId id1 = catalog_->db().insertMedia(v1).value();
+    MediaId id2 = catalog_->db().insertMedia(v2).value();
+    MediaId id3 = catalog_->db().insertMedia(v3).value();
+
+    // Add identical unit vector to all three so visual cosine similarity == 1.0
+    std::vector<float> vec(512, 0.0f);
+    vec[0] = 1.0f;
+    server_->router()->clipService()->addMediaVector(id1, vec);
+    server_->router()->clipService()->addMediaVector(id2, vec);
+    server_->router()->clipService()->addMediaVector(id3, vec);
+
+    // 1. With date_window_sec = 86400 (1 day):
+    // v1 and v2 timestamp diff (100,000s) > 86,400s, so they do NOT cluster
+    nlohmann::json reqWindow = {
+        {"media_ids", {id1, id2}},
+        {"visual_threshold", 0.95},
+        {"date_window_sec", 86400}
+    };
+    auto res1 = client.Post("/api/media/duplicates/scan", reqWindow.dump(), "application/json");
+    ASSERT_TRUE(res1);
+    EXPECT_EQ(res1->status, 200);
+    auto json1 = nlohmann::json::parse(res1->body);
+    EXPECT_TRUE(json1["groups"].empty());
+
+    // 2. With date_window_sec = 200000:
+    // v1 and v2 timestamp diff (100,000s) <= 200,000s, so they DO cluster (happy path)
+    nlohmann::json reqWider = {
+        {"media_ids", {id1, id2}},
+        {"visual_threshold", 0.95},
+        {"date_window_sec", 200000}
+    };
+    auto res2 = client.Post("/api/media/duplicates/scan", reqWider.dump(), "application/json");
+    ASSERT_TRUE(res2);
+    EXPECT_EQ(res2->status, 200);
+    auto json2 = nlohmann::json::parse(res2->body);
+    ASSERT_EQ(json2["groups"].size(), 1u);
+    EXPECT_EQ(json2["groups"][0]["type"], "visual");
+    EXPECT_EQ(json2["groups"][0]["keeper"].get<MediaId>(), id1); // v1 elected keeper (1920x1080 > 1280x720)
+    EXPECT_GE(json2["groups"][0]["min_similarity"].get<double>(), 0.95);
+    ASSERT_EQ(json2["groups"][0]["members"].size(), 2u);
+
+    // 3. Undated item (date_taken == 0) skips date window check even with strict window:
+    nlohmann::json reqUndated = {
+        {"media_ids", {id1, id3}},
+        {"visual_threshold", 0.95},
+        {"date_window_sec", 86400}
+    };
+    auto res3 = client.Post("/api/media/duplicates/scan", reqUndated.dump(), "application/json");
+    ASSERT_TRUE(res3);
+    EXPECT_EQ(res3->status, 200);
+    auto json3 = nlohmann::json::parse(res3->body);
+    ASSERT_EQ(json3["groups"].size(), 1u);
+    EXPECT_EQ(json3["groups"][0]["type"], "visual");
+}
+
+TEST_F(ServerTest, DuplicateResolveEvictsFromClipIndex) {
+    httplib::Client client("127.0.0.1", port_);
+    ASSERT_TRUE(server_->router() != nullptr);
+    ASSERT_TRUE(server_->router()->clipService() != nullptr);
+
+    MediaItem m1;
+    m1.file_path = "evict_k.jpg"; m1.file_name = "evict_k.jpg";
+    m1.content_hash = "evict_hash_k";
+    m1.file_size = 50000; m1.width = 1000; m1.height = 1000;
+    m1.media_type = "photo";
+
+    MediaItem m2;
+    m2.file_path = "evict_l.jpg"; m2.file_name = "evict_l.jpg";
+    m2.content_hash = "evict_hash_l";
+    m2.file_size = 40000; m2.width = 800; m2.height = 800;
+    m2.media_type = "photo";
+
+    MediaId id1 = catalog_->db().insertMedia(m1).value();
+    MediaId id2 = catalog_->db().insertMedia(m2).value();
+
+    std::vector<float> vec(512, 0.0f);
+    vec[1] = 1.0f;
+    server_->router()->clipService()->addMediaVector(id1, vec);
+    server_->router()->clipService()->addMediaVector(id2, vec);
+
+    // Verify both items are present in clip index before resolve
+    EXPECT_TRUE(server_->router()->clipService()->hasMedia(id1));
+    EXPECT_TRUE(server_->router()->clipService()->hasMedia(id2));
+    EXPECT_TRUE(server_->router()->clipService()->findSimilar(id2).isOk());
+
+    // Resolve: id1 is keeper, id2 is removed
+    nlohmann::json resolveBody = {
+        {"groups", {
+            {{"keeper", id1}, {"remove", {id2}}}
+        }}
+    };
+    auto resolveRes = client.Post("/api/media/duplicates/resolve", resolveBody.dump(), "application/json");
+    ASSERT_TRUE(resolveRes);
+    EXPECT_EQ(resolveRes->status, 200);
+
+    // Verify id2 is evicted from CLIP index
+    EXPECT_FALSE(server_->router()->clipService()->hasMedia(id2));
+    EXPECT_FALSE(server_->router()->clipService()->findSimilar(id2).isOk());
+
+    // Verify keeper id1 remains in CLIP index
+    EXPECT_TRUE(server_->router()->clipService()->hasMedia(id1));
 }
 
 

@@ -5,6 +5,7 @@ import { dom, showToast } from './dom.js';
 import { state } from './state.js';
 import { t } from './i18n.js';
 import { loadMedia, loadMetadata } from './grid.js';
+import { isLoupeActionDisabled } from './loupe.js';
 
 const GRID_GROUP_PAGE_SIZE = 48;
 const GRID_GROUP_DOM_LIMIT = GRID_GROUP_PAGE_SIZE * 2;
@@ -2113,7 +2114,7 @@ async function refreshLoupeFaces(mediaId) {
   const image = byId('loupeImg');
   const wrapper = byId('loupeImageViewport');
   const id = Number(mediaId);
-  if (!toggle?.checked || !Number.isInteger(id) || id <= 0) {
+  if (isLoupeActionDisabled() || !toggle?.checked || !Number.isInteger(id) || id <= 0) {
     renderFaceOverlay(svg, null, false, image, wrapper, true);
     return;
   }

@@ -218,7 +218,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ steps.toolset-info.outputs.image-version }}-${{ steps.toolset-info.outputs.msvc-version }}-${{ steps.toolset-info.outputs.vcpkg-commit }}-
             ${{ runner.os }}-vcpkg-${{ steps.toolset-info.outputs.image-version }}-${{ steps.toolset-info.outputs.msvc-version }}-
-            ${{ runner.os }}-vcpkg-${{ steps.toolset-info.outputs.msvc-version }}-
+            ${{ runner.os }}-vcpkg-${{ steps.toolset-info.outputs.image-version }}-
             ${{ runner.os }}-vcpkg-
 
       - name: Create vcpkg cache directory
