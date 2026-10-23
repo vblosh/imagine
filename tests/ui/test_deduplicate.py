@@ -211,7 +211,8 @@ def test_deduplicate_scan_threshold_payload(server, page: Page):
     slider.dispatch_event("input")
     expect(page.locator("#dedupVisualThresholdValue")).to_have_text("98.5%")
 
-    page.locator("#dedupScanBtn").click()
+    with page.expect_response("**/api/media/duplicates/scan"):
+        page.locator("#dedupScanBtn").click()
 
     assert len(scan_payloads) == 1
     assert "visual_threshold" in scan_payloads[0]
@@ -313,7 +314,8 @@ def test_deduplicate_keeper_swap(server, page: Page):
     groups = page.locator(".dedup-group-card")
     groups.nth(1).locator(".dedup-group-checkbox").uncheck()
 
-    page.locator("#dedupResolveBtn").click()
+    with page.expect_response("**/api/media/duplicates/resolve"):
+        page.locator("#dedupResolveBtn").click()
     expect(page.locator(".dedup-group-card")).to_have_count(1)
     assert len(resolve_payloads) == 1
     # Check swapped keeper is 2, and remove is [1]
@@ -377,7 +379,8 @@ def test_deduplicate_merge_on_resolve(server, page: Page):
     expect(summary_count).to_contain_text("2 duplicate groups")
 
     # Click resolve
-    resolve_btn.click()
+    with page.expect_response("**/api/media/duplicates/resolve"):
+        resolve_btn.click()
     assert len(resolve_payloads) == 1
     assert resolve_payloads[0]["merge_metadata"] is True
     assert resolve_payloads[0]["delete_from_disk"] is True
@@ -406,7 +409,8 @@ def test_deduplicate_dismiss(server, page: Page):
     expect(page.locator(".dedup-group-card")).to_have_count(2)
 
     # Click dismiss on first group
-    page.locator(".dedup-dismiss-group-btn").first.click()
+    with page.expect_response("**/api/media/duplicates/dismiss"):
+        page.locator(".dedup-dismiss-group-btn").first.click()
 
     assert len(dismiss_payloads) == 1
     assert dismiss_payloads[0]["pairs"] == [[1, 2]]
@@ -546,13 +550,14 @@ def test_deduplicate_reset_dismissals(server, page: Page):
     # 3. Clicking Reset Dismissals again and clicking Confirm makes request and scans
     reset_btn.click()
     expect(warning_modal).to_be_visible()
-    page.locator("#confirmDedupResetWarningBtn").click()
+    with page.expect_response("**/api/media/duplicates/dismissals/reset"):
+        page.locator("#confirmDedupResetWarningBtn").click()
     expect(warning_modal).to_be_hidden()
 
     expect(page.locator("#dedupReviewContainer")).to_be_visible()
+    expect(page.locator(".dedup-group-card")).to_have_count(2)
     assert reset_called["count"] == 1
     assert scan_called["count"] == 1
-    expect(page.locator(".dedup-group-card")).to_have_count(2)
 
 
 def test_deduplicate_thumb_opens_loupe_in_foreground_with_group_navigation(server, page: Page):
