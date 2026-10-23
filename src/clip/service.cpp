@@ -305,6 +305,11 @@ struct Service::Impl {
                     sim
                 });
             }
+            std::sort(pairs.begin(), pairs.end(), [](const VisualDuplicatePair& lhs, const VisualDuplicatePair& rhs) {
+                if (lhs.a != rhs.a) return lhs.a < rhs.a;
+                if (lhs.b != rhs.b) return lhs.b < rhs.b;
+                return lhs.similarity > rhs.similarity;
+            });
             return pairs;
         }
     } index;

@@ -1085,6 +1085,9 @@ TEST(ClipServiceTest, VisualDuplicateScanHelperAndUnionFindGrouping) {
         // 1. findVisualDuplicatePairs helper
         auto pairs = svc.findVisualDuplicatePairs(0.97f);
         ASSERT_EQ(pairs.size(), 2u);
+        std::sort(pairs.begin(), pairs.end(), [](const auto& p1, const auto& p2) {
+            return std::tie(p1.a, p1.b) < std::tie(p2.a, p2.b);
+        });
         EXPECT_EQ(pairs[0].a, id1);
         EXPECT_EQ(pairs[0].b, id2);
         EXPECT_NEAR(pairs[0].similarity, 0.98f, 0.01f);
