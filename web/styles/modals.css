@@ -61,7 +61,7 @@
 #faceScanBusyModal,
 #dedupResetWarningModal,
 .modal:has(.discard-changes-dialog) {
-  z-index: 2100;
+  z-index: 2200;
 }
 
 .modal-backdrop {

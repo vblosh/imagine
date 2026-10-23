@@ -1,6 +1,8 @@
 """Deterministic UI tests for Deduplicate feature (exact/visual, keeper swap, merge on resolve, dismiss)."""
 
+import base64
 import json
+import re
 from playwright.sync_api import Page, expect
 
 SAMPLE_DUPLICATE_SCAN_RESPONSE = {
@@ -551,5 +553,150 @@ def test_deduplicate_reset_dismissals(server, page: Page):
     assert reset_called["count"] == 1
     assert scan_called["count"] == 1
     expect(page.locator(".dedup-group-card")).to_have_count(2)
+
+
+def test_deduplicate_thumb_opens_loupe_in_foreground_with_group_navigation(server, page: Page):
+    """Clicking a thumb in deduplication dialog opens Loupe in foreground and scopes navigation
+
+    to the duplicate group (Behavior A)."""
+    def handle_scan(route):
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(SAMPLE_DUPLICATE_SCAN_RESPONSE))
+
+    import base64
+    valid_gif = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+    page.route("**/api/thumbnails/**", lambda route: route.fulfill(status=200, content_type="image/gif", body=valid_gif))
+    page.route("**/api/media/duplicates/scan", handle_scan)
+
+    page.goto(server["url"])
+    page.locator("#navDuplicates").click()
+
+    page.locator("#dedupScanBtn").click()
+    expect(page.locator("#dedupReviewContainer")).to_be_visible()
+    groups = page.locator(".dedup-group-card")
+    expect(groups).to_have_count(2)
+
+    loupe = page.locator("#loupeModal")
+    dedup_modal = page.locator("#deduplicateModal")
+    expect(loupe).to_be_hidden()
+    expect(dedup_modal).to_be_visible()
+
+    # 1. Click thumbnail in Group 0 (Photo 1) -> opens Loupe in foreground
+    first_member_thumb = groups.nth(0).locator(".dedup-thumb-wrap").first
+    first_member_thumb.click()
+
+    expect(loupe).to_be_visible()
+    # Check z-index stacking: loupe (2100) > dedup modal (2000)
+    loupe_z = int(loupe.evaluate("el => window.getComputedStyle(el).zIndex"))
+    dedup_z = int(dedup_modal.evaluate("el => window.getComputedStyle(el).zIndex"))
+    assert loupe_z > dedup_z, f"Loupe z-index ({loupe_z}) must be greater than deduplicate modal z-index ({dedup_z})"
+
+    # Verify Loupe content
+    expect(page.locator("#loupeFileName")).to_contain_text("photo1.jpg")
+    # Scoped navigation indicator: "1 / 2" (Behavior A)
+    expect(page.locator("#loupeIndex")).to_have_text("1 / 2")
+
+    # 2. ArrowRight navigates within duplicate group members
+    page.keyboard.press("ArrowRight")
+    expect(page.locator("#loupeFileName")).to_contain_text("photo1_copy.jpg")
+    expect(page.locator("#loupeIndex")).to_have_text("2 / 2")
+
+    # ArrowRight cycles back to first photo in group
+    page.keyboard.press("ArrowRight")
+    expect(page.locator("#loupeFileName")).to_contain_text("photo1.jpg")
+    expect(page.locator("#loupeIndex")).to_have_text("1 / 2")
+
+    # 3. Escape key closes Loupe and returns cleanly to deduplicate dialog without closing it
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+    expect(dedup_modal).to_be_visible()
+
+    # Verify focus returned to thumbnail trigger
+    active_in_group = page.evaluate("() => document.activeElement && document.activeElement.closest('.dedup-thumb-wrap') !== null")
+    assert active_in_group, "Focus should return to the thumbnail trigger in the deduplicate dialog"
+
+    # Pressing Escape when Loupe is closed closes the deduplicate dialog
+    page.keyboard.press("Escape")
+    expect(dedup_modal).to_be_hidden()
+
+
+def test_deduplicate_loupe_disables_actions_and_hides_controls(server, page: Page):
+    """When Loupe is opened from the deduplicate dialog, delete, quick edit, star rating,
+
+    pick, reject, and show boxes controls (and their shortcuts) are completely disabled and hidden."""
+    def handle_scan(route):
+        route.fulfill(status=200, content_type="application/json", body=json.dumps(SAMPLE_DUPLICATE_SCAN_RESPONSE))
+
+    import base64
+    valid_gif = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+    page.route("**/api/thumbnails/**", lambda route: route.fulfill(status=200, content_type="image/gif", body=valid_gif))
+    page.route("**/api/media/duplicates/scan", handle_scan)
+
+    page.goto(server["url"])
+    page.locator("#navDuplicates").click()
+    page.locator("#dedupScanBtn").click()
+
+    expect(page.locator("#dedupReviewContainer")).to_be_visible()
+    groups = page.locator(".dedup-group-card")
+    expect(groups).to_have_count(2)
+
+    loupe = page.locator("#loupeModal")
+    delete_btn = page.locator("#loupeDeleteBtn")
+    quick_edit_btn = page.locator("#loupeQuickEditBtn")
+    quick_edit_drawer = page.locator("#quickEditDrawer")
+    delete_modal = page.locator("#deleteMediaModal")
+    rating_widget = page.locator("#loupeRating")
+    flag_widget = page.locator("#loupeFlag")
+    face_toggle = page.locator(".face-loupe-overlay-toggle")
+
+    # Open Loupe from deduplicate thumbnail
+    groups.nth(0).locator(".dedup-thumb-wrap").first.click()
+    expect(loupe).to_be_visible()
+
+    # All editing / mutating / tagging controls must be hidden in the DOM
+    expect(delete_btn).to_be_hidden()
+    expect(quick_edit_btn).to_be_hidden()
+    expect(rating_widget).to_be_hidden()
+    expect(flag_widget).to_be_hidden()
+    expect(face_toggle).to_be_hidden()
+
+    # Pressing 'e' shortcut should NOT open Quick Edit
+    page.keyboard.press("e")
+    expect(quick_edit_drawer).to_be_hidden()
+
+    # Pressing 'Delete' shortcut should NOT open Delete confirmation modal
+    page.keyboard.press("Delete")
+    expect(delete_modal).to_be_hidden()
+
+    # Pressing rating keys (1-5) and flag keys (p, x) should be inert
+    page.keyboard.press("5")
+    page.keyboard.press("p")
+    page.keyboard.press("x")
+
+    # Close Loupe -> deduplicate modal is preserved
+    page.keyboard.press("Escape")
+    expect(loupe).to_be_hidden()
+    expect(page.locator("#deduplicateModal")).to_be_visible()
+    expect(page.locator(".dedup-group-card")).to_have_count(2)
+
+    # Close deduplicate modal
+    page.keyboard.press("Escape")
+    expect(page.locator("#deduplicateModal")).to_be_hidden()
+
+    # Open Loupe normally from grid view (e.g. double click first grid card)
+    first_grid_card = page.locator(".media-card").first
+    if first_grid_card.is_visible():
+        first_grid_card.dblclick()
+        expect(loupe).to_be_visible()
+        # Controls should be restored to visible and enabled
+        expect(delete_btn).to_be_visible()
+        expect(quick_edit_btn).to_be_visible()
+        expect(rating_widget).to_be_visible()
+        expect(flag_widget).to_be_visible()
+        expect(face_toggle).to_be_visible()
+        expect(delete_btn).to_be_enabled()
+        expect(quick_edit_btn).to_be_enabled()
+        page.keyboard.press("Escape")
+        expect(loupe).to_be_hidden()
+
 
 

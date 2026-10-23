@@ -124,7 +124,9 @@ import {
   resetLoupeZoom,
   loupeNext,
   loupePrev,
-  loadLoupeOriginal
+  loadLoupeOriginal,
+  getCurrentLoupeItem,
+  isLoupeActionDisabled
 } from './loupe.js';
 import {
   openQuickEdit,
@@ -1195,8 +1197,10 @@ export function setupEventListeners() {
 
   if (dom.loupeDeleteBtn) {
     dom.loupeDeleteBtn.addEventListener('click', () => {
-      if (state.loupeIndex >= 0 && state.mediaItems[state.loupeIndex]) {
-        openDeleteMediaModal([state.mediaItems[state.loupeIndex].id]);
+      if (isLoupeActionDisabled()) return;
+      const item = getCurrentLoupeItem();
+      if (item) {
+        openDeleteMediaModal([item.id]);
       }
     });
   }
@@ -1204,9 +1208,8 @@ export function setupEventListeners() {
   // Quick Edit controls
   if (dom.loupeQuickEditBtn) {
     dom.loupeQuickEditBtn.addEventListener('click', () => {
-      const item = (state.loupeIndex >= 0 && state.loupeIndex < state.mediaItems.length)
-        ? state.mediaItems[state.loupeIndex]
-        : null;
+      if (isLoupeActionDisabled()) return;
+      const item = getCurrentLoupeItem();
       if (item && (item.media_type === 'video' || item.media_type === 'audio')) {
         return;
       }
@@ -1653,15 +1656,17 @@ export function setupEventListeners() {
     const loupeRejectBtn = dom.loupeFlag.querySelector('.flag-reject');
     if (loupePickBtn) {
       loupePickBtn.addEventListener('click', () => {
+        if (isLoupeActionDisabled()) return;
         if (state.loupeIndex < 0) return;
-        const item = state.mediaItems[state.loupeIndex];
+        const item = getCurrentLoupeItem();
         if (item) toggleItemFlag(item.id, 1);
       });
     }
     if (loupeRejectBtn) {
       loupeRejectBtn.addEventListener('click', () => {
+        if (isLoupeActionDisabled()) return;
         if (state.loupeIndex < 0) return;
-        const item = state.mediaItems[state.loupeIndex];
+        const item = getCurrentLoupeItem();
         if (item) toggleItemFlag(item.id, -1);
       });
     }

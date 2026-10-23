@@ -21,6 +21,7 @@ export function setDeduplicateActionHooks(hooks) {
 
 let review = null;
 let opener = null;
+let lastDedupLoupeTrigger = null;
 let requestSerial = 0;
 
 export function isDeduplicateOpen() {
@@ -56,6 +57,7 @@ export function closeDeduplicateModal() {
     } catch (_) {}
   }
   opener = null;
+  lastDedupLoupeTrigger = null;
 }
 
 function setDialogState(stateName, message = '') {
@@ -442,10 +444,29 @@ function bindReviewEvents() {
   dom.dedupGroupsList.querySelectorAll('.dedup-thumb-wrap').forEach(wrap => {
     wrap.addEventListener('click', (e) => {
       const mediaId = Number(wrap.dataset.mediaId);
-      if (Number.isFinite(mediaId)) {
-        // Ensure photo is accessible in state.mediaItems for loupe viewer
-        const existing = state.mediaItems.find(m => m.id === mediaId);
-        if (!existing) {
+      if (!Number.isFinite(mediaId)) return;
+
+      lastDedupLoupeTrigger = wrap.querySelector('.dedup-loupe-btn') || wrap;
+
+      const groupCard = wrap.closest('.dedup-group-card');
+      const groupIndex = groupCard ? Number(groupCard.dataset.groupIndex) : -1;
+      const group = (review && review.groups && groupIndex >= 0) ? review.groups[groupIndex] : null;
+
+      // Behavior A: scope Loupe navigation to this duplicate group's photos
+      const groupPhotos = (group && Array.isArray(group.photos) && group.photos.length > 0)
+        ? group.photos
+        : null;
+
+      // Ensure photos are accessible in state.mediaItems for loupe viewer and related features
+      if (groupPhotos) {
+        for (const p of groupPhotos) {
+          if (!state.mediaItems.some(m => Number(m.id) === Number(p.id))) {
+            state.mediaItems.push(p);
+          }
+        }
+      } else {
+        const existing = state.mediaItems.find(m => Number(m.id) === mediaId);
+        if (!existing && review && review.groups) {
           for (const g of review.groups) {
             const p = g.photos.find(x => Number(x.id) === mediaId);
             if (p) {
@@ -454,8 +475,9 @@ function bindReviewEvents() {
             }
           }
         }
-        actionHooks.openLoupeForMedia(mediaId);
       }
+
+      actionHooks.openLoupeForMedia(mediaId, { items: groupPhotos, fromDeduplicate: true });
     });
   });
 
@@ -713,9 +735,24 @@ export function setupDeduplicateListeners() {
   // Modal Escape key trap
   dom.deduplicateModal?.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      if (dom.loupeModal && dom.loupeModal.style.display === 'flex') {
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       closeDeduplicateModal();
+    }
+  });
+
+  // Restore focus when Loupe closes
+  window.addEventListener('imagine:loupeChanged', (e) => {
+    if (e.detail?.mediaId === null && isDeduplicateOpen()) {
+      if (lastDedupLoupeTrigger) {
+        try {
+          lastDedupLoupeTrigger.focus();
+        } catch (_) {}
+        lastDedupLoupeTrigger = null;
+      }
     }
   });
 
