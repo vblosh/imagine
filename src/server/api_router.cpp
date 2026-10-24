@@ -4457,6 +4457,16 @@ void ApiRouter::registerSemanticRoutes(httplib::Server& server) {
                 sreq.filterMediaIds = true;
                 sreq.allowedMediaIds = std::move(verifiedPhotoIds);
             }
+
+            if (sreq.filterMediaIds && sreq.allowedMediaIds.empty()) {
+                nlohmann::json j;
+                j["model"] = clipService_->status().value("modelId", "");
+                j["elapsedMs"] = 0.0;
+                j["items"] = nlohmann::json::array();
+                j["media_items"] = nlohmann::json::array();
+                sendJson(res, j);
+                return;
+            }
             
             auto result = clipService_->search(sreq);
             if (result.isOk()) {

@@ -511,6 +511,15 @@ nlohmann::json Service::status() const {
 }
 
 Result<SearchResult> Service::search(const SearchRequest& request) {
+    if ((request.filterMediaIds && request.allowedMediaIds.empty()) ||
+        (request.mediaType.has_value() && *request.mediaType != "photo")) {
+        return SearchResult{
+            impl_->engine.info().modelId,
+            0.0,
+            {}
+        };
+    }
+
     if (!impl_->engine.info().ready) return Status::internal("CLIP engine is not ready");
 
     {
@@ -543,14 +552,6 @@ Result<SearchResult> Service::search(const SearchRequest& request) {
     auto t0 = std::chrono::steady_clock::now();
     const int limit = std::clamp(request.limit, 1, 1000);
 
-    if (request.filterMediaIds && request.allowedMediaIds.empty()) {
-        auto t1 = std::chrono::steady_clock::now();
-        return SearchResult{
-            impl_->engine.info().modelId,
-            std::chrono::duration<double, std::milli>(t1 - t0).count(),
-            {}
-        };
-    }
     
     auto encodeRes = impl_->engine.encodeText(request.query);
     if (!encodeRes.isOk()) return encodeRes.status();
