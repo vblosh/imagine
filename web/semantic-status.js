@@ -75,6 +75,7 @@ export function restoreSemanticSnapshot() {
   state.activeFolders = new Set(snap.activeFolders || []);
   state.activeMediaType = snap.activeMediaType || 'all';
   state.activeStatusFilter = snap.activeStatusFilter || null;
+  state.activeLastImported = Boolean(snap.activeLastImported);
   state.activeTimelinePeriod = snap.activeTimelinePeriod
     ? { ...snap.activeTimelinePeriod }
     : null;

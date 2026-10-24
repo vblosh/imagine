@@ -79,6 +79,7 @@ export const state = {
   loupePanX: 0,
   loupePanY: 0,
   loupeShowOriginal: false,
+  loupeDisabledActions: false,
   importPollInterval: null,
   viewMode: 'grid',
   mapInstance: null,

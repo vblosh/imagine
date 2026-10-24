@@ -20,13 +20,15 @@ export {
 export async function performSemanticSearch(query, limit = 100, options = {}) {
     if (!query || !state.semanticSearchAvailable) return null;
     
-    // Semantic search results are ranked strictly by probability across the catalog;
-    // secondary filters are only sent if explicitly provided in options.filters
     const { filters = {}, ...fetchOptions } = options;
+    const activeFilters = { ...filters };
+    if (!activeFilters.media_type && !activeFilters.mediaType) {
+        activeFilters.media_type = 'photo';
+    }
     
     try {
         const result = await api.post('/api/semantic/search', {
-            query, limit, filters
+            query, limit, filters: activeFilters
         }, fetchOptions);
         return result;
     } catch (e) {

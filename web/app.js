@@ -550,6 +550,7 @@ export function setupEventListeners() {
               activeFolders: new Set(state.activeFolders),
               activeMediaType: state.activeMediaType,
               activeStatusFilter: state.activeStatusFilter,
+              activeLastImported: state.activeLastImported,
               activeTimelinePeriod: state.activeTimelinePeriod ? { ...state.activeTimelinePeriod } : null,
               sortBy: state.sortBy,
               sortDesc: state.sortDesc

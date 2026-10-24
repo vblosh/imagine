@@ -16,10 +16,9 @@ export const LOUPE_MAX_ZOOM = 5.0;
 export const LOUPE_ZOOM_STEPS = [1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0];
 
 let loupeCustomItems = null;
-let loupeDisabledActions = false;
 
 export function isLoupeActionDisabled() {
-  return loupeDisabledActions;
+  return Boolean(state.loupeDisabledActions);
 }
 
 export function getLoupeItems() {
@@ -41,7 +40,7 @@ export function openLoupeForMedia(id, options = {}) {
     ? options.items
     : null;
   loupeCustomItems = customList;
-  loupeDisabledActions = Boolean(options && (options.fromDeduplicate || options.disableActions));
+  state.loupeDisabledActions = Boolean(options && (options.fromDeduplicate || options.disableActions));
   const items = getLoupeItems();
   const idx = items.findIndex(m => Number(m.id) === Number(id));
   if (idx === -1) return;
@@ -63,7 +62,7 @@ export function closeLoupe() {
     closeQuickEdit(false);
   }
   loupeCustomItems = null;
-  loupeDisabledActions = false;
+  state.loupeDisabledActions = false;
   if (dom.loupeDeleteBtn) {
     dom.loupeDeleteBtn.style.display = '';
     dom.loupeDeleteBtn.disabled = false;
@@ -225,7 +224,7 @@ export function updateLoupeView() {
       dom.loupeZoomControls.style.display = 'flex';
     }
     if (dom.loupeQuickEditBtn) {
-      if (loupeDisabledActions) {
+      if (state.loupeDisabledActions) {
         dom.loupeQuickEditBtn.style.display = 'none';
         dom.loupeQuickEditBtn.disabled = true;
       } else {
@@ -236,7 +235,7 @@ export function updateLoupeView() {
   }
 
   if (dom.loupeDeleteBtn) {
-    if (loupeDisabledActions) {
+    if (state.loupeDisabledActions) {
       dom.loupeDeleteBtn.style.display = 'none';
       dom.loupeDeleteBtn.disabled = true;
     } else {
@@ -246,22 +245,22 @@ export function updateLoupeView() {
   }
 
   if (dom.loupeRating) {
-    dom.loupeRating.style.display = loupeDisabledActions ? 'none' : '';
+    dom.loupeRating.style.display = state.loupeDisabledActions ? 'none' : '';
   }
 
   if (dom.loupeFlag) {
-    dom.loupeFlag.style.display = loupeDisabledActions ? 'none' : '';
+    dom.loupeFlag.style.display = state.loupeDisabledActions ? 'none' : '';
   }
 
   const faceToggleLabel = dom.loupeFaceToggleContainer || dom.loupeFaceOverlayToggle?.closest('.face-overlay-toggle');
   if (faceToggleLabel) {
-    faceToggleLabel.style.display = loupeDisabledActions ? 'none' : '';
+    faceToggleLabel.style.display = state.loupeDisabledActions ? 'none' : '';
   }
 
-  if (loupeDisabledActions && dom.loupeFaceOverlay) {
+  if (state.loupeDisabledActions && dom.loupeFaceOverlay) {
     dom.loupeFaceOverlay.setAttribute('hidden', '');
     dom.loupeFaceOverlay.style.display = 'none';
-  } else if (!loupeDisabledActions && dom.loupeFaceOverlay) {
+  } else if (!state.loupeDisabledActions && dom.loupeFaceOverlay) {
     dom.loupeFaceOverlay.style.display = '';
   }
 
@@ -431,7 +430,7 @@ export function resetLoupeZoom() {
 }
 
 export function updateLoupeControls() {
-  if (loupeDisabledActions) return;
+  if (state.loupeDisabledActions) return;
   const items = getLoupeItems();
   if (state.loupeIndex < 0 || state.loupeIndex >= items.length) return;
   const item = items[state.loupeIndex];

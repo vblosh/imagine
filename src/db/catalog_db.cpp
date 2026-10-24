@@ -1,11 +1,23 @@
 #include "imagine/db/catalog_db.hpp"
+#include "imagine/core/reverse_geocoder.hpp"
 #include "imagine/db/schema.hpp"
 #include "imagine/common/logger.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <set>
 #include <unordered_set>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 namespace imagine::db {
 
@@ -25,6 +37,79 @@ static int64_t currentUnixTime() {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
+}
+
+static std::filesystem::path executableDirectory() {
+#if defined(_WIN32)
+    std::wstring buffer(32768, L'\0');
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length == 0 || length >= buffer.size()) {
+        return {};
+    }
+    buffer.resize(length);
+    return std::filesystem::path(buffer).parent_path();
+#elif defined(__linux__)
+    std::error_code ec;
+    const auto target = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (ec) {
+        return {};
+    }
+    return target.parent_path();
+#else
+    return {};
+#endif
+}
+
+static bool validGpsCoordinates(double latitude, double longitude) {
+    return std::isfinite(latitude) && std::isfinite(longitude) &&
+           latitude >= -90.0 && latitude <= 90.0 &&
+           longitude >= -180.0 && longitude <= 180.0;
+}
+
+static void logGeocoderUnavailableThrottled() {
+    static std::mutex warningMutex;
+    static int64_t lastWarningTime = 0;
+    const int64_t now = currentUnixTime();
+    std::lock_guard<std::mutex> lock(warningMutex);
+    if (lastWarningTime != 0 && now - lastWarningTime < 60) {
+        return;
+    }
+    lastWarningTime = now;
+    IMAGINE_LOG_WARN("Skipping GPS place tag update: reverse geocoder unavailable (GeoNames dataset missing or invalid)");
+}
+
+static std::string findGeonamesDataset() {
+    if (const char* envPath = std::getenv("IMAGINE_GEONAMES_CSV"); envPath != nullptr && *envPath != '\0') {
+        return envPath;
+    }
+
+    std::vector<std::filesystem::path> searchDirs;
+    const auto exeDir = executableDirectory();
+    if (!exeDir.empty()) {
+        searchDirs.push_back(exeDir);
+    }
+    std::error_code cwdEc;
+    const auto cwd = std::filesystem::current_path(cwdEc);
+    if (!cwdEc) {
+        searchDirs.push_back(cwd);
+    }
+
+    for (const auto& dir : searchDirs) {
+        for (const auto& relative : {
+                 std::filesystem::path("geonames_cities15000.csv"),
+                 std::filesystem::path("data") / "geonames_cities15000.csv"}) {
+            std::error_code ec;
+            const auto candidate = dir / relative;
+            if (std::filesystem::is_regular_file(candidate, ec)) {
+                return candidate.string();
+            }
+        }
+    }
+    return {};
+}
+
+std::string CatalogDb::geonamesDatasetInfo() const {
+    return findGeonamesDataset();
 }
 
 CatalogDb::CatalogDb() = default;
@@ -647,6 +732,148 @@ Status CatalogDb::updateGps(MediaId id, bool hasGps, double latitude, double lon
         return Status::notFound("Media item not found: " + std::to_string(id));
     }
     return Status::ok();
+}
+
+bool CatalogDb::ensureGeocoderLoaded() {
+    std::lock_guard<std::mutex> lock(geocoderMutex_);
+    if (geocoderLoadAttempted_) {
+        return geocoderAvailable_;
+    }
+    geocoderLoadAttempted_ = true;
+
+    const std::string datasetPath = findGeonamesDataset();
+    if (datasetPath.empty()) {
+        IMAGINE_LOG_WARN("GPS place tagging disabled: GeoNames dataset not found (set IMAGINE_GEONAMES_CSV to override)");
+        return false;
+    }
+
+    auto geocoder = std::make_unique<core::ReverseGeocoder>();
+    if (!geocoder->load(datasetPath)) {
+        IMAGINE_LOG_WARN("GPS place tagging disabled: failed to load GeoNames dataset: " + datasetPath);
+        return false;
+    }
+
+    geocoder_ = std::move(geocoder);
+    geocoderAvailable_ = true;
+    return true;
+}
+
+Status CatalogDb::applyGpsPlaceTags(MediaId id, bool hasGps, double latitude, double longitude) {
+    const bool coordinatesValid = validGpsCoordinates(latitude, longitude);
+    std::vector<std::string> names;
+
+    if (hasGps && coordinatesValid) {
+        if (!ensureGeocoderLoaded()) {
+            logGeocoderUnavailableThrottled();
+            return Status::ok();
+        }
+
+        core::ReverseGeocoder* geocoder = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(geocoderMutex_);
+            geocoder = geocoder_.get();
+        }
+        if (geocoder == nullptr) {
+            logGeocoderUnavailableThrottled();
+            return Status::ok();
+        }
+
+        if (const auto place = geocoder->lookup(latitude, longitude); place.has_value()) {
+            const std::string* candidates[] = {
+                &place->city,
+                &place->admin1,
+                &place->countryName,
+            };
+            for (const std::string* candidate : candidates) {
+                if (candidate->empty()) {
+                    continue;
+                }
+                if (std::find(names.begin(), names.end(), *candidate) == names.end()) {
+                    names.push_back(*candidate);
+                }
+            }
+        }
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+    Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
+    }
+
+    std::vector<TagId> tagIds;
+    tagIds.reserve(names.size());
+    for (const auto& name : names) {
+        auto tagRes = createOrGetTag(name, "places");
+        if (!tagRes.isOk()) return tagRes.status();
+        tagIds.push_back(tagRes.value());
+    }
+
+    std::string placeholders;
+    for (size_t i = 0; i < tagIds.size(); ++i) {
+        if (i > 0) placeholders += ",";
+        placeholders += "?";
+    }
+    std::string staleWhere = "media_id = ? AND source = 'gps'";
+    if (!placeholders.empty()) {
+        staleWhere += " AND tag_id NOT IN (" + placeholders + ")";
+    }
+
+    auto clearLinksRes = conn_.prepare(
+        "DELETE FROM media_tags WHERE media_id = ? AND tag_id IN ("
+        "SELECT tag_id FROM media_tag_provenance WHERE " + staleWhere + ");");
+    if (!clearLinksRes.isOk()) return clearLinksRes.status();
+    auto clearLinks = std::move(clearLinksRes.value());
+    clearLinks.bind(1, id);
+    clearLinks.bind(2, id);
+    for (size_t i = 0; i < tagIds.size(); ++i) {
+        clearLinks.bind(static_cast<int>(i + 3), tagIds[i]);
+    }
+    if (clearLinks.step() != StepResult::Done) {
+        return Status::databaseError("Failed to clear stale GPS place links: " + conn_.lastErrorMessage());
+    }
+
+    auto clearProvenanceRes = conn_.prepare(
+        "DELETE FROM media_tag_provenance WHERE " + staleWhere + ";");
+    if (!clearProvenanceRes.isOk()) return clearProvenanceRes.status();
+    auto clearProvenance = std::move(clearProvenanceRes.value());
+    clearProvenance.bind(1, id);
+    for (size_t i = 0; i < tagIds.size(); ++i) {
+        clearProvenance.bind(static_cast<int>(i + 2), tagIds[i]);
+    }
+    if (clearProvenance.step() != StepResult::Done) {
+        return Status::databaseError("Failed to clear stale GPS place provenance: " + conn_.lastErrorMessage());
+    }
+
+    auto insertLinkRes = conn_.prepare("INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?, ?);");
+    if (!insertLinkRes.isOk()) return insertLinkRes.status();
+    auto insertLink = std::move(insertLinkRes.value());
+
+    auto insertProvenanceRes = conn_.prepare(
+        "INSERT INTO media_tag_provenance(media_id, tag_id, manual, source) VALUES(?, ?, 0, 'gps') "
+        "ON CONFLICT(media_id, tag_id) DO UPDATE SET manual = 0, source = 'gps' "
+        "WHERE media_tag_provenance.source = 'gps';");
+    if (!insertProvenanceRes.isOk()) return insertProvenanceRes.status();
+    auto insertProvenance = std::move(insertProvenanceRes.value());
+
+    for (const TagId tagId : tagIds) {
+        insertLink.reset();
+        insertLink.bind(1, id);
+        insertLink.bind(2, tagId);
+        if (insertLink.step() != StepResult::Done) {
+            return Status::databaseError("Failed to add GPS place tag: " + conn_.lastErrorMessage());
+        }
+
+        insertProvenance.reset();
+        insertProvenance.bind(1, id);
+        insertProvenance.bind(2, tagId);
+        if (insertProvenance.step() != StepResult::Done) {
+            return Status::databaseError("Failed to record GPS place tag provenance: " + conn_.lastErrorMessage());
+        }
+    }
+
+    return tx.commit();
 }
 
 Status CatalogDb::deleteMedia(MediaId id) {

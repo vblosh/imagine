@@ -115,6 +115,7 @@ set(IMAGINE_LIB_SOURCES
     src/concurrency/thread_pool.cpp
     src/core/query.cpp
     src/core/event_suggestions.cpp
+    src/core/reverse_geocoder.cpp
     src/core/importer.cpp
     src/core/catalog.cpp
     src/server/api_router.cpp
@@ -177,6 +178,30 @@ endfunction()
 imagine_copy_ort_runtime(imagine)
 imagine_copy_ort_runtime(face_inference_example)
 
+# Make the offline city database available next to the built binaries.
+set(IMAGINE_GEONAMES_CSV "${CMAKE_CURRENT_SOURCE_DIR}/data/geonames_cities15000.csv")
+set(IMAGINE_GEONAMES_README "${CMAKE_CURRENT_SOURCE_DIR}/data/README_geonames.md")
+if (NOT EXISTS "${IMAGINE_GEONAMES_CSV}")
+    message(WARNING "data/geonames_cities15000.csv is missing; "
+                    "offline reverse geocoding data will not be copied next to binaries")
+endif()
+function(imagine_copy_geonames_data target_name)
+    if (EXISTS "${IMAGINE_GEONAMES_CSV}")
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${IMAGINE_GEONAMES_CSV}" "$<TARGET_FILE_DIR:${target_name}>"
+            VERBATIM)
+    endif()
+    if (EXISTS "${IMAGINE_GEONAMES_README}")
+        add_custom_command(TARGET ${target_name} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${IMAGINE_GEONAMES_README}" "$<TARGET_FILE_DIR:${target_name}>"
+            VERBATIM)
+    endif()
+endfunction()
+imagine_copy_geonames_data(imagine)
+imagine_copy_geonames_data(face_inference_example)
+
 # Tests
 include(CTest)
 if (BUILD_TESTING)
@@ -195,6 +220,7 @@ if (BUILD_TESTING)
         tests/importer_test.cpp
         tests/query_test.cpp
         tests/event_suggestions_test.cpp
+        tests/reverse_geocoder_test.cpp
         tests/server_test.cpp
         tests/media_test.cpp
     )
@@ -202,6 +228,7 @@ if (BUILD_TESTING)
     add_executable(imagine_tests ${IMAGINE_TEST_SOURCES})
     target_link_libraries(imagine_tests PRIVATE imagine_lib GTest::gtest)
     imagine_copy_ort_runtime(imagine_tests)
+    imagine_copy_geonames_data(imagine_tests)
     if (WIN32)
         target_sources(imagine_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/app.manifest)
     endif()

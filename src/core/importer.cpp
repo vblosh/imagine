@@ -9,8 +9,30 @@
 #include <filesystem>
 #include <chrono>
 #include <cctype>
+#include <exception>
 
 namespace imagine::core {
+
+namespace {
+
+void applyGpsPlaceTagsBestEffort(db::CatalogDb& db, const MediaItem& item) {
+    if (item.id <= 0) {
+        return;
+    }
+    try {
+        const Status status = db.applyGpsPlaceTags(
+            item.id, item.exif.has_gps, item.exif.latitude, item.exif.longitude);
+        if (!status.isOk()) {
+            IMAGINE_LOG_WARN("Failed to apply GPS place tags for " + item.file_path + ": " + status.message());
+        }
+    } catch (const std::exception& e) {
+        IMAGINE_LOG_WARN("GPS place tagging threw for " + item.file_path + ": " + e.what());
+    } catch (...) {
+        IMAGINE_LOG_WARN("GPS place tagging threw an unknown exception for " + item.file_path);
+    }
+}
+
+} // namespace
 
 void to_json(nlohmann::json& j, const ImportProgress& p) {
     j = nlohmann::json{
@@ -536,6 +558,7 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
             }
             item.id = insRes.value();
         }
+        applyGpsPlaceTagsBestEffort(db_, item);
     } else {
         item.id = isUpdate ? existingRes.value().id : 0;
     }
@@ -801,6 +824,9 @@ Result<ImportProgress> Importer::importDirectory(
                     }
                 }
             }
+            for (const auto& item : pendingUpdates) {
+                applyGpsPlaceTagsBestEffort(db_, item);
+            }
             pendingUpdates.clear();
             pendingUpdates.reserve(kBatchSize);
         }
@@ -823,8 +849,9 @@ Result<ImportProgress> Importer::importDirectory(
                 for (auto& item : pendingInserts) {
                     auto insRes = db_.insertMedia(item);
                     if (insRes.isOk()) {
+                        item.id = insRes.value();
                         ++result.persisted_count;
-                        newlyInsertedIds.push_back(insRes.value());
+                        newlyInsertedIds.push_back(item.id);
                         std::lock_guard<std::mutex> pLock(progress_mutex_);
                         ++current_progress_.imported_files;
                         ++current_progress_.processed_files;
@@ -849,6 +876,9 @@ Result<ImportProgress> Importer::importDirectory(
                         ++current_progress_.processed_files;
                     }
                 }
+            }
+            for (const auto& item : pendingInserts) {
+                applyGpsPlaceTagsBestEffort(db_, item);
             }
             pendingInserts.clear();
             pendingInserts.reserve(kBatchSize);

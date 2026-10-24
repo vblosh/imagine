@@ -18,6 +18,7 @@ let persistenceHooks = {
   saveActiveTagIdsPreference: () => {},
   saveActiveTabPreference: () => {},
   saveNavFilterPreference: () => {},
+  clearFilterPreferences: () => {},
 };
 
 export function setSidebarPersistenceHooks(hooks) {
@@ -644,7 +645,7 @@ export function bindSidebarHandlers() {
   // Nav sidebar filters (all, media types, flags/status)
   if (dom.navAllMedia) {
     dom.navAllMedia.addEventListener('click', () => {
-      actionHooks.clearAllFilters();
+      actionHooks.clearAllFilters({ preserveSearch: Boolean(state.searchText) });
     });
   }
   if (dom.navLastImported) {
