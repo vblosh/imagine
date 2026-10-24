@@ -717,7 +717,15 @@ Status Catalog::setGps(MediaId id, bool hasGps, double latitude, double longitud
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
-    return db_->updateGps(id, hasGps, latitude, longitude, altitude);
+    Status updateStatus = db_->updateGps(id, hasGps, latitude, longitude, altitude);
+    if (!updateStatus.isOk()) {
+        return updateStatus;
+    }
+    Status tagStatus = db_->applyGpsPlaceTags(id, hasGps, latitude, longitude);
+    if (!tagStatus.isOk()) {
+        IMAGINE_LOG_WARN("Failed to apply GPS place tags for media " + std::to_string(id) + ": " + tagStatus.message());
+    }
+    return updateStatus;
 }
 
 namespace {

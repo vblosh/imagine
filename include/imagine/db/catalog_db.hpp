@@ -13,6 +13,7 @@
 
 namespace imagine::faces { class Service; }
 namespace imagine::clip { class Service; }
+namespace imagine::core { class ReverseGeocoder; }
 
 namespace imagine::db {
 
@@ -46,6 +47,7 @@ public:
     Status updateDateTaken(MediaId id, int64_t dateTaken, const std::string& dateTakenStr);
     Status updateThumbnails(MediaId id, const std::string& smallPath, const std::string& largePath);
     Status updateGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
+    Status applyGpsPlaceTags(MediaId id, bool hasGps, double latitude, double longitude);
     Status deleteMedia(MediaId id);
     Result<int64_t> makePathsRelative(const std::string& photosDir, const std::string& thumbsDir = "");
     Result<std::vector<std::string>> getVideoHashes();
@@ -113,6 +115,9 @@ public:
 
     Status runInTransaction(std::function<Status()> fn);
 
+    // Returns the resolved GeoNames CSV path, or empty when none is available.
+    std::string geonamesDatasetInfo() const;
+
     Connection& connection() { return conn_; }
     std::recursive_mutex& mutex() const { return mutex_; }
 
@@ -120,9 +125,15 @@ private:
     friend class ::imagine::faces::Service;
     friend class ::imagine::clip::Service;
     MediaItem extractMediaItem(Statement& stmt);
+    bool ensureGeocoderLoaded();
 
     mutable std::recursive_mutex mutex_;
     Connection conn_;
+
+    std::mutex geocoderMutex_;
+    std::unique_ptr<core::ReverseGeocoder> geocoder_;
+    bool geocoderLoadAttempted_{false};
+    bool geocoderAvailable_{false};
 };
 
 } // namespace imagine::db

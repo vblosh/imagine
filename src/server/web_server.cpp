@@ -6,6 +6,7 @@
 #include "imagine/common/types.hpp"
 #include <httplib.h>
 #include <filesystem>
+#include <exception>
 #include <fstream>
 #include <cstdlib>
 
@@ -234,6 +235,19 @@ Status WebServer::start(const std::string& host, int port, const std::string& we
         server_.reset();
         router_.reset();
         return Status::ioError("Failed to bind web server to " + host_ + ":" + std::to_string(port_));
+    }
+
+    if (catalog_.isOpen()) {
+        try {
+            const std::string geonamesDataset = catalog_.db().geonamesDatasetInfo();
+            if (geonamesDataset.empty()) {
+                IMAGINE_LOG_WARN("GeoNames dataset not found (offline place tagging disabled; set IMAGINE_GEONAMES_CSV)");
+            } else {
+                IMAGINE_LOG_INFO("GeoNames dataset: " + geonamesDataset);
+            }
+        } catch (const std::exception&) {
+            IMAGINE_LOG_WARN("GeoNames dataset not found (offline place tagging disabled; set IMAGINE_GEONAMES_CSV)");
+        }
     }
 
     isRunning_ = true;
