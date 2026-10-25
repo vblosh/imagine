@@ -4800,14 +4800,14 @@ namespace {
 
 using db::StepResult;
 
-inline void rankKeeperCandidateIds(std::vector<MediaId>& members, db::CatalogDb& db) {
+inline void rankKeeperCandidatesWithMap(std::vector<MediaId>& members, const std::unordered_map<MediaId, MediaItem>& mediaMap) {
     if (members.size() <= 1) return;
     std::vector<MediaItem> items;
     items.reserve(members.size());
     for (MediaId id : members) {
-        auto r = db.getMediaById(id);
-        if (r.isOk()) {
-            items.push_back(r.value());
+        auto it = mediaMap.find(id);
+        if (it != mediaMap.end()) {
+            items.push_back(it->second);
         } else {
             MediaItem dummy;
             dummy.id = id;
@@ -4861,6 +4861,38 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
             }
         }
 
+        bool scanExact = true;
+        if (body.contains("exact")) {
+            if (!body["exact"].is_boolean()) {
+                sendError(res, "exact must be a boolean", 400);
+                return;
+            }
+            scanExact = body["exact"].get<bool>();
+        } else if (body.contains("include_exact")) {
+            if (!body["include_exact"].is_boolean()) {
+                sendError(res, "include_exact must be a boolean", 400);
+                return;
+            }
+            scanExact = body["include_exact"].get<bool>();
+        }
+
+        bool scanVisual = false;
+        if (body.contains("visual")) {
+            if (!body["visual"].is_boolean()) {
+                sendError(res, "visual must be a boolean", 400);
+                return;
+            }
+            scanVisual = body["visual"].get<bool>();
+        } else if (body.contains("include_visual")) {
+            if (!body["include_visual"].is_boolean()) {
+                sendError(res, "include_visual must be a boolean", 400);
+                return;
+            }
+            scanVisual = body["include_visual"].get<bool>();
+        } else if (body.contains("visual_threshold") || body.contains("similarity_threshold")) {
+            scanVisual = true;
+        }
+
         double visualThreshold = 0.97;
         if (body.contains("similarity_threshold")) {
             if (!body["similarity_threshold"].is_number()) {
@@ -4900,66 +4932,61 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
         }
 
         // 1. Exact duplicate pass
-        std::vector<std::vector<MediaId>> exactDuplicateGroups;
+        std::vector<std::vector<MediaId>> unrankedExactGroups;
         std::unordered_set<MediaId> exactMemberIds;
-        auto exactRes = db().findExactDuplicateGroups(scopeIds);
-        if (exactRes.isOk()) {
-            for (auto& members : exactRes.value()) {
-                if (members.size() < 2) continue;
+        if (scanExact) {
+            auto exactRes = db().findExactDuplicateGroups(scopeIds);
+            if (exactRes.isOk()) {
+                for (auto& members : exactRes.value()) {
+                    if (members.size() < 2) continue;
 
-                // Exclude dismissed pairs within this exact group
-                std::unordered_map<MediaId, MediaId> parent;
-                auto findRoot = [&](auto& self, MediaId x) -> MediaId {
-                    if (!parent.count(x)) parent[x] = x;
-                    if (parent[x] == x) return x;
-                    return parent[x] = self(self, parent[x]);
-                };
-                auto unite = [&](MediaId x, MediaId y) {
-                    MediaId rx = findRoot(findRoot, x);
-                    MediaId ry = findRoot(findRoot, y);
-                    if (rx != ry) parent[rx] = ry;
-                };
+                    // Exclude dismissed pairs within this exact group
+                    std::unordered_map<MediaId, MediaId> parent;
+                    auto findRoot = [&](auto& self, MediaId x) -> MediaId {
+                        if (!parent.count(x)) parent[x] = x;
+                        if (parent[x] == x) return x;
+                        return parent[x] = self(self, parent[x]);
+                    };
+                    auto unite = [&](MediaId x, MediaId y) {
+                        MediaId rx = findRoot(findRoot, x);
+                        MediaId ry = findRoot(findRoot, y);
+                        if (rx != ry) parent[rx] = ry;
+                    };
 
-                for (size_t i = 0; i < members.size(); ++i) {
-                    for (size_t j = i + 1; j < members.size(); ++j) {
-                        MediaId a = members[i];
-                        MediaId b = members[j];
-                        if (a > b) std::swap(a, b);
-                        uint64_t packed = (static_cast<uint64_t>(a) << 32) | (static_cast<uint64_t>(b) & 0xFFFFFFFFULL);
-                        if (!dismissedPairs.count(packed)) {
-                            unite(a, b);
+                    for (size_t i = 0; i < members.size(); ++i) {
+                        for (size_t j = i + 1; j < members.size(); ++j) {
+                            MediaId a = members[i];
+                            MediaId b = members[j];
+                            if (a > b) std::swap(a, b);
+                            uint64_t packed = (static_cast<uint64_t>(a) << 32) | (static_cast<uint64_t>(b) & 0xFFFFFFFFULL);
+                            if (!dismissedPairs.count(packed)) {
+                                unite(a, b);
+                            }
                         }
                     }
-                }
 
-                std::unordered_map<MediaId, std::vector<MediaId>> clusters;
-                for (MediaId m : members) {
-                    if (parent.count(m)) {
-                        clusters[findRoot(findRoot, m)].push_back(m);
-                    }
-                }
-
-                for (auto& [root, clusterMembers] : clusters) {
-                    if (clusterMembers.size() >= 2) {
-                        rankKeeperCandidateIds(clusterMembers, db());
-                        for (MediaId mid : clusterMembers) {
-                            exactMemberIds.insert(mid);
+                    std::unordered_map<MediaId, std::vector<MediaId>> clusters;
+                    for (MediaId m : members) {
+                        if (parent.count(m)) {
+                            clusters[findRoot(findRoot, m)].push_back(m);
                         }
-                        exactDuplicateGroups.push_back(std::move(clusterMembers));
+                    }
+
+                    for (auto& [root, clusterMembers] : clusters) {
+                        if (clusterMembers.size() >= 2) {
+                            for (MediaId mid : clusterMembers) {
+                                exactMemberIds.insert(mid);
+                            }
+                            unrankedExactGroups.push_back(std::move(clusterMembers));
+                        }
                     }
                 }
             }
         }
 
-        // Sort exact groups largest-first
-        std::sort(exactDuplicateGroups.begin(), exactDuplicateGroups.end(),
-                  [](const std::vector<MediaId>& a, const std::vector<MediaId>& b) {
-                      return a.size() > b.size();
-                  });
-
         // 2. Visual duplicate pass
         std::vector<clip::VisualDuplicateGroup> visualGroups;
-        if (clipService_) {
+        if (scanVisual && clipService_) {
             visualGroups = clipService_->scanVisualDuplicates(
                 static_cast<float>(visualThreshold),
                 dateWindowSec,
@@ -4981,7 +5008,7 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
 
         // Hydration: batch load metadata and tags
         std::vector<MediaId> allMemberIds;
-        for (const auto& eg : exactDuplicateGroups) {
+        for (const auto& eg : unrankedExactGroups) {
             allMemberIds.insert(allMemberIds.end(), eg.begin(), eg.end());
         }
         for (const auto& vg : visualGroups) {
@@ -5026,6 +5053,20 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
                 }
             }
         }
+
+        // Rank keepers in-memory using preloaded mediaMap (zero database queries)
+        std::vector<std::vector<MediaId>> exactDuplicateGroups;
+        exactDuplicateGroups.reserve(unrankedExactGroups.size());
+        for (auto& clusterMembers : unrankedExactGroups) {
+            rankKeeperCandidatesWithMap(clusterMembers, mediaMap);
+            exactDuplicateGroups.push_back(std::move(clusterMembers));
+        }
+
+        // Sort exact groups largest-first
+        std::sort(exactDuplicateGroups.begin(), exactDuplicateGroups.end(),
+                  [](const std::vector<MediaId>& a, const std::vector<MediaId>& b) {
+                      return a.size() > b.size();
+                  });
 
         nlohmann::json groupsJson = nlohmann::json::array();
         for (const auto& eg : exactDuplicateGroups) {

@@ -5086,6 +5086,92 @@ TEST_F(ServerTest, DuplicateVisualScanAndDateWindowHandling) {
     EXPECT_EQ(json3["groups"][0]["type"], "visual");
 }
 
+TEST_F(ServerTest, DuplicateEndpointsExactAndVisualFlags) {
+    httplib::Client client("127.0.0.1", port_);
+    ASSERT_TRUE(server_->router() != nullptr);
+    ASSERT_TRUE(server_->router()->clipService() != nullptr);
+
+    // Exact duplicate pair
+    MediaItem e1;
+    e1.file_path = "exact_flag_1.jpg"; e1.file_name = "exact_flag_1.jpg";
+    e1.content_hash = "exact_hash_flags_123";
+    e1.file_size = 50000; e1.width = 1000; e1.height = 1000;
+    e1.media_type = "photo";
+
+    MediaItem e2;
+    e2.file_path = "exact_flag_2.jpg"; e2.file_name = "exact_flag_2.jpg";
+    e2.content_hash = "exact_hash_flags_123";
+    e2.file_size = 50000; e2.width = 1000; e2.height = 1000;
+    e2.media_type = "photo";
+
+    // Visual duplicate pair (different hashes, identical embeddings)
+    MediaItem v1;
+    v1.file_path = "vis_flag_1.jpg"; v1.file_name = "vis_flag_1.jpg";
+    v1.content_hash = "vis_hash_flags_AAA";
+    v1.file_size = 60000; v1.width = 1200; v1.height = 800;
+    v1.date_taken = 50000;
+    v1.media_type = "photo";
+
+    MediaItem v2;
+    v2.file_path = "vis_flag_2.jpg"; v2.file_name = "vis_flag_2.jpg";
+    v2.content_hash = "vis_hash_flags_BBB";
+    v2.file_size = 61000; v2.width = 1200; v2.height = 800;
+    v2.date_taken = 50000;
+    v2.media_type = "photo";
+
+    MediaId eid1 = catalog_->db().insertMedia(e1).value();
+    MediaId eid2 = catalog_->db().insertMedia(e2).value();
+    MediaId vid1 = catalog_->db().insertMedia(v1).value();
+    MediaId vid2 = catalog_->db().insertMedia(v2).value();
+
+    std::vector<float> vec(512, 0.0f);
+    vec[0] = 1.0f;
+    server_->router()->clipService()->addMediaVector(vid1, vec);
+    server_->router()->clipService()->addMediaVector(vid2, vec);
+
+    // 1. Exact only (visual: false) -> returns only exact group
+    nlohmann::json reqExactOnly = {
+        {"exact", true},
+        {"visual", false},
+        {"media_ids", {eid1, eid2, vid1, vid2}}
+    };
+    auto res1 = client.Post("/api/media/duplicates/scan", reqExactOnly.dump(), "application/json");
+    ASSERT_TRUE(res1);
+    EXPECT_EQ(res1->status, 200);
+    auto json1 = nlohmann::json::parse(res1->body);
+    ASSERT_EQ(json1["groups"].size(), 1u);
+    EXPECT_EQ(json1["groups"][0]["type"], "exact");
+
+    // 2. Visual only (exact: false, visual: true) -> returns only visual group
+    nlohmann::json reqVisualOnly = {
+        {"exact", false},
+        {"visual", true},
+        {"visual_threshold", 0.95},
+        {"date_window_sec", 86400},
+        {"media_ids", {eid1, eid2, vid1, vid2}}
+    };
+    auto res2 = client.Post("/api/media/duplicates/scan", reqVisualOnly.dump(), "application/json");
+    ASSERT_TRUE(res2);
+    EXPECT_EQ(res2->status, 200);
+    auto json2 = nlohmann::json::parse(res2->body);
+    ASSERT_EQ(json2["groups"].size(), 1u);
+    EXPECT_EQ(json2["groups"][0]["type"], "visual");
+
+    // 3. Both exact and visual enabled -> returns 2 groups (1 exact, 1 visual)
+    nlohmann::json reqBoth = {
+        {"exact", true},
+        {"visual", true},
+        {"visual_threshold", 0.95},
+        {"date_window_sec", 86400},
+        {"media_ids", {eid1, eid2, vid1, vid2}}
+    };
+    auto res3 = client.Post("/api/media/duplicates/scan", reqBoth.dump(), "application/json");
+    ASSERT_TRUE(res3);
+    EXPECT_EQ(res3->status, 200);
+    auto json3 = nlohmann::json::parse(res3->body);
+    ASSERT_EQ(json3["groups"].size(), 2u);
+}
+
 TEST_F(ServerTest, DuplicateResolveEvictsFromClipIndex) {
     httplib::Client client("127.0.0.1", port_);
     ASSERT_TRUE(server_->router() != nullptr);
