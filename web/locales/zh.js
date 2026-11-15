@@ -794,6 +794,7 @@ export default {
     dedup_resolve_single: '处理 1 个分组',
     dedup_reclaimable: '可释放：{size}',
     dedup_toast_resolved: '已成功处理重复照片分组',
+    dedup_toast_resolved_partial: '部分分组处理失败（{count} 个）',
     dedup_toast_dismissed: '已忽略重复照片分组',
     dedup_reset_dismissals: '重置已忽略项',
     dedup_toast_dismissals_reset: '已重置忽略的重复照片分组',

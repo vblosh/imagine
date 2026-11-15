@@ -794,6 +794,7 @@ export default {
     dedup_resolve_single: 'Resolver 1 grupo',
     dedup_reclaimable: 'Recuperable: {size}',
     dedup_toast_resolved: 'Grupos de duplicados resueltos con éxito',
+    dedup_toast_resolved_partial: 'Algunos grupos no se han resuelto ({count} fallidos)',
     dedup_toast_dismissed: 'Grupo de duplicados descartado',
     dedup_reset_dismissals: 'Restablecer descartados',
     dedup_toast_dismissals_reset: 'Se han restablecido los duplicados descartados',

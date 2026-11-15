@@ -794,6 +794,7 @@ export default {
     dedup_resolve_single: 'Resolve 1 Group',
     dedup_reclaimable: 'Reclaimable: {size}',
     dedup_toast_resolved: 'Successfully resolved duplicate groups',
+    dedup_toast_resolved_partial: 'Some groups were not resolved ({count} failed)',
     dedup_toast_dismissed: 'Duplicate group dismissed',
     dedup_reset_dismissals: 'Reset Dismissals',
     dedup_toast_dismissals_reset: 'Duplicate dismissals have been reset',

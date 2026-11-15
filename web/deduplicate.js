@@ -363,8 +363,13 @@ function renderGroupCardHtml(group, groupIndex) {
       const safePath = escapeHtml(photo.file_path || photo.file_name || '');
       const rawPath = (photo.file_path || '').replace(/\\/g, '/');
       const lastSlashIdx = rawPath.lastIndexOf('/');
-      const folderName = lastSlashIdx !== -1 ? rawPath.substring(0, lastSlashIdx) : '';
-      const safeFolder = escapeHtml(folderName || '/');
+      const folderName = lastSlashIdx > 0 ? rawPath.substring(0, lastSlashIdx) : '';
+      const folderHtml = folderName
+        ? `<div class="dedup-folder" title="${safePath}">
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#icon-folder"></use></svg>
+          <span class="dedup-folder-name">${escapeHtml(folderName)}</span>
+        </div>`
+        : '';
 
       const pills = [];
       if (photo.width && photo.height) {
@@ -402,10 +407,7 @@ function renderGroupCardHtml(group, groupIndex) {
       </div>
       <div class="dedup-meta-pills">
         <div class="dedup-filename" title="${safePath}">${safeFileName}</div>
-        <div class="dedup-folder" title="${safePath}">
-          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#icon-folder"></use></svg>
-          <span class="dedup-folder-name">${safeFolder}</span>
-        </div>
+        ${folderHtml}
         <div class="dedup-pills-row">${pills.join('')}</div>
       </div>
     </div>`;
@@ -525,6 +527,15 @@ function renderReview() {
 
   appendNextChunk();
   setupSentinelObserver();
+}
+
+function rerenderReviewPreservingScroll() {
+  const body = dom.deduplicateBody;
+  const scrollTop = body ? body.scrollTop : 0;
+  renderReview();
+  if (body) {
+    body.scrollTop = scrollTop;
+  }
 }
 
 function updateResolveButton() {
@@ -726,7 +737,7 @@ async function dismissGroup(groupIndex) {
       setDialogState('empty');
       updateResolveButton();
     } else {
-      renderReview();
+      rerenderReviewPreservingScroll();
     }
   } catch (error) {
     showToast(error.message || String(error), 'error');
@@ -757,11 +768,44 @@ async function resolveGroups() {
   }));
 
   try {
-    // Send in chunks constrained by both group count (max 400) and removal count (max 800)
-    // Server enforces kMaxBatchSize = 1000 for both groups array and total remove items.
+    // Server enforces kMaxBatchSize = 1000 for both the groups array and total remove items.
+    // Stay well under both limits (400 groups / 800 removals per request).
+    const MAX_GROUPS_PER_REQUEST = 400;
+    const MAX_REMOVALS_PER_REQUEST = 800;
     const resolvedKeepers = new Set();
+    const failedKeepers = new Set();
+    let anonymousFailures = 0;
     let currentChunk = [];
     let currentRemoveCount = 0;
+    // For groups split across requests: keeper -> { totalParts, okParts }.
+    // A split group is only considered resolved once every part succeeded,
+    // so a partial failure keeps the group retryable (already-deleted members
+    // are skipped server-side with per-item 404s).
+    const splitGroupProgress = new Map();
+
+    const applyResolvedKeepers = (keepers) => {
+      if (keepers.size === 0) return;
+      review.groups = review.groups.filter((g) => !keepers.has(Number(g.keeper)));
+      updateBadgeCount(review.groups.length);
+      if (review.groups.length === 0) {
+        setDialogState('empty');
+      } else {
+        rerenderReviewPreservingScroll();
+      }
+    };
+
+    const markPartResolved = (keeper) => {
+      const progress = splitGroupProgress.get(keeper);
+      if (!progress) {
+        resolvedKeepers.add(keeper);
+        return;
+      }
+      progress.ok += 1;
+      if (progress.ok >= progress.total) {
+        splitGroupProgress.delete(keeper);
+        resolvedKeepers.add(keeper);
+      }
+    };
 
     const executeChunk = async (chunk) => {
       if (chunk.length === 0) return;
@@ -770,49 +814,80 @@ async function resolveGroups() {
         merge_metadata: mergeMetadata,
         delete_from_disk: deleteFromDisk,
       });
+      // Server returns numeric per-group statuses (200/400/404/500), never the string 'error'.
       if (Array.isArray(res.groups) && res.groups.length > 0) {
         for (const rg of res.groups) {
-          if (rg.status !== 'error' && rg.keeper) {
-            resolvedKeepers.add(Number(rg.keeper));
+          if (Number(rg.status) === 200 && rg.keeper) {
+            markPartResolved(Number(rg.keeper));
+          } else {
+            const k = Number(rg?.keeper);
+            if (k) {
+              failedKeepers.add(k);
+            } else {
+              anonymousFailures += 1;
+            }
           }
         }
       } else {
         for (const item of chunk) {
-          resolvedKeepers.add(Number(item.keeper));
+          markPartResolved(Number(item.keeper));
         }
       }
+      applyResolvedKeepers(resolvedKeepers);
     };
 
     for (const groupItem of resolveGroupsPayload) {
-      const removeLen = groupItem.remove.length;
-      if (
-        currentChunk.length >= 400 ||
-        (currentRemoveCount + removeLen > 800 && currentChunk.length > 0)
-      ) {
-        await executeChunk(currentChunk);
-        currentChunk = [];
-        currentRemoveCount = 0;
+      // A single group with more removals than the per-request cap must be split
+      // across multiple requests; the server processes each group independently.
+      const removeParts = [];
+      for (let i = 0; i < groupItem.remove.length; i += MAX_REMOVALS_PER_REQUEST) {
+        removeParts.push(groupItem.remove.slice(i, i + MAX_REMOVALS_PER_REQUEST));
       }
-      currentChunk.push(groupItem);
-      currentRemoveCount += removeLen;
+      const parts =
+        removeParts.length > 1
+          ? removeParts.map((remove) => ({ ...groupItem, remove }))
+          : [groupItem];
+      if (parts.length > 1) {
+        splitGroupProgress.set(Number(groupItem.keeper), { total: parts.length, ok: 0 });
+      }
+
+      for (const part of parts) {
+        const removeLen = part.remove.length;
+        if (
+          currentChunk.length >= MAX_GROUPS_PER_REQUEST ||
+          (currentRemoveCount + removeLen > MAX_REMOVALS_PER_REQUEST && currentChunk.length > 0)
+        ) {
+          await executeChunk(currentChunk);
+          currentChunk = [];
+          currentRemoveCount = 0;
+        }
+        currentChunk.push(part);
+        currentRemoveCount += removeLen;
+      }
     }
     if (currentChunk.length > 0) {
       await executeChunk(currentChunk);
     }
 
+    const failedCount =
+      [...failedKeepers].filter((k) => !resolvedKeepers.has(k)).length + anonymousFailures;
+
     if (resolvedKeepers.size > 0) {
-      review.groups = review.groups.filter((g) => !resolvedKeepers.has(Number(g.keeper)));
       await Promise.all([actionHooks.loadMetadata(), actionHooks.loadMedia()]);
       actionHooks.updateInspector();
-      showToast(t('dedup_toast_resolved'), 'success');
-      const totalGroupsCount = review.groups.length;
-      updateBadgeCount(totalGroupsCount);
+      if (failedCount > 0) {
+        showToast(t('dedup_toast_resolved_partial', { count: failedCount }), 'error');
+      } else {
+        showToast(t('dedup_toast_resolved'), 'success');
+      }
+    } else if (failedCount > 0) {
+      showToast(t('dedup_toast_resolved_partial', { count: failedCount }), 'error');
     }
 
     if (review.groups.length === 0) {
       closeDeduplicateModal();
     } else {
-      renderReview();
+      rerenderReviewPreservingScroll();
     }
   } catch (error) {
     showToast(error.message || String(error), 'error');

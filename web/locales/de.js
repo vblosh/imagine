@@ -794,6 +794,7 @@ export default {
     dedup_resolve_single: '1 Gruppe auflösen',
     dedup_reclaimable: 'Freigebbar: {size}',
     dedup_toast_resolved: 'Duplikatgruppen erfolgreich aufgelöst',
+    dedup_toast_resolved_partial: 'Einige Gruppen konnten nicht aufgelöst werden ({count} fehlgeschlagen)',
     dedup_toast_dismissed: 'Duplikatgruppe verworfen',
     dedup_reset_dismissals: 'Verworfene zurücksetzen',
     dedup_toast_dismissals_reset: 'Verworfene Duplikate wurden zurückgesetzt',

@@ -794,6 +794,7 @@ export default {
     dedup_resolve_single: 'Разрешить 1 группу',
     dedup_reclaimable: 'Освободится: {size}',
     dedup_toast_resolved: 'Группы дубликатов успешно разрешены',
+    dedup_toast_resolved_partial: 'Некоторые группы не были разрешены ({count} ошибок)',
     dedup_toast_dismissed: 'Группа дубликатов пропущена',
     dedup_reset_dismissals: 'Сбросить пропущенные',
     dedup_toast_dismissals_reset: 'Пропущенные дубликаты сброшены',
