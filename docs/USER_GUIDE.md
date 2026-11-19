@@ -100,8 +100,8 @@ File extensions are matched case-insensitively.
 - JPEG (`.jpg`, `.jpeg`)
 - PNG (`.png`)
 - BMP (`.bmp`)
-- WebP (`.webp`)
-- TIFF (`.tiff`, `.tif`)
+
+Convert WebP or TIFF images to a supported format before importing them.
 
 **Videos**
 - MPEG-4 (`.mp4`, `.m4v`)
@@ -457,9 +457,9 @@ Each filter includes an **Intensity Slider** (0% to 100%) allowing you to blend 
 
 ### 6. Non-Destructive Export ("Save Copy")
 - Clicking **Save Copy** exports the edited image at **full source camera resolution** with all crops, perspective rotations, adjustments, and filters accurately composited.
-- The exported file is saved as a new JPEG with the `_edit` suffix (e.g. `IMG_0042_edit.jpg`) in the same directory as the original file.
-- All original EXIF metadata (camera, lens, capture timestamp, GPS coordinates) is automatically preserved.
-- The new photo is immediately indexed into the catalog database and assigned to any albums containing the source photo.
+- The edited copy is saved next to the original with the `_edited` suffix. PNG exports preserve transparency. JPEG exports use the `.jpg` extension.
+- JPEG and PNG exports retain the source EXIF, including camera, capture time and GPS when present. The editor updates orientation and dimensions for the new pixels.
+- Imagine adds the edited copy to the catalog and carries over the source rating, flag and tags.
 - **The original source photo is never modified or overwritten.**
 
 ### Editor Keyboard Shortcuts

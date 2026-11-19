@@ -30,7 +30,6 @@ const RENDER_CHUNK_SIZE = 40;
 let review = null;
 let opener = null;
 let lastDedupLoupeTrigger = null;
-let requestSerial = 0;
 let renderedGroupCount = 0;
 let sentinelObserver = null;
 let reviewDelegationAttached = false;
@@ -59,7 +58,7 @@ export function closeDeduplicateModal() {
   closeResetWarningModal();
   removeSentinel();
   review = null;
-  requestSerial += 1;
+  updateReviewActions();
   if (dom.deduplicateModal) {
     dom.deduplicateModal.style.display = 'none';
   }
@@ -156,6 +155,7 @@ function computeGroupReclaimable(group) {
 }
 
 export async function openDeduplicateModal(options = {}) {
+  if (review?.resolving) return;
   opener = options.opener || document.activeElement;
   const scopeIds =
     Array.isArray(options.mediaIds) && options.mediaIds.length > 0
@@ -168,6 +168,7 @@ export async function openDeduplicateModal(options = {}) {
     groups: [],
     resolving: false,
     scanning: false,
+    pendingDismissals: new Set(),
   };
 
   if (dom.dedupScopeLabel) {
@@ -214,6 +215,7 @@ export async function openDeduplicateModal(options = {}) {
   }
 
   setDialogState('idle');
+  updateReviewActions();
 
   // If autoScan requested or directly opened, scan
   if (options.autoScan) {
@@ -225,18 +227,20 @@ export async function openDeduplicateModal(options = {}) {
 }
 
 export async function scanDuplicates() {
-  if (!review) {
-    review = { scopeIds: [], groups: [], resolving: false, scanning: false };
-  }
-  const serial = ++requestSerial;
-  review.scanning = true;
+  const activeReview = review;
+  if (!activeReview || isReviewBusy()) return;
+
+  activeReview.scanning = true;
+  activeReview.groups = [];
+  removeSentinel();
+  dom.dedupGroupsList?.replaceChildren();
   setDialogState('loading');
-  setScanAndResetButtonsDisabled(true);
+  updateReviewActions();
 
   try {
     const payload = {};
-    if (review.scopeIds && review.scopeIds.length > 0) {
-      payload.media_ids = review.scopeIds;
+    if (activeReview.scopeIds.length > 0) {
+      payload.media_ids = activeReview.scopeIds;
     }
     const exactEnabled = dom.dedupExactToggle ? dom.dedupExactToggle.checked : true;
     const visualEnabled = dom.dedupVisualToggle
@@ -251,7 +255,7 @@ export async function scanDuplicates() {
     }
 
     const result = await api.post('/api/media/duplicates/scan', payload);
-    if (serial !== requestSerial || !review) return;
+    if (review !== activeReview) return;
 
     let rawGroups = result.groups || [];
     if (!exactEnabled) {
@@ -282,7 +286,7 @@ export async function scanDuplicates() {
       };
 
     // Hydrate photo records
-    review.groups = rawGroups.map((group) => {
+    activeReview.groups = rawGroups.map((group) => {
       const memberIds = (group.members || [])
         .map(Number)
         .filter((id) => Number.isFinite(id) && id > 0);
@@ -328,21 +332,24 @@ export async function scanDuplicates() {
       };
     });
 
-    const totalGroupsCount = review.groups.length;
+    const totalGroupsCount = activeReview.groups.length;
     updateBadgeCount(totalGroupsCount);
 
-    if (review.groups.length === 0) {
+    if (activeReview.groups.length === 0) {
       setDialogState('empty');
     } else {
       setDialogState('ready');
       renderReview();
     }
   } catch (error) {
-    if (serial !== requestSerial || !review) return;
+    if (review !== activeReview) return;
+    activeReview.groups = [];
     setDialogState('error', error.message || String(error));
   } finally {
-    if (review) review.scanning = false;
-    setScanAndResetButtonsDisabled(false);
+    if (review === activeReview) {
+      activeReview.scanning = false;
+      updateReviewActions();
+    }
   }
 }
 
@@ -423,7 +430,7 @@ function renderGroupCardHtml(group, groupIndex) {
         ${reclaimBadge}
       </div>
       <div class="dedup-group-actions">
-        <button type="button" class="btn btn-xs btn-secondary dedup-dismiss-group-btn" data-group-index="${groupIndex}" title="${escapeHtml(t('dedup_dismiss_group'))}">${escapeHtml(t('dedup_dismiss_group'))}</button>
+        <button type="button" class="btn btn-xs btn-secondary dedup-dismiss-group-btn" data-group-index="${groupIndex}" title="${escapeHtml(t('dedup_dismiss_group'))}" ${canDismissGroup(group) ? '' : 'disabled'}>${escapeHtml(t('dedup_dismiss_group'))}</button>
       </div>
     </div>
     <div class="dedup-members-grid">${membersHtml}</div>
@@ -513,12 +520,12 @@ function renderReview() {
   const groups = review.groups;
   if (groups.length === 0) {
     setDialogState('empty');
-    updateResolveButton();
+    updateReviewActions();
     return;
   }
 
   updateSummaryBanner();
-  updateResolveButton();
+  updateReviewActions();
 
   ensureReviewDelegation();
 
@@ -538,10 +545,26 @@ function rerenderReviewPreservingScroll() {
   }
 }
 
-function updateResolveButton() {
+function isReviewBusy() {
+  return Boolean(resettingDismissals || review?.scanning || review?.resolving || review?.pendingDismissals.size);
+}
+
+function canDismissGroup(group) {
+  return Boolean(group && review && !review.scanning && !review.resolving &&
+    !resettingDismissals && !review.pendingDismissals.has(group));
+}
+
+function updateReviewActions() {
+  const busy = isReviewBusy();
+  setScanAndResetButtonsDisabled(busy);
+  if (dom.cancelDeduplicateBtn) dom.cancelDeduplicateBtn.disabled = Boolean(review?.resolving);
+  if (dom.dedupDismissAllBtn) dom.dedupDismissAllBtn.disabled = busy || !review?.groups.length;
+  dom.dedupGroupsList?.querySelectorAll('.dedup-dismiss-group-btn').forEach(button => {
+    button.disabled = !canDismissGroup(review?.groups[Number(button.dataset.groupIndex)]);
+  });
   if (!dom.dedupResolveBtn) return;
   const enabledCount = review ? review.groups.filter((g) => g.enabled).length : 0;
-  dom.dedupResolveBtn.disabled = enabledCount === 0;
+  dom.dedupResolveBtn.disabled = busy || enabledCount === 0;
   dom.dedupResolveBtn.textContent =
     enabledCount === 1
       ? t('dedup_resolve_single')
@@ -549,7 +572,7 @@ function updateResolveButton() {
 }
 
 function setKeeper(groupIndex, mediaId) {
-  if (!review || !review.groups[groupIndex]) return;
+  if (!review || review.scanning || review.resolving || !review.groups[groupIndex]) return;
   review.groups[groupIndex].keeper = Number(mediaId);
 
   // Update only the targeted group card in DOM and preserve focus
@@ -641,11 +664,11 @@ function ensureReviewDelegation() {
     const groupCheckbox = e.target.closest('.dedup-group-checkbox');
     if (groupCheckbox) {
       const idx = Number(groupCheckbox.dataset.groupIndex);
-      if (review && review.groups[idx]) {
+      if (review && !review.resolving && !review.scanning && review.groups[idx]) {
         review.groups[idx].enabled = groupCheckbox.checked;
         const card = groupCheckbox.closest('.dedup-group-card');
         if (card) card.classList.toggle('excluded', !groupCheckbox.checked);
-        updateResolveButton();
+        updateReviewActions();
         updateSummaryBanner();
       }
       return;
@@ -672,7 +695,8 @@ function ensureReviewDelegation() {
     const dismissBtn = e.target.closest('.dedup-dismiss-group-btn');
     if (dismissBtn) {
       const idx = Number(dismissBtn.dataset.groupIndex);
-      dismissGroup(idx);
+      const group = review?.groups[idx];
+      if (canDismissGroup(group)) dismissGroups([group]);
       return;
     }
 
@@ -710,48 +734,53 @@ function ensureReviewDelegation() {
   );
 }
 
-async function dismissGroup(groupIndex) {
-  if (!review || !review.groups[groupIndex]) return;
-  const group = review.groups[groupIndex];
-  const members = (group.members || []).map(Number);
-  const pairs = [];
-  for (let i = 0; i < members.length; i++) {
-    for (let j = i + 1; j < members.length; j++) {
-      pairs.push([Math.min(members[i], members[j]), Math.max(members[i], members[j])]);
-    }
-  }
-
+async function dismissGroups(groups) {
+  const activeReview = review;
+  const dismissedGroups = new Set(groups);
+  for (const group of dismissedGroups) activeReview.pendingDismissals.add(group);
+  updateReviewActions();
+  const batchSize = 500;
+  let pairs = [];
   try {
-    if (pairs.length > 0) {
-      const BATCH_SIZE = 500;
-      for (let i = 0; i < pairs.length; i += BATCH_SIZE) {
-        const chunk = pairs.slice(i, i + BATCH_SIZE);
-        await api.post('/api/media/duplicates/dismiss', { pairs: chunk });
+    for (const group of dismissedGroups) {
+      const members = group.members;
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          pairs.push([Math.min(members[i], members[j]), Math.max(members[i], members[j])]);
+          if (pairs.length === batchSize) {
+            await api.post('/api/media/duplicates/dismiss', { pairs });
+            pairs = [];
+          }
+        }
       }
     }
-    review.groups.splice(groupIndex, 1);
+    if (pairs.length > 0) await api.post('/api/media/duplicates/dismiss', { pairs });
+    if (review !== activeReview) return;
+
+    activeReview.groups = activeReview.groups.filter(group => !dismissedGroups.has(group));
     showToast(t('dedup_toast_dismissed'), 'info');
-    const totalGroupsCount = review.groups.length;
+    const totalGroupsCount = activeReview.groups.length;
     updateBadgeCount(totalGroupsCount);
-    if (review.groups.length === 0) {
+    if (totalGroupsCount === 0) {
       setDialogState('empty');
-      updateResolveButton();
     } else {
       rerenderReviewPreservingScroll();
     }
   } catch (error) {
-    showToast(error.message || String(error), 'error');
+    if (review === activeReview) showToast(error.message || String(error), 'error');
+  } finally {
+    for (const group of dismissedGroups) activeReview.pendingDismissals.delete(group);
+    if (review === activeReview) updateReviewActions();
   }
 }
 
 async function resolveGroups() {
-  if (!review || review.resolving) return;
+  if (!review || isReviewBusy()) return;
   const enabledGroups = review.groups.filter((g) => g.enabled);
   if (enabledGroups.length === 0) return;
 
   review.resolving = true;
-  if (dom.dedupResolveBtn) dom.dedupResolveBtn.disabled = true;
-  if (dom.cancelDeduplicateBtn) dom.cancelDeduplicateBtn.disabled = true;
+  updateReviewActions();
 
   const mergeMetadata = dom.dedupMergeMetadataCheckbox
     ? dom.dedupMergeMetadataCheckbox.checked
@@ -763,10 +792,12 @@ async function resolveGroups() {
   const resolveGroupsPayload = enabledGroups.map((g) => ({
     keeper: Number(g.keeper),
     remove: g.members.filter((id) => Number(id) !== Number(g.keeper)).map(Number),
+    expected_hashes: Object.fromEntries(g.photos.map(photo => [photo.id, photo.content_hash || ''])),
     merge_metadata: mergeMetadata,
     delete_from_disk: deleteFromDisk,
   }));
 
+  const diskFailedIds = new Set();
   try {
     // Server enforces kMaxBatchSize = 1000 for both the groups array and total remove items.
     // Stay well under both limits (400 groups / 800 removals per request).
@@ -817,6 +848,7 @@ async function resolveGroups() {
       // Server returns numeric per-group statuses (200/400/404/500), never the string 'error'.
       if (Array.isArray(res.groups) && res.groups.length > 0) {
         for (const rg of res.groups) {
+          for (const failure of rg.disk_failures || []) diskFailedIds.add(Number(failure.id));
           if (Number(rg.status) === 200 && rg.keeper) {
             markPartResolved(Number(rg.keeper));
           } else {
@@ -845,7 +877,11 @@ async function resolveGroups() {
       }
       const parts =
         removeParts.length > 1
-          ? removeParts.map((remove) => ({ ...groupItem, remove }))
+          ? removeParts.map((remove) => ({
+              ...groupItem,
+              remove,
+              expected_hashes: Object.fromEntries([groupItem.keeper, ...remove].map(id => [id, groupItem.expected_hashes[id]])),
+            }))
           : [groupItem];
       if (parts.length > 1) {
         splitGroupProgress.set(Number(groupItem.keeper), { total: parts.length, ok: 0 });
@@ -885,6 +921,7 @@ async function resolveGroups() {
     }
 
     if (review.groups.length === 0) {
+      review.resolving = false;
       closeDeduplicateModal();
     } else {
       rerenderReviewPreservingScroll();
@@ -892,10 +929,12 @@ async function resolveGroups() {
   } catch (error) {
     showToast(error.message || String(error), 'error');
   } finally {
+    if (diskFailedIds.size > 0) {
+      showToast(t('toast_disk_delete_incomplete', { count: diskFailedIds.size }), 'error');
+    }
     if (review) {
       review.resolving = false;
-      if (dom.cancelDeduplicateBtn) dom.cancelDeduplicateBtn.disabled = false;
-      updateResolveButton();
+      updateReviewActions();
     }
   }
 }
@@ -925,29 +964,26 @@ export function openResetWarningModal() {
 }
 
 export async function resetDismissals() {
-  if (!isDeduplicateOpen() || resettingDismissals) return;
-  if (review && (review.scanning || review.resolving)) return;
+  const activeReview = review;
+  if (!isDeduplicateOpen() || !activeReview || isReviewBusy()) return;
 
   const confirmed = await openResetWarningModal();
-  if (!confirmed) return;
+  if (!confirmed || review !== activeReview || isReviewBusy()) return;
 
   resettingDismissals = true;
-  setScanAndResetButtonsDisabled(true);
+  updateReviewActions();
 
   try {
     await api.post('/api/media/duplicates/dismissals/reset', {});
     showToast(t('dedup_toast_dismissals_reset'), 'info');
-    if (isDeduplicateOpen() && review) {
-      await scanDuplicates();
-    }
   } catch (error) {
     showToast(error.message || String(error), 'error');
+    return;
   } finally {
     resettingDismissals = false;
-    if (isDeduplicateOpen()) {
-      setScanAndResetButtonsDisabled(Boolean(review && review.scanning));
-    }
+    updateReviewActions();
   }
+  if (review === activeReview) await scanDuplicates();
 }
 
 export function setupDeduplicateListeners() {
@@ -1001,7 +1037,7 @@ export function setupDeduplicateListeners() {
 
   // Summary bulk actions
   dom.dedupSelectAllBtn?.addEventListener('click', () => {
-    if (!review) return;
+    if (!review || review.scanning || review.resolving) return;
     review.groups.forEach((g) => {
       g.enabled = true;
     });
@@ -1010,11 +1046,11 @@ export function setupDeduplicateListeners() {
       cb.closest('.dedup-group-card')?.classList.remove('excluded');
     });
     updateSummaryBanner();
-    updateResolveButton();
+    updateReviewActions();
   });
 
   dom.dedupDeselectAllBtn?.addEventListener('click', () => {
-    if (!review) return;
+    if (!review || review.scanning || review.resolving) return;
     review.groups.forEach((g) => {
       g.enabled = false;
     });
@@ -1023,36 +1059,11 @@ export function setupDeduplicateListeners() {
       cb.closest('.dedup-group-card')?.classList.add('excluded');
     });
     updateSummaryBanner();
-    updateResolveButton();
+    updateReviewActions();
   });
 
-  dom.dedupDismissAllBtn?.addEventListener('click', async () => {
-    if (!review || review.groups.length === 0) return;
-    const allPairs = [];
-    for (const g of review.groups) {
-      const members = (g.members || []).map(Number);
-      for (let i = 0; i < members.length; i++) {
-        for (let j = i + 1; j < members.length; j++) {
-          allPairs.push([Math.min(members[i], members[j]), Math.max(members[i], members[j])]);
-        }
-      }
-    }
-    try {
-      if (allPairs.length > 0) {
-        const BATCH_SIZE = 500;
-        for (let i = 0; i < allPairs.length; i += BATCH_SIZE) {
-          const chunk = allPairs.slice(i, i + BATCH_SIZE);
-          await api.post('/api/media/duplicates/dismiss', { pairs: chunk });
-        }
-      }
-      review.groups = [];
-      updateBadgeCount(0);
-      showToast(t('dedup_toast_dismissed'), 'info');
-      setDialogState('empty');
-      updateResolveButton();
-    } catch (error) {
-      showToast(error.message || String(error), 'error');
-    }
+  dom.dedupDismissAllBtn?.addEventListener('click', () => {
+    if (review?.groups.length && !isReviewBusy()) dismissGroups(review.groups);
   });
 
   // Resolve button
@@ -1085,7 +1096,7 @@ export function setupDeduplicateListeners() {
   });
 
   onLanguageChange(() => {
-    if (isDeduplicateOpen() && review) {
+    if (isDeduplicateOpen() && review?.groups.length) {
       renderReview();
     }
   });

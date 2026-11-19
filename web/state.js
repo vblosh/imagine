@@ -142,3 +142,11 @@ export function invalidateGpsCache() {
   state._cachedGpsItems = null;
   state._lastMapItemsSig = null;
 }
+
+export function pruneMediaSelection() {
+  const visibleIds = new Set(state.mediaItems.map(item => item.id));
+  for (const id of state.selectedIds) {
+    if (!visibleIds.has(id)) state.selectedIds.delete(id);
+  }
+  if (!visibleIds.has(state.lastSelectedId)) state.lastSelectedId = null;
+}

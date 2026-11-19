@@ -23,11 +23,12 @@ import os
 import csv
 import math
 import time
-import shutil
 import sqlite3
 import argparse
+from contextlib import closing
 from datetime import datetime
 from collections import defaultdict
+from pathlib import Path
 
 if sys.platform == "win32":
     try:
@@ -200,14 +201,25 @@ def update_places(
 
     # Automated backup before any writes
     if not dry_run and not no_backup:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = f"{catalog_path}.backup_{timestamp}"
         print(f"\n[1/5] Creating database backup...")
+        backup_created = False
         try:
-            shutil.copy2(catalog_path, backup_path)
+            with open(backup_path, "xb"):
+                backup_created = True
+            source_uri = Path(catalog_path).resolve().as_uri() + "?mode=ro"
+            with closing(sqlite3.connect(source_uri, uri=True)) as source:
+                with closing(sqlite3.connect(backup_path)) as backup:
+                    source.backup(backup)
             backup_size = os.path.getsize(backup_path) / (1024 * 1024)
             print(f"  Backup created successfully: {backup_path} ({backup_size:.1f} MB)")
-        except Exception as e:
+        except (OSError, sqlite3.Error) as e:
+            if backup_created:
+                try:
+                    Path(backup_path).unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    print(f"Error: Failed to remove incomplete backup: {cleanup_error}", file=sys.stderr)
             print(f"Error: Failed to create database backup: {e}", file=sys.stderr)
             return 1
     elif dry_run:

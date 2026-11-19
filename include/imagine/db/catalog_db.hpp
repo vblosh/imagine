@@ -7,6 +7,7 @@
 #include <mutex>
 #include <memory>
 #include <functional>
+#include <span>
 #include "imagine/db/connection.hpp"
 #include "imagine/common/types.hpp"
 #include "imagine/common/error.hpp"
@@ -23,6 +24,11 @@ struct SmartTagRecord {
     std::string contentHash;
 };
 
+struct ImportedMediaUpdate {
+    MediaItem item;
+    MediaItem expected;
+};
+
 class CatalogDb {
 public:
     CatalogDb();
@@ -37,6 +43,7 @@ public:
     Result<size_t> insertMediaBatch(std::vector<MediaItem>& items);
     Status updateMedia(const MediaItem& item);
     Result<size_t> updateMediaBatch(const std::vector<MediaItem>& items);
+    Result<size_t> updateImportedMediaBatch(std::span<const ImportedMediaUpdate> updates);
     Result<MediaItem> getMediaById(MediaId id);
     Result<MediaItem> getMediaByPath(const std::string& path);
     Result<MediaItem> getMediaByHash(const std::string& hash);
@@ -129,6 +136,7 @@ private:
 
     mutable std::recursive_mutex mutex_;
     Connection conn_;
+    std::function<void(MediaId)> invalidateSemanticVector_;
 
     std::mutex geocoderMutex_;
     std::unique_ptr<core::ReverseGeocoder> geocoder_;

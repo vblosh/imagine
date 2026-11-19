@@ -1,75 +1,35 @@
 #!/usr/bin/env python3
 """
-Fix photo orientations in Imagine catalog by reading EXIF orientation headers
-from disk, updating media_items.orientation in SQLite, and clearing any
-stale unrotated thumbnails from the cache directory.
+Fix photo orientations in Imagine by decoding photos and inspecting their EXIF
+orientation. Requires Pillow. Run against a stopped catalog so the server
+reloads derived data when it starts.
 """
 
 import os
 import sys
 import time
-import struct
 import sqlite3
 import argparse
+import re
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 
-sys.stdout.reconfigure(encoding='utf-8')
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 def get_exif_orientation(filepath):
-    """
-    Read EXIF orientation tag (0x0112) directly from JPEG/TIFF header.
-    Returns 1..8 if found, otherwise 1.
-    """
+    """Return the EXIF orientation of a readable photo or None if unavailable."""
     try:
-        with open(filepath, 'rb') as f:
-            data = f.read(65536)
-            if not data or len(data) < 16:
-                return 1
+        with Image.open(filepath) as image:
+            orientation = image.getexif().get(0x0112, 1)
+            image.load()
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError):
+        return None
+    return orientation if isinstance(orientation, int) and 1 <= orientation <= 8 else None
 
-            # Check JPEG
-            idx = data.find(b'Exif\x00\x00')
-            if idx != -1:
-                tiff_start = idx + 6
-                byte_order = data[tiff_start:tiff_start+2]
-                endian = '<' if byte_order == b'II' else '>'
-                magic = struct.unpack(endian + 'H', data[tiff_start+2:tiff_start+4])[0]
-                if magic == 42:
-                    offset = struct.unpack(endian + 'I', data[tiff_start+4:tiff_start+8])[0]
-                    ifd_start = tiff_start + offset
-                    if ifd_start + 2 <= len(data):
-                        num_entries = struct.unpack(endian + 'H', data[ifd_start:ifd_start+2])[0]
-                        for i in range(num_entries):
-                            entry_offset = ifd_start + 2 + i * 12
-                            if entry_offset + 12 > len(data):
-                                break
-                            tag = struct.unpack(endian + 'H', data[entry_offset:entry_offset+2])[0]
-                            if tag == 0x0112:
-                                val = struct.unpack(endian + 'H', data[entry_offset+8:entry_offset+10])[0]
-                                if 1 <= val <= 8:
-                                    return val
-                                return 1
-
-            # Check TIFF
-            if data.startswith(b'II*\x00') or data.startswith(b'MM\x00*'):
-                endian = '<' if data[:2] == b'II' else '>'
-                offset = struct.unpack(endian + 'I', data[4:8])[0]
-                if offset + 2 <= len(data):
-                    num_entries = struct.unpack(endian + 'H', data[offset:offset+2])[0]
-                    for i in range(num_entries):
-                        entry_offset = offset + 2 + i * 12
-                        if entry_offset + 12 > len(data):
-                            break
-                        tag = struct.unpack(endian + 'H', data[entry_offset:entry_offset+2])[0]
-                        if tag == 0x0112:
-                            val = struct.unpack(endian + 'H', data[entry_offset+8:entry_offset+10])[0]
-                            if 1 <= val <= 8:
-                                return val
-                            return 1
-    except Exception:
-        pass
-    return 1
-
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Fix orientations in Imagine catalog")
     parser.add_argument("--catalog", default=r"D:\Foto\imagine\catalog.db",
                         help="Path to catalog.db")
@@ -79,7 +39,10 @@ def main():
                         help="Thumbnail cache directory")
     parser.add_argument("--workers", type=int, default=16,
                         help="Thread pool workers")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if Image is None:
+        print("Orientation repair requires Pillow (python -m pip install Pillow).", file=sys.stderr)
+        return 1
 
     print("=" * 70)
     print(" IMAGINE PHOTO ORGANIZER — EXIF ORIENTATION REPAIR TOOL")
@@ -94,10 +57,12 @@ def main():
         print(f"Error: Catalog not found at {args.catalog}")
         return 1
 
-    conn = sqlite3.connect(args.catalog)
-    cur = conn.cursor()
-    cur.execute("SELECT id, file_path, content_hash, orientation FROM media_items")
-    rows = cur.fetchall()
+    with closing(sqlite3.connect(args.catalog)) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(media_items)")}
+        query = "SELECT id, file_path, content_hash, orientation FROM media_items"
+        if "media_type" in columns:
+            query += " WHERE media_type = 'photo'"
+        rows = conn.execute(query).fetchall()
     total_files = len(rows)
     print(f"\n[1/3] Reading EXIF orientation for {total_files:,} media items...")
 
@@ -106,7 +71,7 @@ def main():
         mid, rel_path, chash, current_orient = row
         full_p = os.path.join(args.photos_dir, rel_path)
         exif_o = get_exif_orientation(full_p)
-        return mid, chash, current_orient, exif_o
+        return mid, rel_path, chash, current_orient, exif_o
 
     results = []
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
@@ -117,14 +82,14 @@ def main():
 
     # Filter mismatches
     to_update = []
-    hashes_to_invalidate = set()
     counts = {}
-    for mid, chash, curr_o, exif_o in results:
+    for mid, rel_path, chash, curr_o, exif_o in results:
+        if exif_o is None:
+            continue
         counts[exif_o] = counts.get(exif_o, 0) + 1
         if curr_o != exif_o:
-            to_update.append((exif_o, mid))
-            if curr_o != 1 or exif_o != 1:
-                hashes_to_invalidate.add(chash)
+            to_update.append((exif_o, mid, rel_path, chash, curr_o))
+    print(f"  Skipped {total_files - sum(counts.values()):,} unavailable or unreadable photos.")
 
     print("\n[2/3] Orientation distribution across library:")
     orientation_labels = {
@@ -142,44 +107,66 @@ def main():
 
     print(f"\n  Found {len(to_update):,} photos requiring orientation database updates.")
 
+    hashes_to_invalidate = set()
+    updated_count = 0
     if to_update:
-        cur.executemany("UPDATE media_items SET orientation = ? WHERE id = ?", to_update)
-        conn.commit()
-        print("  Database updated successfully.")
-    conn.close()
+        with closing(sqlite3.connect(args.catalog)) as conn, conn:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("BEGIN IMMEDIATE")
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            provenance_columns = {row[1] for row in conn.execute("PRAGMA table_info(media_tag_provenance)")}
+            derived = "media_id = ? AND manual = 0"
+            if "source" in provenance_columns:
+                derived += " AND source IN ('face', 'clip')"
+            now = int(time.time())
+            for exif_o, mid, path, chash, curr_o in to_update:
+                updated = conn.execute(
+                    "UPDATE media_items SET orientation = ?, updated_at = ? "
+                    "WHERE id = ? AND file_path = ? AND content_hash IS ? AND orientation IS ?",
+                    (exif_o, now, mid, path, chash, curr_o),
+                )
+                if not updated.rowcount:
+                    continue
+                if provenance_columns:
+                    conn.execute(
+                        f"DELETE FROM media_tags WHERE media_id = ? AND tag_id IN ("
+                        f"SELECT tag_id FROM media_tag_provenance WHERE {derived})", (mid, mid)
+                    )
+                    conn.execute(f"DELETE FROM media_tag_provenance WHERE {derived}", (mid,))
+                for table in ("faces", "face_media_analysis", "semantic_index_state", "smart_tag_state"):
+                    if table in tables:
+                        conn.execute(f"DELETE FROM {table} WHERE media_id = ?", (mid,))
+                if chash:
+                    hashes_to_invalidate.add(chash)
+                updated_count += 1
+        print(f"  Updated {updated_count:,} photo orientations and invalidated their analysis.")
 
     # Step 3: Invalidate stale cached thumbnails
     print(f"\n[3/3] Checking thumbnail cache for {len(hashes_to_invalidate):,} rotated photos...")
     deleted_thumbs = 0
     if os.path.isdir(args.cache_dir):
         for chash in hashes_to_invalidate:
-            if not chash or len(chash) < 4:
+            if not re.fullmatch(r"[0-9a-fA-F]{64}", chash):
                 continue
-            p1 = chash[:2]
-            p2 = chash[2:4]
-            candidates = [
-                os.path.join(args.cache_dir, f"{chash}_256.jpg"),
-                os.path.join(args.cache_dir, f"{chash}_1024.jpg"),
-                os.path.join(args.cache_dir, p1, f"{chash}_256.jpg"),
-                os.path.join(args.cache_dir, p1, f"{chash}_1024.jpg"),
-                os.path.join(args.cache_dir, p1, p2, f"{chash}_256.jpg"),
-                os.path.join(args.cache_dir, p1, p2, f"{chash}_1024.jpg")
-            ]
-            for c in candidates:
-                if os.path.isfile(c):
-                    try:
-                        os.remove(c)
-                        deleted_thumbs += 1
-                    except Exception:
-                        pass
+            for directory in (args.cache_dir, os.path.join(args.cache_dir, chash[:2]),
+                              os.path.join(args.cache_dir, chash[:2], chash[2:4])):
+                if not os.path.isdir(directory):
+                    continue
+                for filename in os.listdir(directory):
+                    if re.fullmatch(chash + r"_\d+\.jpg", filename):
+                        try:
+                            os.remove(os.path.join(directory, filename))
+                            deleted_thumbs += 1
+                        except OSError as error:
+                            print(f"  Could not remove {filename}: {error}", file=sys.stderr)
 
     print(f"  Purged {deleted_thumbs:,} stale unrotated thumbnails from cache.")
     print("\n" + "=" * 70)
-    print(" ALL PHOTO ORIENTATIONS SYNCHRONIZED SUCCESSFULLY!")
-    print(" When viewing photos in the Web UI, thumbnails will now generate")
-    print(" with the correct rotation and aspect ratio.")
+    print(" Orientation repair finished.")
     print("=" * 70)
     return 0
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
     sys.exit(main())

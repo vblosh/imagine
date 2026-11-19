@@ -196,16 +196,29 @@ std::string Importer::normalizePath(const std::string& path) {
     if (std::filesystem::is_symlink(std::filesystem::symlink_status(p, ec))) {
         return path;
     }
-    auto weakly = std::filesystem::weakly_canonical(p, ec);
+    auto absolute = std::filesystem::absolute(p, ec);
+    if (ec) absolute = p;
+    auto weakly = std::filesystem::weakly_canonical(absolute, ec);
     if (!ec) {
         return pathToUtf8(stripExtendedPrefix(weakly));
     }
-    return pathToUtf8(stripExtendedPrefix(p.lexically_normal()));
+    return pathToUtf8(stripExtendedPrefix(absolute.lexically_normal()));
 }
 
 void Importer::cancel() noexcept {
-    cancelled_.store(true);
+    {
+        std::lock_guard lock(memory_mutex_);
+        cancelled_.store(true);
+    }
     memory_cv_.notify_all();
+}
+
+bool Importer::tryStartJob() {
+    std::lock_guard lock(memory_mutex_);
+    if (running_.load()) return false;
+    cancelled_.store(false);
+    running_.store(true);
+    return true;
 }
 
 bool Importer::isCancelled() const noexcept {
@@ -221,7 +234,8 @@ ImportProgress Importer::currentProgress() const {
     return current_progress_;
 }
 
-Importer::ProcessStatus Importer::processFileInternal(const std::string& filePath, MediaItem* outItem, bool commitToDb) {
+Importer::ProcessStatus Importer::processFileInternal(
+    const std::string& filePath, PreparedFile& prepared, bool cancellable) {
     std::error_code ec;
     auto fPath = pathFromUtf8(filePath);
 
@@ -279,31 +293,30 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         return ProcessStatus::Failed;
     }
 
-    auto sctp = std::chrono::clock_cast<std::chrono::system_clock>(lwt);
-    int64_t modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctp.time_since_epoch()).count();
+    const int64_t modifiedTime = fileTimeToUnixSeconds(lwt);
+    prepared.source = pathFromUtf8(normalizedPath);
+    prepared.write_time = lwt;
 
     // Check existing file by relative stored path (or normalized absolute path fallback for legacy DBs)
     auto existingRes = db_.getMediaByPath(storedPath);
-    if (!existingRes.isOk() && storedPath != normalizedPath) {
+    if (existingRes.status().code() == StatusCode::NotFound && storedPath != normalizedPath) {
         existingRes = db_.getMediaByPath(normalizedPath);
     }
-    bool isUpdate = existingRes.isOk();
-    if (isUpdate) {
+    if (existingRes.isOk()) {
         const auto& existing = existingRes.value();
         if (existing.file_modified_time == modifiedTime && existing.file_size == static_cast<int64_t>(fsize)
             && existing.media_type == mediaType) {
-            if (outItem) {
-                *outItem = existing;
-            }
+            prepared.item = existing;
             return ProcessStatus::Skipped;
         }
+        prepared.item = existing;
+        prepared.previous = std::move(existingRes.value());
+    } else if (existingRes.status().code() != StatusCode::NotFound) {
+        IMAGINE_LOG_ERROR("Failed to look up media for " + storedPath + ": " + existingRes.status().message());
+        return ProcessStatus::Failed;
     }
 
-    MediaItem item;
-    if (isUpdate) {
-        item = existingRes.value();
-    }
-
+    auto& item = prepared.item;
     if (mediaType == "photo") {
         // Memory throttling: limit aggregate in-flight memory allocation across workers.
     // Files larger than kMaxInFlightBytes are allowed to proceed as a single exclusive
@@ -312,9 +325,10 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
     {
         std::unique_lock<std::mutex> memLock(memory_mutex_);
         memory_cv_.wait(memLock, [&]() {
-            return cancelled_.load() || in_flight_bytes_ == 0 || (in_flight_bytes_ + requiredBudget <= kMaxInFlightBytes);
+            return (cancellable && cancelled_.load()) || in_flight_bytes_ == 0 ||
+                   (in_flight_bytes_ + requiredBudget <= kMaxInFlightBytes);
         });
-        if (cancelled_.load()) {
+        if (cancellable && cancelled_.load()) {
             return ProcessStatus::Failed;
         }
         in_flight_bytes_ += requiredBudget;
@@ -357,17 +371,8 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         return ProcessStatus::Failed;
     }
     if (bytesRead != static_cast<size_t>(fsize)) {
-        IMAGINE_LOG_WARN("File size changed during read for " + filePath + ": expected " +
-                         std::to_string(fsize) + ", read " + std::to_string(bytesRead));
-        fileBytes.resize(bytesRead);
-        fsize = bytesRead;
-    }
-
-    // TOCTOU verification: re-fetch modification time after reading
-    auto lwtPost = std::filesystem::last_write_time(pathFromUtf8(filePath), ec);
-    if (!ec) {
-        auto sctpPost = std::chrono::clock_cast<std::chrono::system_clock>(lwtPost);
-        modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctpPost.time_since_epoch()).count();
+        IMAGINE_LOG_WARN("File size changed during read for " + filePath);
+        return ProcessStatus::Failed;
     }
 
     // Extract SHA-256 hash using in-memory bytes
@@ -431,13 +436,6 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
             return ProcessStatus::Failed;
         }
         std::string hash = hashRes.value();
-
-        // TOCTOU verification
-        auto lwtPost = std::filesystem::last_write_time(pathFromUtf8(filePath), ec);
-        if (!ec) {
-            auto sctpPost = std::chrono::clock_cast<std::chrono::system_clock>(lwtPost);
-            modifiedTime = std::chrono::duration_cast<std::chrono::seconds>(sctpPost.time_since_epoch()).count();
-        }
 
         metadata::MediaFileInfo mediaInfo;
         auto metaRes = metadata::MediaReader::readMetadata(filePath);
@@ -541,38 +539,67 @@ Importer::ProcessStatus Importer::processFileInternal(const std::string& filePat
         item.thumb_large = !thumbLarge.empty() ? thumbnail::Cache::getRelativeThumbnailPath(hash, thumbnail::Cache::LargeSize) : "";
     }
 
-    // Database persistence: if commitToDb is true, persist immediately.
-    // Otherwise, persistence is deferred to batch persistence in importDirectory.
-    if (commitToDb) {
-        if (isUpdate) {
-            Status s = db_.updateMedia(item);
-            if (!s.isOk()) {
-                IMAGINE_LOG_ERROR("Failed to update media in DB for " + storedPath + ": " + s.message());
-                return ProcessStatus::Failed;
-            }
-        } else {
-            auto insRes = db_.insertMedia(item);
-            if (!insRes.isOk()) {
-                IMAGINE_LOG_ERROR("Failed to insert media into DB for " + storedPath + ": " + insRes.status().message());
-                return ProcessStatus::Failed;
-            }
-            item.id = insRes.value();
-        }
-        applyGpsPlaceTagsBestEffort(db_, item);
-    } else {
-        item.id = isUpdate ? existingRes.value().id : 0;
-    }
-
-    if (outItem) {
-        *outItem = std::move(item);
-    }
     return ProcessStatus::Imported;
 }
 
+bool Importer::sourceUnchanged(const PreparedFile& prepared) {
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(prepared.source, ec);
+    if (ec || !std::filesystem::is_regular_file(status)) return false;
+    const auto modified = std::filesystem::last_write_time(prepared.source, ec);
+    if (ec || modified != prepared.write_time) return false;
+    const auto size = std::filesystem::file_size(prepared.source, ec);
+    return !ec && size == static_cast<uintmax_t>(prepared.item.file_size);
+}
+
+// The caller holds the database lock from validation through persistence.
+Status Importer::validatePreparedFile(PreparedFile& prepared, MediaItem& expected) {
+    if (!sourceUnchanged(prepared)) {
+        return Status::alreadyExists("Original changed during import: " + pathToUtf8(prepared.source));
+    }
+    if (!prepared.previous) return Status::ok();
+
+    const auto& previous = *prepared.previous;
+    auto currentResult = db_.getMediaById(previous.id);
+    if (!currentResult.isOk()) return currentResult.status();
+    const auto& current = currentResult.value();
+    if (current.file_path != previous.file_path || current.file_name != previous.file_name ||
+        current.content_hash != previous.content_hash || current.file_size != previous.file_size ||
+        current.file_modified_time != previous.file_modified_time) {
+        return Status::alreadyExists("Catalog file changed during import: " + previous.file_path);
+    }
+
+    auto& item = prepared.item;
+    item.id = current.id;
+    item.file_path = current.file_path;
+    item.file_name = current.file_name;
+    item.rating = current.rating;
+    item.flag = current.flag;
+    item.caption = current.caption;
+    if (current.date_taken != previous.date_taken || current.exif.date_taken_str != previous.exif.date_taken_str) {
+        item.date_taken = current.date_taken;
+        item.exif.date_taken_str = current.exif.date_taken_str;
+    }
+    if (current.exif.has_gps != previous.exif.has_gps || current.exif.latitude != previous.exif.latitude ||
+        current.exif.longitude != previous.exif.longitude || current.exif.altitude != previous.exif.altitude) {
+        item.exif.has_gps = current.exif.has_gps;
+        item.exif.latitude = current.exif.latitude;
+        item.exif.longitude = current.exif.longitude;
+        item.exif.altitude = current.exif.altitude;
+    }
+    item.created_at = current.created_at;
+    expected = std::move(currentResult.value());
+    return Status::ok();
+}
+
 Result<MediaItem> Importer::importFile(const std::string& filePath) {
-    if (running_.load()) {
+    if (!tryStartJob()) {
         return Status::alreadyExists("Importer is already running");
     }
+    struct RunningGuard {
+        std::atomic<bool>& flag;
+        ~RunningGuard() { flag.store(false); }
+    } runningGuard{running_};
     if (!isSupportedExtension(filePath)) {
         return Status::invalidArgument("Unsupported media extension: " + filePath);
     }
@@ -587,27 +614,44 @@ Result<MediaItem> Importer::importFile(const std::string& filePath) {
     if (!isInsideRootDir(normPath, currentPhotosDir)) {
         return Status::invalidArgument("File is outside photos root directory (" + currentPhotosDir + "): " + filePath);
     }
-    MediaItem item;
-    ProcessStatus st = processFileInternal(filePath, &item, true);
+    PreparedFile prepared;
+    ProcessStatus st = processFileInternal(filePath, prepared, false);
     if (st == ProcessStatus::Failed) {
         if (autoAssignedRoot) {
             setPhotosDir("");
         }
         return Status::internal("Failed to import media file: " + filePath);
     }
-    return item;
+    if (st == ProcessStatus::Skipped) return prepared.item;
+
+    std::lock_guard lock(db_.mutex());
+    MediaItem expected;
+    auto status = validatePreparedFile(prepared, expected);
+    if (status.isOk()) {
+        if (prepared.previous) {
+            const db::ImportedMediaUpdate update{prepared.item, std::move(expected)};
+            status = db_.updateImportedMediaBatch({&update, 1}).status();
+        } else {
+            status = db_.insertMedia(prepared.item).status();
+        }
+    }
+    if (!status.isOk()) {
+        if (autoAssignedRoot) setPhotosDir("");
+        return status;
+    }
+    applyGpsPlaceTagsBestEffort(db_, prepared.item);
+    return prepared.item;
 }
 
 Result<ImportProgress> Importer::importDirectory(
     const std::string& directoryPath,
     bool recursive,
-    ProgressCallback progressCb
+    ProgressCallback progressCb,
+    bool useDirectoryAsRoot
 ) {
-    bool expected = false;
-    if (!running_.compare_exchange_strong(expected, true)) {
+    if (!tryStartJob()) {
         return Status::alreadyExists("Importer is already running");
     }
-    cancelled_.store(false);
 
     // RAII guard ensuring running_ is always reset on exit or exceptions
     struct RunningGuard {
@@ -615,9 +659,11 @@ Result<ImportProgress> Importer::importDirectory(
         std::mutex& mtx;
         ImportProgress& prog;
         ~RunningGuard() {
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                prog.is_running = false;
+            }
             flag.store(false);
-            std::lock_guard<std::mutex> lock(mtx);
-            prog.is_running = false;
         }
     } runningGuard{running_, progress_mutex_, current_progress_};
 
@@ -642,7 +688,7 @@ Result<ImportProgress> Importer::importDirectory(
     std::string normDir = normalizePath(directoryPath);
     std::string currentPhotosDir = photosDir();
     if (currentPhotosDir.empty()) {
-        setPhotosDir(normDir);
+        if (useDirectoryAsRoot) setPhotosDir(normDir);
     } else {
         std::string normRoot = normalizePath(currentPhotosDir);
         if (normDir != normRoot && !isInsideRootDir(normDir, normRoot)) {
@@ -786,104 +832,84 @@ Result<ImportProgress> Importer::importDirectory(
 
     // Batch persistence structures
     std::mutex batchMutex;
-    std::vector<MediaItem> pendingInserts;
-    std::vector<MediaItem> pendingUpdates;
+    std::vector<PreparedFile> pendingFiles;
     std::vector<MediaId> newlyInsertedIds;
     constexpr size_t kBatchSize = 64;
-    pendingInserts.reserve(kBatchSize);
-    pendingUpdates.reserve(kBatchSize);
+    pendingFiles.reserve(kBatchSize);
 
     auto flushBatch = [&]() -> BatchFlushResult {
         std::lock_guard<std::mutex> bLock(batchMutex);
         BatchFlushResult result;
+        if (pendingFiles.empty()) return result;
 
-        // 1. Flush pending updates transactionally
-        if (!pendingUpdates.empty()) {
-            auto uRes = db_.updateMediaBatch(pendingUpdates);
-            if (uRes.isOk()) {
-                size_t count = uRes.value();
-                result.persisted_count += count;
-                std::lock_guard<std::mutex> pLock(progress_mutex_);
-                current_progress_.imported_files += static_cast<int64_t>(count);
-                current_progress_.processed_files += static_cast<int64_t>(count);
+        std::lock_guard dbLock(db_.mutex());
+        std::vector<db::ImportedMediaUpdate> updates;
+        std::vector<MediaItem> inserts;
+        const auto recordFailure = [&](const std::string& path, const Status& status) {
+            ++result.failed_count;
+            IMAGINE_LOG_WARN("Failed to import " + path + ": " + status.message());
+        };
+        for (auto& file : pendingFiles) {
+            MediaItem expected;
+            auto status = validatePreparedFile(file, expected);
+            if (!status.isOk()) {
+                recordFailure(file.item.file_path, status);
+            } else if (file.previous) {
+                updates.push_back({std::move(file.item), std::move(expected)});
+            } else {
+                inserts.push_back(std::move(file.item));
+            }
+        }
+        pendingFiles.clear();
+
+        if (!updates.empty()) {
+            auto updated = db_.updateImportedMediaBatch(updates);
+            if (updated.isOk()) {
+                result.persisted_count += updated.value();
+                for (const auto& update : updates) applyGpsPlaceTagsBestEffort(db_, update.item);
             } else {
                 result.batch_transaction_failed = true;
-                IMAGINE_LOG_WARN("Batch update failed (" + uRes.status().message() + "), falling back to individual updates");
-                for (const auto& item : pendingUpdates) {
-                    Status s = db_.updateMedia(item);
-                    std::lock_guard<std::mutex> pLock(progress_mutex_);
-                    if (s.isOk()) {
+                IMAGINE_LOG_WARN("Batch update failed (" + updated.status().message() + "), falling back to individual updates");
+                for (const auto& update : updates) {
+                    auto status = db_.updateImportedMediaBatch({&update, 1});
+                    if (status.isOk()) {
                         ++result.persisted_count;
-                        ++current_progress_.imported_files;
-                        ++current_progress_.processed_files;
+                        applyGpsPlaceTagsBestEffort(db_, update.item);
                     } else {
-                        ++result.failed_count;
-                        IMAGINE_LOG_ERROR("Failed to update media in DB for " + item.file_path + ": " + s.message());
-                        ++current_progress_.failed_files;
-                        ++current_progress_.processed_files;
+                        recordFailure(update.item.file_path, status.status());
                     }
                 }
             }
-            for (const auto& item : pendingUpdates) {
-                applyGpsPlaceTagsBestEffort(db_, item);
-            }
-            pendingUpdates.clear();
-            pendingUpdates.reserve(kBatchSize);
         }
 
-        // 2. Flush pending inserts transactionally
-        if (!pendingInserts.empty()) {
-            auto bRes = db_.insertMediaBatch(pendingInserts);
-            if (bRes.isOk()) {
-                size_t count = bRes.value();
-                result.persisted_count += count;
-                for (const auto& item : pendingInserts) {
-                    if (item.id > 0) newlyInsertedIds.push_back(item.id);
+        if (!inserts.empty()) {
+            auto inserted = db_.insertMediaBatch(inserts);
+            if (inserted.isOk()) {
+                result.persisted_count += inserted.value();
+                for (const auto& item : inserts) {
+                    newlyInsertedIds.push_back(item.id);
+                    applyGpsPlaceTagsBestEffort(db_, item);
                 }
-                std::lock_guard<std::mutex> pLock(progress_mutex_);
-                current_progress_.imported_files += static_cast<int64_t>(count);
-                current_progress_.processed_files += static_cast<int64_t>(count);
             } else {
                 result.batch_transaction_failed = true;
-                IMAGINE_LOG_WARN("Batch insert failed (" + bRes.status().message() + "), falling back to individual inserts");
-                for (auto& item : pendingInserts) {
-                    auto insRes = db_.insertMedia(item);
-                    if (insRes.isOk()) {
-                        item.id = insRes.value();
+                IMAGINE_LOG_WARN("Batch insert failed (" + inserted.status().message() + "), falling back to individual inserts");
+                for (auto& item : inserts) {
+                    auto status = db_.insertMedia(item);
+                    if (status.isOk()) {
                         ++result.persisted_count;
                         newlyInsertedIds.push_back(item.id);
-                        std::lock_guard<std::mutex> pLock(progress_mutex_);
-                        ++current_progress_.imported_files;
-                        ++current_progress_.processed_files;
+                        applyGpsPlaceTagsBestEffort(db_, item);
                     } else {
-                        // Atomic upsert fallback for path uniqueness conflict races
-                        auto existing = db_.getMediaByPath(item.file_path);
-                        if (existing.isOk()) {
-                            item.id = existing.value().id;
-                            auto updRes = db_.updateMedia(item);
-                            if (updRes.isOk()) {
-                                ++result.persisted_count;
-                                std::lock_guard<std::mutex> pLock(progress_mutex_);
-                                ++current_progress_.imported_files;
-                                ++current_progress_.processed_files;
-                                continue;
-                            }
-                        }
-                        ++result.failed_count;
-                        IMAGINE_LOG_ERROR("Failed to insert media into DB for " + item.file_path + ": " + insRes.status().message());
-                        std::lock_guard<std::mutex> pLock(progress_mutex_);
-                        ++current_progress_.failed_files;
-                        ++current_progress_.processed_files;
+                        recordFailure(item.file_path, status.status());
                     }
                 }
             }
-            for (const auto& item : pendingInserts) {
-                applyGpsPlaceTagsBestEffort(db_, item);
-            }
-            pendingInserts.clear();
-            pendingInserts.reserve(kBatchSize);
         }
 
+        std::lock_guard<std::mutex> progressLock(progress_mutex_);
+        current_progress_.imported_files += static_cast<int64_t>(result.persisted_count);
+        current_progress_.failed_files += static_cast<int64_t>(result.failed_count);
+        current_progress_.processed_files += static_cast<int64_t>(result.persisted_count + result.failed_count);
         return result;
     };
 
@@ -903,24 +929,15 @@ Result<ImportProgress> Importer::importDirectory(
             current_progress_.current_file = sanitizeUtf8(file);
         }
 
-        MediaItem item;
-        ProcessStatus st = processFileInternal(file, &item, false);
+        PreparedFile prepared;
+        ProcessStatus st = processFileInternal(file, prepared, true);
         switch (st) {
             case ProcessStatus::Imported: {
                 bool needFlush = false;
                 {
                     std::lock_guard<std::mutex> bLock(batchMutex);
-                    if (item.id > 0) {
-                        pendingUpdates.push_back(std::move(item));
-                        if (pendingUpdates.size() >= kBatchSize) {
-                            needFlush = true;
-                        }
-                    } else {
-                        pendingInserts.push_back(std::move(item));
-                        if (pendingInserts.size() >= kBatchSize) {
-                            needFlush = true;
-                        }
-                    }
+                    pendingFiles.push_back(std::move(prepared));
+                    needFlush = pendingFiles.size() >= kBatchSize;
                 }
                 if (needFlush) {
                     auto fRes = flushBatch();
@@ -953,7 +970,7 @@ Result<ImportProgress> Importer::importDirectory(
     };
 
     if (pool_ != nullptr) {
-        std::atomic<size_t> remainingTasks{0};
+        size_t remainingTasks = 0;
         std::mutex taskMutex;
         std::condition_variable taskCv;
 
@@ -972,7 +989,7 @@ Result<ImportProgress> Importer::importDirectory(
             {
                 std::unique_lock<std::mutex> lock(taskMutex);
                 taskCv.wait(lock, [&]() {
-                    return cancelled_.load() || remainingTasks.load() < maxInFlight;
+                    return cancelled_.load() || remainingTasks < maxInFlight;
                 });
             }
 
@@ -984,16 +1001,19 @@ Result<ImportProgress> Importer::importDirectory(
                 break;
             }
 
-            ++remainingTasks;
+            {
+                std::lock_guard lock(taskMutex);
+                ++remainingTasks;
+            }
             try {
                 pool_->enqueue([&, file = files[i]]() {
                     struct TaskCompletionGuard {
-                        std::atomic<size_t>& rem;
+                        size_t& rem;
                         std::mutex& mtx;
                         std::condition_variable& cv;
                         ~TaskCompletionGuard() {
-                            --rem;
                             std::lock_guard<std::mutex> lock(mtx);
+                            --rem;
                             cv.notify_all();
                         }
                     } tGuard{remainingTasks, taskMutex, taskCv};
@@ -1013,7 +1033,10 @@ Result<ImportProgress> Importer::importDirectory(
                     }
                 });
             } catch (const std::exception& ex) {
-                --remainingTasks;
+                {
+                    std::lock_guard lock(taskMutex);
+                    --remainingTasks;
+                }
                 IMAGINE_LOG_ERROR("Failed to enqueue import task: " + std::string(ex.what()));
                 std::lock_guard<std::mutex> lock(progress_mutex_);
                 ++current_progress_.failed_files;
@@ -1025,7 +1048,7 @@ Result<ImportProgress> Importer::importDirectory(
         {
             std::unique_lock<std::mutex> lock(taskMutex);
             taskCv.wait(lock, [&]() {
-                return remainingTasks.load() == 0;
+                return remainingTasks == 0;
             });
         }
     } else {

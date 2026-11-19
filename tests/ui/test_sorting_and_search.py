@@ -332,6 +332,28 @@ def test_semantic_search_probability_rank_grid_and_ui(server, page: Page):
     expect(page.locator(".sort-selector")).to_be_hidden()
 
 
+def test_find_similar_clears_hidden_source_selection(server, page: Page):
+    page.route('**/api/semantic/status', lambda route: route.fulfill(
+        json={'ready': True, 'indexSize': 10, 'modelId': 'clip', 'built': True}
+    ))
+    page.goto(server['url'])
+    source = page.locator('.photo-card', has_text='sunset.bmp')
+    result = page.locator('.photo-card', has_text='mountain.bmp')
+    source_id = source.get_attribute('data-id')
+    result_id = int(result.get_attribute('data-id'))
+    page.route(f'**/api/semantic/similar/{source_id}', lambda route: route.fulfill(
+        json={'media_items': [{'id': result_id, 'file_name': 'mountain.bmp'}]}
+    ))
+
+    source.click()
+    page.locator('#inspectorFindSimilarBtn').click()
+    expect(source).to_have_count(0)
+    expect(result).to_be_visible()
+    expect(page.locator('#inspectorNoSelection')).to_be_visible()
+    page.keyboard.press('Delete')
+    expect(page.locator('#deleteMediaModal')).to_be_hidden()
+
+
 def test_loupe_navigation_in_semantic_search_probability_rank_order(server, page: Page):
     """Loupe viewer navigates sequentially through semantic search results in probability rank order."""
     page.route("**/api/semantic/status*", lambda route: route.fulfill(

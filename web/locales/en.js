@@ -710,6 +710,7 @@ export default {
     toast_failed_load_metadata: 'Failed to load catalog metadata: {error}',
     toast_batch_delete_failed: 'Batch delete failed: {error}',
     toast_photos_not_deleted: '{count} photos could not be deleted',
+    toast_disk_delete_incomplete: 'Incomplete disk cleanup after catalog removal ({count})',
     toast_deleted_photos_disk: 'Deleted {count} photos from catalog and disk',
     toast_deleted_photo_disk: 'Deleted 1 photo from catalog and disk',
     toast_tag_deleted_named: 'Tag "{name}" deleted.',

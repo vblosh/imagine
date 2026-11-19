@@ -1046,6 +1046,39 @@ TEST(ClipServiceTest, SearchAndFindSimilarClampingAndDateFilters) {
     fs::remove_all(tempModels, ec);
 }
 
+TEST(ClipServiceTest, VisualScanKeepsEligiblePairAndEvictsChangedPhoto) {
+    imagine::db::CatalogDb db;
+    ASSERT_TRUE(db.open(":memory:").isOk());
+    imagine::clip::Service svc(db, "", [](const std::string& path) { return path; });
+    auto add = [&](const std::string& name, int64_t date, const std::vector<float>& vector) {
+        imagine::MediaItem item;
+        item.file_path = name;
+        item.file_name = name;
+        item.content_hash = name;
+        item.date_taken = date;
+        auto id = db.insertMedia(item).value();
+        svc.addMediaVector(id, vector);
+        return id;
+    };
+    const auto first = add("first.jpg", 1000, {1.0f, 0.0f});
+    const auto second = add("second.jpg", 1001, {0.98f, 0.198997f});
+    for (int i = 0; i < 55; ++i) {
+        add("other-" + std::to_string(i) + ".jpg", 10000 + 100 * i, {0.995f, 0.099875f});
+    }
+    const auto groups = svc.scanVisualDuplicates(0.97f, 10);
+    ASSERT_EQ(groups.size(), 1u);
+    ASSERT_EQ(groups.front().memberIds.size(), 2u);
+    EXPECT_TRUE(std::ranges::find(groups.front().memberIds, first) != groups.front().memberIds.end());
+    EXPECT_TRUE(std::ranges::find(groups.front().memberIds, second) != groups.front().memberIds.end());
+
+    auto changed = db.getMediaById(first).value();
+    changed.content_hash = "new-content";
+    ASSERT_TRUE(db.updateMediaBatch({changed}).isOk());
+    EXPECT_FALSE(svc.hasMedia(first));
+    EXPECT_TRUE(svc.hasMedia(second));
+    EXPECT_TRUE(svc.scanVisualDuplicates(0.97f, 10).empty());
+}
+
 TEST(ClipServiceTest, VisualDuplicateScanHelperAndUnionFindGrouping) {
     std::error_code ec;
     auto testDb = fs::temp_directory_path() / ("test_clip_dedup_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".db");

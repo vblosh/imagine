@@ -710,6 +710,7 @@ export default {
     toast_failed_load_metadata: 'Не удалось загрузить метаданные каталога: {error}',
     toast_batch_delete_failed: 'Пакетное удаление не удалось: {error}',
     toast_photos_not_deleted: '{count} фото не удалось удалить',
+    toast_disk_delete_incomplete: 'Очистка диска после удаления из каталога не завершена ({count})',
     toast_deleted_photos_disk: 'Удалено {count} фото из каталога и диска',
     toast_deleted_photo_disk: 'Удалено 1 фото из каталога и диска',
     toast_tag_deleted_named: 'Тег "{name}" удален.',

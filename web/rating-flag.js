@@ -208,7 +208,7 @@ export async function batchUpdateDates(updates) {
     }
   });
   try {
-    await api.post('/api/media/batch-date', { updates });
+    await api.post('/api/media/batch-date', { items: updates });
     metadataReloadCallback();
   } catch (err) {
     console.error('Failed to batch update dates:', err);

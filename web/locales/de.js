@@ -710,6 +710,7 @@ export default {
     toast_failed_load_metadata: 'Fehler beim Laden der Katalog-Metadaten: {error}',
     toast_batch_delete_failed: 'Stapellöschen fehlgeschlagen: {error}',
     toast_photos_not_deleted: '{count} Fotos konnten nicht gelöscht werden',
+    toast_disk_delete_incomplete: 'Festplattenbereinigung nach Kataloglöschung unvollständig ({count})',
     toast_deleted_photos_disk: '{count} Fotos aus Katalog und Festplatte gelöscht',
     toast_deleted_photo_disk: '1 Foto aus Katalog und Festplatte gelöscht',
     toast_tag_deleted_named: 'Schlagwort "{name}" gelöscht.',

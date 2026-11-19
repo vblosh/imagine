@@ -710,6 +710,7 @@ export default {
     toast_failed_load_metadata: '加载目录元数据失败: {error}',
     toast_batch_delete_failed: '批量删除失败: {error}',
     toast_photos_not_deleted: '{count} 张照片无法删除',
+    toast_disk_delete_incomplete: '从目录移除后，磁盘清理未完成（{count}）',
     toast_deleted_photos_disk: '已从目录和磁盘删除 {count} 张照片',
     toast_deleted_photo_disk: '已从目录和磁盘删除 1 张照片',
     toast_tag_deleted_named: '标签 "{name}" 已删除。',

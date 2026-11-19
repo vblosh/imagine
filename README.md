@@ -54,7 +54,7 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Persistent Pair Dismissals**: Suppresses user-dismissed pairs in future scans via canonical SQLite dismissal records with one-click reset support.
 - **High-Throughput Importer**:
   - Multi-threaded scanning and processing pipeline (`std::jthread` thread pool).
-  - Support for Photos (JPEG, PNG, WebP, TIFF, BMP), Videos (MP4, MOV, WebM, MKV, AVI, etc.), and Audio (MP3, FLAC, WAV, AAC, etc.).
+  - Support for Photos (JPEG, PNG, BMP), Videos (MP4, MOV, WebM, MKV, AVI, etc.), and Audio (MP3, FLAC, WAV, AAC, etc.).
   - Fast change-detection skipping unchanged files via modification timestamps.
   - Automatic SHA-256 cryptographic content hashing for deduplication.
   - Robust EXIF parsing with fallback to filesystem timestamps.
@@ -293,7 +293,7 @@ Import a folder of photos, videos, or audio into an Imagine catalog:
 ```
 
 Options:
-- `--photos-dir <dir>`: Base directory for relative media storage.
+- `--photos-dir <dir>`: Base directory for relative media storage. CLI imports store absolute paths when this option is omitted.
 - `--thumbs-dir <dir>`: Custom thumbnail cache directory.
 - `--threads <N>`: Worker thread count (default: hardware concurrency).
 - `--no-recursive`: Disable scanning nested subfolders.

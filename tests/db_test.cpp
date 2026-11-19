@@ -1558,6 +1558,13 @@ TEST_F(CatalogDbTest, RemoveClipTagRecordsRejectionAndReAddClearsIt) {
     ASSERT_EQ(countStmt.step(), StepResult::Row);
     EXPECT_EQ(countStmt.getInt64(0), 1);
 
+    // A worker can have prepared these results before the user rejected the tag.
+    ASSERT_TRUE(db.replaceSmartTags(records, "model", "rev", "tax").isOk());
+    EXPECT_TRUE(db.getTagsForMedia(mid).value().empty());
+    auto stale = records;
+    stale.front().contentHash = "older-photo-hash";
+    EXPECT_FALSE(db.replaceSmartTags(stale, "model", "rev", "tax").isOk());
+
     // Re-adding manually clears rejection and sets source='manual'
     ASSERT_TRUE(db.addTagToMedia(mid, tClip).isOk());
     countStmt.reset();

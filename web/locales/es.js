@@ -710,6 +710,7 @@ export default {
     toast_failed_load_metadata: 'Error al cargar los metadatos del catálogo: {error}',
     toast_batch_delete_failed: 'Error al eliminar por lotes: {error}',
     toast_photos_not_deleted: '{count} fotos no se pudieron eliminar',
+    toast_disk_delete_incomplete: 'Limpieza de disco incompleta tras eliminar del catálogo ({count})',
     toast_deleted_photos_disk: 'Se eliminaron {count} fotos del catálogo y del disco',
     toast_deleted_photo_disk: 'Se eliminó 1 foto del catálogo y del disco',
     toast_tag_deleted_named: 'Etiqueta "{name}" eliminada.',

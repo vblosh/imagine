@@ -12,7 +12,7 @@ import {
   normalizeTimelineEntry,
   normalizeCatalogStats,
 } from './api.js';
-import { state, invalidateGpsCache } from './state.js';
+import { state, invalidateGpsCache, pruneMediaSelection } from './state.js';
 import { showToast } from './dom.js';
 import { t } from './i18n.js';
 import { buildMediaParams, prepareAlbumOrderMode, syncAlbumOrderSortOption, isAlbumOrderMode } from './media-params.js';
@@ -207,16 +207,7 @@ export async function loadMediaData(append = false, { preserveScroll = false } =
     state.mediaItems = items;
     state.mediaOffset = items.length;
 
-    // Reconcile selection: prune IDs no longer visible
-    const visibleIds = new Set(state.mediaItems.map(item => item.id));
-    state.selectedIds.forEach(id => {
-      if (!visibleIds.has(id)) {
-        state.selectedIds.delete(id);
-      }
-    });
-    if (state.lastSelectedId !== null && !visibleIds.has(state.lastSelectedId)) {
-      state.lastSelectedId = null;
-    }
+    pruneMediaSelection();
 
     // Track all discovered folders across loads so filtering doesn't remove folders from sidebar
     state.mediaItems.forEach(item => {
@@ -313,16 +304,7 @@ export async function loadMoreMediaData() {
       state.totalCount = state.mediaItems.length;
     }
 
-    // Reconcile selection: prune IDs no longer visible
-    const visibleIds = new Set(state.mediaItems.map(item => item.id));
-    state.selectedIds.forEach(id => {
-      if (!visibleIds.has(id)) {
-        state.selectedIds.delete(id);
-      }
-    });
-    if (state.lastSelectedId !== null && !visibleIds.has(state.lastSelectedId)) {
-      state.lastSelectedId = null;
-    }
+    pruneMediaSelection();
 
     newItems.forEach(item => {
       if (item.file_path) {

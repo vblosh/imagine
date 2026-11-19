@@ -961,9 +961,17 @@ export async function submitDeleteMedia() {
 
   const idsToDelete = [...pendingDeleteMediaIds];
   const deleteFromDisk = !!(dom.deleteFromDiskCheckbox && dom.deleteFromDiskCheckbox.checked);
-  const failedIds = [];
+  const failedIds = new Set();
+  const diskDeletedIds = new Set();
+  const diskFailedIds = new Set();
   try {
-    await api.post('/api/media/batch-delete', { ids: idsToDelete, delete_from_disk: deleteFromDisk });
+    const result = await api.post('/api/media/batch-delete', { ids: idsToDelete, delete_from_disk: deleteFromDisk });
+    for (const id of result?.failed_ids || []) failedIds.add(Number(id));
+    if (deleteFromDisk) {
+      const diskIds = result?.disk_deleted_ids ?? (result?.deleted_from_disk === false ? [] : idsToDelete);
+      for (const id of diskIds) diskDeletedIds.add(Number(id));
+      for (const failure of result?.disk_failures || []) diskFailedIds.add(Number(failure.id));
+    }
   } catch (e) {
     if (idsToDelete.length > 25) {
       console.error('Batch delete failed:', e);
@@ -973,23 +981,32 @@ export async function submitDeleteMedia() {
     }
     for (const id of idsToDelete) {
       try {
-        await api.del(`/api/media/${id}${deleteFromDisk ? '?delete_from_disk=true' : ''}`);
+        const result = await api.del(`/api/media/${id}${deleteFromDisk ? '?delete_from_disk=true' : ''}`);
+        if (deleteFromDisk && result?.deleted_from_disk !== false) diskDeletedIds.add(id);
+        if (result?.disk_error) diskFailedIds.add(id);
       } catch (err) {
         console.warn('Failed to delete media', id, err);
-        failedIds.push(id);
+        failedIds.add(id);
       }
     }
   }
 
   pendingDeleteMediaIds = [];
 
-  if (failedIds.length > 0) {
-    showToast(t('toast_photos_not_deleted', { count: failedIds.length }), 'error');
-  } else if (deleteFromDisk) {
-    showToast(idsToDelete.length === 1 ? t('toast_deleted_photo_disk') : t('toast_deleted_photos_disk', { count: idsToDelete.length }), 'success');
+  const actuallyDeletedIds = idsToDelete.filter(id => !failedIds.has(id));
+  if (failedIds.size > 0) {
+    showToast(t('toast_photos_not_deleted', { count: failedIds.size }), 'error');
   }
-
-  const actuallyDeletedIds = idsToDelete.filter(id => !failedIds.includes(id));
+  if (deleteFromDisk) {
+    const diskDeletedCount = actuallyDeletedIds.filter(id => diskDeletedIds.has(id) && !diskFailedIds.has(id)).length;
+    if (diskDeletedCount > 0) {
+      showToast(diskDeletedCount === 1 ? t('toast_deleted_photo_disk') : t('toast_deleted_photos_disk', { count: diskDeletedCount }), 'success');
+    }
+    const incompleteDiskCount = actuallyDeletedIds.length - diskDeletedCount;
+    if (incompleteDiskCount > 0) {
+      showToast(t('toast_disk_delete_incomplete', { count: incompleteDiskCount }), 'error');
+    }
+  }
 
   const isLoupeActive = state.loupeIndex >= 0 || (dom.loupeModal && dom.loupeModal.style.display === 'flex');
   let targetLoupeMediaId = null;

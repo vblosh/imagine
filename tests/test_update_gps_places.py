@@ -8,6 +8,7 @@ import sys
 import tempfile
 import sqlite3
 import pytest
+from contextlib import closing
 from tools.update_gps_places import SpatialCityIndex, haversine_km, update_places, resolve_candidate_tags
 
 TEST_CSV_CONTENT = """name,admin1,country_code,country_name,latitude,longitude,population
@@ -59,6 +60,26 @@ def test_haversine_distance():
     # Berlin to Potsdam is approx 27 km
     dist = haversine_km(52.52000, 13.40500, 52.39886, 13.06566)
     assert 25.0 < dist < 30.0
+
+
+def test_backup_includes_uncheckpointed_wal_rows(tmp_path):
+    db_path = tmp_path / "catalog.db"
+    csv_path = tmp_path / "cities.csv"
+    csv_path.write_text(TEST_CSV_CONTENT, encoding="utf-8")
+    create_test_db(db_path)
+
+    with closing(sqlite3.connect(db_path)) as writer:
+        assert writer.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute("INSERT INTO media_items(file_path, has_gps, latitude, longitude) VALUES('berlin.jpg', 1, 52.52, 13.405)")
+        writer.commit()
+        assert (tmp_path / "catalog.db-wal").stat().st_size > 0
+
+        assert update_places(str(db_path), str(csv_path)) == 0
+        backup_path, = tmp_path.glob("catalog.db.backup_*")
+        with closing(sqlite3.connect(backup_path)) as backup:
+            assert backup.execute("SELECT file_path FROM media_items").fetchone() == ("berlin.jpg",)
+            assert backup.execute("SELECT COUNT(*) FROM media_tags").fetchone() == (0,)
 
 
 def test_spatial_index_lookup():

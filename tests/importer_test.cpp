@@ -200,9 +200,9 @@ TEST_F(ImporterTest, SupportedExtensionsAndProgressJson) {
     EXPECT_TRUE(Importer::isSupportedExtension("test.jpeg"));
     EXPECT_TRUE(Importer::isSupportedExtension("test.PNG"));
     EXPECT_TRUE(Importer::isSupportedExtension("test.bmp"));
-    EXPECT_TRUE(Importer::isSupportedExtension("test.webp"));
-    EXPECT_TRUE(Importer::isSupportedExtension("test.tiff"));
-    EXPECT_TRUE(Importer::isSupportedExtension("test.tif"));
+    EXPECT_FALSE(Importer::isSupportedExtension("test.webp"));
+    EXPECT_FALSE(Importer::isSupportedExtension("test.tiff"));
+    EXPECT_FALSE(Importer::isSupportedExtension("test.tif"));
     EXPECT_FALSE(Importer::isSupportedExtension("test.txt"));
     EXPECT_FALSE(Importer::isSupportedExtension("test.pdf"));
 

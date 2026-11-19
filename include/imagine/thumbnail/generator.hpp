@@ -18,7 +18,7 @@ class Generator {
 public:
     static Result<ImageBuffer> loadImage(const std::string& filePath);
     static Result<std::vector<uint8_t>> loadImageBytes(const std::string& filePath);
-    static Result<ImageBuffer> loadImageFromMemory(const uint8_t* data, size_t size);
+    static Result<ImageBuffer> loadImageFromMemory(const uint8_t* data, size_t size, bool preserveAlpha = false);
 
     static Result<ImageBuffer> resize(const ImageBuffer& src, int maxDimension);
     // Applies all EXIF orientations 1-8 (including mirrored orientations).
@@ -28,6 +28,7 @@ public:
 
     static Status saveJpeg(const ImageBuffer& img, const std::string& destPath, int quality = 85);
     static Status saveJpegFast(const ImageBuffer& img, const std::string& destPath, int quality = 85);
+    static Status saveBmp(const ImageBuffer& img, const std::string& destPath);
     static Status savePng(const ImageBuffer& img, const std::string& destPath);
 
     static Result<std::pair<int, int>> getImageDimensions(const std::string& filePath);

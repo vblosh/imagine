@@ -11,6 +11,11 @@
 
 namespace imagine {
 
+inline int64_t fileTimeToUnixSeconds(std::filesystem::file_time_type fileTime) {
+    const auto systemTime = std::chrono::clock_cast<std::chrono::system_clock>(fileTime);
+    return std::chrono::duration_cast<std::chrono::seconds>(systemTime.time_since_epoch()).count();
+}
+
 inline std::filesystem::path stripExtendedPrefix(const std::filesystem::path& p) {
 #if defined(_WIN32)
     std::wstring ws = p.native();
