@@ -125,7 +125,8 @@ public:
     Result<ImportProgress> importDirectory(
         const std::string& directoryPath,
         bool recursive = true,
-        ProgressCallback progressCb = nullptr
+        ProgressCallback progressCb = nullptr,
+        bool useDirectoryAsRoot = true
     );
 
     Result<MediaItem> importFile(const std::string& filePath);
@@ -153,7 +154,17 @@ public:
     }
 
 private:
-    ProcessStatus processFileInternal(const std::string& filePath, MediaItem* outItem = nullptr, bool commitToDb = true);
+    struct PreparedFile {
+        MediaItem item;
+        std::optional<MediaItem> previous;
+        std::filesystem::path source;
+        std::filesystem::file_time_type write_time;
+    };
+
+    bool tryStartJob();
+    ProcessStatus processFileInternal(const std::string& filePath, PreparedFile& prepared, bool cancellable);
+    Status validatePreparedFile(PreparedFile& prepared, MediaItem& expected);
+    static bool sourceUnchanged(const PreparedFile& prepared);
 
     db::CatalogDb& db_;
     thumbnail::Cache& cache_;

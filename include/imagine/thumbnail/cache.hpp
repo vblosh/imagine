@@ -36,7 +36,8 @@ public:
     Result<std::pair<std::string, std::string>> ensureDualThumbnails(
         const std::string& sourceImagePath,
         const std::string& hash,
-        int orientation = 1
+        int orientation = 1,
+        bool replaceExisting = false
     );
 
     /// Ensures both small and large thumbnails exist for an in-memory image buffer.
@@ -49,7 +50,8 @@ public:
         const std::string& hash,
         int orientation = 1,
         int* outWidth = nullptr,
-        int* outHeight = nullptr
+        int* outHeight = nullptr,
+        bool replaceExisting = false
     );
 
     Result<std::pair<std::string, std::string>> ensureProceduralThumbnails(

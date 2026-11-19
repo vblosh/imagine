@@ -16,9 +16,9 @@ import {
   normalizeImportProgress,
   getOriginalMediaUrl
 } from './api.js';
-import { state, invalidateGpsCache } from './state.js';
+import { state, invalidateGpsCache, pruneMediaSelection } from './state.js';
 import { dom, validateRequiredDom, showToast } from './dom.js';
-import { initViews, renderCurrentView } from './views.js';
+import { initViews, refreshAfterMediaLoad, renderCurrentView } from './views.js';
 import { bindGridHandlers } from './grid.js';
 import { bindSidebarHandlers } from './sidebar.js';
 import { bindTimelineHandlers } from './timeline.js';
@@ -584,8 +584,8 @@ export function setupEventListeners() {
           state.totalCount = items.length;
           state.mediaOffset = items.length;
 
-          syncSemanticSearchUI();
-          renderGrid();
+          pruneMediaSelection();
+          refreshAfterMediaLoad();
           showToast(t('toast_similar_found', { count: items.length }), 'info');
         } else {
           showToast(t('toast_similar_none'), 'info');

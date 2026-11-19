@@ -567,6 +567,12 @@ bool MediaReader::isAudioExtension(const std::string& ext) {
 
 bool MediaReader::isSupportedExtension(const std::string& path) {
     std::string ext = getExtensionLower(path);
+    if (ext == ".webp" || ext == ".tiff" || ext == ".tif") return false;
+    return isImageExtension(ext) || isVideoExtension(ext) || isAudioExtension(ext);
+}
+
+bool MediaReader::isRecognizedExtension(const std::string& path) {
+    std::string ext = getExtensionLower(path);
     return isImageExtension(ext) || isVideoExtension(ext) || isAudioExtension(ext);
 }
 

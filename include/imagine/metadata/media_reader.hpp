@@ -52,6 +52,7 @@ public:
 class MediaReader {
 public:
     static bool isSupportedExtension(const std::string& path);
+    static bool isRecognizedExtension(const std::string& path);
     static bool isVideoExtension(const std::string& ext);
     static bool isAudioExtension(const std::string& ext);
     static bool isImageExtension(const std::string& ext);

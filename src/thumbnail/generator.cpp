@@ -165,7 +165,7 @@ Result<std::vector<uint8_t>> Generator::loadImageBytes(const std::string& filePa
     return bytes;
 }
 
-Result<ImageBuffer> Generator::loadImageFromMemory(const uint8_t* data, size_t size) {
+Result<ImageBuffer> Generator::loadImageFromMemory(const uint8_t* data, size_t size, bool preserveAlpha) {
     if (!data || size == 0) {
         return Status::invalidArgument("Empty memory buffer for image decode");
     }
@@ -184,7 +184,8 @@ Result<ImageBuffer> Generator::loadImageFromMemory(const uint8_t* data, size_t s
     }
 
     int w = 0, h = 0, channels = 0;
-    unsigned char* pixels = stbi_load_from_memory(data, static_cast<int>(size), &w, &h, &channels, 3);
+    const int outputChannels = preserveAlpha ? 4 : 3;
+    unsigned char* pixels = stbi_load_from_memory(data, static_cast<int>(size), &w, &h, &channels, outputChannels);
     if (!pixels) {
         return Status::parseError("Failed to decode image from memory: " + std::string(stbi_failure_reason()));
     }
@@ -199,15 +200,15 @@ Result<ImageBuffer> Generator::loadImageFromMemory(const uint8_t* data, size_t s
     }
 
     size_t numPixels = static_cast<size_t>(w) * static_cast<size_t>(h);
-    if (numPixels > std::numeric_limits<size_t>::max() / 3) {
+    if (numPixels > std::numeric_limits<size_t>::max() / outputChannels) {
         return Status::internal("Image dimensions too large to allocate");
     }
-    size_t totalBytes = numPixels * 3;
+    size_t totalBytes = numPixels * outputChannels;
 
     ImageBuffer buf;
     buf.width = w;
     buf.height = h;
-    buf.channels = 3;
+    buf.channels = outputChannels;
     buf.data.assign(pixels, pixels + totalBytes);
 
     return buf;
@@ -636,9 +637,9 @@ Status Generator::saveJpegFast(const ImageBuffer& img, const std::string& destPa
     return saveJpeg(img, destPath, quality);
 }
 
-Status Generator::savePng(const ImageBuffer& img, const std::string& destPath) {
+static Status saveBitmap(const ImageBuffer& img, const std::string& destPath, bool png) {
     if (!isValidImageBuffer(img)) {
-        return Status::invalidArgument("Empty or invalid image buffer for saving PNG");
+        return Status::invalidArgument("Empty or invalid image buffer for saving bitmap");
     }
 
     std::filesystem::path p = pathFromUtf8(destPath);
@@ -660,17 +661,27 @@ Status Generator::savePng(const ImageBuffer& img, const std::string& destPath) {
         };
 
         int stride = img.width * img.channels;
-        int rc = stbi_write_png_to_func(writeFunc, &ofs, img.width, img.height, img.channels, img.data.data(), stride);
+        int rc = png
+            ? stbi_write_png_to_func(writeFunc, &ofs, img.width, img.height, img.channels, img.data.data(), stride)
+            : stbi_write_bmp_to_func(writeFunc, &ofs, img.width, img.height, img.channels, img.data.data());
         ofs.flush();
         if (!rc || !ofs) {
             ofs.close();
             std::error_code ecClean;
             std::filesystem::remove(tmpPath, ecClean);
-            return Status::ioError("Failed to write PNG thumbnail to " + destPath);
+            return Status::ioError("Failed to write bitmap to " + destPath);
         }
     }
 
     return commitFile(tmpPath, p);
+}
+
+Status Generator::savePng(const ImageBuffer& img, const std::string& destPath) {
+    return saveBitmap(img, destPath, true);
+}
+
+Status Generator::saveBmp(const ImageBuffer& img, const std::string& destPath) {
+    return saveBitmap(img, destPath, false);
 }
 
 Result<ImageBuffer> Generator::generateProceduralThumbnail(

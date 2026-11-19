@@ -107,7 +107,7 @@ struct DeduplicatorScanResult {
 
 - **Architectural scan placement recorded decision:** Visual scan and Union-Find graph clustering (`DisjointSet`) are co-located in `ClipService::scanVisualDuplicates` (`src/clip/service.cpp`), where vector embeddings and similarity queries live, delegating keeper ranking to `imagine::core::isBetterKeeper`. `Deduplicator` in `include/imagine/core/deduplicator.hpp` defines the canonical domain types (`DuplicateMatchType`, `DuplicateCandidateOptions` / `DeduplicatorOptions`, `DuplicateGroup`, `DuplicateScanResult` / `DeduplicatorScanResult`), `rankKeeper`, `isBetterKeeper`, and `sortDuplicateGroup`. Exact duplicate scanning is implemented by `CatalogDb::findExactDuplicateGroups`.
 - `rankKeeper(members, metadata)` implements the Section 1.2 ordering; pure function, unit-testable without a database.
-- Visual scan fetches candidate pairs via `ClipService::findSimilar` above threshold, drops pairs failing the `date_taken` window (window check skipped only when either side `== 0`: undated photos cluster on visual score alone; negative pre-1970 timestamps are valid and participate in the window), drops dismissed pairs, then **Union-Find** clusters the surviving edges. Exact-group members are removed from the visual candidate set before clustering so the two passes never overlap.
+- Visual scanning excludes exact-group members, dismissed pairs and pairs outside the configured capture-date window before computing similarity. When either capture date is unknown, similarity alone determines whether the pair qualifies. Pre-1970 timestamps participate in the date window. The scan feeds every eligible pair at or above the similarity threshold into union-find clustering.
 - Result ordering: exact groups first (largest-first), then visual groups. `mediaScanned` counts in-scope rows examined.
 
 ### 2.5 `Catalog::deleteMedia` safeguards (`src/core/catalog.cpp:723`)
@@ -156,10 +156,19 @@ Response (`200`):
 ### 3.3 `POST /api/media/duplicates/resolve`
 
 ```json
-{ "groups": [{ "keeper": 12, "remove": [13] }] }
+{
+  "groups": [{
+    "keeper": 12,
+    "remove": [13],
+    "expected_hashes": { "12": "<keeper SHA-256>", "13": "<removed item SHA-256>" },
+    "delete_from_disk": true
+  }]
+}
 ```
 
-For each group, in one transaction per group: `mergeMediaMetadata(keeper, loser)` for every loser, then `Catalog::deleteMedia(loser)` (which evicts the CLIP `VectorIndex` entry via `clipService.removeMedia`), then compact album positions. Returns per-group `{ keeper, removed, merged_tags }`. Unknown IDs yield per-group `404` entries without aborting sibling groups.
+The review sends the content hashes recorded by the scan. Disk removal requires a SHA-256 for every item in the group, including the keeper. A changed hash returns a group conflict and the user can rescan. Catalog-only clients may omit `expected_hashes`.
+
+The resolver stages the originals on the same volume, then merges and removes catalog rows in one transaction per group. A failed transaction restores staged files. `freed_bytes` reflects files actually unlinked. If final cleanup fails after commit, the group's `disk_failures` entries report the affected media IDs and recovery paths.
 
 ### 3.4 `POST /api/media/duplicates/dismiss`
 

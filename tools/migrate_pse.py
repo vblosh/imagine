@@ -27,10 +27,8 @@ import struct
 import argparse
 import sqlite3
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
-
-sys.stdout.reconfigure(encoding='utf-8')
 
 CAMERA_DUMMY_CAPTIONS = {
     'DCF 1.0',
@@ -192,14 +190,19 @@ def compute_quick_hash(filepath, size, mtime):
 
 def parse_pse_date(date_str):
     if not date_str or len(date_str) < 15:
-        return 0, ""
+        return None, ""
     try:
         dt = datetime.strptime(date_str[:15], "%Y%m%dT%H%M%S")
-        epoch = int(dt.timestamp())
+        try:
+            epoch = int(dt.timestamp())
+        except (OSError, OverflowError, ValueError):
+            # Windows local time conversion cannot represent pre-epoch dates.
+            # Use the stored clock time as UTC, as Imagine does for EXIF dates.
+            epoch = int(dt.replace(tzinfo=timezone.utc).timestamp())
         formatted = dt.strftime("%Y-%m-%d %H:%M:%S")
         return epoch, formatted
-    except Exception:
-        return 0, ""
+    except (OSError, OverflowError, ValueError):
+        return None, ""
 
 def is_valid_caption(caption):
     if not caption or not isinstance(caption, str):
@@ -391,7 +394,6 @@ def run_migration():
     query = """
         SELECT m.id, m.volume_id, m.full_filepath, m.search_date_begin
         FROM media_table m
-        WHERE m.volume_id NOT IN (184, 2)
         ORDER BY m.id
     """
     if args.limit > 0:
@@ -433,7 +435,7 @@ def run_migration():
         fmtime = int(os.path.getmtime(full_path))
         fname = os.path.basename(full_path)
         date_taken, date_taken_str = parse_pse_date(s_date)
-        if date_taken <= 0:
+        if date_taken is None:
             date_taken = fmtime
             date_taken_str = datetime.fromtimestamp(fmtime).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -729,4 +731,6 @@ def run_migration():
     print("=" * 70)
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8")
     run_migration()

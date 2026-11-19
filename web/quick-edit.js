@@ -60,6 +60,8 @@ export const quickEditState = {
   isDirty: false,
   isOriginalLoaded: false,
   photoId: null,
+  originalContentHash: "",
+  exportType: "image/jpeg",
   originalImage: null,
   workingCanvas: null,
   workingCtx: null,
@@ -476,6 +478,10 @@ export function openQuickEdit() {
   quickEditState.isDirty = false;
   quickEditState.isOriginalLoaded = false;
   quickEditState.photoId = item.id;
+  quickEditState.originalContentHash = item.content_hash;
+  quickEditState.exportType = /\.png$/i.test(item.file_name || item.file_path || '')
+    ? "image/png"
+    : "image/jpeg";
   quickEditState.rotation = 0;
   quickEditState.straighten = 0;
   quickEditState.flipH = false;
@@ -1793,6 +1799,9 @@ export async function saveEdits(mode = "overwrite") {
   if (currentItem && (currentItem.media_type === "video" || currentItem.media_type === "audio")) {
     return;
   }
+  const { exportType, originalContentHash } = quickEditState;
+  const headers = getAuthHeaders();
+  if (originalContentHash) headers["X-Image-Hash"] = originalContentHash;
 
   try {
     if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = true;
@@ -1815,13 +1824,13 @@ export async function saveEdits(mode = "overwrite") {
     let res;
     if (typeof canvas.toBlob === "function") {
       try {
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.95));
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, exportType, 0.95));
         if (blob) {
           res = await fetch(`/api/photos/${id}/edit?mode=${encodeURIComponent(mode)}`, {
             method: "POST",
             headers: {
-              ...getAuthHeaders(),
-              "Content-Type": "image/jpeg",
+              ...headers,
+              "Content-Type": exportType,
               "X-Edit-Mode": mode,
             },
             body: blob,
@@ -1833,10 +1842,10 @@ export async function saveEdits(mode = "overwrite") {
     }
 
     if (!res) {
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.95);
+      const dataUrl = canvas.toDataURL(exportType, 0.95);
       res = await fetch(`/api/photos/${id}/edit`, {
         method: "POST",
-        headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+        headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({
           mode,
           image_data: dataUrl,

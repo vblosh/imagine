@@ -17,6 +17,18 @@
 
 namespace imagine::core {
 
+struct ReviewedMedia {
+    MediaId id;
+    std::string content_hash;
+};
+
+struct DeleteResult {
+    bool deleted_from_disk{false};
+    int64_t freed_bytes{0};
+    std::string disk_error;
+    std::string recovery_path;
+};
+
 class Catalog {
 public:
     explicit Catalog(size_t threadPoolThreads = std::max(1u, std::thread::hardware_concurrency()));
@@ -42,7 +54,8 @@ public:
     Result<ImportProgress> importDirectory(
         const std::string& path,
         bool recursive = true,
-        Importer::ProgressCallback progressCb = nullptr
+        Importer::ProgressCallback progressCb = nullptr,
+        bool useDirectoryAsRoot = true
     );
     Result<MediaItem> importFile(const std::string& path);
     void cancelImport();
@@ -62,6 +75,10 @@ public:
     Status setDateTaken(MediaId id, int64_t dateTaken, const std::string& dateTakenStr = "");
     Status setGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
     Status deleteMedia(MediaId id, bool deleteFromDisk = false);
+    Result<DeleteResult> deleteMediaWithResult(MediaId id, bool deleteFromDisk);
+    Result<std::vector<DeleteResult>> resolveDuplicateGroup(
+        const ReviewedMedia& keeper, const std::vector<ReviewedMedia>& remove,
+        bool deleteFromDisk, bool mergeMetadata);
     Result<size_t> clearThumbnailCache(bool dryRun = false);
     Result<size_t> clearVideoThumbnailCache(bool dryRun = false);
 
@@ -92,6 +109,8 @@ public:
     Result<std::vector<std::string>> getFolders();
 
     Status runInTransaction(std::function<Status()> fn);
+    using PhotoPathResolver = std::function<std::string(const std::string&)>;
+    Status runWithExclusiveAccess(std::function<Status(db::CatalogDb&, const PhotoPathResolver&)> fn);
 
     // Component accessors
     // Note: Component accessors return direct references to underlying subsystem instances
@@ -109,6 +128,10 @@ private:
     void syncPhotosDirFromImporter();
     void setPhotosDirInternal(std::string photosDir);
     std::string resolvePhotoPathInternal(const std::string& recordedPath) const;
+    std::string resolveRecordedPathInternal(const std::string& recordedPath) const;
+    Result<std::vector<DeleteResult>> removeMedia(
+        const ReviewedMedia* keeper, const std::vector<ReviewedMedia>& remove,
+        bool deleteFromDisk, bool mergeMetadata);
 
     size_t threadCount_{1};
     std::unique_ptr<db::CatalogDb> db_;

@@ -130,7 +130,8 @@ public:
 private:
     void runJob(int64_t jobId, std::string scope, std::vector<MediaId> mediaIds, bool force);
     void runTagJob(int64_t jobId, std::string scope, std::vector<MediaId> mediaIds, bool force);
-    void loadIndex();
+    void loadIndex() const;
+    void refreshIndexFromExternalChanges() const;
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

@@ -3,7 +3,14 @@
  * Pure Vanilla JavaScript (Offline-ready, no dependencies)
  */
 
-import { api, escapeHtml, formatBytes, formatDate, getOriginalMediaUrl, normalizeMediaItem } from './api.js';
+import {
+  api,
+  escapeHtml,
+  formatBytes,
+  formatDate,
+  getOriginalMediaUrl,
+  normalizeMediaItem,
+} from './api.js';
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
 import { t, onLanguageChange } from './i18n.js';
@@ -19,10 +26,13 @@ export function setDeduplicateActionHooks(hooks) {
   actionHooks = { ...actionHooks, ...hooks };
 }
 
+const RENDER_CHUNK_SIZE = 40;
 let review = null;
 let opener = null;
 let lastDedupLoupeTrigger = null;
-let requestSerial = 0;
+let renderedGroupCount = 0;
+let sentinelObserver = null;
+let reviewDelegationAttached = false;
 
 export function isDeduplicateOpen() {
   return Boolean(dom.deduplicateModal && dom.deduplicateModal.style.display === 'flex');
@@ -46,8 +56,9 @@ export function closeResetWarningModal() {
 export function closeDeduplicateModal() {
   if (review && review.resolving) return;
   closeResetWarningModal();
+  removeSentinel();
   review = null;
-  requestSerial += 1;
+  updateReviewActions();
   if (dom.deduplicateModal) {
     dom.deduplicateModal.style.display = 'none';
   }
@@ -81,7 +92,7 @@ function setDialogState(stateName, message = '') {
 function updateSummaryBanner() {
   if (!review) return;
   const groups = review.groups || [];
-  const enabledGroups = groups.filter(g => g.enabled);
+  const enabledGroups = groups.filter((g) => g.enabled);
   let totalReclaimable = 0;
   let totalDuplicatePhotos = 0;
 
@@ -144,22 +155,27 @@ function computeGroupReclaimable(group) {
 }
 
 export async function openDeduplicateModal(options = {}) {
+  if (review?.resolving) return;
   opener = options.opener || document.activeElement;
-  const scopeIds = Array.isArray(options.mediaIds) && options.mediaIds.length > 0
-    ? [...new Set(options.mediaIds.map(Number).filter(Number.isFinite))]
-    : [];
+  const scopeIds =
+    Array.isArray(options.mediaIds) && options.mediaIds.length > 0
+      ? [...new Set(options.mediaIds.map(Number).filter(Number.isFinite))]
+      : [];
 
+  removeSentinel();
   review = {
     scopeIds,
     groups: [],
     resolving: false,
     scanning: false,
+    pendingDismissals: new Set(),
   };
 
   if (dom.dedupScopeLabel) {
-    dom.dedupScopeLabel.textContent = scopeIds.length > 0
-      ? t('dedup_scope_selected', { count: scopeIds.length })
-      : t('dedup_scope_all');
+    dom.dedupScopeLabel.textContent =
+      scopeIds.length > 0
+        ? t('dedup_scope_selected', { count: scopeIds.length })
+        : t('dedup_scope_all');
   }
 
   // Exact toggle defaults ON
@@ -199,6 +215,7 @@ export async function openDeduplicateModal(options = {}) {
   }
 
   setDialogState('idle');
+  updateReviewActions();
 
   // If autoScan requested or directly opened, scan
   if (options.autoScan) {
@@ -210,53 +227,75 @@ export async function openDeduplicateModal(options = {}) {
 }
 
 export async function scanDuplicates() {
-  if (!review) {
-    review = { scopeIds: [], groups: [], resolving: false, scanning: false };
-  }
-  const serial = ++requestSerial;
-  review.scanning = true;
+  const activeReview = review;
+  if (!activeReview || isReviewBusy()) return;
+
+  activeReview.scanning = true;
+  activeReview.groups = [];
+  removeSentinel();
+  dom.dedupGroupsList?.replaceChildren();
   setDialogState('loading');
-  setScanAndResetButtonsDisabled(true);
+  updateReviewActions();
 
   try {
     const payload = {};
-    if (review.scopeIds && review.scopeIds.length > 0) {
-      payload.media_ids = review.scopeIds;
+    if (activeReview.scopeIds.length > 0) {
+      payload.media_ids = activeReview.scopeIds;
     }
     const exactEnabled = dom.dedupExactToggle ? dom.dedupExactToggle.checked : true;
-    const visualEnabled = dom.dedupVisualToggle ? (dom.dedupVisualToggle.checked && !dom.dedupVisualToggle.disabled) : false;
+    const visualEnabled = dom.dedupVisualToggle
+      ? dom.dedupVisualToggle.checked && !dom.dedupVisualToggle.disabled
+      : false;
+
+    payload.exact = exactEnabled;
+    payload.visual = visualEnabled;
 
     if (visualEnabled && dom.dedupVisualThresholdSlider) {
       payload.visual_threshold = Number(dom.dedupVisualThresholdSlider.value) / 100.0;
     }
 
     const result = await api.post('/api/media/duplicates/scan', payload);
-    if (serial !== requestSerial || !review) return;
+    if (review !== activeReview) return;
 
     let rawGroups = result.groups || [];
     if (!exactEnabled) {
-      rawGroups = rawGroups.filter(g => g.type !== 'exact');
+      rawGroups = rawGroups.filter((g) => g.type !== 'exact');
+    }
+    if (!visualEnabled) {
+      rawGroups = rawGroups.filter((g) => g.type !== 'visual');
     }
 
-    const catalogMediaMap = new Map((state.mediaItems || []).map(m => [Number(m.id), m]));
-    const makePlaceholderPhoto = (id) => normalizeMediaItem({
-      id,
-      file_name: String(id),
-      file_size: 0,
-      width: 0,
-      height: 0,
-      date_taken: 0,
-      media_type: 'photo'
-    }) || { id, file_name: String(id), file_size: 0, width: 0, height: 0, date_taken: 0, media_type: 'photo' };
+    const catalogMediaMap = new Map((state.mediaItems || []).map((m) => [Number(m.id), m]));
+    const makePlaceholderPhoto = (id) =>
+      normalizeMediaItem({
+        id,
+        file_name: String(id),
+        file_size: 0,
+        width: 0,
+        height: 0,
+        date_taken: 0,
+        media_type: 'photo',
+      }) || {
+        id,
+        file_name: String(id),
+        file_size: 0,
+        width: 0,
+        height: 0,
+        date_taken: 0,
+        media_type: 'photo',
+      };
 
     // Hydrate photo records
-    review.groups = rawGroups.map(group => {
-      const memberIds = (group.members || []).map(Number).filter(id => Number.isFinite(id) && id > 0);
-      const rawList = (Array.isArray(group.photos) && group.photos.length > 0)
-        ? group.photos
-        : (Array.isArray(group.items) && group.items.length > 0)
-          ? group.items
-          : [];
+    activeReview.groups = rawGroups.map((group) => {
+      const memberIds = (group.members || [])
+        .map(Number)
+        .filter((id) => Number.isFinite(id) && id > 0);
+      const rawList =
+        Array.isArray(group.photos) && group.photos.length > 0
+          ? group.photos
+          : Array.isArray(group.items) && group.items.length > 0
+            ? group.items
+            : [];
 
       const photoMap = new Map();
       for (const p of rawList) {
@@ -268,12 +307,13 @@ export async function scanDuplicates() {
         }
       }
 
-      const effectiveIds = memberIds.length > 0
-        ? memberIds
-        : rawList.map(p => Number(p && p.id)).filter(id => Number.isFinite(id) && id > 0);
+      const effectiveIds =
+        memberIds.length > 0
+          ? memberIds
+          : rawList.map((p) => Number(p && p.id)).filter((id) => Number.isFinite(id) && id > 0);
       const keeperId = group.keeper != null ? Number(group.keeper) : effectiveIds[0];
 
-      const photos = effectiveIds.map(id => {
+      const photos = effectiveIds.map((id) => {
         if (photoMap.has(id) && photoMap.get(id)) {
           return photoMap.get(id);
         }
@@ -292,49 +332,51 @@ export async function scanDuplicates() {
       };
     });
 
-    const totalGroupsCount = review.groups.length;
+    const totalGroupsCount = activeReview.groups.length;
     updateBadgeCount(totalGroupsCount);
 
-    if (review.groups.length === 0) {
+    if (activeReview.groups.length === 0) {
       setDialogState('empty');
     } else {
       setDialogState('ready');
       renderReview();
     }
   } catch (error) {
-    if (serial !== requestSerial || !review) return;
+    if (review !== activeReview) return;
+    activeReview.groups = [];
     setDialogState('error', error.message || String(error));
   } finally {
-    if (review) review.scanning = false;
-    setScanAndResetButtonsDisabled(false);
+    if (review === activeReview) {
+      activeReview.scanning = false;
+      updateReviewActions();
+    }
   }
 }
 
-function renderReview() {
-  if (!review || !dom.dedupGroupsList) return;
-  const groups = review.groups;
-  if (groups.length === 0) {
-    setDialogState('empty');
-    updateResolveButton();
-    return;
-  }
+function renderGroupCardHtml(group, groupIndex) {
+  const isExact = group.type === 'exact';
+  const matchBadge = isExact
+    ? `<span class="dedup-match-badge exact">${escapeHtml(t('dedup_match_exact'))}</span>`
+    : `<span class="dedup-match-badge visual">${escapeHtml(t('dedup_match_visual', { similarity: (group.min_similarity * 100).toFixed(1) }))}</span>`;
 
-  updateSummaryBanner();
+  const groupReclaimable = computeGroupReclaimable(group);
+  const reclaimBadge = `<span class="dedup-reclaimable-badge">${escapeHtml(t('dedup_reclaimable', { size: formatBytes(groupReclaimable) }))}</span>`;
 
-  dom.dedupGroupsList.innerHTML = groups.map((group, groupIndex) => {
-    const isExact = group.type === 'exact';
-    const matchBadge = isExact
-      ? `<span class="dedup-match-badge exact">${escapeHtml(t('dedup_match_exact'))}</span>`
-      : `<span class="dedup-match-badge visual">${escapeHtml(t('dedup_match_visual', { similarity: (group.min_similarity * 100).toFixed(1) }))}</span>`;
-
-    const groupReclaimable = computeGroupReclaimable(group);
-    const reclaimBadge = `<span class="dedup-reclaimable-badge">${escapeHtml(t('dedup_reclaimable', { size: formatBytes(groupReclaimable) }))}</span>`;
-
-    const membersHtml = group.photos.map(photo => {
+  const membersHtml = group.photos
+    .map((photo) => {
       const isKeeper = Number(photo.id) === Number(group.keeper);
       const thumb = getPhotoThumb(photo);
       const safeFileName = escapeHtml(photo.file_name || String(photo.id));
       const safePath = escapeHtml(photo.file_path || photo.file_name || '');
+      const rawPath = (photo.file_path || '').replace(/\\/g, '/');
+      const lastSlashIdx = rawPath.lastIndexOf('/');
+      const folderName = lastSlashIdx > 0 ? rawPath.substring(0, lastSlashIdx) : '';
+      const folderHtml = folderName
+        ? `<div class="dedup-folder" title="${safePath}">
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#icon-folder"></use></svg>
+          <span class="dedup-folder-name">${escapeHtml(folderName)}</span>
+        </div>`
+        : '';
 
       const pills = [];
       if (photo.width && photo.height) {
@@ -351,244 +393,548 @@ function renderReview() {
         pills.push(`<span class="dedup-pill pill-flag">★</span>`);
       }
       if (photo.tags && photo.tags.length > 0) {
-        pills.push(`<span class="dedup-pill">${escapeHtml(t('dedup_tags_count', { count: photo.tags.length }))}</span>`);
+        pills.push(
+          `<span class="dedup-pill">${escapeHtml(t('dedup_tags_count', { count: photo.tags.length }))}</span>`
+        );
       }
 
       return `<div class="dedup-member-card${isKeeper ? ' is-keeper' : ''}" data-media-id="${photo.id}">
-        <div class="dedup-thumb-wrap" data-media-id="${photo.id}">
-          ${thumb ? `<img src="${escapeHtml(thumb)}" alt="${safeFileName}" loading="lazy" data-media-id="${photo.id}">` : ''}
-          <button type="button" class="dedup-loupe-btn" data-media-id="${photo.id}" title="${escapeHtml(t('dedup_loupe_tooltip'))}">
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-expand-arrows"></use></svg>
-          </button>
-        </div>
-        <div class="dedup-keeper-controls">
-          <label class="dedup-keeper-label">
-            <input type="radio" name="dedup-keeper-${groupIndex}" class="dedup-keeper-radio" data-group-index="${groupIndex}" data-media-id="${photo.id}" ${isKeeper ? 'checked' : ''}>
-            ${isKeeper ? `<span class="dedup-keeper-badge">${escapeHtml(t('dedup_keeper'))}</span>` : ''}
-          </label>
-          ${!isKeeper ? `<button type="button" class="btn btn-xs btn-secondary dedup-swap-btn" data-group-index="${groupIndex}" data-media-id="${photo.id}">${escapeHtml(t('dedup_keep_this_instead'))}</button>` : ''}
-        </div>
-        <div class="dedup-meta-pills">
-          <div class="dedup-filename" title="${safePath}">${safeFileName}</div>
-          <div class="dedup-pills-row">${pills.join('')}</div>
-        </div>
-      </div>`;
-    }).join('');
-
-    return `<section class="dedup-group-card${group.enabled ? '' : ' excluded'}" data-group-index="${groupIndex}">
-      <div class="dedup-group-header">
-        <div class="dedup-group-title-row">
-          <input type="checkbox" class="dedup-group-checkbox" data-group-index="${groupIndex}" ${group.enabled ? 'checked' : ''} aria-label="${escapeHtml(t('dedup_group', { index: groupIndex + 1 }))}">
-          <span class="dedup-group-title">${escapeHtml(t('dedup_group', { index: groupIndex + 1 }))}</span>
-          ${matchBadge}
-          ${reclaimBadge}
-        </div>
-        <div class="dedup-group-actions">
-          <button type="button" class="btn btn-xs btn-secondary dedup-dismiss-group-btn" data-group-index="${groupIndex}" title="${escapeHtml(t('dedup_dismiss_group'))}">${escapeHtml(t('dedup_dismiss_group'))}</button>
-        </div>
+      <div class="dedup-thumb-wrap" data-media-id="${photo.id}">
+        ${thumb ? `<img src="${escapeHtml(thumb)}" alt="${safeFileName}" loading="lazy" data-media-id="${photo.id}">` : ''}
+        <button type="button" class="dedup-loupe-btn" data-media-id="${photo.id}" title="${escapeHtml(t('dedup_loupe_tooltip'))}">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><use href="#icon-expand-arrows"></use></svg>
+        </button>
       </div>
-      <div class="dedup-members-grid">${membersHtml}</div>
-    </section>`;
-  }).join('');
+      <div class="dedup-keeper-controls">
+        <label class="dedup-keeper-label">
+          <input type="radio" name="dedup-keeper-${groupIndex}" class="dedup-keeper-radio" data-group-index="${groupIndex}" data-media-id="${photo.id}" ${isKeeper ? 'checked' : ''}>
+          ${isKeeper ? `<span class="dedup-keeper-badge">${escapeHtml(t('dedup_keeper'))}</span>` : ''}
+        </label>
+        ${!isKeeper ? `<button type="button" class="btn btn-xs btn-secondary dedup-swap-btn" data-group-index="${groupIndex}" data-media-id="${photo.id}">${escapeHtml(t('dedup_keep_this_instead'))}</button>` : ''}
+      </div>
+      <div class="dedup-meta-pills">
+        <div class="dedup-filename" title="${safePath}">${safeFileName}</div>
+        ${folderHtml}
+        <div class="dedup-pills-row">${pills.join('')}</div>
+      </div>
+    </div>`;
+    })
+    .join('');
 
-  bindReviewEvents();
-  updateResolveButton();
+  return `<section class="dedup-group-card${group.enabled ? '' : ' excluded'}" data-group-index="${groupIndex}">
+    <div class="dedup-group-header">
+      <div class="dedup-group-title-row">
+        <input type="checkbox" class="dedup-group-checkbox" data-group-index="${groupIndex}" ${group.enabled ? 'checked' : ''} aria-label="${escapeHtml(t('dedup_group', { index: groupIndex + 1 }))}">
+        <span class="dedup-group-title">${escapeHtml(t('dedup_group', { index: groupIndex + 1 }))}</span>
+        ${matchBadge}
+        ${reclaimBadge}
+      </div>
+      <div class="dedup-group-actions">
+        <button type="button" class="btn btn-xs btn-secondary dedup-dismiss-group-btn" data-group-index="${groupIndex}" title="${escapeHtml(t('dedup_dismiss_group'))}" ${canDismissGroup(group) ? '' : 'disabled'}>${escapeHtml(t('dedup_dismiss_group'))}</button>
+      </div>
+    </div>
+    <div class="dedup-members-grid">${membersHtml}</div>
+  </section>`;
 }
 
-function updateResolveButton() {
-  if (!dom.dedupResolveBtn) return;
-  const enabledCount = review ? review.groups.filter(g => g.enabled).length : 0;
-  dom.dedupResolveBtn.disabled = enabledCount === 0;
-  dom.dedupResolveBtn.textContent = enabledCount === 1
-    ? t('dedup_resolve_single')
-    : t('dedup_resolve_groups', { count: enabledCount });
+function removeSentinel() {
+  if (sentinelObserver) {
+    sentinelObserver.disconnect();
+    sentinelObserver = null;
+  }
+  const s = dom.dedupGroupsList?.querySelector('.dedup-sentinel');
+  if (s) s.remove();
 }
 
-function bindReviewEvents() {
+function ensureSentinel() {
   if (!dom.dedupGroupsList) return;
-
-  // Group checkboxes
-  dom.dedupGroupsList.querySelectorAll('.dedup-group-checkbox').forEach(input => {
-    input.addEventListener('change', () => {
-      const idx = Number(input.dataset.groupIndex);
-      if (review && review.groups[idx]) {
-        review.groups[idx].enabled = input.checked;
-        const card = input.closest('.dedup-group-card');
-        if (card) card.classList.toggle('excluded', !input.checked);
-        updateResolveButton();
-        updateSummaryBanner();
-      }
-    });
-  });
-
-  // Keeper radios and Swap buttons
-  const setKeeper = (groupIndex, mediaId) => {
-    if (!review || !review.groups[groupIndex]) return;
-    review.groups[groupIndex].keeper = Number(mediaId);
-    renderReview();
-  };
-
-  dom.dedupGroupsList.querySelectorAll('.dedup-keeper-radio').forEach(radio => {
-    radio.addEventListener('change', () => {
-      setKeeper(radio.dataset.groupIndex, radio.dataset.mediaId);
-    });
-  });
-
-  dom.dedupGroupsList.querySelectorAll('.dedup-swap-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      setKeeper(btn.dataset.groupIndex, btn.dataset.mediaId);
-    });
-  });
-
-  // Thumbnail / Loupe click
-  dom.dedupGroupsList.querySelectorAll('.dedup-thumb-wrap').forEach(wrap => {
-    wrap.addEventListener('click', (e) => {
-      const mediaId = Number(wrap.dataset.mediaId);
-      if (!Number.isFinite(mediaId)) return;
-
-      lastDedupLoupeTrigger = wrap.querySelector('.dedup-loupe-btn') || wrap;
-
-      const groupCard = wrap.closest('.dedup-group-card');
-      const groupIndex = groupCard ? Number(groupCard.dataset.groupIndex) : -1;
-      const group = (review && review.groups && groupIndex >= 0) ? review.groups[groupIndex] : null;
-
-      // Behavior A: scope Loupe navigation to this duplicate group's photos
-      const groupPhotos = (group && Array.isArray(group.photos) && group.photos.length > 0)
-        ? group.photos
-        : null;
-
-      // Ensure photos are accessible in state.mediaItems for loupe viewer and related features
-      if (groupPhotos) {
-        for (const p of groupPhotos) {
-          if (!state.mediaItems.some(m => Number(m.id) === Number(p.id))) {
-            state.mediaItems.push(p);
-          }
-        }
-      } else {
-        const existing = state.mediaItems.find(m => Number(m.id) === mediaId);
-        if (!existing && review && review.groups) {
-          for (const g of review.groups) {
-            const p = g.photos.find(x => Number(x.id) === mediaId);
-            if (p) {
-              state.mediaItems.push(p);
-              break;
-            }
-          }
-        }
-      }
-
-      actionHooks.openLoupeForMedia(mediaId, { items: groupPhotos, fromDeduplicate: true });
-    });
-  });
-
-  // Group Dismiss button
-  dom.dedupGroupsList.querySelectorAll('.dedup-dismiss-group-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const idx = Number(btn.dataset.groupIndex);
-      await dismissGroup(idx);
-    });
-  });
-
-  // Thumbnail fallback on error (fallback to original photo URL if cached thumbnail is missing)
-  dom.dedupGroupsList.querySelectorAll('.dedup-thumb-wrap img').forEach(img => {
-    img.addEventListener('error', () => {
-      const mediaId = Number(img.dataset.mediaId);
-      if (!Number.isFinite(mediaId)) return;
-      let photo = null;
-      if (review && review.groups) {
-        for (const g of review.groups) {
-          const found = g.photos && g.photos.find(p => Number(p && p.id) === mediaId);
-          if (found) { photo = found; break; }
-        }
-      }
-      const isImage = !photo || !photo.media_type || photo.media_type === 'photo' || photo.media_type === 'image';
-      if (!isImage) return;
-
-      const fallbackUrl = photo ? getOriginalMediaUrl(photo) : `/api/photos/${mediaId}/original`;
-      const currentSrcAttr = img.getAttribute('src');
-      if (fallbackUrl && currentSrcAttr !== fallbackUrl && img.src !== new URL(fallbackUrl, window.location.href).href) {
-        img.src = fallbackUrl;
-      }
-    }, { once: true });
-  });
+  let s = dom.dedupGroupsList.querySelector('.dedup-sentinel');
+  if (!s) {
+    s = document.createElement('div');
+    s.className = 'dedup-sentinel';
+    s.setAttribute('aria-hidden', 'true');
+    dom.dedupGroupsList.appendChild(s);
+  }
+  if (sentinelObserver) {
+    sentinelObserver.observe(s);
+  }
 }
 
-async function dismissGroup(groupIndex) {
-  if (!review || !review.groups[groupIndex]) return;
-  const group = review.groups[groupIndex];
-  const members = (group.members || []).map(Number);
-  const pairs = [];
-  for (let i = 0; i < members.length; i++) {
-    for (let j = i + 1; j < members.length; j++) {
-      pairs.push([Math.min(members[i], members[j]), Math.max(members[i], members[j])]);
+function appendNextChunk() {
+  if (!review || !dom.dedupGroupsList) return;
+  const total = review.groups.length;
+  if (renderedGroupCount >= total) {
+    removeSentinel();
+    return;
+  }
+
+  const nextEnd = Math.min(renderedGroupCount + RENDER_CHUNK_SIZE, total);
+  const chunkHtmlArr = [];
+  for (let i = renderedGroupCount; i < nextEnd; i++) {
+    chunkHtmlArr.push(renderGroupCardHtml(review.groups[i], i));
+  }
+
+  const existingSentinel = dom.dedupGroupsList.querySelector('.dedup-sentinel');
+  if (existingSentinel) {
+    existingSentinel.remove();
+  }
+
+  dom.dedupGroupsList.insertAdjacentHTML('beforeend', chunkHtmlArr.join(''));
+  renderedGroupCount = nextEnd;
+
+  if (renderedGroupCount < total) {
+    ensureSentinel();
+  } else {
+    removeSentinel();
+  }
+}
+
+function setupSentinelObserver() {
+  if (sentinelObserver) {
+    sentinelObserver.disconnect();
+    sentinelObserver = null;
+  }
+
+  if (typeof IntersectionObserver !== 'undefined' && dom.deduplicateBody) {
+    sentinelObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            appendNextChunk();
+          }
+        }
+      },
+      {
+        root: dom.deduplicateBody,
+        rootMargin: '400px 0px',
+        threshold: 0,
+      }
+    );
+  }
+
+  ensureSentinel();
+}
+
+function renderReview() {
+  if (!review || !dom.dedupGroupsList) return;
+  const groups = review.groups;
+  if (groups.length === 0) {
+    setDialogState('empty');
+    updateReviewActions();
+    return;
+  }
+
+  updateSummaryBanner();
+  updateReviewActions();
+
+  ensureReviewDelegation();
+
+  dom.dedupGroupsList.innerHTML = '';
+  renderedGroupCount = 0;
+
+  appendNextChunk();
+  setupSentinelObserver();
+}
+
+function rerenderReviewPreservingScroll() {
+  const body = dom.deduplicateBody;
+  const scrollTop = body ? body.scrollTop : 0;
+  renderReview();
+  if (body) {
+    body.scrollTop = scrollTop;
+  }
+}
+
+function isReviewBusy() {
+  return Boolean(resettingDismissals || review?.scanning || review?.resolving || review?.pendingDismissals.size);
+}
+
+function canDismissGroup(group) {
+  return Boolean(group && review && !review.scanning && !review.resolving &&
+    !resettingDismissals && !review.pendingDismissals.has(group));
+}
+
+function updateReviewActions() {
+  const busy = isReviewBusy();
+  setScanAndResetButtonsDisabled(busy);
+  if (dom.cancelDeduplicateBtn) dom.cancelDeduplicateBtn.disabled = Boolean(review?.resolving);
+  if (dom.dedupDismissAllBtn) dom.dedupDismissAllBtn.disabled = busy || !review?.groups.length;
+  dom.dedupGroupsList?.querySelectorAll('.dedup-dismiss-group-btn').forEach(button => {
+    button.disabled = !canDismissGroup(review?.groups[Number(button.dataset.groupIndex)]);
+  });
+  if (!dom.dedupResolveBtn) return;
+  const enabledCount = review ? review.groups.filter((g) => g.enabled).length : 0;
+  dom.dedupResolveBtn.disabled = busy || enabledCount === 0;
+  dom.dedupResolveBtn.textContent =
+    enabledCount === 1
+      ? t('dedup_resolve_single')
+      : t('dedup_resolve_groups', { count: enabledCount });
+}
+
+function setKeeper(groupIndex, mediaId) {
+  if (!review || review.scanning || review.resolving || !review.groups[groupIndex]) return;
+  review.groups[groupIndex].keeper = Number(mediaId);
+
+  // Update only the targeted group card in DOM and preserve focus
+  const card = dom.dedupGroupsList?.querySelector(
+    `.dedup-group-card[data-group-index="${groupIndex}"]`
+  );
+  if (card) {
+    const hadFocus = card.contains(document.activeElement);
+    const temp = document.createElement('div');
+    temp.innerHTML = renderGroupCardHtml(review.groups[groupIndex], groupIndex);
+    const newCard = temp.firstElementChild;
+    if (newCard) {
+      card.replaceWith(newCard);
+      if (hadFocus) {
+        newCard.querySelector('.dedup-keeper-radio:checked')?.focus();
+      }
     }
   }
 
-  try {
-    if (pairs.length > 0) {
-      await api.post('/api/media/duplicates/dismiss', { pairs });
+  updateSummaryBanner();
+}
+
+function handleThumbClick(wrap, mediaId) {
+  lastDedupLoupeTrigger = wrap.querySelector('.dedup-loupe-btn') || wrap;
+
+  const groupCard = wrap.closest('.dedup-group-card');
+  const groupIndex = groupCard ? Number(groupCard.dataset.groupIndex) : -1;
+  const group = review && review.groups && groupIndex >= 0 ? review.groups[groupIndex] : null;
+
+  const groupPhotos =
+    group && Array.isArray(group.photos) && group.photos.length > 0 ? group.photos : null;
+
+  if (groupPhotos) {
+    for (const p of groupPhotos) {
+      if (!state.mediaItems.some((m) => Number(m.id) === Number(p.id))) {
+        state.mediaItems.push(p);
+      }
     }
-    review.groups.splice(groupIndex, 1);
+  } else {
+    const existing = state.mediaItems.find((m) => Number(m.id) === mediaId);
+    if (!existing && review && review.groups) {
+      for (const g of review.groups) {
+        const p = g.photos.find((x) => Number(x.id) === mediaId);
+        if (p) {
+          state.mediaItems.push(p);
+          break;
+        }
+      }
+    }
+  }
+
+  actionHooks.openLoupeForMedia(mediaId, { items: groupPhotos, fromDeduplicate: true });
+}
+
+function handleThumbError(img) {
+  const mediaId = Number(img.dataset.mediaId);
+  if (!Number.isFinite(mediaId)) return;
+  let photo = null;
+  if (review && review.groups) {
+    for (const g of review.groups) {
+      const found = g.photos && g.photos.find((p) => Number(p && p.id) === mediaId);
+      if (found) {
+        photo = found;
+        break;
+      }
+    }
+  }
+  const isImage =
+    !photo || !photo.media_type || photo.media_type === 'photo' || photo.media_type === 'image';
+  if (!isImage) return;
+
+  const fallbackUrl = photo ? getOriginalMediaUrl(photo) : `/api/photos/${mediaId}/original`;
+  const currentSrcAttr = img.getAttribute('src');
+  if (
+    fallbackUrl &&
+    currentSrcAttr !== fallbackUrl &&
+    img.src !== new URL(fallbackUrl, window.location.href).href
+  ) {
+    img.src = fallbackUrl;
+  }
+}
+
+function ensureReviewDelegation() {
+  if (reviewDelegationAttached || !dom.dedupGroupsList) return;
+  reviewDelegationAttached = true;
+
+  // Group checkboxes and keeper radio buttons
+  dom.dedupGroupsList.addEventListener('change', (e) => {
+    const groupCheckbox = e.target.closest('.dedup-group-checkbox');
+    if (groupCheckbox) {
+      const idx = Number(groupCheckbox.dataset.groupIndex);
+      if (review && !review.resolving && !review.scanning && review.groups[idx]) {
+        review.groups[idx].enabled = groupCheckbox.checked;
+        const card = groupCheckbox.closest('.dedup-group-card');
+        if (card) card.classList.toggle('excluded', !groupCheckbox.checked);
+        updateReviewActions();
+        updateSummaryBanner();
+      }
+      return;
+    }
+
+    const radio = e.target.closest('.dedup-keeper-radio');
+    if (radio) {
+      const idx = Number(radio.dataset.groupIndex);
+      const mediaId = Number(radio.dataset.mediaId);
+      setKeeper(idx, mediaId);
+    }
+  });
+
+  // Swap button, Dismiss button, Thumbnail/Loupe click
+  dom.dedupGroupsList.addEventListener('click', (e) => {
+    const swapBtn = e.target.closest('.dedup-swap-btn');
+    if (swapBtn) {
+      const idx = Number(swapBtn.dataset.groupIndex);
+      const mediaId = Number(swapBtn.dataset.mediaId);
+      setKeeper(idx, mediaId);
+      return;
+    }
+
+    const dismissBtn = e.target.closest('.dedup-dismiss-group-btn');
+    if (dismissBtn) {
+      const idx = Number(dismissBtn.dataset.groupIndex);
+      const group = review?.groups[idx];
+      if (canDismissGroup(group)) dismissGroups([group]);
+      return;
+    }
+
+    const wrap = e.target.closest('.dedup-thumb-wrap');
+    if (wrap) {
+      const mediaId = Number(wrap.dataset.mediaId);
+      if (Number.isFinite(mediaId)) {
+        handleThumbClick(wrap, mediaId);
+      }
+    }
+  });
+
+  // Thumbnail fallback on error (capturing listener handles all present and future imgs)
+  dom.dedupGroupsList.addEventListener(
+    'error',
+    (e) => {
+      if (e.target && e.target.tagName === 'IMG') {
+        handleThumbError(e.target);
+      }
+    },
+    true
+  );
+
+  // Fallback scroll listener on scroll container for fast scrolling
+  dom.deduplicateBody?.addEventListener(
+    'scroll',
+    () => {
+      if (!review || renderedGroupCount >= review.groups.length) return;
+      const body = dom.deduplicateBody;
+      if (body.scrollTop + body.clientHeight >= body.scrollHeight - 600) {
+        appendNextChunk();
+      }
+    },
+    { passive: true }
+  );
+}
+
+async function dismissGroups(groups) {
+  const activeReview = review;
+  const dismissedGroups = new Set(groups);
+  for (const group of dismissedGroups) activeReview.pendingDismissals.add(group);
+  updateReviewActions();
+  const batchSize = 500;
+  let pairs = [];
+  try {
+    for (const group of dismissedGroups) {
+      const members = group.members;
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          pairs.push([Math.min(members[i], members[j]), Math.max(members[i], members[j])]);
+          if (pairs.length === batchSize) {
+            await api.post('/api/media/duplicates/dismiss', { pairs });
+            pairs = [];
+          }
+        }
+      }
+    }
+    if (pairs.length > 0) await api.post('/api/media/duplicates/dismiss', { pairs });
+    if (review !== activeReview) return;
+
+    activeReview.groups = activeReview.groups.filter(group => !dismissedGroups.has(group));
     showToast(t('dedup_toast_dismissed'), 'info');
-    const totalGroupsCount = review.groups.length;
+    const totalGroupsCount = activeReview.groups.length;
     updateBadgeCount(totalGroupsCount);
-    renderReview();
+    if (totalGroupsCount === 0) {
+      setDialogState('empty');
+    } else {
+      rerenderReviewPreservingScroll();
+    }
   } catch (error) {
-    showToast(error.message || String(error), 'error');
+    if (review === activeReview) showToast(error.message || String(error), 'error');
+  } finally {
+    for (const group of dismissedGroups) activeReview.pendingDismissals.delete(group);
+    if (review === activeReview) updateReviewActions();
   }
 }
 
 async function resolveGroups() {
-  if (!review || review.resolving) return;
-  const enabledGroups = review.groups.filter(g => g.enabled);
+  if (!review || isReviewBusy()) return;
+  const enabledGroups = review.groups.filter((g) => g.enabled);
   if (enabledGroups.length === 0) return;
 
   review.resolving = true;
-  if (dom.dedupResolveBtn) dom.dedupResolveBtn.disabled = true;
-  if (dom.cancelDeduplicateBtn) dom.cancelDeduplicateBtn.disabled = true;
+  updateReviewActions();
 
-  const mergeMetadata = dom.dedupMergeMetadataCheckbox ? dom.dedupMergeMetadataCheckbox.checked : true;
-  const deleteFromDisk = dom.dedupDeleteFromDiskCheckbox ? dom.dedupDeleteFromDiskCheckbox.checked : false;
+  const mergeMetadata = dom.dedupMergeMetadataCheckbox
+    ? dom.dedupMergeMetadataCheckbox.checked
+    : true;
+  const deleteFromDisk = dom.dedupDeleteFromDiskCheckbox
+    ? dom.dedupDeleteFromDiskCheckbox.checked
+    : false;
 
-  const resolveGroupsPayload = enabledGroups.map(g => ({
+  const resolveGroupsPayload = enabledGroups.map((g) => ({
     keeper: Number(g.keeper),
-    remove: g.members.filter(id => Number(id) !== Number(g.keeper)).map(Number),
+    remove: g.members.filter((id) => Number(id) !== Number(g.keeper)).map(Number),
+    expected_hashes: Object.fromEntries(g.photos.map(photo => [photo.id, photo.content_hash || ''])),
     merge_metadata: mergeMetadata,
     delete_from_disk: deleteFromDisk,
   }));
 
+  const diskFailedIds = new Set();
   try {
-    await api.post('/api/media/duplicates/resolve', {
-      groups: resolveGroupsPayload,
-      merge_metadata: mergeMetadata,
-      delete_from_disk: deleteFromDisk,
-    });
+    // Server enforces kMaxBatchSize = 1000 for both the groups array and total remove items.
+    // Stay well under both limits (400 groups / 800 removals per request).
+    const MAX_GROUPS_PER_REQUEST = 400;
+    const MAX_REMOVALS_PER_REQUEST = 800;
+    const resolvedKeepers = new Set();
+    const failedKeepers = new Set();
+    let anonymousFailures = 0;
+    let currentChunk = [];
+    let currentRemoveCount = 0;
+    // For groups split across requests: keeper -> { totalParts, okParts }.
+    // A split group is only considered resolved once every part succeeded,
+    // so a partial failure keeps the group retryable (already-deleted members
+    // are skipped server-side with per-item 404s).
+    const splitGroupProgress = new Map();
 
-    const resolvedKeepers = new Set(enabledGroups.map(g => Number(g.keeper)));
-    review.groups = review.groups.filter(g => !resolvedKeepers.has(Number(g.keeper)));
+    const applyResolvedKeepers = (keepers) => {
+      if (keepers.size === 0) return;
+      review.groups = review.groups.filter((g) => !keepers.has(Number(g.keeper)));
+      updateBadgeCount(review.groups.length);
+      if (review.groups.length === 0) {
+        setDialogState('empty');
+      } else {
+        rerenderReviewPreservingScroll();
+      }
+    };
 
-    await Promise.all([
-      actionHooks.loadMetadata(),
-      actionHooks.loadMedia(),
-    ]);
-    actionHooks.updateInspector();
+    const markPartResolved = (keeper) => {
+      const progress = splitGroupProgress.get(keeper);
+      if (!progress) {
+        resolvedKeepers.add(keeper);
+        return;
+      }
+      progress.ok += 1;
+      if (progress.ok >= progress.total) {
+        splitGroupProgress.delete(keeper);
+        resolvedKeepers.add(keeper);
+      }
+    };
 
-    showToast(t('dedup_toast_resolved'), 'success');
-    const totalGroupsCount = review.groups.length;
-    updateBadgeCount(totalGroupsCount);
+    const executeChunk = async (chunk) => {
+      if (chunk.length === 0) return;
+      const res = await api.post('/api/media/duplicates/resolve', {
+        groups: chunk,
+        merge_metadata: mergeMetadata,
+        delete_from_disk: deleteFromDisk,
+      });
+      // Server returns numeric per-group statuses (200/400/404/500), never the string 'error'.
+      if (Array.isArray(res.groups) && res.groups.length > 0) {
+        for (const rg of res.groups) {
+          for (const failure of rg.disk_failures || []) diskFailedIds.add(Number(failure.id));
+          if (Number(rg.status) === 200 && rg.keeper) {
+            markPartResolved(Number(rg.keeper));
+          } else {
+            const k = Number(rg?.keeper);
+            if (k) {
+              failedKeepers.add(k);
+            } else {
+              anonymousFailures += 1;
+            }
+          }
+        }
+      } else {
+        for (const item of chunk) {
+          markPartResolved(Number(item.keeper));
+        }
+      }
+      applyResolvedKeepers(resolvedKeepers);
+    };
+
+    for (const groupItem of resolveGroupsPayload) {
+      // A single group with more removals than the per-request cap must be split
+      // across multiple requests; the server processes each group independently.
+      const removeParts = [];
+      for (let i = 0; i < groupItem.remove.length; i += MAX_REMOVALS_PER_REQUEST) {
+        removeParts.push(groupItem.remove.slice(i, i + MAX_REMOVALS_PER_REQUEST));
+      }
+      const parts =
+        removeParts.length > 1
+          ? removeParts.map((remove) => ({
+              ...groupItem,
+              remove,
+              expected_hashes: Object.fromEntries([groupItem.keeper, ...remove].map(id => [id, groupItem.expected_hashes[id]])),
+            }))
+          : [groupItem];
+      if (parts.length > 1) {
+        splitGroupProgress.set(Number(groupItem.keeper), { total: parts.length, ok: 0 });
+      }
+
+      for (const part of parts) {
+        const removeLen = part.remove.length;
+        if (
+          currentChunk.length >= MAX_GROUPS_PER_REQUEST ||
+          (currentRemoveCount + removeLen > MAX_REMOVALS_PER_REQUEST && currentChunk.length > 0)
+        ) {
+          await executeChunk(currentChunk);
+          currentChunk = [];
+          currentRemoveCount = 0;
+        }
+        currentChunk.push(part);
+        currentRemoveCount += removeLen;
+      }
+    }
+    if (currentChunk.length > 0) {
+      await executeChunk(currentChunk);
+    }
+
+    const failedCount =
+      [...failedKeepers].filter((k) => !resolvedKeepers.has(k)).length + anonymousFailures;
+
+    if (resolvedKeepers.size > 0) {
+      await Promise.all([actionHooks.loadMetadata(), actionHooks.loadMedia()]);
+      actionHooks.updateInspector();
+      if (failedCount > 0) {
+        showToast(t('dedup_toast_resolved_partial', { count: failedCount }), 'error');
+      } else {
+        showToast(t('dedup_toast_resolved'), 'success');
+      }
+    } else if (failedCount > 0) {
+      showToast(t('dedup_toast_resolved_partial', { count: failedCount }), 'error');
+    }
 
     if (review.groups.length === 0) {
+      review.resolving = false;
       closeDeduplicateModal();
     } else {
-      renderReview();
+      rerenderReviewPreservingScroll();
     }
   } catch (error) {
     showToast(error.message || String(error), 'error');
   } finally {
+    if (diskFailedIds.size > 0) {
+      showToast(t('toast_disk_delete_incomplete', { count: diskFailedIds.size }), 'error');
+    }
     if (review) {
       review.resolving = false;
-      if (dom.cancelDeduplicateBtn) dom.cancelDeduplicateBtn.disabled = false;
-      updateResolveButton();
+      updateReviewActions();
     }
   }
 }
@@ -600,13 +946,17 @@ export function openResetWarningModal() {
   if (!dom.dedupResetWarningModal) return Promise.resolve(false);
 
   if (dom.dedupResetWarningPrompt) {
-    dom.dedupResetWarningPrompt.textContent = t('dedup_reset_warning_prompt') || 'Are you sure you want to reset all dismissed duplicate pairs?';
+    dom.dedupResetWarningPrompt.textContent =
+      t('dedup_reset_warning_prompt') ||
+      'Are you sure you want to reset all dismissed duplicate pairs?';
   }
   if (dom.dedupResetWarningDesc) {
-    dom.dedupResetWarningDesc.textContent = t('dedup_reset_warning_desc') || 'This clears all previously dismissed duplicate pairs in this catalog so future scans will detect them again. No files on disk will be deleted or changed.';
+    dom.dedupResetWarningDesc.textContent =
+      t('dedup_reset_warning_desc') ||
+      'This clears all previously dismissed duplicate pairs in this catalog so future scans will detect them again. No files on disk will be deleted or changed.';
   }
 
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     resetWarningResolver = resolve;
     dom.dedupResetWarningModal.style.display = 'flex';
     dom.cancelDedupResetWarningBtn?.focus();
@@ -614,33 +964,29 @@ export function openResetWarningModal() {
 }
 
 export async function resetDismissals() {
-  if (!isDeduplicateOpen() || resettingDismissals) return;
-  if (review && (review.scanning || review.resolving)) return;
+  const activeReview = review;
+  if (!isDeduplicateOpen() || !activeReview || isReviewBusy()) return;
 
   const confirmed = await openResetWarningModal();
-  if (!confirmed) return;
+  if (!confirmed || review !== activeReview || isReviewBusy()) return;
 
   resettingDismissals = true;
-  setScanAndResetButtonsDisabled(true);
+  updateReviewActions();
 
   try {
     await api.post('/api/media/duplicates/dismissals/reset', {});
     showToast(t('dedup_toast_dismissals_reset'), 'info');
-    if (isDeduplicateOpen() && review) {
-      await scanDuplicates();
-    }
   } catch (error) {
     showToast(error.message || String(error), 'error');
+    return;
   } finally {
     resettingDismissals = false;
-    if (isDeduplicateOpen()) {
-      setScanAndResetButtonsDisabled(Boolean(review && review.scanning));
-    }
+    updateReviewActions();
   }
+  if (review === activeReview) await scanDuplicates();
 }
 
 export function setupDeduplicateListeners() {
-
   // Batch action bar Find Duplicates entry
   dom.batchDeduplicateBtn?.addEventListener('click', () => {
     const selected = [...state.selectedIds];
@@ -691,40 +1037,33 @@ export function setupDeduplicateListeners() {
 
   // Summary bulk actions
   dom.dedupSelectAllBtn?.addEventListener('click', () => {
-    if (!review) return;
-    review.groups.forEach(g => { g.enabled = true; });
-    renderReview();
+    if (!review || review.scanning || review.resolving) return;
+    review.groups.forEach((g) => {
+      g.enabled = true;
+    });
+    dom.dedupGroupsList?.querySelectorAll('.dedup-group-checkbox').forEach((cb) => {
+      cb.checked = true;
+      cb.closest('.dedup-group-card')?.classList.remove('excluded');
+    });
+    updateSummaryBanner();
+    updateReviewActions();
   });
 
   dom.dedupDeselectAllBtn?.addEventListener('click', () => {
-    if (!review) return;
-    review.groups.forEach(g => { g.enabled = false; });
-    renderReview();
+    if (!review || review.scanning || review.resolving) return;
+    review.groups.forEach((g) => {
+      g.enabled = false;
+    });
+    dom.dedupGroupsList?.querySelectorAll('.dedup-group-checkbox').forEach((cb) => {
+      cb.checked = false;
+      cb.closest('.dedup-group-card')?.classList.add('excluded');
+    });
+    updateSummaryBanner();
+    updateReviewActions();
   });
 
-  dom.dedupDismissAllBtn?.addEventListener('click', async () => {
-    if (!review || review.groups.length === 0) return;
-    const allPairs = [];
-    for (const g of review.groups) {
-      const members = (g.members || []).map(Number);
-      for (let i = 0; i < members.length; i++) {
-        for (let j = i + 1; j < members.length; j++) {
-          allPairs.push([Math.min(members[i], members[j]), Math.max(members[i], members[j])]);
-        }
-      }
-    }
-    try {
-      if (allPairs.length > 0) {
-        await api.post('/api/media/duplicates/dismiss', { pairs: allPairs });
-      }
-      review.groups = [];
-      updateBadgeCount(0);
-      showToast(t('dedup_toast_dismissed'), 'info');
-      setDialogState('empty');
-      updateResolveButton();
-    } catch (error) {
-      showToast(error.message || String(error), 'error');
-    }
+  dom.dedupDismissAllBtn?.addEventListener('click', () => {
+    if (review?.groups.length && !isReviewBusy()) dismissGroups(review.groups);
   });
 
   // Resolve button
@@ -757,7 +1096,7 @@ export function setupDeduplicateListeners() {
   });
 
   onLanguageChange(() => {
-    if (isDeduplicateOpen() && review) {
+    if (isDeduplicateOpen() && review?.groups.length) {
       renderReview();
     }
   });

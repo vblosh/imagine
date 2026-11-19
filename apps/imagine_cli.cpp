@@ -2,6 +2,8 @@
 #include <iomanip>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <charconv>
 #include <csignal>
 #include <chrono>
 #include <thread>
@@ -40,22 +42,11 @@ extern "C" char** environ;
 
 namespace {
 
-static imagine::server::WebServer* g_serverInstance{nullptr};
-static std::atomic<int> g_shutdownSignalCount{0};
+static std::atomic_flag g_shutdownRequested = ATOMIC_FLAG_INIT;
 
 void sigHandler(int) {
-    int count = ++g_shutdownSignalCount;
-    if (count > 1) {
-#ifdef _WIN32
-        _write(2, "\nForcefully shutting down...\n", 29);
-#else
-        (void)!write(2, "\nForcefully shutting down...\n", 29);
-#endif
+    if (g_shutdownRequested.test_and_set(std::memory_order_relaxed)) {
         std::_Exit(1);
-    }
-    std::cout << "\nShutting down server...\n";
-    if (g_serverInstance) {
-        g_serverInstance->stop();
     }
 }
 
@@ -112,7 +103,7 @@ Commands:
 
 Options for 'import':
   --catalog <db>      Path to SQLite catalog database (default: catalog.db)
-  --photos-dir <dir>  Base root directory for media (default: <path>)
+  --photos-dir <dir>  Base root for relative media paths (default: store absolute paths)
   --thumbs-dir <dir>  Path to thumbnail cache directory (default: system cache)
   --thumbs <dir>      Alias for --thumbs-dir
   --recursive         Recursively scan subdirectories (default: true)
@@ -218,9 +209,7 @@ int handleImport(int argc, char** argv) {
         return 1;
     }
 
-    if (photosDir.empty()) {
-        photosDir = path;
-    } else {
+    if (!photosDir.empty()) {
         std::string normPath = imagine::core::Importer::normalizePath(path);
         std::string normRoot = imagine::core::Importer::normalizePath(photosDir);
         if (normPath != normRoot && !imagine::core::Importer::isInsideRootDir(normPath, normRoot)) {
@@ -246,7 +235,7 @@ int handleImport(int argc, char** argv) {
                   << " | Skipped: " << p.skipped_files.load()
                   << " | Failed: " << p.failed_files.load() << "] "
                   << std::flush;
-    });
+    }, false);
 
     auto end = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
@@ -410,8 +399,7 @@ int handleServe(int argc, char** argv) {
     }
 
     imagine::server::WebServer webServer(catalog, webDir);
-    g_shutdownSignalCount.store(0);
-    g_serverInstance = &webServer;
+    g_shutdownRequested.clear(std::memory_order_relaxed);
 
     std::signal(SIGINT, sigHandler);
     std::signal(SIGTERM, sigHandler);
@@ -567,12 +555,21 @@ int handleServe(int argc, char** argv) {
                      ", log-file=" + (logFile.empty() ? "(none)" : logFile) +
                      ", log-level=" + logLevel);
 
-    auto startStatus = webServer.run(host, port, webDir);
+    auto startStatus = webServer.start(host, port, webDir);
     if (!startStatus.isOk()) {
         std::cerr << "Server error: " << startStatus.message() << "\n";
         return 1;
     }
 
+    while (webServer.isRunning() && !g_shutdownRequested.test(std::memory_order_relaxed)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (g_shutdownRequested.test(std::memory_order_relaxed)) {
+        std::cout << "\nShutting down server...\n";
+        webServer.stop();
+    } else {
+        webServer.wait();
+    }
     return 0;
 }
 
@@ -795,12 +792,13 @@ int handleDelete(int argc, char** argv) {
         } else if (arg == "--rejected") {
             deleteRejected = true;
         } else if (!arg.empty() && arg[0] != '-') {
-            try {
-                targetIds.push_back(std::stoll(arg));
-            } catch (...) {
-                std::cerr << "Error: Invalid media ID: '" << arg << "'. Must be a numeric ID.\n";
+            imagine::MediaId id = 0;
+            const auto parsed = std::from_chars(arg.data(), arg.data() + arg.size(), id);
+            if (parsed.ec != std::errc{} || parsed.ptr != arg.data() + arg.size() || id <= 0) {
+                std::cerr << "Error: Invalid media ID: '" << arg << "'. Must be a positive integer.\n";
                 return 1;
             }
+            targetIds.push_back(id);
         } else {
             std::cerr << "Unknown option: '" << arg << "'\n";
             return 1;

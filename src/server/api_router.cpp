@@ -5,6 +5,7 @@
 #include "imagine/core/importer.hpp"
 #include "imagine/core/event_suggestions.hpp"
 #include "imagine/metadata/hasher.hpp"
+#include "imagine/metadata/exif_reader.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/logger.hpp"
 #include "imagine/core/deduplicator.hpp"
@@ -71,6 +72,72 @@ std::vector<uint8_t> base64Decode(const std::string& input) {
         }
     }
     return out;
+}
+
+enum class EditFormat { Unsupported, Jpeg, Png, Bmp };
+
+EditFormat detectEditFormat(const std::vector<uint8_t>& data) {
+    if (thumbnail::Generator::isJpeg(data.data(), data.size())) return EditFormat::Jpeg;
+    constexpr uint8_t pngSignature[] = {0x89, 'P', 'N', 'G', 13, 10, 26, 10};
+    if (data.size() >= sizeof(pngSignature) &&
+        std::equal(std::begin(pngSignature), std::end(pngSignature), data.begin())) {
+        return EditFormat::Png;
+    }
+    if (data.size() >= 2 && data[0] == 'B' && data[1] == 'M') return EditFormat::Bmp;
+    return EditFormat::Unsupported;
+}
+
+const char* editExtension(EditFormat format) {
+    switch (format) {
+        case EditFormat::Png: return ".png";
+        case EditFormat::Bmp: return ".bmp";
+        default: return ".jpg";
+    }
+}
+
+Status saveEditedBitmap(const thumbnail::ImageBuffer& image,
+                        const std::filesystem::path& path, EditFormat format) {
+    const auto name = pathToUtf8(path);
+    switch (format) {
+        case EditFormat::Png: return thumbnail::Generator::savePng(image, name);
+        case EditFormat::Bmp: return thumbnail::Generator::saveBmp(image, name);
+        default: return thumbnail::Generator::saveJpeg(image, name, 95);
+    }
+}
+
+// Same-volume staging lets an interrupted or failed overwrite retain the original.
+struct PhotoEditStaging {
+    std::filesystem::path dir;
+
+    ~PhotoEditStaging() {
+        if (dir.empty()) return;
+        std::error_code ignored;
+        std::filesystem::remove(dir / "output", ignored);
+        std::filesystem::remove(dir, ignored);
+    }
+
+    Status create(const std::filesystem::path& parent) {
+        static std::atomic<uint64_t> next{0};
+        for (;;) {
+            auto candidate = parent / (".imagine-edit-" + std::to_string(++next));
+            std::error_code ec;
+            if (std::filesystem::create_directory(candidate, ec)) {
+                dir = std::move(candidate);
+                return Status::ok();
+            }
+            if (ec) return Status::ioError("Cannot stage edited file: " + ec.message());
+        }
+    }
+};
+
+Status writeEditedBytes(const std::filesystem::path& target, const std::vector<uint8_t>& bytes) {
+    std::ofstream output(target, std::ios::binary);
+    if (output) {
+        output.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        output.close();
+        if (output) return Status::ok();
+    }
+    return Status::ioError("Failed to write edited file: " + pathToUtf8(target));
 }
 
 int64_t daysFromCivil(int y, int m, int d) noexcept {
@@ -622,7 +689,7 @@ void ApiRouter::registerCorsHandler(httplib::Server& server) {
         }
 
         res.set_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-        res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, Accept, Origin, X-Requested-With, X-Request-ID, Range");
+        res.set_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Key, Accept, Origin, X-Requested-With, X-Request-ID, Range, X-Image-Hash");
         res.set_header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, ETag, X-Request-ID");
 
         if (req.method == "OPTIONS") {
@@ -1448,19 +1515,18 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             deleteFromDisk = (val == "true" || val == "1");
         }
 
-        Status s;
+        Result<core::DeleteResult> result = core::DeleteResult{};
         if (catalog_) {
-            s = catalog_->deleteMedia(id, deleteFromDisk);
+            result = catalog_->deleteMediaWithResult(id, deleteFromDisk);
         } else {
-            if (deleteFromDisk) {
-                sendStatusError(res, Status::internal("Catalog is required to delete files from disk"));
-                return;
-            }
-            s = db().deleteMedia(id);
+            const Status status = deleteFromDisk
+                ? Status::internal("Catalog is required to delete files from disk")
+                : db().deleteMedia(id);
+            if (!status.isOk()) result = status;
         }
 
-        if (!s.isOk()) {
-            sendStatusError(res, s);
+        if (!result.isOk()) {
+            sendStatusError(res, result.status());
             return;
         }
 
@@ -1468,7 +1534,15 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             clipService_->removeMedia(id);
         }
 
-        sendJson(res, {{"status", "ok"}, {"id", id}, {"deleted_from_disk", deleteFromDisk}});
+        const auto& outcome = result.value();
+        nlohmann::json response = {
+            {"status", outcome.disk_error.empty() ? "ok" : "partial"},
+            {"id", id},
+            {"deleted_from_disk", outcome.deleted_from_disk}
+        };
+        if (!outcome.disk_error.empty()) response["disk_error"] = outcome.disk_error;
+        if (!outcome.recovery_path.empty()) response["recovery_path"] = outcome.recovery_path;
+        sendJson(res, response);
     });
 
     // POST /api/media/batch-delete
@@ -1494,31 +1568,39 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
             int deletedCount = 0;
             std::vector<MediaId> failedIds;
+            std::vector<MediaId> diskDeletedIds;
+            auto diskFailures = nlohmann::json::array();
             for (MediaId id : ids) {
-                Status s;
+                Result<core::DeleteResult> result = core::DeleteResult{};
                 if (catalog_) {
-                    s = catalog_->deleteMedia(id, deleteFromDisk);
+                    result = catalog_->deleteMediaWithResult(id, deleteFromDisk);
                 } else {
-                    if (deleteFromDisk) {
-                        s = Status::internal("Catalog is required to delete files from disk");
-                    } else {
-                        s = db().deleteMedia(id);
-                    }
+                    const Status status = deleteFromDisk
+                        ? Status::internal("Catalog is required to delete files from disk")
+                        : db().deleteMedia(id);
+                    if (!status.isOk()) result = status;
                 }
-                if (s.isOk()) {
-                    if (clipService_) {
-                        clipService_->removeMedia(id);
-                    }
-                    deletedCount++;
-                } else {
+                if (!result.isOk()) {
                     failedIds.push_back(id);
+                    continue;
+                }
+                if (clipService_) clipService_->removeMedia(id);
+                ++deletedCount;
+                const auto& outcome = result.value();
+                if (outcome.deleted_from_disk) diskDeletedIds.push_back(id);
+                if (!outcome.disk_error.empty()) {
+                    diskFailures.push_back({
+                        {"id", id}, {"error", outcome.disk_error}, {"recovery_path", outcome.recovery_path}
+                    });
                 }
             }
             sendJson(res, {
-                {"status", failedIds.empty() ? "ok" : "partial"},
+                {"status", failedIds.empty() && diskFailures.empty() ? "ok" : "partial"},
                 {"deleted_count", deletedCount},
                 {"failed_ids", failedIds},
-                {"deleted_from_disk", deleteFromDisk}
+                {"disk_deleted_ids", diskDeletedIds},
+                {"disk_failures", diskFailures},
+                {"deleted_from_disk", !ids.empty() && diskDeletedIds.size() == ids.size()}
             });
         } catch (const std::exception& ex) {
             sendError(res, std::string("Invalid JSON: ") + ex.what());
@@ -1551,29 +1633,18 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
-            Status batchStatus = catalog_
-                ? catalog_->runInTransaction([&]() -> Status {
-                    for (MediaId id : ids) {
-                        Status s = catalog_->setRating(id, rating);
-                        if (s.isOk()) {
-                            updatedCount++;
-                        } else {
-                            failedIds.push_back(id);
-                        }
+            auto& database = db();
+            Status batchStatus = database.runInTransaction([&]() -> Status {
+                for (MediaId id : ids) {
+                    Status s = database.updateRating(id, rating);
+                    if (s.isOk()) {
+                        updatedCount++;
+                    } else {
+                        failedIds.push_back(id);
                     }
-                    return Status::ok();
-                })
-                : db().runInTransaction([&]() -> Status {
-                    for (MediaId id : ids) {
-                        Status s = db().updateRating(id, rating);
-                        if (s.isOk()) {
-                            updatedCount++;
-                        } else {
-                            failedIds.push_back(id);
-                        }
-                    }
-                    return Status::ok();
-                });
+                }
+                return Status::ok();
+            });
             if (!batchStatus.isOk()) {
                 sendStatusError(res, batchStatus);
                 return;
@@ -1616,29 +1687,18 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
-            Status batchStatus = catalog_
-                ? catalog_->runInTransaction([&]() -> Status {
-                    for (MediaId id : ids) {
-                        Status s = catalog_->setFlag(id, flag);
-                        if (s.isOk()) {
-                            updatedCount++;
-                        } else {
-                            failedIds.push_back(id);
-                        }
+            auto& database = db();
+            Status batchStatus = database.runInTransaction([&]() -> Status {
+                for (MediaId id : ids) {
+                    Status s = database.updateFlag(id, flag);
+                    if (s.isOk()) {
+                        updatedCount++;
+                    } else {
+                        failedIds.push_back(id);
                     }
-                    return Status::ok();
-                })
-                : db().runInTransaction([&]() -> Status {
-                    for (MediaId id : ids) {
-                        Status s = db().updateFlag(id, flag);
-                        if (s.isOk()) {
-                            updatedCount++;
-                        } else {
-                            failedIds.push_back(id);
-                        }
-                    }
-                    return Status::ok();
-                });
+                }
+                return Status::ok();
+            });
             if (!batchStatus.isOk()) {
                 sendStatusError(res, batchStatus);
                 return;
@@ -1703,29 +1763,18 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             TagId tagId = tagRes.value();
             int taggedCount = 0;
             std::vector<MediaId> failedIds;
-            Status batchStatus = catalog_
-                ? catalog_->runInTransaction([&]() -> Status {
-                    for (MediaId id : ids) {
-                        Status s = catalog_->addTag(id, tagId);
-                        if (s.isOk()) {
-                            taggedCount++;
-                        } else {
-                            failedIds.push_back(id);
-                        }
+            auto& database = db();
+            Status batchStatus = database.runInTransaction([&]() -> Status {
+                for (MediaId id : ids) {
+                    Status s = database.addTagToMedia(id, tagId);
+                    if (s.isOk()) {
+                        taggedCount++;
+                    } else {
+                        failedIds.push_back(id);
                     }
-                    return Status::ok();
-                })
-                : db().runInTransaction([&]() -> Status {
-                    for (MediaId id : ids) {
-                        Status s = db().addTagToMedia(id, tagId);
-                        if (s.isOk()) {
-                            taggedCount++;
-                        } else {
-                            failedIds.push_back(id);
-                        }
-                    }
-                    return Status::ok();
-                });
+                }
+                return Status::ok();
+            });
             if (!batchStatus.isOk()) {
                 sendStatusError(res, batchStatus);
                 return;
@@ -1805,67 +1854,37 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             int removedCount = 0;
             int unchangedCount = 0;
             std::vector<MediaId> failedIds;
-            Status batchStatus = catalog_
-                ? catalog_->runInTransaction([&]() -> Status {
-                    for (const MediaId id : ids) {
-                        auto it = tagsMap.find(id);
-                        if (it == tagsMap.end()) {
-                            auto mediaRes = catalog_->getMedia(id);
-                            if (!mediaRes.isOk()) {
-                                failedIds.push_back(id);
-                                continue;
-                            }
-                            unchangedCount++;
-                            continue;
-                        }
-
-                        const auto& mediaTags = it->second;
-                        const bool hasTag = std::any_of(mediaTags.begin(), mediaTags.end(),
-                            [tagId](const Tag& tag) { return tag.id == tagId; });
-                        if (!hasTag) {
-                            unchangedCount++;
-                            continue;
-                        }
-
-                        Status status = catalog_->removeTag(id, tagId);
-                        if (status.isOk()) {
-                            removedCount++;
-                        } else {
+            auto& database = db();
+            Status batchStatus = database.runInTransaction([&]() -> Status {
+                for (const MediaId id : ids) {
+                    auto it = tagsMap.find(id);
+                    if (it == tagsMap.end()) {
+                        auto mediaRes = database.getMediaById(id);
+                        if (!mediaRes.isOk()) {
                             failedIds.push_back(id);
-                        }
-                    }
-                    return Status::ok();
-                })
-                : db().runInTransaction([&]() -> Status {
-                    for (const MediaId id : ids) {
-                        auto it = tagsMap.find(id);
-                        if (it == tagsMap.end()) {
-                            auto mediaRes = db().getMediaById(id);
-                            if (!mediaRes.isOk()) {
-                                failedIds.push_back(id);
-                                continue;
-                            }
-                            unchangedCount++;
                             continue;
                         }
-
-                        const auto& mediaTags = it->second;
-                        const bool hasTag = std::any_of(mediaTags.begin(), mediaTags.end(),
-                            [tagId](const Tag& tag) { return tag.id == tagId; });
-                        if (!hasTag) {
-                            unchangedCount++;
-                            continue;
-                        }
-
-                        Status status = db().removeTagFromMedia(id, tagId);
-                        if (status.isOk()) {
-                            removedCount++;
-                        } else {
-                            failedIds.push_back(id);
-                        }
+                        unchangedCount++;
+                        continue;
                     }
-                    return Status::ok();
-                });
+
+                    const auto& mediaTags = it->second;
+                    const bool hasTag = std::any_of(mediaTags.begin(), mediaTags.end(),
+                        [tagId](const Tag& tag) { return tag.id == tagId; });
+                    if (!hasTag) {
+                        unchangedCount++;
+                        continue;
+                    }
+
+                    Status status = database.removeTagFromMedia(id, tagId);
+                    if (status.isOk()) {
+                        removedCount++;
+                    } else {
+                        failedIds.push_back(id);
+                    }
+                }
+                return Status::ok();
+            });
             if (!batchStatus.isOk()) {
                 sendStatusError(res, batchStatus);
                 return;
@@ -1922,29 +1941,23 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
 
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
-            Status batchStatus = catalog_
-                ? catalog_->runInTransaction([&]() -> Status {
-                    for (MediaId id : ids) {
-                        Status s = catalog_->setGps(id, hasGps, latitude, longitude, altitude);
-                        if (s.isOk()) {
+            auto& database = db();
+            Status batchStatus = database.runInTransaction([&]() -> Status {
+                for (MediaId id : ids) {
+                    Status s = database.updateGps(id, hasGps, latitude, longitude, altitude);
+                    if (s.isOk()) {
+                        auto placeStatus = database.applyGpsPlaceTags(id, hasGps, latitude, longitude);
+                            if (!placeStatus.isOk()) {
+                                IMAGINE_LOG_WARN("Failed to apply GPS place tags for media " +
+                                    std::to_string(id) + ": " + placeStatus.message());
+                            }
                             updatedCount++;
-                        } else {
-                            failedIds.push_back(id);
-                        }
+                    } else {
+                        failedIds.push_back(id);
                     }
-                    return Status::ok();
-                })
-                : db().runInTransaction([&]() -> Status {
-                    for (MediaId id : ids) {
-                        Status s = db().updateGps(id, hasGps, latitude, longitude, altitude);
-                        if (s.isOk()) {
-                            updatedCount++;
-                        } else {
-                            failedIds.push_back(id);
-                        }
-                    }
-                    return Status::ok();
-                });
+                }
+                return Status::ok();
+            });
             if (!batchStatus.isOk()) {
                 sendStatusError(res, batchStatus);
                 return;
@@ -2127,43 +2140,22 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
             nlohmann::json updatedItems = nlohmann::json::array();
-            Status batchStatus = catalog_
-                ? catalog_->runInTransaction([&]() -> Status {
-                    for (const auto& [id, dateTaken] : updates) {
-                        std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
-                        if (dateTakenStr.empty() && dateTaken != 0) {
-                            dateTakenStr = formatTimestampToDateString(dateTaken);
-                        }
-
-                        Status s = catalog_->setDateTaken(id, dateTaken, dateTakenStr);
-                        if (s.isOk()) {
-                            updatedCount++;
-                            updatedItems.push_back({
-                                {"id", id},
-                                {"date_taken", dateTaken},
-                                {"date_taken_str", dateTakenStr}
-                            });
-                        } else {
-                            failedIds.push_back(id);
-                        }
+            auto& database = db();
+            Status batchStatus = database.runInTransaction([&]() -> Status {
+                for (const auto& [id, dateTaken] : updates) {
+                    std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
+                    if (dateTakenStr.empty() && dateTaken != 0) {
+                        dateTakenStr = formatTimestampToDateString(dateTaken);
                     }
-                    return Status::ok();
-                })
-                : db().runInTransaction([&]() -> Status {
-                    for (const auto& [id, dateTaken] : updates) {
-                        std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
-                        if (dateTakenStr.empty() && dateTaken != 0) {
-                            dateTakenStr = formatTimestampToDateString(dateTaken);
-                        }
 
-                        Status s = db().updateDateTaken(id, dateTaken, dateTakenStr);
-                        if (s.isOk()) {
-                            updatedCount++;
-                            updatedItems.push_back({
-                                {"id", id},
-                                {"date_taken", dateTaken},
-                                {"date_taken_str", dateTakenStr}
-                            });
+                    Status s = database.updateDateTaken(id, dateTaken, dateTakenStr);
+                    if (s.isOk()) {
+                        updatedCount++;
+                        updatedItems.push_back({
+                            {"id", id},
+                            {"date_taken", dateTaken},
+                            {"date_taken_str", dateTakenStr}
+            });
                         } else {
                             failedIds.push_back(id);
                         }
@@ -2382,7 +2374,12 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                         double captureTime = std::min(1.0, item.duration > 0 ? item.duration / 2.0 : 0.0);
                         auto ffRes = metadata::FfmpegHelper::extractVideoFrame(videoPath, captureTime, tmpThumb);
                         if (ffRes.isOk()) {
-                            auto dualRes = cache().ensureDualThumbnails(tmpThumb, hash);
+                            // Existing dual thumbnails are placeholders on this branch.
+                            // Remove them before deriving the requested size from the extracted frame.
+                            if (largeIsPlaceholder) {
+                                cache().clearThumbnail(hash);
+                            }
+                            auto dualRes = cache().ensureDualThumbnails(tmpThumb, hash, 1, largeIsPlaceholder);
                             if (dualRes.isOk()) {
                                 const std::string& largePath = dualRes.value().second;
                                 const std::string& sizeSource =
@@ -2610,253 +2607,251 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         if (!checkAuth(req, res)) return;
         auto idOpt = parseMatchId<MediaId>(req, 1, res, "media ID");
         if (!idOpt) return;
-        MediaId id = *idOpt;
-        auto mediaRes = db().getMediaById(id);
-        if (!mediaRes.isOk()) {
-            sendError(res, "Media not found", 404);
-            return;
-        }
 
-        auto item = mediaRes.value();
-        if (item.media_type != "photo") {
-            sendError(res, "Quick edit is not supported for " + item.media_type + " files", 400);
-            return;
-        }
-
-        std::string photoPath = resolvePhotoPath(item.file_path);
-        std::error_code ec;
-        if (!std::filesystem::exists(photoPath, ec) || !std::filesystem::is_regular_file(photoPath, ec)) {
-            IMAGINE_LOG_WARN("Source photo not found on disk: " + photoPath);
-            sendError(res, "Source photo not found on disk", 404);
-            return;
-        }
-
-        std::string mode = "overwrite";
-        std::vector<uint8_t> newImageBytes;
-
-        bool isJson = false;
-        std::string contentType = req.get_header_value("Content-Type");
-        if (contentType.find("application/json") != std::string::npos || (!req.body.empty() && req.body.front() == '{')) {
-            isJson = true;
-        }
-
-        if (isJson) {
-            try {
-                auto body = nlohmann::json::parse(req.body);
-                if (body.contains("mode") && body["mode"].is_string()) {
-                    mode = body["mode"].get<std::string>();
-                } else if (req.has_param("mode")) {
-                    mode = req.get_param_value("mode");
-                } else if (req.has_header("X-Edit-Mode")) {
-                    mode = req.get_header_value("X-Edit-Mode");
-                }
+        std::string mode = req.has_param("mode") ? req.get_param_value("mode") :
+            req.has_header("X-Edit-Mode") ? req.get_header_value("X-Edit-Mode") : "overwrite";
+        nlohmann::json operations;
+        std::vector<uint8_t> edited;
+        try {
+            const std::string contentType = req.get_header_value("Content-Type");
+            if (contentType.find("application/json") != std::string::npos ||
+                (!req.body.empty() && req.body.front() == '{')) {
+                const auto body = nlohmann::json::parse(req.body);
+                mode = body.value("mode", mode);
                 if (body.contains("image_data") && body["image_data"].is_string()) {
-                    newImageBytes = base64Decode(body["image_data"].get<std::string>());
+                    edited = base64Decode(body["image_data"].get<std::string>());
                 } else if (body.contains("operations") && body["operations"].is_object()) {
-                    auto loadRes = thumbnail::Generator::loadImage(photoPath);
-                    if (!loadRes.isOk()) {
-                        sendStatusError(res, loadRes.status());
-                        return;
-                    }
-                    auto img = loadRes.value();
-                    if (item.exif.orientation > 1 && item.exif.orientation <= 8) {
-                        img = thumbnail::Generator::rotate(img, item.exif.orientation);
-                    }
-                    const auto& ops = body["operations"];
-                    if (ops.contains("crop") && ops["crop"].is_object()) {
-                        int x = ops["crop"].value("x", 0);
-                        int y = ops["crop"].value("y", 0);
-                        int w = ops["crop"].value("width", img.width);
-                        int h = ops["crop"].value("height", img.height);
-                        auto cropRes = thumbnail::Generator::crop(img, x, y, w, h);
-                        if (!cropRes.isOk()) {
-                            sendStatusError(res, cropRes.status());
-                            return;
-                        }
-                        img = cropRes.value();
-                    }
-                    if (ops.contains("rotation") && ops["rotation"].is_number_integer()) {
-                        int deg = ops["rotation"].get<int>();
-                        img = thumbnail::Generator::rotateAngle(img, deg);
-                    }
-                    static std::atomic<uint64_t> s_tmpCounter{0};
-                    std::string tmpOut = photoPath + "." + std::to_string(++s_tmpCounter) + ".proc.tmp";
-                    auto saveStatus = thumbnail::Generator::saveJpeg(img, tmpOut, 95);
-                    if (!saveStatus.isOk()) {
-                        sendStatusError(res, saveStatus);
-                        return;
-                    }
-                    std::ifstream ifs(tmpOut, std::ios::binary);
-                    newImageBytes.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
-                    ifs.close();
-                    std::filesystem::remove(tmpOut, ec);
-                } else {
-                    sendError(res, "Missing image_data or operations in edit request");
-                    return;
+                    operations = body["operations"];
                 }
-            } catch (const std::exception& ex) {
-                sendError(res, std::string("Invalid JSON: ") + ex.what());
-                return;
+            } else {
+                edited.assign(req.body.begin(), req.body.end());
             }
+        } catch (const std::exception& ex) {
+            sendError(res, std::string("Invalid edit request: ") + ex.what());
+            return;
+        }
+        if (mode != "copy" && mode != "overwrite") {
+            sendError(res, "Unknown edit mode");
+            return;
+        }
+        if (edited.empty() && operations.is_null()) {
+            sendError(res, "Missing image_data or operations in edit request");
+            return;
+        }
+
+        MediaItem item;
+        std::filesystem::path copyPath;
+        auto edit = [&](db::CatalogDb& database, const auto& resolve) -> Status {
+            auto current = database.getMediaById(*idOpt);
+            if (!current.isOk()) return current.status();
+            item = std::move(current).value();
+            if (item.media_type != "photo") {
+                return Status::invalidArgument("Quick edit is not supported for " + item.media_type + " files");
+            }
+
+            const std::string photoPath = resolve(item.file_path);
+            const auto original = pathFromUtf8(photoPath);
+            std::error_code ec;
+            if (photoPath.empty() || !std::filesystem::is_regular_file(original, ec)) {
+                return Status::notFound("Source photo not found on disk");
+            }
+            auto loaded = thumbnail::Generator::loadImageBytes(photoPath);
+            if (!loaded.isOk()) return loaded.status();
+            const auto& source = loaded.value();
+            const auto actualHash = metadata::Hasher::computeBytesSha256(source.data(), source.size());
+            if (mode == "overwrite" && actualHash != item.content_hash) {
+                return Status::alreadyExists("Source photo changed since import. Refresh the catalog before editing.");
+            }
+            if (req.has_header("X-Image-Hash") && req.get_header_value("X-Image-Hash") != actualHash) {
+                return Status::alreadyExists("Source photo changed since the editor was opened");
+            }
+
+            const auto originalFormat = detectEditFormat(source);
+            auto storedExtension = pathToUtf8(original.extension());
+            std::transform(storedExtension.begin(), storedExtension.end(), storedExtension.begin(),
+                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            const bool extensionMatches =
+                (originalFormat == EditFormat::Jpeg && (storedExtension == ".jpg" || storedExtension == ".jpeg")) ||
+                (originalFormat == EditFormat::Png && storedExtension == ".png") ||
+                (originalFormat == EditFormat::Bmp && storedExtension == ".bmp");
+            if (mode == "overwrite" && !extensionMatches) {
+                return Status::invalidArgument("Save Copy is required for this source format");
+            }
+
+            PhotoEditStaging staging;
+            auto staged = staging.create(original.parent_path());
+            if (!staged.isOk()) return staged;
+            const auto output = staging.dir / "output";
+            const auto backup = staging.dir / "original";
+            auto format = detectEditFormat(edited);
+            if (!operations.is_null()) {
+                format = originalFormat == EditFormat::Unsupported ? EditFormat::Jpeg : originalFormat;
+                auto decoded = thumbnail::Generator::loadImageFromMemory(
+                    source.data(), source.size(), format == EditFormat::Png || format == EditFormat::Bmp);
+                if (!decoded.isOk()) return decoded.status();
+                auto img = std::move(decoded).value();
+                if (item.exif.orientation > 1 && item.exif.orientation <= 8) {
+                    img = thumbnail::Generator::rotate(img, item.exif.orientation);
+                }
+                try {
+                    if (operations.contains("crop") && operations["crop"].is_object()) {
+                        const auto& crop = operations["crop"];
+                        auto cropped = thumbnail::Generator::crop(img, crop.value("x", 0), crop.value("y", 0),
+                            crop.value("width", img.width), crop.value("height", img.height));
+                        if (!cropped.isOk()) return cropped.status();
+                        img = std::move(cropped).value();
+                    }
+                    if (operations.contains("rotation")) {
+                        img = thumbnail::Generator::rotateAngle(img, operations["rotation"].get<int>());
+                    }
+                } catch (const nlohmann::json::exception& ex) {
+                    return Status::invalidArgument(std::string("Invalid edit operations: ") + ex.what());
+                }
+                auto saved = saveEditedBitmap(img, output, format);
+                if (!saved.isOk()) return saved;
+                auto bytes = thumbnail::Generator::loadImageBytes(pathToUtf8(output));
+                if (!bytes.isOk()) return bytes.status();
+                edited = std::move(bytes).value();
+            }
+            if (format == EditFormat::Unsupported) {
+                return Status::invalidArgument("Edited images must be JPEG, PNG or BMP");
+            }
+            if (mode == "overwrite" && format != originalFormat) {
+                if (originalFormat != EditFormat::Bmp) {
+                    return Status::invalidArgument("Edited image does not match the original file format");
+                }
+                auto decoded = thumbnail::Generator::loadImageFromMemory(edited.data(), edited.size(), true);
+                if (!decoded.isOk()) return decoded.status();
+                auto saved = saveEditedBitmap(decoded.value(), output, EditFormat::Bmp);
+                if (!saved.isOk()) return saved;
+                auto bytes = thumbnail::Generator::loadImageBytes(pathToUtf8(output));
+                if (!bytes.isOk()) return bytes.status();
+                edited = std::move(bytes).value();
+                format = EditFormat::Bmp;
+            }
+            auto dimensions = thumbnail::Generator::getImageDimensionsFromMemory(edited.data(), edited.size());
+            if (!dimensions.isOk()) return dimensions.status();
+            const auto [width, height] = dimensions.value();
+            if (operations.is_null()) {
+                // A valid header alone cannot establish that the new pixels are readable.
+                auto decoded = thumbnail::Generator::loadImageFromMemory(edited.data(), edited.size());
+                if (!decoded.isOk()) return decoded.status();
+            }
+            if (format == EditFormat::Jpeg || format == EditFormat::Png) {
+                auto preserved = metadata::ExifReader::preserveForEdit(source, edited, width, height);
+                if (!preserved.isOk()) return preserved;
+            }
+            auto writeStatus = writeEditedBytes(output, edited);
+            if (!writeStatus.isOk()) return writeStatus;
+
+            if (mode == "copy") {
+                const auto stem = pathToUtf8(original.stem());
+                for (size_t n = 1; ; ++n) {
+                    const auto suffix = n == 1 ? "_edited" : "_edited_" + std::to_string(n);
+                    auto candidate = original.parent_path() / pathFromUtf8(stem + suffix + editExtension(format));
+                    if (std::filesystem::copy_file(output, candidate, std::filesystem::copy_options::none, ec)) {
+                        copyPath = std::move(candidate);
+                        return Status::ok();
+                    }
+                    if (ec != std::errc::file_exists) {
+                        return Status::ioError("Failed to save edited copy: " + ec.message());
+                    }
+                }
+            }
+
+            const auto fileTime = std::filesystem::last_write_time(output, ec);
+            if (ec) return Status::ioError("Cannot read edited file timestamp: " + ec.message());
+            item.content_hash = metadata::Hasher::computeBytesSha256(edited.data(), edited.size());
+            if (item.content_hash.empty()) return Status::internal("Unable to hash edited photo");
+            item.exif.orientation = 1;
+            item.width = width;
+            item.height = height;
+            item.file_size = static_cast<int64_t>(edited.size());
+            item.file_modified_time = fileTimeToUnixSeconds(fileTime);
+            item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(item.content_hash, thumbnail::Cache::SmallSize);
+            item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(item.content_hash, thumbnail::Cache::LargeSize);
+
+            std::filesystem::rename(original, backup, ec);
+            if (ec) return Status::ioError("Cannot stage original photo: " + ec.message());
+            auto restore = [&]() {
+                std::error_code restoreEc;
+                std::filesystem::rename(backup, original, restoreEc);
+                if (restoreEc) {
+                    IMAGINE_LOG_ERROR("Unable to restore original photo. Recovery file: " + pathToUtf8(backup));
+                }
+                return restoreEc;
+            };
+            auto stagedHash = metadata::Hasher::computeFileSha256(pathToUtf8(backup));
+            if (!stagedHash.isOk() || stagedHash.value() != actualHash) {
+                if (restore()) return Status::ioError("Original photo can be recovered at " + pathToUtf8(backup));
+                return stagedHash.isOk()
+                    ? Status::alreadyExists("Source photo changed while the edit was being prepared")
+                    : stagedHash.status();
+            }
+            std::filesystem::rename(output, original, ec);
+            if (ec) {
+                if (restore()) return Status::ioError("Original photo can be recovered at " + pathToUtf8(backup));
+                return Status::ioError("Cannot replace original photo: " + ec.message());
+            }
+
+            Status updated;
+            try {
+                updated = database.updateMedia(item);
+            } catch (...) {
+                restore();
+                throw;
+            }
+            if (!updated.isOk()) {
+                if (restore()) return Status::ioError("Original photo can be recovered at " + pathToUtf8(backup));
+                return updated;
+            }
+            std::filesystem::remove(backup, ec);
+            if (ec) IMAGINE_LOG_WARN("Could not remove the staged original photo: " + pathToUtf8(backup));
+            return Status::ok();
+        };
+
+        auto& database = db();
+        Status result;
+        if (catalog_) {
+            result = catalog_->runWithExclusiveAccess([&](db::CatalogDb& lockedDb, const core::Catalog::PhotoPathResolver& resolve) {
+                return edit(lockedDb, resolve);
+            });
         } else {
-            if (req.has_param("mode")) {
-                mode = req.get_param_value("mode");
-            } else if (req.has_header("X-Edit-Mode")) {
-                mode = req.get_header_value("X-Edit-Mode");
-            }
-            newImageBytes.assign(reinterpret_cast<const uint8_t*>(req.body.data()),
-                                 reinterpret_cast<const uint8_t*>(req.body.data()) + req.body.size());
+            std::lock_guard lock(database.mutex());
+            result = edit(database, [this](const std::string& path) { return resolvePhotoPath(path); });
         }
-
-        if (newImageBytes.empty()) {
-            sendError(res, "No image data provided");
+        if (!result.isOk()) {
+            sendStatusError(res, result);
             return;
         }
-
-        auto dimRes = thumbnail::Generator::getImageDimensionsFromMemory(newImageBytes.data(), newImageBytes.size());
-        if (!dimRes.isOk()) {
-            sendError(res, "Invalid image data: unable to parse dimensions");
-            return;
-        }
-        int newW = dimRes.value().first;
-        int newH = dimRes.value().second;
 
         if (mode == "copy") {
-            std::filesystem::path origPath(photoPath);
-            std::string stem = origPath.stem().string();
-            std::string ext = origPath.extension().string();
-            auto parent = origPath.parent_path();
-
-            std::filesystem::path destPath;
-            int counter = 1;
-            while (true) {
-                std::string suffix = (counter == 1) ? "_edited" : ("_edited_" + std::to_string(counter));
-                destPath = parent / (stem + suffix + ext);
-                if (!std::filesystem::exists(destPath, ec)) {
-                    break;
-                }
-                counter++;
-            }
-
-            {
-                std::ofstream ofs(destPath, std::ios::binary);
-                if (!ofs) {
-                    sendError(res, "Failed to write new file: " + destPath.string(), 500);
-                    return;
-                }
-                ofs.write(reinterpret_cast<const char*>(newImageBytes.data()), newImageBytes.size());
-                ofs.flush();
-                if (!ofs) {
-                    ofs.close();
-                    std::filesystem::remove(destPath, ec);
-                    sendError(res, "Failed to write new file: " + destPath.string(), 500);
-                    return;
-                }
-                ofs.close();
-                if (ofs.fail()) {
-                    std::filesystem::remove(destPath, ec);
-                    sendError(res, "Failed to close new file: " + destPath.string(), 500);
-                    return;
-                }
-            }
-
-            if (catalog_) {
-                auto importRes = catalog_->importFile(destPath.string());
-                if (!importRes.isOk()) {
-                    sendStatusError(res, importRes.status());
-                    return;
-                }
-                auto newItem = importRes.value();
-                if (item.rating > 0) catalog_->setRating(newItem.id, item.rating);
-                if (item.flag != FlagState::Unflagged) catalog_->setFlag(newItem.id, item.flag);
-                auto tagsRes = catalog_->getTagsForMedia(item.id);
-                if (tagsRes.isOk()) {
-                    for (const auto& tag : tagsRes.value()) {
-                        catalog_->addTag(newItem.id, tag.id);
-                    }
-                }
-                auto reloaded = catalog_->getMedia(newItem.id);
-                sendJson(res, reloaded.isOk() ? reloaded.value() : newItem, 201);
-            } else {
-                sendJson(res, {{"status", "created"}, {"path", destPath.string()}}, 201);
-            }
-        } else {
-            std::error_code dirEc;
-            if (std::filesystem::is_directory(photoPath + ".edit.tmp", dirEc)) {
-                sendError(res, "Failed to create temporary file for saving", 500);
+            if (!catalog_) {
+                sendJson(res, {{"status", "created"}, {"path", pathToUtf8(copyPath)}}, 201);
                 return;
             }
-            static std::atomic<uint64_t> s_editTmpCounter{0};
-            std::string tmpPath = photoPath + "." + std::to_string(++s_editTmpCounter) + ".edit.tmp";
-            {
-                std::ofstream ofs(tmpPath, std::ios::binary);
-                if (!ofs) {
-                    sendError(res, "Failed to create temporary file for saving", 500);
-                    return;
+            auto imported = catalog_->importFile(pathToUtf8(copyPath));
+            if (!imported.isOk()) {
+                const auto existing = catalog_->getMediaByPath(pathToUtf8(copyPath));
+                if (!existing.isOk() && !catalog_->importer().isRunning()) {
+                    std::error_code ignored;
+                    std::filesystem::remove(copyPath, ignored);
                 }
-                ofs.write(reinterpret_cast<const char*>(newImageBytes.data()), newImageBytes.size());
-                ofs.flush();
-                if (!ofs) {
-                    ofs.close();
-                    std::filesystem::remove(tmpPath, ec);
-                    sendError(res, "Failed to write temporary file for saving", 500);
-                    return;
-                }
-                ofs.close();
-                if (ofs.fail()) {
-                    std::filesystem::remove(tmpPath, ec);
-                    sendError(res, "Failed to close temporary file for saving", 500);
-                    return;
-                }
-            }
-
-            std::filesystem::rename(tmpPath, photoPath, ec);
-            if (ec) {
-                std::filesystem::remove(tmpPath, ec);
-                sendError(res, "Failed to overwrite original file: " + ec.message(), 500);
+                sendStatusError(res, imported.status());
                 return;
             }
-
-            auto hashRes = metadata::Hasher::computeFileSha256(photoPath);
-            if (!hashRes.isOk()) {
-                sendStatusError(res, hashRes.status());
-                return;
-            }
-            std::string oldHash = item.content_hash;
-            std::string newHash = hashRes.value();
-            auto fsize = std::filesystem::file_size(photoPath, ec);
-            auto mtime = std::filesystem::last_write_time(photoPath, ec);
-            int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
-
-            if (!oldHash.empty() && oldHash != newHash) {
-                std::filesystem::remove(cache().getThumbnailPath(oldHash, thumbnail::Cache::SmallSize), ec);
-                std::filesystem::remove(cache().getThumbnailPath(oldHash, thumbnail::Cache::LargeSize), ec);
-            }
-
-            item.exif.orientation = 1;
-            cache().ensureDualThumbnails(photoPath, newHash, item.exif.orientation);
-
-            item.content_hash = newHash;
-            item.width = newW;
-            item.height = newH;
-            item.file_size = static_cast<int64_t>(fsize);
-            item.file_modified_time = mtimeSec;
-            item.thumb_small = thumbnail::Cache::getRelativeThumbnailPath(newHash, thumbnail::Cache::SmallSize);
-            item.thumb_large = thumbnail::Cache::getRelativeThumbnailPath(newHash, thumbnail::Cache::LargeSize);
-            item.updated_at = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-
-            auto updateStatus = db().updateMedia(item);
-            if (!updateStatus.isOk()) {
-                sendStatusError(res, updateStatus);
-                return;
-            }
-
-            if (clipService_) {
-                clipService_->removeMedia(item.id);
-            }
-
-            sendJson(res, item, 200);
+            const auto& copy = imported.value();
+            if (item.rating > 0) catalog_->setRating(copy.id, item.rating);
+            if (item.flag != FlagState::Unflagged) catalog_->setFlag(copy.id, item.flag);
+            for (const auto& tag : item.tags) catalog_->addTag(copy.id, tag.id);
+            auto reloaded = catalog_->getMedia(copy.id);
+            sendJson(res, reloaded.isOk() ? reloaded.value() : copy, 201);
+            return;
         }
+
+        if (clipService_) clipService_->removeMedia(item.id);
+        auto reloaded = database.getMediaById(item.id);
+        sendJson(res, reloaded.isOk() ? reloaded.value() : item);
     };
 
     server.Post(R"(/api/photos/(\d+)/edit)", handleEditPhoto);
@@ -3002,21 +2997,14 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
                 return;
             }
 
-            Status batchStatus = catalog_
-                ? catalog_->runInTransaction([&]() -> Status {
-                    for (MediaId mid : mediaIds) {
-                        Status s = catalog_->addMediaToAlbum(albumId, mid);
-                        if (!s.isOk()) return s;
-                    }
-                    return Status::ok();
-                })
-                : db().runInTransaction([&]() -> Status {
-                    for (MediaId mid : mediaIds) {
-                        Status s = db().addMediaToAlbum(albumId, mid);
-                        if (!s.isOk()) return s;
-                    }
-                    return Status::ok();
-                });
+            auto& database = db();
+            Status batchStatus = database.runInTransaction([&]() -> Status {
+                for (MediaId mid : mediaIds) {
+                    Status s = database.addMediaToAlbum(albumId, mid);
+                    if (!s.isOk()) return s;
+                }
+                return Status::ok();
+            });
             if (!batchStatus.isOk()) {
                 sendStatusError(res, batchStatus);
                 return;
@@ -3133,21 +3121,14 @@ void ApiRouter::registerAlbumRoutes(httplib::Server& server) {
                 return;
             }
 
-            Status batchStatus = catalog_
-                ? catalog_->runInTransaction([&]() -> Status {
-                    for (MediaId mediaId : mediaIds) {
-                        Status s = catalog_->removeMediaFromAlbum(albumId, mediaId);
-                        if (!s.isOk()) return s;
-                    }
-                    return Status::ok();
-                })
-                : db().runInTransaction([&]() -> Status {
-                    for (MediaId mediaId : mediaIds) {
-                        Status s = db().removeMediaFromAlbum(albumId, mediaId);
-                        if (!s.isOk()) return s;
-                    }
-                    return Status::ok();
-                });
+            auto& database = db();
+            Status batchStatus = database.runInTransaction([&]() -> Status {
+                for (MediaId mediaId : mediaIds) {
+                    Status s = database.removeMediaFromAlbum(albumId, mediaId);
+                    if (!s.isOk()) return s;
+                }
+                return Status::ok();
+            });
             if (!batchStatus.isOk()) {
                 sendStatusError(res, batchStatus);
                 return;
@@ -4800,14 +4781,14 @@ namespace {
 
 using db::StepResult;
 
-inline void rankKeeperCandidateIds(std::vector<MediaId>& members, db::CatalogDb& db) {
+inline void rankKeeperCandidatesWithMap(std::vector<MediaId>& members, const std::unordered_map<MediaId, MediaItem>& mediaMap) {
     if (members.size() <= 1) return;
     std::vector<MediaItem> items;
     items.reserve(members.size());
     for (MediaId id : members) {
-        auto r = db.getMediaById(id);
-        if (r.isOk()) {
-            items.push_back(r.value());
+        auto it = mediaMap.find(id);
+        if (it != mediaMap.end()) {
+            items.push_back(it->second);
         } else {
             MediaItem dummy;
             dummy.id = id;
@@ -4861,6 +4842,38 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
             }
         }
 
+        bool scanExact = true;
+        if (body.contains("exact")) {
+            if (!body["exact"].is_boolean()) {
+                sendError(res, "exact must be a boolean", 400);
+                return;
+            }
+            scanExact = body["exact"].get<bool>();
+        } else if (body.contains("include_exact")) {
+            if (!body["include_exact"].is_boolean()) {
+                sendError(res, "include_exact must be a boolean", 400);
+                return;
+            }
+            scanExact = body["include_exact"].get<bool>();
+        }
+
+        bool scanVisual = false;
+        if (body.contains("visual")) {
+            if (!body["visual"].is_boolean()) {
+                sendError(res, "visual must be a boolean", 400);
+                return;
+            }
+            scanVisual = body["visual"].get<bool>();
+        } else if (body.contains("include_visual")) {
+            if (!body["include_visual"].is_boolean()) {
+                sendError(res, "include_visual must be a boolean", 400);
+                return;
+            }
+            scanVisual = body["include_visual"].get<bool>();
+        } else if (body.contains("visual_threshold") || body.contains("similarity_threshold")) {
+            scanVisual = true;
+        }
+
         double visualThreshold = 0.97;
         if (body.contains("similarity_threshold")) {
             if (!body["similarity_threshold"].is_number()) {
@@ -4889,77 +4902,51 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
             dateWindowSec = body["date_window_sec"].get<int64_t>();
         }
 
-        std::unordered_set<uint64_t> dismissedPairs;
-        auto disRes = db().getDismissedDuplicatePairs();
-        if (disRes.isOk()) {
-            for (const auto& [a, b] : disRes.value()) {
-                MediaId low = std::min(a, b);
-                MediaId high = std::max(a, b);
-                dismissedPairs.insert((static_cast<uint64_t>(low) << 32) | (static_cast<uint64_t>(high) & 0xFFFFFFFFULL));
-            }
-        }
-
-        // 1. Exact duplicate pass
-        std::vector<std::vector<MediaId>> exactDuplicateGroups;
+        std::vector<std::vector<MediaId>> unrankedExactGroups;
         std::unordered_set<MediaId> exactMemberIds;
-        auto exactRes = db().findExactDuplicateGroups(scopeIds);
-        if (exactRes.isOk()) {
+        if (scanExact) {
+            auto disRes = db().getDismissedDuplicatePairs();
+            if (!disRes.isOk()) {
+                sendStatusError(res, disRes.status());
+                return;
+            }
+            std::unordered_map<MediaId, std::unordered_set<MediaId>> dismissed;
+            for (const auto& [a, b] : disRes.value()) {
+                dismissed[a].insert(b);
+                dismissed[b].insert(a);
+            }
+            auto exactRes = db().findExactDuplicateGroups(scopeIds);
+            if (!exactRes.isOk()) {
+                sendStatusError(res, exactRes.status());
+                return;
+            }
             for (auto& members : exactRes.value()) {
-                if (members.size() < 2) continue;
-
-                // Exclude dismissed pairs within this exact group
-                std::unordered_map<MediaId, MediaId> parent;
-                auto findRoot = [&](auto& self, MediaId x) -> MediaId {
-                    if (!parent.count(x)) parent[x] = x;
-                    if (parent[x] == x) return x;
-                    return parent[x] = self(self, parent[x]);
-                };
-                auto unite = [&](MediaId x, MediaId y) {
-                    MediaId rx = findRoot(findRoot, x);
-                    MediaId ry = findRoot(findRoot, y);
-                    if (rx != ry) parent[rx] = ry;
-                };
-
-                for (size_t i = 0; i < members.size(); ++i) {
-                    for (size_t j = i + 1; j < members.size(); ++j) {
-                        MediaId a = members[i];
-                        MediaId b = members[j];
-                        if (a > b) std::swap(a, b);
-                        uint64_t packed = (static_cast<uint64_t>(a) << 32) | (static_cast<uint64_t>(b) & 0xFFFFFFFFULL);
-                        if (!dismissedPairs.count(packed)) {
-                            unite(a, b);
-                        }
+                std::vector<std::vector<MediaId>> clusters;
+                for (MediaId member : members) {
+                    auto blocked = dismissed.find(member);
+                    auto compatible = std::find_if(clusters.begin(), clusters.end(), [&](const auto& cluster) {
+                        return blocked == dismissed.end() ||
+                            std::none_of(cluster.begin(), cluster.end(), [&](MediaId other) {
+                                return blocked->second.contains(other);
+                            });
+                    });
+                    if (compatible == clusters.end()) {
+                        clusters.push_back({member});
+                    } else {
+                        compatible->push_back(member);
                     }
                 }
-
-                std::unordered_map<MediaId, std::vector<MediaId>> clusters;
-                for (MediaId m : members) {
-                    if (parent.count(m)) {
-                        clusters[findRoot(findRoot, m)].push_back(m);
-                    }
-                }
-
-                for (auto& [root, clusterMembers] : clusters) {
-                    if (clusterMembers.size() >= 2) {
-                        rankKeeperCandidateIds(clusterMembers, db());
-                        for (MediaId mid : clusterMembers) {
-                            exactMemberIds.insert(mid);
-                        }
-                        exactDuplicateGroups.push_back(std::move(clusterMembers));
-                    }
+                for (auto& cluster : clusters) {
+                    if (cluster.size() < 2) continue;
+                    exactMemberIds.insert(cluster.begin(), cluster.end());
+                    unrankedExactGroups.push_back(std::move(cluster));
                 }
             }
         }
-
-        // Sort exact groups largest-first
-        std::sort(exactDuplicateGroups.begin(), exactDuplicateGroups.end(),
-                  [](const std::vector<MediaId>& a, const std::vector<MediaId>& b) {
-                      return a.size() > b.size();
-                  });
 
         // 2. Visual duplicate pass
         std::vector<clip::VisualDuplicateGroup> visualGroups;
-        if (clipService_) {
+        if (scanVisual && clipService_) {
             visualGroups = clipService_->scanVisualDuplicates(
                 static_cast<float>(visualThreshold),
                 dateWindowSec,
@@ -4981,7 +4968,7 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
 
         // Hydration: batch load metadata and tags
         std::vector<MediaId> allMemberIds;
-        for (const auto& eg : exactDuplicateGroups) {
+        for (const auto& eg : unrankedExactGroups) {
             allMemberIds.insert(allMemberIds.end(), eg.begin(), eg.end());
         }
         for (const auto& vg : visualGroups) {
@@ -5026,6 +5013,20 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
                 }
             }
         }
+
+        // Rank keepers in-memory using preloaded mediaMap (zero database queries)
+        std::vector<std::vector<MediaId>> exactDuplicateGroups;
+        exactDuplicateGroups.reserve(unrankedExactGroups.size());
+        for (auto& clusterMembers : unrankedExactGroups) {
+            rankKeeperCandidatesWithMap(clusterMembers, mediaMap);
+            exactDuplicateGroups.push_back(std::move(clusterMembers));
+        }
+
+        // Sort exact groups largest-first
+        std::sort(exactDuplicateGroups.begin(), exactDuplicateGroups.end(),
+                  [](const std::vector<MediaId>& a, const std::vector<MediaId>& b) {
+                      return a.size() > b.size();
+                  });
 
         nlohmann::json groupsJson = nlohmann::json::array();
         for (const auto& eg : exactDuplicateGroups) {
@@ -5140,95 +5141,124 @@ void ApiRouter::registerDuplicateRoutes(httplib::Server& server) {
                 groupMergeMetadata = groupEl["merge_metadata"].get<bool>();
             }
 
-            MediaId keeperId = groupEl["keeper"].get<MediaId>();
-            const auto& removeList = groupEl["remove"];
+            const MediaId keeperId = groupEl["keeper"].get<MediaId>();
+            const auto versions = groupEl.contains("expected_hashes")
+                ? groupEl["expected_hashes"] : nlohmann::json::object();
+            auto expectedHash = [&](MediaId id) -> std::string {
+                if (!versions.is_object()) return {};
+                auto it = versions.find(std::to_string(id));
+                return it != versions.end() && it->is_string() ? it->get<std::string>() : std::string{};
+            };
 
-            auto keeperRes = catalog_ ? catalog_->getMedia(keeperId) : db().getMediaById(keeperId);
-            if (!keeperRes.isOk()) {
-                groupResults.push_back({{"keeper", keeperId}, {"status", 404}, {"error", "Keeper media not found"}});
+            const core::ReviewedMedia keeper{keeperId, expectedHash(keeperId)};
+            std::vector<core::ReviewedMedia> removals;
+            std::vector<nlohmann::json> groupItemErrors;
+            std::unordered_set<MediaId> seen{keeperId};
+            for (const auto& element : groupEl["remove"]) {
+                const MediaId id = element.is_number_integer() ? element.get<MediaId>() : 0;
+                if (id <= 0 || !seen.insert(id).second) {
+                    groupItemErrors.push_back({{"id", id}, {"status", 400}, {"error", "Invalid or repeated removal ID"}});
+                    continue;
+                }
+                auto existing = db().getMediaById(id);
+                if (!existing.isOk() && existing.status().code() == StatusCode::NotFound) {
+                    // A previously committed part can be re-submitted after another part fails.
+                    continue;
+                }
+                removals.push_back({id, expectedHash(id)});
+            }
+            if (groupDeleteFromDisk && (keeper.content_hash.empty() ||
+                std::any_of(removals.begin(), removals.end(), [](const auto& media) {
+                    return media.content_hash.empty();
+                }))) {
+                groupResults.push_back({{"keeper", keeperId}, {"status", 409},
+                    {"error", "Scan again before deleting duplicate files from disk"}});
+                continue;
+            }
+            if (groupDeleteFromDisk && !groupItemErrors.empty()) {
+                groupResults.push_back({{"keeper", keeperId}, {"status", 400}, {"errors", groupItemErrors}});
                 continue;
             }
 
-            size_t keeperTagsBefore = 0;
-            if (auto tr = db().getTagsForMedia(keeperId); tr.isOk()) {
-                keeperTagsBefore = tr.value().size();
+            auto& database = db();
+            auto initialTags = database.getTagsForMedia(keeperId);
+            Result<std::vector<core::DeleteResult>> resolution = std::vector<core::DeleteResult>{};
+            if (removals.empty() && groupItemErrors.empty()) {
+                auto current = database.getMediaById(keeper.id);
+                if (!current.isOk()) resolution = current.status();
+                else if (!keeper.content_hash.empty() && keeper.content_hash != current.value().content_hash) {
+                    resolution = Status::alreadyExists("Keeper changed since the duplicate scan");
+                }
+            } else if (catalog_) {
+                resolution = catalog_->resolveDuplicateGroup(keeper, removals, groupDeleteFromDisk, groupMergeMetadata);
+            } else if (groupDeleteFromDisk) {
+                resolution = Status::internal("Catalog is required to delete files from disk");
+            } else {
+                std::vector<core::DeleteResult> outcomes;
+                auto status = database.runInTransaction([&]() -> Status {
+                    auto currentKeeper = database.getMediaById(keeper.id);
+                    if (!currentKeeper.isOk()) return currentKeeper.status();
+                    if (!keeper.content_hash.empty() && keeper.content_hash != currentKeeper.value().content_hash) {
+                        return Status::alreadyExists("Keeper changed since the duplicate scan");
+                    }
+                    for (const auto& media : removals) {
+                        auto current = database.getMediaById(media.id);
+                        if (!current.isOk()) return current.status();
+                        if (!media.content_hash.empty() && media.content_hash != current.value().content_hash) {
+                            return Status::alreadyExists("Media changed since the duplicate scan");
+                        }
+                        if (groupMergeMetadata) {
+                            auto merged = database.mergeMediaMetadata(keeper.id, media.id);
+                            if (!merged.isOk()) return merged;
+                        }
+                        auto removed = database.deleteMedia(media.id);
+                        if (!removed.isOk()) return removed;
+                        outcomes.emplace_back();
+                    }
+                    return Status::ok();
+                });
+                if (status.isOk()) resolution = std::move(outcomes);
+                else resolution = status;
+            }
+
+            if (!resolution.isOk()) {
+                const auto status = resolution.status();
+                groupResults.push_back({{"keeper", keeperId}, {"status", statusToHttpCode(status)},
+                    {"error", status.message()}});
+                continue;
             }
 
             int64_t groupFreedBytes = 0;
             std::vector<MediaId> groupRemoved;
-            std::vector<nlohmann::json> groupItemErrors;
-
-            Status txStatus = db().runInTransaction([&]() -> Status {
-                for (const auto& removeEl : removeList) {
-                    if (!removeEl.is_number_integer() || removeEl.get<int64_t>() <= 0) {
-                        groupItemErrors.push_back({{"id", 0}, {"status", 400}, {"error", "Invalid remove media ID"}});
-                        continue;
-                    }
-                    MediaId loserId = removeEl.get<MediaId>();
-                    if (loserId == keeperId) {
-                        groupItemErrors.push_back({{"id", loserId}, {"status", 400}, {"error", "Cannot remove keeper"}});
-                        continue;
-                    }
-                    auto loserRes = catalog_ ? catalog_->getMedia(loserId) : db().getMediaById(loserId);
-                    if (!loserRes.isOk()) {
-                        groupItemErrors.push_back({{"id", loserId}, {"status", 404}, {"error", "Remove media not found"}});
-                        continue;
-                    }
-
-                    MediaItem loser = loserRes.value();
-                    if (groupMergeMetadata) {
-                        Status mergeStatus = db().mergeMediaMetadata(keeperId, loserId);
-                        if (!mergeStatus.isOk()) {
-                            return mergeStatus;
-                        }
-                    }
-
-                    Status delStatus = catalog_ ? catalog_->deleteMedia(loserId, groupDeleteFromDisk)
-                                                : (groupDeleteFromDisk ? Status::internal("Catalog is required to delete files from disk") : db().deleteMedia(loserId));
-                    if (!delStatus.isOk()) {
-                        return delStatus;
-                    }
-
-                    groupFreedBytes += loser.file_size;
-                    groupRemoved.push_back(loserId);
+            auto diskFailures = nlohmann::json::array();
+            const auto& outcomes = resolution.value();
+            for (size_t i = 0; i < outcomes.size(); ++i) {
+                const auto id = removals[i].id;
+                const auto& outcome = outcomes[i];
+                if (clipService_) clipService_->removeMedia(id);
+                groupRemoved.push_back(id);
+                groupFreedBytes += outcome.freed_bytes;
+                if (!outcome.disk_error.empty()) {
+                    diskFailures.push_back({
+                        {"id", id}, {"error", outcome.disk_error}, {"recovery_path", outcome.recovery_path}
+                    });
                 }
-                return Status::ok();
-            });
-
-            if (txStatus.isOk()) {
-                if (clipService_) {
-                    for (MediaId loserId : groupRemoved) {
-                        clipService_->removeMedia(loserId);
-                    }
-                }
-                totalMergedCount += 1;
-                totalDeletedCount += static_cast<int>(groupRemoved.size());
-                totalFreedBytes += groupFreedBytes;
-
-                size_t keeperTagsAfter = 0;
-                if (auto tr = db().getTagsForMedia(keeperId); tr.isOk()) {
-                    keeperTagsAfter = tr.value().size();
-                }
-                int groupMergedTags = static_cast<int>(keeperTagsAfter > keeperTagsBefore ? keeperTagsAfter - keeperTagsBefore : 0);
-
-                nlohmann::json gr = {
-                    {"keeper", keeperId},
-                    {"removed", groupRemoved},
-                    {"merged_tags", groupMergedTags},
-                    {"freed_bytes", groupFreedBytes},
-                    {"status", 200}
-                };
-                if (!groupItemErrors.empty()) {
-                    gr["errors"] = groupItemErrors;
-                }
-                groupResults.push_back(std::move(gr));
-            } else {
-                groupResults.push_back({
-                    {"keeper", keeperId},
-                    {"status", 500},
-                    {"error", "Failed to resolve group: " + txStatus.message()}
-                });
             }
+            ++totalMergedCount;
+            totalDeletedCount += static_cast<int>(groupRemoved.size());
+            totalFreedBytes += groupFreedBytes;
+
+            const auto finalTags = database.getTagsForMedia(keeperId);
+            const size_t before = initialTags.isOk() ? initialTags.value().size() : 0;
+            const size_t after = finalTags.isOk() ? finalTags.value().size() : 0;
+            nlohmann::json groupResult = {
+                {"keeper", keeperId}, {"removed", groupRemoved},
+                {"merged_tags", after > before ? after - before : 0},
+                {"freed_bytes", groupFreedBytes}, {"status", 200}
+            };
+            if (!groupItemErrors.empty()) groupResult["errors"] = std::move(groupItemErrors);
+            if (!diskFailures.empty()) groupResult["disk_failures"] = std::move(diskFailures);
+            groupResults.push_back(std::move(groupResult));
         }
 
         nlohmann::json resJson = {

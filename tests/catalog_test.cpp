@@ -3,6 +3,7 @@
 #include "imagine/core/deduplicator.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include <filesystem>
+#include <fstream>
 
 using namespace imagine;
 using namespace imagine::core;
@@ -197,6 +198,279 @@ TEST_F(CatalogClassTest, DeleteMediaWithDiskDeletion) {
     EXPECT_TRUE(std::filesystem::exists(sampleImg));
     EXPECT_TRUE(cat.deleteMedia(mid, true).isOk());
     EXPECT_FALSE(cat.getMedia(mid).isOk());
+    EXPECT_FALSE(std::filesystem::exists(sampleImg));
+}
+
+TEST_F(CatalogClassTest, DeletePreservesAnOriginalReferencedByAnAbsoluteAlias) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    const auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+
+    auto legacy = imported.value();
+    legacy.file_path = sampleImg;
+    ASSERT_TRUE(cat.db().insertMedia(legacy).isOk());
+
+    auto deleted = cat.deleteMediaWithResult(imported.value().id, true);
+    ASSERT_TRUE(deleted.isOk()) << deleted.status().message();
+    EXPECT_FALSE(deleted.value().deleted_from_disk);
+    EXPECT_TRUE(deleted.value().disk_error.empty());
+    EXPECT_TRUE(cat.getMedia(legacy.id).isOk());
+    EXPECT_TRUE(std::filesystem::exists(sampleImg));
+}
+
+TEST_F(CatalogClassTest, DeletePreservesAnOriginalReferencedWithDifferentPathCasing) {
+    const auto uppercase = testDir / "PHOTO.JPG";
+    if (!std::filesystem::exists(uppercase)) {
+        GTEST_SKIP() << "This test needs a case-insensitive photo directory";
+    }
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    const auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+
+    auto alias = imported.value();
+    alias.file_path = uppercase.string();
+    ASSERT_TRUE(cat.db().insertMedia(alias).isOk());
+
+    auto deleted = cat.deleteMediaWithResult(imported.value().id, true);
+    ASSERT_TRUE(deleted.isOk()) << deleted.status().message();
+    EXPECT_FALSE(deleted.value().deleted_from_disk);
+    EXPECT_TRUE(cat.getMedia(alias.id).isOk());
+    EXPECT_TRUE(std::filesystem::exists(sampleImg));
+}
+
+TEST_F(CatalogClassTest, DeleteDoesNotGuessAnOfflineOriginalsLocation) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    const auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+
+    auto legacy = imported.value();
+    legacy.file_path = (testDir / "offline" / "photo.jpg").string();
+    ASSERT_TRUE(cat.db().insertMedia(legacy).isOk());
+    ASSERT_EQ(pathFromUtf8(cat.resolvePhotoPath(legacy.file_path)), pathFromUtf8(sampleImg));
+
+    auto deleted = cat.deleteMediaWithResult(legacy.id, true);
+    EXPECT_FALSE(deleted.isOk());
+    EXPECT_TRUE(cat.getMedia(legacy.id).isOk());
+    EXPECT_TRUE(std::filesystem::exists(sampleImg));
+}
+
+#ifdef _WIN32
+TEST_F(CatalogClassTest, DeleteKeepsTheCatalogRowWhenAnOriginalIsReadOnly) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    const auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+    const auto writeBits = std::filesystem::perms::owner_write | std::filesystem::perms::group_write |
+                           std::filesystem::perms::others_write;
+    std::error_code ec;
+    std::filesystem::permissions(sampleImg, writeBits, std::filesystem::perm_options::remove, ec);
+    ASSERT_FALSE(ec);
+
+    auto deleted = cat.deleteMediaWithResult(imported.value().id, true);
+    EXPECT_EQ(deleted.status().code(), StatusCode::IoError);
+    EXPECT_TRUE(cat.getMedia(imported.value().id).isOk());
+    EXPECT_TRUE(std::filesystem::exists(sampleImg));
+    std::filesystem::permissions(sampleImg, writeBits, std::filesystem::perm_options::add, ec);
+    EXPECT_FALSE(ec);
+}
+#endif
+
+TEST_F(CatalogClassTest, DuplicateGroupRestoresStagedFilesWhenDatabaseDeleteFails) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    const auto firstPath = testDir / "first.jpg";
+    const auto secondPath = testDir / "second.jpg";
+    std::filesystem::copy_file(sampleImg, firstPath);
+    std::filesystem::copy_file(sampleImg, secondPath);
+    const auto keeper = cat.importFile(sampleImg);
+    const auto first = cat.importFile(firstPath.string());
+    const auto second = cat.importFile(secondPath.string());
+    ASSERT_TRUE(keeper.isOk());
+    ASSERT_TRUE(first.isOk());
+    ASSERT_TRUE(second.isOk());
+    ASSERT_TRUE(cat.setRating(first.value().id, 4).isOk());
+    ASSERT_TRUE(cat.db().connection().execute(
+        "CREATE TRIGGER fail_delete BEFORE DELETE ON media_items WHEN OLD.id = " +
+        std::to_string(second.value().id) + " BEGIN SELECT RAISE(ABORT, 'forced failure'); END;").isOk());
+
+    const ReviewedMedia reviewedKeeper{keeper.value().id, keeper.value().content_hash};
+    const std::vector<ReviewedMedia> removals{
+        {first.value().id, first.value().content_hash},
+        {second.value().id, second.value().content_hash}
+    };
+    const auto failed = cat.resolveDuplicateGroup(reviewedKeeper, removals, true, true);
+    ASSERT_FALSE(failed.isOk());
+    EXPECT_NE(failed.status().message().find("forced failure"), std::string::npos);
+    EXPECT_EQ(cat.getMedia(reviewedKeeper.id).value().rating, 0);
+    EXPECT_TRUE(cat.getMedia(removals[0].id).isOk());
+    EXPECT_TRUE(cat.getMedia(removals[1].id).isOk());
+    EXPECT_TRUE(std::filesystem::exists(firstPath));
+    EXPECT_TRUE(std::filesystem::exists(secondPath));
+
+    ASSERT_TRUE(cat.db().connection().execute("DROP TRIGGER fail_delete;").isOk());
+    const auto resolved = cat.resolveDuplicateGroup(reviewedKeeper, removals, true, true);
+    ASSERT_TRUE(resolved.isOk()) << resolved.status().message();
+    ASSERT_EQ(resolved.value().size(), 2);
+    EXPECT_TRUE(resolved.value()[0].deleted_from_disk);
+    EXPECT_TRUE(resolved.value()[1].deleted_from_disk);
+    EXPECT_EQ(resolved.value()[0].freed_bytes, first.value().file_size);
+    EXPECT_EQ(cat.getMedia(reviewedKeeper.id).value().rating, 4);
+    EXPECT_FALSE(std::filesystem::exists(firstPath));
+    EXPECT_FALSE(std::filesystem::exists(secondPath));
+    EXPECT_TRUE(std::filesystem::exists(sampleImg));
+}
+
+TEST_F(CatalogClassTest, DuplicateGroupRejectsAnOriginalChangedOutsideTheCatalog) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    const auto copyPath = testDir / "copy.jpg";
+    std::filesystem::copy_file(sampleImg, copyPath);
+    const auto keeper = cat.importFile(sampleImg);
+    const auto copy = cat.importFile(copyPath.string());
+    ASSERT_TRUE(keeper.isOk());
+    ASSERT_TRUE(copy.isOk());
+    {
+        std::ofstream file(copyPath, std::ios::binary | std::ios::app);
+        file << "new photo bytes";
+    }
+
+    const auto result = cat.resolveDuplicateGroup(
+        {keeper.value().id, keeper.value().content_hash}, {{copy.value().id, copy.value().content_hash}},
+        true, true);
+    EXPECT_EQ(result.status().code(), StatusCode::AlreadyExists);
+    EXPECT_TRUE(cat.getMedia(copy.value().id).isOk());
+    EXPECT_GT(std::filesystem::file_size(copyPath), static_cast<uintmax_t>(copy.value().file_size));
+}
+
+TEST_F(CatalogClassTest, DuplicateMergePreservesAutomaticTagSourcesAndPromotesManualOwnership) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    const auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+    const auto keeper = imported.value().id;
+    auto duplicate = imported.value();
+    duplicate.file_path = "another.jpg";
+    ASSERT_TRUE(cat.db().insertMedia(duplicate).isOk());
+
+    const auto gpsTag = cat.createOrGetTag("GPS place", "places");
+    const auto clipTag = cat.createOrGetTag("CLIP only", "keyword");
+    const auto promotedTag = cat.createOrGetTag("Manual and CLIP", "keyword");
+    ASSERT_TRUE(gpsTag.isOk());
+    ASSERT_TRUE(clipTag.isOk());
+    ASSERT_TRUE(promotedTag.isOk());
+    ASSERT_TRUE(cat.addTag(duplicate.id, gpsTag.value()).isOk());
+    ASSERT_TRUE(cat.addTag(duplicate.id, clipTag.value()).isOk());
+    ASSERT_TRUE(cat.addTag(duplicate.id, promotedTag.value()).isOk());
+    ASSERT_TRUE(cat.addTag(keeper, promotedTag.value()).isOk());
+
+    const auto setSource = [&](MediaId id, TagId tag, std::string source) {
+        return cat.db().connection().execute(
+            "UPDATE media_tag_provenance SET manual = 0, source = '" + source +
+            "' WHERE media_id = " + std::to_string(id) + " AND tag_id = " + std::to_string(tag) + ";");
+    };
+    ASSERT_TRUE(setSource(duplicate.id, gpsTag.value(), "gps").isOk());
+    ASSERT_TRUE(setSource(duplicate.id, clipTag.value(), "clip").isOk());
+    ASSERT_TRUE(setSource(keeper, promotedTag.value(), "clip").isOk());
+
+    const auto merged = cat.resolveDuplicateGroup({keeper, {}}, {{duplicate.id, {}}}, false, true);
+    ASSERT_TRUE(merged.isOk()) << merged.status().message();
+    const auto tags = cat.getTagsForMedia(keeper);
+    ASSERT_TRUE(tags.isOk());
+    std::unordered_map<TagId, std::string> sources;
+    for (const auto& tag : tags.value()) sources.emplace(tag.id, tag.source);
+    EXPECT_EQ(sources[gpsTag.value()], "gps");
+    EXPECT_EQ(sources[clipTag.value()], "clip");
+    EXPECT_EQ(sources[promotedTag.value()], "manual");
+
+    ASSERT_TRUE(cat.db().clearSmartTags().isOk());
+    const auto retained = cat.getTagsForMedia(keeper);
+    ASSERT_TRUE(retained.isOk());
+    ASSERT_EQ(retained.value().size(), 2);
+    EXPECT_EQ(retained.value()[0].id, gpsTag.value());
+    EXPECT_EQ(retained.value()[1].id, promotedTag.value());
+}
+
+TEST_F(CatalogClassTest, IndependentImportsStoreDistinctAbsolutePathsWithoutARoot) {
+    const auto firstDir = testDir / "first";
+    const auto secondDir = testDir / "second";
+    std::filesystem::create_directory(firstDir);
+    std::filesystem::create_directory(secondDir);
+    const auto firstPath = firstDir / "photo.jpg";
+    const auto secondPath = secondDir / "photo.jpg";
+    std::filesystem::copy_file(sampleImg, firstPath);
+    std::filesystem::copy_file(sampleImg, secondPath);
+
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir).isOk());
+    ASSERT_TRUE(cat.importDirectory(firstDir.string(), true, nullptr, false).isOk());
+    cat.close();
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir).isOk());
+    ASSERT_TRUE(cat.importDirectory(secondDir.string(), true, nullptr, false).isOk());
+
+    const auto first = cat.getMediaByPath(Importer::normalizePath(firstPath.string()));
+    const auto second = cat.getMediaByPath(Importer::normalizePath(secondPath.string()));
+    ASSERT_TRUE(first.isOk());
+    ASSERT_TRUE(second.isOk());
+    EXPECT_NE(first.value().id, second.value().id);
+}
+
+TEST_F(CatalogClassTest, CancellingAFolderImportDoesNotCancelTheNextSingleFileImport) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    auto cancelled = cat.importDirectory(testDir.string(), true, [&](const ImportProgress& progress) {
+        if (progress.is_running) cat.cancelImport();
+    });
+    ASSERT_TRUE(cancelled.isOk());
+    EXPECT_EQ(cancelled.value().cancelled_files.load(), 1);
+    EXPECT_TRUE(cat.importFile(sampleImg).isOk());
+}
+
+TEST_F(CatalogClassTest, RescanPreservesCatalogEditsMadeAfterReading) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    auto original = cat.importFile(sampleImg);
+    ASSERT_TRUE(original.isOk());
+    const auto id = original.value().id;
+    {
+        std::ofstream file(sampleImg, std::ios::binary | std::ios::app);
+        file << "changed original";
+    }
+    cat.importer().setFileHook([&](const std::string&) {
+        EXPECT_TRUE(cat.setRating(id, 5).isOk());
+        EXPECT_TRUE(cat.setCaption(id, "Edited during rescan").isOk());
+        EXPECT_TRUE(cat.setDateTaken(id, 1234567890).isOk());
+    });
+    auto rescanned = cat.importDirectory(testDir.string());
+    ASSERT_TRUE(rescanned.isOk());
+    EXPECT_EQ(rescanned.value().imported_files.load(), 1);
+    const auto item = cat.getMedia(id).value();
+    EXPECT_EQ(item.rating, 5);
+    EXPECT_EQ(item.caption, "Edited during rescan");
+    EXPECT_EQ(item.date_taken, 1234567890);
+    EXPECT_NE(item.content_hash, original.value().content_hash);
+}
+
+TEST_F(CatalogClassTest, RescanDoesNotRestoreAPathRenamedAfterReading) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    auto original = cat.importFile(sampleImg);
+    ASSERT_TRUE(original.isOk());
+    const auto id = original.value().id;
+    {
+        std::ofstream file(sampleImg, std::ios::binary | std::ios::app);
+        file << "changed original";
+    }
+    cat.importer().setFileHook([&](const std::string&) {
+        EXPECT_TRUE(cat.renameMedia(id, "renamed.jpg").isOk());
+    });
+    auto rescanned = cat.importDirectory(testDir.string());
+    ASSERT_TRUE(rescanned.isOk());
+    EXPECT_EQ(rescanned.value().failed_files.load(), 1);
+    EXPECT_EQ(cat.getMedia(id).value().file_path, "renamed.jpg");
+    EXPECT_TRUE(std::filesystem::exists(testDir / "renamed.jpg"));
     EXPECT_FALSE(std::filesystem::exists(sampleImg));
 }
 

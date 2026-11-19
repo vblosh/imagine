@@ -148,6 +148,8 @@
 }
 
 .dedup-group-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 220px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 6px;
@@ -326,6 +328,29 @@
   text-overflow: ellipsis;
 }
 
+.dedup-folder {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-height: 16px;
+}
+
+.dedup-folder svg {
+  flex-shrink: 0;
+  color: var(--text-dim, #888);
+}
+
+.dedup-folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dedup-pills-row {
   display: flex;
   flex-wrap: wrap;
@@ -456,4 +481,11 @@
 
 .btn.btn-warning:active {
   background-color: #c98410;
+}
+
+.dedup-sentinel {
+  height: 1px;
+  width: 100%;
+  pointer-events: none;
+  visibility: hidden;
 }

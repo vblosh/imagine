@@ -2,6 +2,7 @@
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/types.hpp"
 #include <cctype>
+#include <charconv>
 #include <cstdlib>
 #include <chrono>
 #include <filesystem>
@@ -14,6 +15,36 @@ namespace {
 // Marker lives next to the small thumbnail, e.g. ab/cd/hash_256.jpg.placeholder.
 std::string placeholderMarkerRelativePath(const std::string& hash) {
     return Cache::getRelativeThumbnailPath(hash, Cache::SmallSize) + ".placeholder";
+}
+
+bool isCacheArtifact(const std::filesystem::path& relativePath) {
+    const std::string fileName = pathToUtf8(relativePath.filename());
+    constexpr std::string_view markerExtension = ".placeholder";
+    const bool isMarker = fileName.ends_with(markerExtension);
+    std::string_view stem(fileName);
+    if (isMarker) stem.remove_suffix(markerExtension.size());
+    if (!stem.ends_with(".jpg")) return false;
+    stem.remove_suffix(4);
+
+    const auto separator = stem.rfind('_');
+    if (separator == std::string_view::npos) return false;
+    auto hash = stem.substr(0, separator);
+    auto number = stem.substr(separator + 1);
+
+    if (relativePath.parent_path().empty() && !isMarker && hash.starts_with("tmp_")) {
+        hash.remove_prefix(hash.starts_with("tmp_ondemand_") ? 13 : 4);
+        return hash.size() == 64 && hash.find_first_not_of("0123456789abcdefABCDEF") == std::string_view::npos &&
+               !number.empty() && number.find_first_not_of("0123456789") == std::string_view::npos;
+    }
+
+    int size = 0;
+    const auto [end, parseError] = std::from_chars(number.data(), number.data() + number.size(), size);
+    if (parseError != std::errc{} || end != number.data() + number.size() || size <= 0) return false;
+    if (isMarker && size != Cache::SmallSize) return false;
+    if (hash.starts_with("misc_")) hash.remove_prefix(5);
+
+    const auto thumbnail = Cache::getRelativeThumbnailPath(std::string(hash), size);
+    return relativePath == pathFromUtf8(isMarker ? thumbnail + ".placeholder" : thumbnail);
 }
 
 } // anonymous namespace
@@ -148,13 +179,14 @@ Result<std::string> Cache::ensureThumbnail(
 Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnails(
     const std::string& sourceImagePath,
     const std::string& hash,
-    int orientation
+    int orientation,
+    bool replaceExisting
 ) {
     std::string smallPath = getThumbnailPath(hash, SmallSize);
     std::string largePath = getThumbnailPath(hash, LargeSize);
 
-    bool hasSmall = hasThumbnail(hash, SmallSize);
-    bool hasLarge = hasThumbnail(hash, LargeSize);
+    bool hasSmall = !replaceExisting && hasThumbnail(hash, SmallSize);
+    bool hasLarge = !replaceExisting && hasThumbnail(hash, LargeSize);
 
     if (hasSmall && hasLarge) {
         return std::make_pair(smallPath, largePath);
@@ -182,7 +214,7 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnails(
         loadBytesRes.value().data(),
         loadBytesRes.value().size(),
         hash,
-        orientation
+        orientation, nullptr, nullptr, replaceExisting
     );
 }
 
@@ -192,7 +224,8 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemor
     const std::string& hash,
     int orientation,
     int* outWidth,
-    int* outHeight
+    int* outHeight,
+    bool replaceExisting
 ) {
     if (outWidth) *outWidth = 0;
     if (outHeight) *outHeight = 0;
@@ -200,8 +233,8 @@ Result<std::pair<std::string, std::string>> Cache::ensureDualThumbnailsFromMemor
     std::string smallPath = getThumbnailPath(hash, SmallSize);
     std::string largePath = getThumbnailPath(hash, LargeSize);
 
-    bool hasSmall = hasThumbnail(hash, SmallSize);
-    bool hasLarge = hasThumbnail(hash, LargeSize);
+    bool hasSmall = !replaceExisting && hasThumbnail(hash, SmallSize);
+    bool hasLarge = !replaceExisting && hasThumbnail(hash, LargeSize);
 
     if (hasSmall && hasLarge) {
         if (outWidth || outHeight) {
@@ -421,17 +454,16 @@ Result<size_t> Cache::clearThumbnail(const std::string& hash, bool dryRun) const
     size_t count = 0;
     std::error_code ec;
     if (std::filesystem::is_directory(targetDir, ec) && !ec) {
-        for (const auto& entry : std::filesystem::directory_iterator(targetDir, ec)) {
-            if (ec) break;
-            if (entry.is_regular_file(ec)) {
-                std::string fname = pathToUtf8(entry.path().filename());
-                if (fname.rfind(prefix, 0) == 0) {
-                    count++;
-                    if (!dryRun) {
-                        std::filesystem::remove(entry.path(), ec);
-                    }
-                }
-            }
+        const auto root = pathFromUtf8(baseDir);
+        const std::filesystem::directory_iterator end;
+        for (std::filesystem::directory_iterator it(targetDir, ec); !ec && it != end; it.increment(ec)) {
+            const auto& entry = *it;
+            std::error_code entryError;
+            if (!std::filesystem::is_regular_file(entry.symlink_status(entryError)) || entryError) continue;
+            const std::string name = pathToUtf8(entry.path().filename());
+            if (!name.starts_with(prefix) || !isCacheArtifact(entry.path().lexically_relative(root))) continue;
+            if (!dryRun && !std::filesystem::remove(entry.path(), entryError)) continue;
+            count++;
         }
     }
     return count;
@@ -463,19 +495,20 @@ Result<size_t> Cache::clearAll(bool dryRun) const {
         return size_t{0};
     }
     size_t count = 0;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(dirPath, ec)) {
-        if (ec) break;
-        if (!entry.is_regular_file(ec) || ec) continue;
-        // Only touch thumbnail artifacts; never wipe foreign files in the cache dir.
-        const std::string fname = pathToUtf8(entry.path().filename());
-        const std::string ext = pathToUtf8(entry.path().extension());
-        const bool isThumb = (ext == ".jpg" || ext == ".jpeg" || ext == ".placeholder") ||
-                             fname.rfind("tmp_ondemand_", 0) == 0;
-        if (!isThumb) continue;
+    const std::filesystem::recursive_directory_iterator end;
+    for (std::filesystem::recursive_directory_iterator it(
+             dirPath, std::filesystem::directory_options::skip_permission_denied, ec);
+         !ec && it != end; it.increment(ec)) {
+        const auto& entry = *it;
+        if (it.depth() >= 2 || entry.path().filename().native().size() != 2) {
+            it.disable_recursion_pending();
+        }
+        std::error_code statusError;
+        if (!std::filesystem::is_regular_file(entry.symlink_status(statusError)) || statusError) continue;
+        if (!isCacheArtifact(entry.path().lexically_relative(dirPath))) continue;
         if (!dryRun) {
             std::error_code removeEc;
-            std::filesystem::remove(entry.path(), removeEc);
-            if (removeEc) continue;
+            if (!std::filesystem::remove(entry.path(), removeEc)) continue;
         }
         count++;
     }

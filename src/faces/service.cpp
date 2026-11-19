@@ -2130,6 +2130,19 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
     if (impl_->stopping.load()) {
         return Status::internal("Face-analysis service is stopping");
     }
+    {
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        auto activeRes = impl_->db.conn_.prepare("SELECT 1 FROM face_analysis_jobs WHERE state IN ('running','cancelling') LIMIT 1;");
+        if (!activeRes.isOk()) return activeRes.status();
+        switch (activeRes.value().step()) {
+        case StepResult::Row:
+            return Status::alreadyExists("A face-analysis scan is already active");
+        case StepResult::Error:
+            return dbError(impl_->db.conn_, "Failed to check for an active face-analysis scan");
+        case StepResult::Done:
+            break;
+        }
+    }
     if (impl_->worker.joinable()) {
         impl_->worker.join();
     }
@@ -2137,11 +2150,6 @@ Status Service::startJob(const std::string& scope, const std::vector<MediaId>& r
     std::vector<MediaId> ids;
     {
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
-        auto activeRes = impl_->db.conn_.prepare("SELECT id FROM face_analysis_jobs WHERE state IN ('running','cancelling') LIMIT 1;");
-        if (!activeRes.isOk()) return activeRes.status();
-        auto active = std::move(activeRes.value());
-        if (active.step() == StepResult::Row) return Status::alreadyExists("A face-analysis scan is already active");
-
         if (scope == "catalog") {
             // Keep this eligibility predicate aligned with analysisReusable().
             auto mediaRes = impl_->db.conn_.prepare(R"SQL(

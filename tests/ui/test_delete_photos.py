@@ -2,6 +2,8 @@
 Deterministic UI tests for Deleting Photos from Catalog.
 """
 
+import re
+
 from playwright.sync_api import Page, expect
 
 
@@ -82,6 +84,53 @@ def test_batch_delete_photos(server, page: Page):
     expect(cards).to_have_count(4)
     expect(page.locator("#totalMediaCount")).to_have_text("4")
     expect(page.locator("#batchActionBar")).to_be_hidden()
+
+
+def test_failed_disk_delete_keeps_current_photo_selected_in_loupe(server, page: Page):
+    page.goto(server['url'])
+    card = page.locator('.photo-card', has_text='sunset.bmp')
+    media_id = int(card.get_attribute('data-id'))
+    page.route('**/api/media/batch-delete', lambda route: route.fulfill(json={
+        'status': 'partial', 'deleted_count': 0, 'failed_ids': [media_id], 'disk_deleted_ids': []
+    }))
+
+    card.dblclick()
+    page.locator('#loupeDeleteBtn').click()
+    page.locator('#deleteFromDiskCheckbox').check()
+    page.locator('#confirmDeleteMediaBtn').click()
+
+    expect(page.locator('#deleteMediaModal')).to_be_hidden()
+    expect(page.locator('#loupeFileName')).to_contain_text('sunset.bmp')
+    expect(page.locator('.toast-error')).to_contain_text('could not be deleted')
+    expect(page.locator('.toast-success')).to_have_count(0)
+    page.keyboard.press('Escape')
+    expect(card).to_have_class(re.compile(r'\bselected\b'))
+
+
+def test_disk_cleanup_failure_reports_catalog_removal(server, page: Page):
+    def handle_delete(route):
+        payload = route.request.post_data_json
+        response = route.fetch(post_data={**payload, 'delete_from_disk': False})
+        result = response.json()
+        assert result['deleted_count'] == 1
+        route.fulfill(json={
+            **result,
+            'disk_deleted_ids': [],
+            'disk_failures': [{'id': payload['ids'][0], 'error': 'File is locked'}],
+        })
+
+    page.route('**/api/media/batch-delete', handle_delete)
+    page.goto(server['url'])
+    card = page.locator('.photo-card', has_text='sunset.bmp')
+    card.click()
+    page.locator('#inspectorDeleteBtn').click()
+    page.locator('#deleteFromDiskCheckbox').check()
+    page.locator('#confirmDeleteMediaBtn').click()
+
+    expect(card).to_have_count(0)
+    expect(page.locator('#inspectorNoSelection')).to_be_visible()
+    expect(page.locator('.toast-error')).to_contain_text('Incomplete disk cleanup after catalog removal (1)')
+    expect(page.locator('.toast-success')).to_have_count(0)
 
 
 def test_keyboard_delete_shortcut_and_escape(server, page: Page):

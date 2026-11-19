@@ -220,6 +220,31 @@ def test_save_overwrite_and_save_copy(server, page: Page):
     expect(page.locator(".photo-card", has_text="birthday_edited")).to_be_visible()
 
 
+def test_quick_edit_uploads_png_for_png_original(server, page: Page):
+    page.goto(server['url'])
+    card = page.locator('.photo-card', has_text='birthday.bmp')
+    media_id = int(card.get_attribute('data-id'))
+    original = page.request.get(f"{server['url']}/api/media/{media_id}").json()
+    png_original = {**original, 'file_name': 'birthday.PNG'}
+    page.route(f'**/api/media/{media_id}', lambda route: route.fulfill(json=png_original))
+    page.route(f'**/api/photos/{media_id}/edit?mode=overwrite', lambda route: route.fulfill(json=png_original))
+
+    card.dblclick()
+    page.wait_for_function('''id => window.imagineUI.state.mediaItems.some(
+        item => item.id === id && item.file_name.endsWith('.PNG')
+    )''', arg=media_id)
+    page.locator('#loupeQuickEditBtn').click()
+    page.evaluate('''id => {
+        window.imagineUI.state.mediaItems.find(item => item.id === id).content_hash = 'changed-after-opening';
+    }''', media_id)
+    page.locator('#quickEditRotateRightBtn').click()
+    with page.expect_request(f'**/api/photos/{media_id}/edit?mode=overwrite') as request:
+        page.locator('#quickEditSaveBtn').click()
+    assert request.value.headers['content-type'] == 'image/png'
+    assert request.value.headers['x-image-hash'] == original['content_hash']
+    assert request.value.post_data_buffer.startswith(b'\x89PNG\r\n\x1a\n')
+
+
 def test_quick_edit_disabled_on_video_and_audio(media_server, page: Page):
     """Quick edit button and shortcuts must be disabled for video and audio files."""
     page.goto(media_server["url"])

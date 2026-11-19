@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <filesystem>
+#include <set>
 #include <shared_mutex>
 #include <thread>
 #include <unordered_set>
@@ -161,6 +162,12 @@ void bindEmbedding(Statement& stmt, int index, const std::vector<float>& embeddi
     bindEmbedding(stmt, index, embedding.data(), embedding.size());
 }
 
+std::optional<int64_t> dataVersion(Connection& conn) {
+    auto res = conn.prepare("PRAGMA data_version;");
+    if (!res.isOk() || res.value().step() != StepResult::Row) return std::nullopt;
+    return res.value().getInt64(0);
+}
+
 } // namespace
 
 struct Service::Impl {
@@ -260,59 +267,36 @@ struct Service::Impl {
             return searchUnlocked(query, k, d, allowedIds);
         }
 
-        std::vector<VisualDuplicatePair> findDuplicatePairs(
-            float threshold,
-            const std::unordered_set<MediaId>& allowedIds
-        ) const {
-            std::shared_lock lock(mutex);
-            if (ids.size() < 2 || dim <= 0) return {};
-
-            std::vector<size_t> indices;
-            indices.reserve(ids.size());
-            for (size_t i = 0; i < ids.size(); ++i) {
-                if (allowedIds.empty() || allowedIds.count(ids[i])) {
-                    indices.push_back(i);
-                }
-            }
-            if (indices.size() < 2) return {};
-
-            std::unordered_map<uint64_t, float> pairMap;
-            constexpr int kCandidatesPerSeed = 50;
-
-            for (size_t idxA : indices) {
-                MediaId idA = ids[idxA];
-                const float* vecA = &vectors[idxA * dim];
-                auto hits = searchUnlocked(vecA, kCandidatesPerSeed + 1, dim, allowedIds.empty() ? nullptr : &allowedIds);
-                for (const auto& hit : hits) {
-                    if (hit.mediaId == idA) continue;
-                    if (hit.score < threshold) continue;
-                    MediaId low = std::min(idA, hit.mediaId);
-                    MediaId high = std::max(idA, hit.mediaId);
-                    uint64_t key = (static_cast<uint64_t>(low) << 32) | (static_cast<uint64_t>(high) & 0xFFFFFFFFULL);
-                    auto it = pairMap.find(key);
-                    if (it == pairMap.end() || hit.score > it->second) {
-                        pairMap[key] = hit.score;
-                    }
+        template <typename AllowMedia, typename AllowPair, typename Visit>
+        void visitDuplicatePairs(float threshold, AllowMedia allowMedia,
+                                 AllowPair allowPair, Visit visit) const {
+            std::vector<MediaId> seeds;
+            {
+                std::shared_lock lock(mutex);
+                if (ids.size() < 2 || dim <= 0) return;
+                seeds.reserve(ids.size());
+                for (MediaId id : ids) {
+                    if (allowMedia(id)) seeds.push_back(id);
                 }
             }
 
-            std::vector<VisualDuplicatePair> pairs;
-            pairs.reserve(pairMap.size());
-            for (const auto& [key, sim] : pairMap) {
-                pairs.push_back(VisualDuplicatePair{
-                    static_cast<MediaId>(key >> 32),
-                    static_cast<MediaId>(key & 0xFFFFFFFFULL),
-                    sim
-                });
+            for (MediaId a : seeds) {
+                // Release the index lock between seeds so imports can evict vectors.
+                std::shared_lock lock(mutex);
+                auto seed = std::lower_bound(ids.begin(), ids.end(), a);
+                if (seed == ids.end() || *seed != a) continue;
+                const auto idxA = static_cast<size_t>(seed - ids.begin());
+                for (size_t idxB = idxA + 1; idxB < ids.size(); ++idxB) {
+                    const MediaId b = ids[idxB];
+                    if (!allowMedia(b) || !allowPair(a, b)) continue;
+                    const float score = dotProduct(&vectors[idxA * dim], &vectors[idxB * dim], dim);
+                    if (score >= threshold) visit(a, b, score);
+                }
             }
-            std::sort(pairs.begin(), pairs.end(), [](const VisualDuplicatePair& lhs, const VisualDuplicatePair& rhs) {
-                if (lhs.a != rhs.a) return lhs.a < rhs.a;
-                if (lhs.b != rhs.b) return lhs.b < rhs.b;
-                return lhs.similarity > rhs.similarity;
-            });
-            return pairs;
         }
-    } index;
+    };
+    std::shared_ptr<VectorIndex> index{std::make_shared<VectorIndex>()};
+    std::optional<int64_t> indexDataVersion;
     
     std::atomic<bool> cancelRequested{false};
     std::atomic<bool> stopping{false};
@@ -404,9 +388,11 @@ Service::Service(db::CatalogDb& db, std::string cacheDirectory, PathResolver res
         IMAGINE_LOG_INFO("CLIP engine probed successfully from " + impl_->config.modelDirectory + " (models will load on demand)");
     }
     
-    loadIndex();
-    
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+    impl_->db.invalidateSemanticVector_ = [index = std::weak_ptr(impl_->index)](MediaId mediaId) {
+        if (auto existing = index.lock()) existing->remove(mediaId);
+    };
+    loadIndex();
     auto updateRes = impl_->db.conn_.prepare("UPDATE semantic_jobs SET state='interrupted' WHERE state IN ('running','cancelling');");
     if (updateRes.isOk()) {
         auto update = std::move(updateRes.value());
@@ -444,14 +430,15 @@ Service::~Service() {
     impl_->engine.unload();
 }
 
-void Service::loadIndex() {
+void Service::loadIndex() const {
     if (!impl_->engine.info().ready) return;
     auto t0 = std::chrono::steady_clock::now();
     std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+    const auto version = dataVersion(impl_->db.conn_);
     
     auto stmtRes = impl_->db.conn_.prepare(
         "SELECT s.media_id, s.embedding, s.vector_dim FROM semantic_index_state s "
-        "JOIN media_items m ON s.media_id = m.id AND m.media_type = 'photo' "
+        "JOIN media_items m ON s.media_id = m.id AND s.content_hash = m.content_hash AND m.media_type = 'photo' "
         "WHERE s.embedding IS NOT NULL AND (s.error_text IS NULL OR s.error_text = '') AND s.model_id = ? AND s.model_revision = ? "
         "ORDER BY s.media_id;"
     );
@@ -464,7 +451,8 @@ void Service::loadIndex() {
     std::vector<MediaId> loadedIds;
     std::vector<float> loadedVectors;
 
-    while (stmt.step() == StepResult::Row) {
+    StepResult readResult;
+    while ((readResult = stmt.step()) == StepResult::Row) {
         MediaId id = stmt.getInt64(0);
         int dim = stmt.getInt(2);
         if (targetDim > 0 && dim != targetDim) continue;
@@ -474,29 +462,40 @@ void Service::loadIndex() {
             loadedVectors.insert(loadedVectors.end(), vec.begin(), vec.end());
         }
     }
+    if (readResult == StepResult::Error) return;
     int count = static_cast<int>(loadedIds.size());
-    impl_->index.loadBulk(std::move(loadedIds), std::move(loadedVectors), targetDim);
+    impl_->index->loadBulk(std::move(loadedIds), std::move(loadedVectors), targetDim);
+    impl_->indexDataVersion = version;
 
     auto t1 = std::chrono::steady_clock::now();
     double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
     IMAGINE_LOG_INFO("Loaded " + std::to_string(count) + " semantic vectors in " + std::to_string(ms) + " ms");
 }
 
+void Service::refreshIndexFromExternalChanges() const {
+    if (!impl_->engine.info().ready) return;
+    std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+    const auto version = dataVersion(impl_->db.conn_);
+    if (version && version != impl_->indexDataVersion) loadIndex();
+}
+
 void Service::removeMedia(MediaId mediaId) {
-    impl_->index.remove(mediaId);
+    impl_->index->remove(mediaId);
 }
 
 bool Service::hasMedia(MediaId mediaId) const {
-    return impl_->index.has(mediaId);
+    refreshIndexFromExternalChanges();
+    return impl_->index->has(mediaId);
 }
 
 nlohmann::json Service::status() const {
+    refreshIndexFromExternalChanges();
     const auto info = impl_->engine.info();
     const bool isLoaded = impl_->engine.isLoaded();
     size_t size = 0;
     {
-        std::shared_lock lock(impl_->index.mutex);
-        size = impl_->index.ids.size();
+        std::shared_lock lock(impl_->index->mutex);
+        size = impl_->index->ids.size();
     }
     return json{
         {"built", info.built},
@@ -597,7 +596,8 @@ Result<SearchResult> Service::search(const SearchRequest& request) {
         }
     }
 
-    auto hits = impl_->index.search(
+    refreshIndexFromExternalChanges();
+    auto hits = impl_->index->search(
         queryVec.data(),
         limit,
         impl_->engine.info().vectorDim,
@@ -665,12 +665,16 @@ Result<SearchResult> Service::findSimilar(MediaId mediaId, int limit) {
     auto t0 = std::chrono::steady_clock::now();
     const int clampedLimit = std::clamp(limit, 1, 1000);
     
+    refreshIndexFromExternalChanges();
     int dim = 0;
-    std::vector<float> queryVec = impl_->index.get(mediaId, dim);
+    std::vector<float> queryVec = impl_->index->get(mediaId, dim);
     if (queryVec.empty()) {
         if (!impl_->engine.info().ready) return Status::internal("CLIP engine is not ready");
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
-        auto stmtRes = impl_->db.conn_.prepare("SELECT embedding, vector_dim FROM semantic_index_state WHERE media_id=? AND model_id=? AND model_revision=?;");
+        auto stmtRes = impl_->db.conn_.prepare(
+            "SELECT s.embedding, s.vector_dim FROM semantic_index_state s "
+            "JOIN media_items m ON s.media_id = m.id AND s.content_hash = m.content_hash AND m.media_type = 'photo' "
+            "WHERE s.media_id=? AND s.model_id=? AND s.model_revision=?;");
         if (stmtRes.isOk()) {
             auto stmt = std::move(stmtRes.value());
             stmt.bind(1, mediaId);
@@ -685,7 +689,7 @@ Result<SearchResult> Service::findSimilar(MediaId mediaId, int limit) {
     
     if (queryVec.empty()) return Status::notFound("Media embedding not found");
     
-    auto hits = impl_->index.search(queryVec.data(), clampedLimit + 1, dim);
+    auto hits = impl_->index->search(queryVec.data(), clampedLimit + 1, dim);
     if (hits.empty()) {
         auto t1 = std::chrono::steady_clock::now();
         return SearchResult{
@@ -943,40 +947,59 @@ void Service::runJob(int64_t jobId, std::string scope, std::vector<MediaId> medi
         }
     };
 
-    auto recordFailure = [&](MediaId mediaId, const std::string& hash, const std::string& reason) {
-        impl_->index.remove(mediaId);
+    auto matchesCurrentMedia = [&](const MediaItem& media) {
+        auto current = impl_->db.getMediaById(media.id);
+        return current.isOk() && current.value().media_type == "photo" &&
+               current.value().content_hash == media.content_hash &&
+               current.value().width == media.width && current.value().height == media.height &&
+               current.value().exif.orientation == media.exif.orientation;
+    };
+
+    auto recordFailure = [&](const MediaItem& media, const std::string& reason) {
         std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
         db::Transaction tx(impl_->db.conn_);
+        if (!tx.isActive()) {
+            updateProgress("failed", "Failed to start semantic index update");
+            return;
+        }
+        if (!matchesCurrentMedia(media)) {
+            tx.rollback();
+            updateProgress("skipped");
+            return;
+        }
         auto insRes = impl_->db.conn_.prepare(
             "INSERT OR REPLACE INTO semantic_index_state "
             "(media_id, model_id, model_revision, preprocess_id, vector_dim, embedding, content_hash, error_text, indexed_at) "
             "VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?);"
         );
-        if (insRes.isOk()) {
-            auto ins = std::move(insRes.value());
-            ins.bind(1, mediaId);
-            ins.bind(2, runtimeInfo.modelId);
-            ins.bind(3, runtimeInfo.modelRevision);
-            ins.bind(4, runtimeInfo.preprocessId);
-            ins.bind(5, runtimeInfo.vectorDim);
-            ins.bind(6, hash);
-            ins.bind(7, reason);
-            ins.bind(8, nowSeconds());
-            ins.step();
+        if (!insRes.isOk()) {
+            tx.rollback();
+            updateProgress("failed", insRes.status().message());
+            return;
         }
-        std::string sql = "UPDATE semantic_jobs SET failed=failed+1, "
-                          "remaining=MAX(0, total - processed - skipped - failed - 1), updated_at=?, "
-                          "error=CASE WHEN error='' AND ?<>'' THEN ? ELSE error END WHERE id=?;";
-        auto updateRes = impl_->db.conn_.prepare(sql);
-        if (updateRes.isOk()) {
-            auto update = std::move(updateRes.value());
-            update.bind(1, nowSeconds());
-            update.bind(2, reason);
-            update.bind(3, reason);
-            update.bind(4, jobId);
-            update.step();
+        auto ins = std::move(insRes.value());
+        ins.bind(1, media.id);
+        ins.bind(2, runtimeInfo.modelId);
+        ins.bind(3, runtimeInfo.modelRevision);
+        ins.bind(4, runtimeInfo.preprocessId);
+        ins.bind(5, runtimeInfo.vectorDim);
+        ins.bind(6, media.content_hash);
+        ins.bind(7, reason);
+        ins.bind(8, nowSeconds());
+        if (ins.step() != StepResult::Done) {
+            const auto error = impl_->db.conn_.lastErrorMessage();
+            tx.rollback();
+            updateProgress("failed", error);
+            return;
         }
-        tx.commit();
+        const Status commit = tx.commit();
+        if (!commit.isOk()) {
+            tx.rollback();
+            updateProgress("failed", commit.message());
+            return;
+        }
+        impl_->index->remove(media.id);
+        updateProgress("failed", reason);
     };
 
     auto isAlreadyIndexed = [&](MediaId id, const std::string& hash) -> bool {
@@ -1077,13 +1100,13 @@ void Service::runJob(int64_t jobId, std::string scope, std::vector<MediaId> medi
                 std::string photoPath = impl_->resolver ? impl_->resolver(media.file_path) : media.file_path;
                 auto bytes = thumbnail::Generator::loadImageBytes(photoPath);
                 if (!bytes.isOk()) {
-                    recordFailure(mediaId, media.content_hash, "Failed to load image");
+                    recordFailure(media, "Failed to load image");
                     continue;
                 }
 
                 auto loaded = thumbnail::Generator::loadImageFromMemory(bytes.value().data(), bytes.value().size());
                 if (!loaded.isOk()) {
-                    recordFailure(mediaId, media.content_hash, "Failed to decode image");
+                    recordFailure(media, "Failed to decode image");
                     continue;
                 }
 
@@ -1096,41 +1119,55 @@ void Service::runJob(int64_t jobId, std::string scope, std::vector<MediaId> medi
 
             auto encodeRes = impl_->engine.encodeImage(orientedImage);
             if (!encodeRes.isOk()) {
-                recordFailure(mediaId, media.content_hash, encodeRes.status().message());
+                recordFailure(media, encodeRes.status().message());
                 continue;
             }
 
-            impl_->index.add(mediaId, encodeRes.value().data(), static_cast<int>(encodeRes.value().size()));
             {
                 std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
                 db::Transaction tx(impl_->db.conn_);
+                if (!tx.isActive()) {
+                    updateProgress("failed", "Failed to start semantic index update");
+                    continue;
+                }
+                if (!matchesCurrentMedia(media)) {
+                    tx.rollback();
+                    updateProgress("skipped");
+                    continue;
+                }
                 auto insRes = impl_->db.conn_.prepare(
                     "INSERT OR REPLACE INTO semantic_index_state "
                     "(media_id, model_id, model_revision, preprocess_id, vector_dim, embedding, content_hash, error_text, indexed_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, '', ?);"
                 );
-                if (insRes.isOk()) {
-                    auto ins = std::move(insRes.value());
-                    ins.bind(1, mediaId);
-                    ins.bind(2, runtimeInfo.modelId);
-                    ins.bind(3, runtimeInfo.modelRevision);
-                    ins.bind(4, runtimeInfo.preprocessId);
-                    ins.bind(5, static_cast<int>(encodeRes.value().size()));
-                    bindEmbedding(ins, 6, encodeRes.value());
-                    ins.bind(7, media.content_hash);
-                    ins.bind(8, nowSeconds());
-                    ins.step();
+                if (!insRes.isOk()) {
+                    tx.rollback();
+                    updateProgress("failed", insRes.status().message());
+                    continue;
                 }
-                std::string sql = "UPDATE semantic_jobs SET processed=processed+1, "
-                                  "remaining=MAX(0, total - processed - skipped - failed - 1), updated_at=? WHERE id=?;";
-                auto updateRes = impl_->db.conn_.prepare(sql);
-                if (updateRes.isOk()) {
-                    auto update = std::move(updateRes.value());
-                    update.bind(1, nowSeconds());
-                    update.bind(2, jobId);
-                    update.step();
+                auto ins = std::move(insRes.value());
+                ins.bind(1, mediaId);
+                ins.bind(2, runtimeInfo.modelId);
+                ins.bind(3, runtimeInfo.modelRevision);
+                ins.bind(4, runtimeInfo.preprocessId);
+                ins.bind(5, static_cast<int>(encodeRes.value().size()));
+                bindEmbedding(ins, 6, encodeRes.value());
+                ins.bind(7, media.content_hash);
+                ins.bind(8, nowSeconds());
+                if (ins.step() != StepResult::Done) {
+                    const auto reason = impl_->db.conn_.lastErrorMessage();
+                    tx.rollback();
+                    updateProgress("failed", reason);
+                    continue;
                 }
-                tx.commit();
+                const Status commit = tx.commit();
+                if (!commit.isOk()) {
+                    tx.rollback();
+                    updateProgress("failed", commit.message());
+                    continue;
+                }
+                impl_->index->add(mediaId, encodeRes.value().data(), static_cast<int>(encodeRes.value().size()));
+                updateProgress("processed");
             }
         }
     } catch (const std::exception& e) {
@@ -1169,14 +1206,14 @@ void Service::runJob(int64_t jobId, std::string scope, std::vector<MediaId> medi
 
 namespace {
 
-inline std::unordered_set<uint64_t> loadDismissedPairs(db::CatalogDb& db) {
-    std::unordered_set<uint64_t> dismissed;
+inline std::set<std::pair<MediaId, MediaId>> loadDismissedPairs(db::CatalogDb& db) {
+    std::set<std::pair<MediaId, MediaId>> dismissed;
     auto res = db.getDismissedDuplicatePairs();
     if (res.isOk()) {
         for (const auto& [a, b] : res.value()) {
             MediaId low = std::min(a, b);
             MediaId high = std::max(a, b);
-            dismissed.insert((static_cast<uint64_t>(low) << 32) | (static_cast<uint64_t>(high) & 0xFFFFFFFFULL));
+            dismissed.emplace(low, high);
         }
     }
     return dismissed;
@@ -1194,17 +1231,29 @@ inline std::unordered_set<MediaId> loadExactDuplicateMembers(db::CatalogDb& db) 
 }
 
 struct DisjointSet {
-    std::unordered_map<MediaId, MediaId> parent;
+    struct Node {
+        MediaId parent;
+        size_t size{1};
+        float minSimilarity{1.0f};
+    };
+    std::unordered_map<MediaId, Node> nodes;
+
     MediaId find(MediaId x) {
-        if (!parent.count(x)) parent[x] = x;
-        if (parent[x] == x) return x;
-        return parent[x] = find(parent[x]);
+        auto& node = nodes.try_emplace(x, Node{x}).first->second;
+        if (node.parent != x) node.parent = find(node.parent);
+        return node.parent;
     }
-    void unite(MediaId x, MediaId y) {
+
+    void unite(MediaId x, MediaId y, float score) {
         MediaId rx = find(x);
         MediaId ry = find(y);
+        if (nodes.at(rx).size < nodes.at(ry).size) std::swap(rx, ry);
+        auto& root = nodes.at(rx);
+        auto& other = nodes.at(ry);
+        root.minSimilarity = std::min({root.minSimilarity, other.minSimilarity, score});
         if (rx != ry) {
-            parent[rx] = ry;
+            root.size += other.size;
+            other.parent = rx;
         }
     }
 };
@@ -1237,7 +1286,13 @@ std::vector<VisualDuplicatePair> Service::findVisualDuplicatePairs(
     float threshold,
     const std::unordered_set<MediaId>& allowedIds
 ) const {
-    return impl_->index.findDuplicatePairs(threshold, allowedIds);
+    refreshIndexFromExternalChanges();
+    std::vector<VisualDuplicatePair> pairs;
+    impl_->index->visitDuplicatePairs(threshold,
+        [&](MediaId id) { return allowedIds.empty() || allowedIds.contains(id); },
+        [](MediaId, MediaId) { return true; },
+        [&](MediaId a, MediaId b, float score) { pairs.push_back({a, b, score}); });
+    return pairs;
 }
 
 std::vector<VisualDuplicateGroup> Service::scanVisualDuplicates(
@@ -1246,107 +1301,44 @@ std::vector<VisualDuplicateGroup> Service::scanVisualDuplicates(
     const std::unordered_set<MediaId>& allowedIds,
     const std::unordered_set<MediaId>& exactHashMemberIds
 ) const {
+    refreshIndexFromExternalChanges();
     auto dismissed = loadDismissedPairs(impl_->db);
     std::unordered_set<MediaId> exactMembers = exactHashMemberIds.empty()
         ? loadExactDuplicateMembers(impl_->db)
         : exactHashMemberIds;
 
-    std::vector<MediaId> seedIds;
-    if (!allowedIds.empty()) {
-        seedIds.assign(allowedIds.begin(), allowedIds.end());
-    } else {
-        std::shared_lock lock(impl_->index.mutex);
-        seedIds = impl_->index.ids;
-    }
-    if (seedIds.size() < 2) return {};
-
-    // Candidate generation seeded by nearest-neighbor index search
-    std::unordered_map<uint64_t, float> candidatePairs;
-    constexpr int kCandidatesPerSeed = 50;
-
-    for (MediaId seedId : seedIds) {
-        if (exactMembers.count(seedId)) continue; // exact-group members excluded before visual pass
-
-        int dim = 0;
-        std::vector<float> queryVec = impl_->index.get(seedId, dim);
-        if (queryVec.empty()) continue;
-
-        auto hits = impl_->index.search(
-            queryVec.data(),
-            kCandidatesPerSeed + 1,
-            dim,
-            allowedIds.empty() ? nullptr : &allowedIds
-        );
-
-        for (const auto& hit : hits) {
-            if (hit.mediaId == seedId) continue;
-            if (hit.score < threshold) continue;
-            if (exactMembers.count(hit.mediaId)) continue; // exclude exact-group members
-
-            MediaId low = std::min(seedId, hit.mediaId);
-            MediaId high = std::max(seedId, hit.mediaId);
-            uint64_t key = (static_cast<uint64_t>(low) << 32) | (static_cast<uint64_t>(high) & 0xFFFFFFFFULL);
-
-            if (dismissed.count(key)) continue; // exclude dismissed pairs
-
-            auto it = candidatePairs.find(key);
-            if (it == candidatePairs.end() || hit.score > it->second) {
-                candidatePairs[key] = hit.score;
+    std::unordered_map<MediaId, int64_t> dates;
+    {
+        std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
+        auto datesRes = impl_->db.conn_.prepare("SELECT id, date_taken FROM media_items WHERE media_type = 'photo';");
+        if (!datesRes.isOk()) return {};
+        auto datesStmt = std::move(datesRes.value());
+        StepResult readResult;
+        while ((readResult = datesStmt.step()) == StepResult::Row) {
+            const MediaId id = datesStmt.getInt64(0);
+            if (!exactMembers.contains(id) && (allowedIds.empty() || allowedIds.contains(id))) {
+                dates.emplace(id, datesStmt.getInt64(1));
             }
         }
+        if (readResult == StepResult::Error) return {};
     }
-
-    if (candidatePairs.empty()) return {};
-
-    std::vector<VisualDuplicatePair> surviving;
-    surviving.reserve(candidatePairs.size());
-
-    std::unordered_map<MediaId, int64_t> dateTakenCache;
-    if (dateWindowSec > 0) {
-        std::unordered_set<MediaId> needed;
-        for (const auto& [key, _] : candidatePairs) {
-            needed.insert(static_cast<MediaId>(key >> 32));
-            needed.insert(static_cast<MediaId>(key & 0xFFFFFFFFULL));
-        }
-        for (MediaId id : needed) {
-            auto m = impl_->db.getMediaById(id);
-            if (m.isOk()) {
-                dateTakenCache[id] = m.value().date_taken;
-            }
-        }
-    }
-
-    for (const auto& [key, sim] : candidatePairs) {
-        MediaId low = static_cast<MediaId>(key >> 32);
-        MediaId high = static_cast<MediaId>(key & 0xFFFFFFFFULL);
-
-        if (dateWindowSec > 0) {
-            auto itA = dateTakenCache.find(low);
-            auto itB = dateTakenCache.find(high);
-            int64_t dtA = (itA != dateTakenCache.end()) ? itA->second : 0;
-            int64_t dtB = (itB != dateTakenCache.end()) ? itB->second : 0;
-            if (dtA != 0 && dtB != 0 && std::abs(dtA - dtB) > dateWindowSec) {
-                continue;
-            }
-        }
-
-        surviving.push_back(VisualDuplicatePair{low, high, sim});
-    }
-
-    if (surviving.empty()) return {};
-
     DisjointSet ds;
-    for (const auto& p : surviving) {
-        ds.unite(p.a, p.b);
-    }
+    impl_->index->visitDuplicatePairs(threshold,
+        [&](MediaId id) { return dates.contains(id); },
+        [&](MediaId a, MediaId b) {
+            if (dismissed.contains({a, b})) return false;
+            if (dateWindowSec <= 0) return true;
+            const auto first = dates.at(a);
+            const auto second = dates.at(b);
+            if (first == 0 || second == 0) return true;
+            const auto gap = static_cast<uint64_t>(std::max(first, second)) -
+                             static_cast<uint64_t>(std::min(first, second));
+            return gap <= static_cast<uint64_t>(dateWindowSec);
+        },
+        [&](MediaId a, MediaId b, float score) { ds.unite(a, b, score); });
 
     std::unordered_map<MediaId, std::vector<MediaId>> clusters;
-    std::unordered_set<MediaId> allParticipants;
-    for (const auto& p : surviving) {
-        allParticipants.insert(p.a);
-        allParticipants.insert(p.b);
-    }
-    for (MediaId id : allParticipants) {
+    for (const auto& [id, node] : ds.nodes) {
         clusters[ds.find(id)].push_back(id);
     }
 
@@ -1354,15 +1346,8 @@ std::vector<VisualDuplicateGroup> Service::scanVisualDuplicates(
     for (auto& [root, members] : clusters) {
         if (members.size() < 2) continue;
 
-        float minSim = 1.0f;
-        for (const auto& p : surviving) {
-            if (ds.find(p.a) == root) {
-                minSim = std::min(minSim, p.similarity);
-            }
-        }
-
         rankKeeperMembers(members, impl_->db);
-        groups.push_back(VisualDuplicateGroup{std::move(members), minSim});
+        groups.push_back(VisualDuplicateGroup{std::move(members), ds.nodes.at(root).minSimilarity});
     }
 
     std::sort(groups.begin(), groups.end(), [](const VisualDuplicateGroup& a, const VisualDuplicateGroup& b) {
@@ -1378,11 +1363,11 @@ std::vector<VisualDuplicateGroup> Service::scanVisualDuplicates(
 }
 
 void Service::addMediaVector(MediaId id, const float* embedding, int dim) {
-    impl_->index.add(id, embedding, dim);
+    impl_->index->add(id, embedding, dim);
 }
 
 void Service::addMediaVector(MediaId id, const std::vector<float>& embedding) {
-    impl_->index.add(id, embedding.data(), static_cast<int>(embedding.size()));
+    impl_->index->add(id, embedding.data(), static_cast<int>(embedding.size()));
 }
 
 void Service::reloadIndex() {
@@ -1672,22 +1657,10 @@ void Service::runTagJob(int64_t jobId, std::string scope, std::vector<MediaId> c
 
         std::unordered_map<MediaId, std::string> candidateHashes;
         std::unordered_set<MediaId> upToDateMediaIds;
-        std::unordered_set<uint64_t> rejections;
 
         {
             std::lock_guard<std::recursive_mutex> lock(impl_->db.mutex_);
             Connection& conn = impl_->db.conn_;
-
-            auto rejRes = conn.prepare("SELECT media_id, tag_id FROM smart_tag_rejections;");
-            if (rejRes.isOk()) {
-                auto& rejStmt = rejRes.value();
-                while (rejStmt.step() == StepResult::Row) {
-                    MediaId mid = rejStmt.getInt64(0);
-                    TagId tid = rejStmt.getInt64(1);
-                    uint64_t key = (static_cast<uint64_t>(mid) << 32) | static_cast<uint32_t>(tid);
-                    rejections.insert(key);
-                }
-            }
 
             for (size_t offset = 0; offset < candidateIds.size(); offset += 500) {
                 size_t chunkEnd = std::min(offset + 500, candidateIds.size());
@@ -1749,6 +1722,8 @@ void Service::runTagJob(int64_t jobId, std::string scope, std::vector<MediaId> c
                     Status singleSt = impl_->db.replaceSmartTags({rec}, info.modelId, info.modelRevision, impl_->taxonomy.version);
                     if (singleSt.isOk()) {
                         processed++;
+                    } else if (singleSt.code() == StatusCode::NotFound) {
+                        skipped++;
                     } else {
                         failed++;
                     }
@@ -1841,10 +1816,6 @@ void Service::runTagJob(int64_t jobId, std::string scope, std::vector<MediaId> c
                     if (!tagRes.isOk()) continue;
                     tid = tagRes.value();
                     labelIdToTagId[s.id] = tid;
-                }
-                uint64_t key = (static_cast<uint64_t>(mid) << 32) | static_cast<uint32_t>(tid);
-                if (rejections.find(key) != rejections.end()) {
-                    continue;
                 }
                 tagIds.push_back(tid);
             }

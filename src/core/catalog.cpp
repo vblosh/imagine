@@ -1,8 +1,11 @@
 #include "imagine/core/catalog.hpp"
 #include "imagine/common/logger.hpp"
+#include "imagine/metadata/hasher.hpp"
+#include <atomic>
 #include <ctime>
 #include <cstdio>
 #include <thread>
+#include <unordered_set>
 
 namespace imagine::core {
 
@@ -105,6 +108,18 @@ std::string Catalog::resolvePhotoPath(const std::string& recordedPath) const {
     return resolvePhotoPathInternal(recordedPath);
 }
 
+std::string Catalog::resolveRecordedPathInternal(const std::string& recordedPath) const {
+    const auto path = pathFromUtf8(recordedPath);
+    if (path.has_root_path()) {
+        return recordedPath;
+    }
+    const auto root = photosDir_.empty() && importer_ ? importer_->photosDir() : photosDir_;
+    if (!recordedPath.empty() && !root.empty()) {
+        return pathToUtf8(pathFromUtf8(root) / path);
+    }
+    return resolvePhotoPathInternal(recordedPath);
+}
+
 std::string Catalog::resolvePhotoPathInternal(const std::string& recordedPath) const {
     if (recordedPath.empty()) {
         return "";
@@ -196,7 +211,8 @@ void Catalog::syncPhotosDirFromImporter() {
 Result<ImportProgress> Catalog::importDirectory(
     const std::string& path,
     bool recursive,
-    Importer::ProgressCallback progressCb
+    Importer::ProgressCallback progressCb,
+    bool useDirectoryAsRoot
 ) {
     Importer* imp = nullptr;
     {
@@ -206,7 +222,7 @@ Result<ImportProgress> Catalog::importDirectory(
         }
         imp = importer_.get();
     }
-    auto res = imp->importDirectory(path, recursive, std::move(progressCb));
+    auto res = imp->importDirectory(path, recursive, std::move(progressCb), useDirectoryAsRoot);
     syncPhotosDirFromImporter();
     return res;
 }
@@ -367,7 +383,7 @@ Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::str
         return Status::alreadyExists("A media item with path already exists in the catalog: " + newPathStr);
     }
 
-    std::string oldDiskPath = resolvePhotoPathInternal(item.file_path);
+    std::string oldDiskPath = resolveRecordedPathInternal(item.file_path);
     std::error_code ec;
     std::filesystem::path oldDiskFs;
     if (!oldDiskPath.empty()) {
@@ -430,7 +446,7 @@ Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::s
     }
     const auto& item = itemRes.value();
 
-    std::string oldDiskPath = resolvePhotoPathInternal(item.file_path);
+    std::string oldDiskPath = resolveRecordedPathInternal(item.file_path);
     std::error_code ec;
     std::filesystem::path oldDiskFs;
     if (!oldDiskPath.empty()) {
@@ -730,6 +746,110 @@ Status Catalog::setGps(MediaId id, bool hasGps, double latitude, double longitud
 
 namespace {
 std::function<void(MediaId)> gClipEvictionHook = nullptr;
+
+namespace fs = std::filesystem;
+
+bool isSha256(std::string_view hash) {
+    return hash.size() == 64 && hash.find_first_not_of("0123456789abcdef") == std::string_view::npos;
+}
+
+Status verifyDiskHash(const fs::path& path, const std::string& expectedHash) {
+    auto hash = metadata::Hasher::computeFileSha256(pathToUtf8(path));
+    if (!hash.isOk()) return hash.status();
+    if (hash.value() != expectedHash) {
+        return Status::alreadyExists("File changed since it was cataloged: " + pathToUtf8(path));
+    }
+    return Status::ok();
+}
+
+class StagedRemoval {
+public:
+    fs::path original;
+
+    ~StagedRemoval() {
+        if (moved_) {
+            const auto status = restore();
+            if (!status.isOk()) IMAGINE_LOG_ERROR(status.message());
+        }
+    }
+
+    Status stage() {
+        static std::atomic<uint64_t> sequence{0};
+        std::error_code ec;
+        for (;;) {
+            const auto suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
+                              + '-' + std::to_string(sequence.fetch_add(1));
+            directory_ = original.parent_path() / (".imagine-delete-" + suffix);
+            staged_ = directory_ / original.filename();
+            staged_ += ".staged";
+            if (fs::create_directory(directory_, ec)) break;
+            if (ec) return Status::ioError("Cannot create deletion staging directory: " + ec.message());
+        }
+        fs::rename(original, staged_, ec);
+        if (ec) {
+            std::error_code cleanupError;
+            fs::remove(directory_, cleanupError);
+            return Status::ioError("Cannot stage " + pathToUtf8(original) + ": " + ec.message());
+        }
+        moved_ = true;
+        return Status::ok();
+    }
+
+    Status verify(const std::string& hash) const {
+        std::error_code ec;
+        if (!fs::is_regular_file(fs::symlink_status(staged_, ec))) {
+            return Status::ioError("Original is no longer a regular file: " + pathToUtf8(original));
+        }
+        if (!isSha256(hash)) return Status::ok();
+        auto status = verifyDiskHash(staged_, hash);
+        if (status.code() == StatusCode::AlreadyExists) {
+            return Status::alreadyExists("File changed since it was cataloged: " + pathToUtf8(original));
+        }
+        return status;
+    }
+
+    Status restore() {
+        if (!moved_) return Status::ok();
+        moved_ = false;
+        std::error_code ec;
+        const auto existing = fs::symlink_status(original, ec);
+        if (existing.type() == fs::file_type::not_found) {
+            fs::rename(staged_, original, ec);
+            if (!ec) {
+                fs::remove(directory_, ec);
+                return Status::ok();
+            }
+        }
+        return Status::ioError("Cannot restore " + pathToUtf8(original) + ". Recover the original from "
+                               + pathToUtf8(staged_) + (ec ? " (" + ec.message() + ")" : ""));
+    }
+
+    void finish(DeleteResult& result) {
+        if (!moved_) return;
+        moved_ = false;
+        std::error_code ec;
+        int64_t bytes = 0;
+        if (fs::hard_link_count(staged_, ec) == 1 && !ec) {
+            const auto size = fs::file_size(staged_, ec);
+            if (!ec) bytes = static_cast<int64_t>(size);
+        }
+        if (fs::remove(staged_, ec)) {
+            result.deleted_from_disk = true;
+            result.freed_bytes = bytes;
+            fs::remove(directory_, ec);
+        } else {
+            result.disk_error = "Cannot delete staged original " + pathToUtf8(original)
+                              + (ec ? ": " + ec.message() : ": staging file is missing");
+            result.recovery_path = pathToUtf8(staged_);
+            IMAGINE_LOG_WARN(result.disk_error + " (" + result.recovery_path + ")");
+        }
+    }
+
+private:
+    fs::path directory_;
+    fs::path staged_;
+    bool moved_{false};
+};
 }
 
 void setClipEvictionHook(std::function<void(MediaId)> hook) {
@@ -737,80 +857,168 @@ void setClipEvictionHook(std::function<void(MediaId)> hook) {
 }
 
 Status Catalog::deleteMedia(MediaId id, bool deleteFromDisk) {
-    std::unique_lock<std::shared_mutex> lock(rwMutex_);
+    auto result = deleteMediaWithResult(id, deleteFromDisk);
+    if (!result.isOk()) return result.status();
+    if (!result.value().disk_error.empty()) {
+        return Status::ioError(result.value().disk_error + " (" + result.value().recovery_path + ")");
+    }
+    return Status::ok();
+}
+
+Result<DeleteResult> Catalog::deleteMediaWithResult(MediaId id, bool deleteFromDisk) {
+    auto result = removeMedia(nullptr, {{id, {}}}, deleteFromDisk, false);
+    if (!result.isOk()) return result.status();
+    return std::move(result.value().front());
+}
+
+Result<std::vector<DeleteResult>> Catalog::resolveDuplicateGroup(
+    const ReviewedMedia& keeper, const std::vector<ReviewedMedia>& remove,
+    bool deleteFromDisk, bool mergeMetadata) {
+    if (remove.empty()) return Status::invalidArgument("No duplicate items to remove");
+    return removeMedia(&keeper, remove, deleteFromDisk, mergeMetadata);
+}
+
+Result<std::vector<DeleteResult>> Catalog::removeMedia(
+    const ReviewedMedia* keeper, const std::vector<ReviewedMedia>& remove,
+    bool deleteFromDisk, bool mergeMetadata) {
+    std::unique_lock catalogLock(rwMutex_);
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
 
-    auto itemRes = db_->getMediaById(id);
-    if (!itemRes.isOk()) {
-        return itemRes.status();
-    }
-    const auto item = itemRes.value();
+    std::vector<MediaItem> items;
+    items.reserve(remove.size());
+    std::vector<StagedRemoval> files(remove.size());
+    std::vector<DeleteResult> results(remove.size());
+    std::unordered_set<MediaId> removedIds;
 
-    std::string filePath = resolvePhotoPathInternal(item.file_path);
-    if (deleteFromDisk && !filePath.empty()) {
-        std::string effPhotosDir = photosDir_;
-        if (effPhotosDir.empty() && importer_) {
-            effPhotosDir = importer_->photosDir();
+    const auto loadReviewed = [&](const ReviewedMedia& reviewed) -> Result<MediaItem> {
+        if (keeper && deleteFromDisk && !isSha256(reviewed.content_hash)) {
+            return Status::invalidArgument("A reviewed content hash is required for media " + std::to_string(reviewed.id));
         }
-        if (effPhotosDir.empty() || !Importer::isInsideRootDir(filePath, effPhotosDir)) {
-            IMAGINE_LOG_WARN("Refusing to delete file outside photos directory: " + filePath);
-            return Status::invalidArgument("Cannot delete file outside photos directory: " + filePath);
+        auto item = db_->getMediaById(reviewed.id);
+        if (item.isOk() && !reviewed.content_hash.empty() && item.value().content_hash != reviewed.content_hash) {
+            return Status::alreadyExists("Media changed since duplicate review: " + std::to_string(reviewed.id));
         }
-    }
+        return item;
+    };
 
-    // Shared content_hash thumbnail guard via COUNT(*) check:
-    // Before unlinking files, compare the victim content_hash against remaining rows.
-    // If countMedia fails or returns > 0, treat as shared to fail-safe and preserve cached thumbnails.
-    bool sharedThumbnail = false;
-    if (!item.content_hash.empty()) {
-        auto countRes = db_->countMedia("content_hash = ? AND id != ?", {item.content_hash, std::to_string(id)});
-        if (!countRes.isOk() || countRes.value() > 0) {
-            sharedThumbnail = true;
-        }
-    }
-
-    // Same-path and hardlink disk deletion guards:
-    // 1. If another catalog entry references the exact same file path, we must NOT unlink
-    //    the file from disk because the other item still uses it.
-    // 2. For distinct hardlinks on disk (different file paths sharing the same inode),
-    //    std::filesystem::remove safely unlinks only this directory entry and leaves
-    //    the sibling hardlink intact.
-    bool pathStillReferencedInDb = false;
-    if (deleteFromDisk && !filePath.empty()) {
-        auto otherItemsRes = db_->queryMedia("file_path = ? AND id != ?", {item.file_path, std::to_string(id)}, "", 0, 0);
-        if (otherItemsRes.isOk() && !otherItemsRes.value().empty()) {
-            pathStillReferencedInDb = true;
-        }
-    }
-
-    Status s = db_->deleteMedia(id);
-    if (!s.isOk()) {
-        return s;
-    }
-
-    // CLIP eviction call if available
-    if (gClipEvictionHook) {
-        gClipEvictionHook(id);
-    }
-
-    // Shared-render thumbnail check: if another row shares the hash, keep the shared thumbnail bytes
-    if (!sharedThumbnail && cache_ && !item.content_hash.empty()) {
-        cache_->clearThumbnail(item.content_hash);
-    }
-
-    // Disk deletion: unlinks directory entry only if no other media row references the same path
-    if (deleteFromDisk && !filePath.empty() && !pathStillReferencedInDb) {
-        std::error_code ec;
-        if (!std::filesystem::remove(pathFromUtf8(filePath), ec)) {
-            if (ec) {
-                IMAGINE_LOG_WARN("Failed to delete file from disk: " + filePath + " (" + ec.message() + ")");
+    Status status = db_->runInTransaction([&]() -> Status {
+        if (keeper) {
+            auto item = loadReviewed(*keeper);
+            if (!item.isOk()) return item.status();
+            if (deleteFromDisk) {
+                const auto path = pathFromUtf8(resolveRecordedPathInternal(item.value().file_path));
+                std::error_code ec;
+                if (!fs::is_regular_file(path, ec)) {
+                    return Status::notFound("Keeper original is unavailable: " + item.value().file_path);
+                }
+                auto checked = verifyDiskHash(path, keeper->content_hash);
+                if (!checked.isOk()) return checked;
             }
         }
+
+        for (const auto& reviewed : remove) {
+            if ((keeper && reviewed.id == keeper->id) || !removedIds.insert(reviewed.id).second) {
+                return Status::invalidArgument("Repeated keeper or removal ID: " + std::to_string(reviewed.id));
+            }
+            auto item = loadReviewed(reviewed);
+            if (!item.isOk()) return item.status();
+            items.push_back(std::move(item.value()));
+        }
+
+        if (deleteFromDisk) {
+            const auto root = photosDir_.empty() && importer_ ? importer_->photosDir() : photosDir_;
+            std::error_code ec;
+            const auto rootPath = root.empty() ? fs::path{} : fs::canonical(pathFromUtf8(root), ec);
+            if (rootPath.empty() || ec) {
+                return Status::invalidArgument("A reachable photos directory is required to delete files");
+            }
+
+            std::unordered_map<fs::path, size_t> pathsToRemove;
+            for (size_t i = 0; i < items.size(); ++i) {
+                const auto path = pathFromUtf8(resolveRecordedPathInternal(items[i].file_path));
+                const auto fileStatus = fs::symlink_status(path, ec);
+                if (!fs::is_regular_file(fileStatus) || ec) {
+                    return Status::notFound("Recorded original is unavailable: " + pathToUtf8(path));
+                }
+                const auto canonical = stripExtendedPrefix(fs::canonical(path, ec));
+                if (ec || !Importer::isInsideRootDir(canonical, stripExtendedPrefix(rootPath))) {
+                    return Status::invalidArgument("Cannot delete file outside photos directory: " + pathToUtf8(path));
+                }
+#ifdef _WIN32
+                if ((fileStatus.permissions() & fs::perms::owner_write) == fs::perms::none) {
+                    return Status::ioError("Cannot delete read-only file: " + pathToUtf8(path));
+                }
+#endif
+                if (pathsToRemove.emplace(canonical, i).second) {
+                    files[i].original = canonical;
+                }
+            }
+
+            // Canonical names identify entries, so sibling hardlinks keep their distinct paths.
+            auto query = db_->connection().prepare("SELECT id, file_path FROM media_items;");
+            if (!query.isOk()) return query.status();
+            auto stmt = std::move(query.value());
+            auto step = db::StepResult::Done;
+            while (!pathsToRemove.empty() && (step = stmt.step()) == db::StepResult::Row) {
+                if (removedIds.contains(stmt.getInt64(0))) continue;
+                const auto recorded = stmt.getString(1);
+                const auto path = pathFromUtf8(resolvePhotoPathInternal(recorded));
+                const auto canonical = stripExtendedPrefix(fs::canonical(path, ec));
+                if (ec) continue;
+                const auto match = pathsToRemove.find(canonical);
+                if (match != pathsToRemove.end()) {
+                    files[match->second].original.clear();
+                    pathsToRemove.erase(match);
+                }
+            }
+            if (!pathsToRemove.empty() && step == db::StepResult::Error) {
+                return Status::databaseError("Failed to check original-file references: " + db_->connection().lastErrorMessage());
+            }
+        }
+
+        for (size_t i = 0; i < files.size(); ++i) {
+            if (files[i].original.empty()) continue;
+            auto staged = files[i].stage();
+            if (!staged.isOk()) return staged;
+            auto verified = files[i].verify(items[i].content_hash);
+            if (!verified.isOk()) return verified;
+        }
+        for (const auto& item : items) {
+            if (mergeMetadata && keeper) {
+                auto merged = db_->mergeMediaMetadata(keeper->id, item.id);
+                if (!merged.isOk()) return merged;
+            }
+            auto deleted = db_->deleteMedia(item.id);
+            if (!deleted.isOk()) return deleted;
+        }
+        return Status::ok();
+    });
+
+    if (!status.isOk()) {
+        auto message = status.message();
+        for (auto& file : files) {
+            auto restored = file.restore();
+            if (!restored.isOk()) message += ". " + restored.message();
+        }
+        return Status(status.code(), std::move(message));
     }
 
-    return Status::ok();
+    for (size_t i = 0; i < files.size(); ++i) files[i].finish(results[i]);
+    if (cache_) {
+        std::unordered_set<std::string> hashes;
+        for (const auto& item : items) {
+            if (item.content_hash.empty() || !hashes.insert(item.content_hash).second) continue;
+            auto remaining = db_->countMedia("content_hash = ?", {item.content_hash});
+            if (remaining.isOk() && remaining.value() == 0) cache_->clearThumbnail(item.content_hash);
+        }
+    }
+    catalogLock.unlock();
+    if (gClipEvictionHook) {
+        for (const auto& item : items) gClipEvictionHook(item.id);
+    }
+    return results;
 }
 
 Result<size_t> Catalog::clearThumbnailCache(bool dryRun) {
@@ -1044,6 +1252,16 @@ Status Catalog::runInTransaction(std::function<Status()> fn) {
         return Status::internal("Catalog is not open");
     }
     return db_->runInTransaction(fn);
+}
+
+Status Catalog::runWithExclusiveAccess(
+    std::function<Status(db::CatalogDb&, const PhotoPathResolver&)> fn) {
+    std::unique_lock lock(rwMutex_);
+    if (!isOpen_ || !db_) {
+        return Status::internal("Catalog is not open");
+    }
+    std::lock_guard dbLock(db_->mutex());
+    return fn(*db_, [this](const std::string& path) { return resolveRecordedPathInternal(path); });
 }
 
 } // namespace imagine::core

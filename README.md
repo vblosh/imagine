@@ -17,7 +17,8 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Timeline Scrubber**: Interactive histogram of photos by year and month with range-filtering capabilities.
   - **Sidebars**: Collapsible Folders tree, Standard/Smart Albums, and Tag categories (People, Places, Events, Keywords).
   - **Duplicate Review & Resolution**: Dedicated "Duplicates" entry point with live count badge, guided two-pass detection modal (exact SHA-256 and visual CLIP similarity), side-by-side comparison cards, intelligent keeper scoring (`rankKeeper`), keeper swapping, Loupe previews, pair dismissals, and lossless metadata merge-before-delete.
-  - **Map View & Geotagging**: Leaflet map view with spatial clustering, photo pinning, and reverse geocoding via OpenStreetMap Nominatim proxy.
+  - **Map View & Geotagging**: Leaflet map view with spatial clustering, photo pinning, and online place search via an OpenStreetMap Nominatim proxy.
+  - **Offline GPS-to-Places Auto-Tagging**: Automatically labels photos with City / Region / Country using a bundled GeoNames `cities15000` dataset — 100% offline, no network call, EXIF coordinates never leave the machine.
   - **Auto Events**: Automatically suggest outings and events from selected photos using local timestamps, GPS coordinates, captions, and existing tags.
   - **Face Review & Naming**: Local face detection, cluster grouping, face crop cards, naming, and review suggestions using existing people tags.
   - **Semantic AI Search**: Natural language search and visual similarity ("Find Similar") powered by OpenAI CLIP via ONNX Runtime.
@@ -53,7 +54,7 @@ It features a multi-threaded cataloging engine, SQLite metadata store (with WAL 
   - **Persistent Pair Dismissals**: Suppresses user-dismissed pairs in future scans via canonical SQLite dismissal records with one-click reset support.
 - **High-Throughput Importer**:
   - Multi-threaded scanning and processing pipeline (`std::jthread` thread pool).
-  - Support for Photos (JPEG, PNG, WebP, TIFF, BMP), Videos (MP4, MOV, WebM, MKV, AVI, etc.), and Audio (MP3, FLAC, WAV, AAC, etc.).
+  - Support for Photos (JPEG, PNG, BMP), Videos (MP4, MOV, WebM, MKV, AVI, etc.), and Audio (MP3, FLAC, WAV, AAC, etc.).
   - Fast change-detection skipping unchanged files via modification timestamps.
   - Automatic SHA-256 cryptographic content hashing for deduplication.
   - Robust EXIF parsing with fallback to filesystem timestamps.
@@ -137,6 +138,47 @@ Smart Tags extends the CLIP engine to provide local, zero-shot photo auto-labeli
 - **Custom Taxonomy**: Easily customize or extend labels, prompts, and score thresholds via a JSON override file (`IMAGINE_SMART_TAGS_TAXONOMY`).
 
 For complete details on workflows, JSON schemas, tuning, and REST endpoints, see the [Smart Tags Guide](docs/smart-tags.md).
+
+---
+
+## Offline Reverse Geocoding (GPS-to-Places)
+
+Imagine automatically labels photos with a **City / Region / Country** hierarchy using a bundled [GeoNames `cities15000`](https://download.geonames.org/export/dump/) dataset. Lookups run entirely on the local machine: **no network request is made and EXIF coordinates never leave the computer**.
+
+### How It Works
+- **Bundled Dataset**: `data/geonames_cities15000.csv` (34,180 populated places across 244 countries and territories, CC-BY-4.0) ships with the application and is copied next to the built binaries.
+- **Lazy Loading**: The dataset is **not** opened at startup. The first `applyGpsPlaceTags` call with valid GPS triggers a one-time lazy load; the app remains fully functional without it (place labelling is simply skipped).
+- **Nearest-City Lookup**: For a photo's GPS coordinates the nearest city is found using great-circle (Haversine) distance and accepted only when within a **100 km** cutoff. Invalid coordinates or points with no city in range produce no place tags.
+- **Tag Hierarchy & Provenance**: Matches add up to three `places` tags (Country, Region, City), skipping empty or duplicate names. Every GPS-derived assignment is recorded in `media_tag_provenance` with `source = 'gps'`.
+- **Manual Tag Preservation**: Reverse geocoding only owns rows whose provenance source is `gps`. Refreshing or clearing place tags never removes a tag the user assigned manually, even when it has the same name.
+
+### Triggers
+Place tags are refreshed whenever GPS coordinates are established:
+- **Import**: a newly imported photo whose EXIF/metadata contains GPS.
+- **Set GPS**: the user sets or changes GPS coordinates for a photo.
+
+Clearing GPS removes the previously generated GPS place tags.
+
+### Dataset Discovery & Override
+The dataset is discovered in this order (first existing file wins):
+1. `IMAGINE_GEONAMES_CSV`, if set (used verbatim).
+2. `geonames_cities15000.csv` beside the server executable.
+3. `data/geonames_cities15000.csv` beside the server executable.
+4. `geonames_cities15000.csv` in the current working directory.
+5. `data/geonames_cities15000.csv` in the current working directory.
+
+Set `IMAGINE_GEONAMES_CSV` to override the dataset path for testing or custom data.
+
+### Backfill Tool
+To backfill or refresh GPS-to-places tags on an existing catalog:
+```bash
+python tools/update_gps_places.py --catalog catalog.db --geonames-csv data/geonames_cities15000.csv
+```
+Options include `--missing-only` (default), `--all`, `--dry-run`, `--no-backup`, and `--cutoff-km <N>`.
+
+> **Note**: This offline auto-tagging is distinct from the **online** place search in the Map View, which uses an OpenStreetMap Nominatim proxy for interactive text queries.
+
+For the full specification, lookup rules, and manual testing recipe, see the [Offline Reverse Geocoding Guide](docs/offline-reverse-geocoding.md).
 
 ---
 
@@ -251,7 +293,7 @@ Import a folder of photos, videos, or audio into an Imagine catalog:
 ```
 
 Options:
-- `--photos-dir <dir>`: Base directory for relative media storage.
+- `--photos-dir <dir>`: Base directory for relative media storage. CLI imports store absolute paths when this option is omitted.
 - `--thumbs-dir <dir>`: Custom thumbnail cache directory.
 - `--threads <N>`: Worker thread count (default: hardware concurrency).
 - `--no-recursive`: Disable scanning nested subfolders.
@@ -319,6 +361,7 @@ Imagine can be configured using environment variables:
 | `IMAGINE_SMART_TAGS_MIN_SCORE` | `0.23` | Minimum cosine similarity score threshold for smart tags |
 | `IMAGINE_SMART_TAGS_MAX_LABELS` | `3` | Maximum number of smart tags assigned per photo |
 | `IMAGINE_SMART_TAGS_MAX_PER_GROUP` | `2` | Maximum smart tags assigned from any single taxonomy group |
+| `IMAGINE_GEONAMES_CSV` | *(auto-discovered)* | Path to the GeoNames `cities15000` CSV for offline GPS-to-Places tagging (overrides the default discovery order) |
 | `IMAGINE_FFMPEG_PATH` | `ffmpeg` | Path to FFmpeg binary for video thumbnail extraction |
 
 ---
@@ -331,6 +374,9 @@ imagine/
 ├── cmake/                      # CMake modules & manifests
 │   ├── Dependencies.cmake      # FetchContent (SQLite, STB, EasyEXIF, httplib, JSON, GTest)
 │   └── app.manifest            # Windows application manifest (DPI awareness, visual styles)
+├── data/                       # Bundled offline datasets
+│   ├── geonames_cities15000.csv # GeoNames cities15000 dataset for offline GPS-to-Places tagging
+│   └── README_geonames.md      # Dataset provenance, license & usage notes
 ├── docs/                       # Comprehensive documentation & developer guides
 │   ├── USER_GUIDE.md           # User guide, tutorial, CLI options & REST API reference
 │   ├── face-analysis-runtime.md# Face analysis runtime setup, model configuration & CPU/CUDA guides
@@ -338,6 +384,7 @@ imagine/
 │   ├── face-analysis-validation.md # InsightFace reference parity validation protocol
 │   ├── semantic-search.md      # CLIP Semantic AI search & visual similarity guide
 │   ├── smart-tags.md           # Smart Tags local zero-shot auto-labeling guide
+│   ├── offline-reverse-geocoding.md # Offline GPS-to-Places auto-tagging (GeoNames) guide
 │   └── dev/                    # Developer architectural documentation
 │       ├── database_schema.md  # SQLite schema, tables, migrations (v1-v8), indexing
 │       ├── deduplicate.md      # Exact & visual duplicate detection, keeper ranking & consolidation design
@@ -354,7 +401,8 @@ imagine/
 │   ├── common/                 # Common utilities (Types, Error, Logger)
 │   ├── concurrency/            # ThreadPool (std::jthread worker pool)
 │   ├── core/                   # Core catalog facade, importer, query engine, deduplicator & event suggestions
-│   │   └── deduplicator.hpp    # Domain types, keeper ranking heuristics & scan options
+│   │   ├── deduplicator.hpp    # Domain types, keeper ranking heuristics & scan options
+│   │   └── reverse_geocoder.hpp # Offline GPS-to-Places nearest-city lookup (GeoNames)
 │   ├── db/                     # SQLite RAII Connection, Schema, CatalogDb
 │   ├── metadata/               # SHA-256 Hasher, EXIF Reader, Media Reader
 │   ├── server/                 # REST API Router, Web Server, MIME Types
@@ -366,7 +414,8 @@ imagine/
 │   ├── common/                 # Logger & types implementations
 │   ├── concurrency/            # Thread pool implementation
 │   ├── core/                   # Catalog, importer, query, deduplicator & event suggestions implementations
-│   │   └── deduplicator.cpp    # Deduplicator engine implementation
+│   │   ├── deduplicator.cpp    # Deduplicator engine implementation
+│   │   └── reverse_geocoder.cpp # Offline GPS-to-Places nearest-city lookup implementation
 │   ├── db/                     # SQLite connection, schema & database implementations
 │   ├── metadata/               # EXIF reader, SHA-256 hasher & media reader implementations
 │   ├── server/                 # REST API router & HTTP web server implementations
@@ -379,7 +428,8 @@ imagine/
 │   │   └── insightface_reference.py # Python InsightFace 0.7.3 reference parity test harness
 │   ├── migrate_pse.py          # Photoshop Elements catalog migration tool
 │   ├── verify_migration.py     # Photoshop Elements migration verification tool
-│   └── fix_orientations.py     # EXIF orientation repair utility
+│   ├── fix_orientations.py     # EXIF orientation repair utility
+│   └── update_gps_places.py    # Offline GPS-to-Places backfill tool (GeoNames)
 ├── scripts/                    # Development & benchmarking scripts
 │   ├── benchmark-face-review.py # Face review UI performance benchmark
 │   ├── benchmark-face-lazy-grid.py # Face grid virtualization benchmark
@@ -446,5 +496,6 @@ imagine/
 - **[Deduplication Developer Guide](docs/dev/deduplicate.md)**: Two-pass duplicate detection architecture, keeper ranking heuristics, lossless metadata merge-before-delete, and REST API specification.
 - **[Database Schema Documentation](docs/dev/database_schema.md)**: Relational schema architecture, tables, indexes, and migrations (v1 to v8).
 - **[Smart Tags Guide](docs/smart-tags.md)**: Local zero-shot auto-labeling, taxonomy configuration, rejection memory, and REST API.
+- **[Offline Reverse Geocoding Guide](docs/offline-reverse-geocoding.md)**: Offline GPS-to-Places auto-tagging, GeoNames dataset discovery, lookup rules, and the backfill tool.
 - **[Map View & Geotagging Developer Guide](docs/dev/map_view.md)**: Leaflet map clustering, spatial queries, and reverse geocoding architecture.
 - **[UI Test Plan](docs/dev/ui_test_plan.md)**: Playwright test architecture, test matrix, and deterministic UI harness.

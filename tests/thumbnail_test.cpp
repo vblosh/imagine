@@ -433,6 +433,34 @@ TEST_F(ThumbnailTest, RelativeThumbnailPathAndCustomCacheDir) {
     EXPECT_EQ(fullPath, (std::filesystem::path(customCacheDir) / "a1" / "b2" / "a1b2c3d4e5f6071829_256.jpg").string());
 }
 
+TEST_F(ThumbnailTest, ClearAllCountsOnlyGeneratedArtifacts) {
+    Cache cache(testDir.string());
+    const std::string hash(64, 'a');
+    const auto thumbnail = std::filesystem::path(cache.getThumbnailPath(hash, Cache::SmallSize));
+    auto marker = thumbnail;
+    marker += ".placeholder";
+    const auto temporary = testDir / ("tmp_ondemand_" + hash + "_1.jpg");
+    const auto wrongParent = testDir / "ab" / "cd" / thumbnail.filename();
+
+    const std::vector generated = {thumbnail, marker, temporary};
+    const std::vector originals = {std::filesystem::path(testImgPath), wrongParent,
+                                    testDir / "notes.placeholder", testDir / "tmp_ondemand_notes.jpg"};
+    for (const auto& path : generated) {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream(path) << "generated";
+    }
+    for (const auto& path : originals) {
+        std::filesystem::create_directories(path.parent_path());
+        std::ofstream(path) << "original";
+    }
+
+    ASSERT_EQ(cache.clearAll(true).value(), generated.size());
+    for (const auto& path : generated) EXPECT_TRUE(std::filesystem::exists(path));
+    ASSERT_EQ(cache.clearAll().value(), generated.size());
+    for (const auto& path : generated) EXPECT_FALSE(std::filesystem::exists(path));
+    for (const auto& path : originals) EXPECT_TRUE(std::filesystem::exists(path));
+}
+
 TEST_F(ThumbnailTest, EmptyCorruptThumbnailIgnoredAndRegenerated) {
     std::string cacheDir = (testDir / "corrupt_cache").string();
     Cache cache(cacheDir);

@@ -76,6 +76,22 @@ SAMPLE_DUPLICATE_SCAN_RESPONSE = {
 }
 
 
+def mock_clip_ready(page: Page):
+    """Mock /api/semantic/status so the visual toggle is enabled and visual groups are kept."""
+    page.route("**/api/semantic/status", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"ready": True, "indexSize": 10, "modelId": "clip", "built": True})
+    ))
+
+
+def enable_visual_scan(page: Page):
+    """Check the visual match toggle (opt-in since CLIP scanning is no longer default).
+
+    Auto-waits until the toggle is enabled, i.e. until the semantic status has loaded."""
+    page.locator("#dedupVisualToggle").check()
+
+
 def test_deduplicate_sidebar_and_toolbar_entries(server, page: Page):
     """Test sidebar entry opens modal in config state without auto-scan, batch toolbar button auto-scans."""
     scan_calls = []
@@ -134,6 +150,7 @@ def test_deduplicate_sidebar_and_toolbar_entries(server, page: Page):
 
 def test_deduplicate_scan_exact_and_visual(server, page: Page):
     """Test scanning duplicates shows exact and visual groups with metadata pills and header controls."""
+    mock_clip_ready(page)
     page.route("**/api/media/duplicates/scan", lambda route: route.fulfill(
         status=200,
         content_type="application/json",
@@ -150,6 +167,9 @@ def test_deduplicate_scan_exact_and_visual(server, page: Page):
     slider = page.locator("#dedupVisualThresholdSlider")
     expect(slider).to_have_value("97.5")
     expect(page.locator("#dedupVisualThresholdValue")).to_have_text("97.5%")
+
+    # Visual scanning is opt-in; enable it so the mocked visual group is kept
+    enable_visual_scan(page)
 
     # Click scan
     page.locator("#dedupScanBtn").click()
@@ -241,6 +261,7 @@ def test_deduplicate_visual_toggle_disabled_without_clip(server, page: Page):
 
 def test_deduplicate_error_and_retry(server, page: Page):
     """Test scan error surfaces error state with retry button, which restarts scan."""
+    mock_clip_ready(page)
     attempt = {"count": 0}
 
     def handle_scan(route):
@@ -254,6 +275,7 @@ def test_deduplicate_error_and_retry(server, page: Page):
 
     page.goto(server["url"])
     page.locator("#navDuplicates").click()
+    enable_visual_scan(page)
     page.locator("#dedupScanBtn").click()
 
     # Error state should be visible with retry affordance
@@ -275,6 +297,7 @@ def test_deduplicate_error_and_retry(server, page: Page):
 
 def test_deduplicate_keeper_swap(server, page: Page):
     """Test swapping keeper changes active keeper badge and payload for resolve."""
+    mock_clip_ready(page)
     page.route("**/api/media/duplicates/scan", lambda route: route.fulfill(
         status=200,
         content_type="application/json",
@@ -291,6 +314,7 @@ def test_deduplicate_keeper_swap(server, page: Page):
 
     page.goto(server["url"])
     page.locator("#navDuplicates").click()
+    enable_visual_scan(page)
     page.locator("#dedupScanBtn").click()
 
     first_group = page.locator(".dedup-group-card").first
@@ -320,6 +344,7 @@ def test_deduplicate_keeper_swap(server, page: Page):
     assert len(resolve_payloads) == 1
     # Check swapped keeper is 2, and remove is [1]
     res_groups = resolve_payloads[0].get("groups", [])
+    assert res_groups[0]["expected_hashes"] == {"1": "hash_photo1", "2": "hash_photo1"}
     assert len(res_groups) == 1
     assert res_groups[0]["keeper"] == 2
     assert res_groups[0]["remove"] == [1]
@@ -327,6 +352,7 @@ def test_deduplicate_keeper_swap(server, page: Page):
 
 def test_deduplicate_merge_on_resolve(server, page: Page):
     """Test merge metadata checkbox, delete from disk flag, group selection toggle, and resolve execution."""
+    mock_clip_ready(page)
     page.route("**/api/media/duplicates/scan", lambda route: route.fulfill(
         status=200,
         content_type="application/json",
@@ -343,6 +369,7 @@ def test_deduplicate_merge_on_resolve(server, page: Page):
 
     page.goto(server["url"])
     page.locator("#navDuplicates").click()
+    enable_visual_scan(page)
     page.locator("#dedupScanBtn").click()
 
     # Summary count starts with 2 enabled groups
@@ -386,8 +413,54 @@ def test_deduplicate_merge_on_resolve(server, page: Page):
     assert resolve_payloads[0]["delete_from_disk"] is True
 
 
+def test_deduplicate_resolve_partial_failure(server, page: Page):
+    """Test partial failure during resolve: successful group is removed, failed group remains, and error toast appears."""
+    mock_clip_ready(page)
+    page.route("**/api/media/duplicates/scan", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps(SAMPLE_DUPLICATE_SCAN_RESPONSE)
+    ))
+
+    def handle_resolve(route):
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({
+                "status": "ok",
+                "groups": [
+                    {"keeper": 1, "status": 200, "removed": [2], "freed_bytes": 2048000},
+                    {"keeper": 3, "status": 500, "error": "Disk delete error"}
+                ]
+            })
+        )
+
+    page.route("**/api/media/duplicates/resolve", handle_resolve)
+
+    page.goto(server["url"])
+    page.locator("#navDuplicates").click()
+    enable_visual_scan(page)
+    page.locator("#dedupScanBtn").click()
+
+    expect(page.locator(".dedup-group-card")).to_have_count(2)
+
+    resolve_btn = page.locator("#dedupResolveBtn")
+    expect(resolve_btn).to_be_enabled()
+    resolve_btn.click()
+
+    # Partial failure toast should be visible with 1 failed
+    expect(page.locator(".toast-error")).to_be_visible()
+    expect(page.locator(".toast-error")).to_contain_text("1 failed")
+
+    # Group 1 was resolved and removed; Group 3 remains
+    expect(page.locator(".dedup-group-card")).to_have_count(1)
+    expect(page.locator(".dedup-group-card").first).to_contain_text("beach.jpg")
+    expect(resolve_btn).to_contain_text("1 Group")
+
+
 def test_deduplicate_dismiss(server, page: Page):
     """Test dismissing a duplicate group calls /dismiss with canonical pairs and removes group."""
+    mock_clip_ready(page)
     page.route("**/api/media/duplicates/scan", lambda route: route.fulfill(
         status=200,
         content_type="application/json",
@@ -404,6 +477,7 @@ def test_deduplicate_dismiss(server, page: Page):
 
     page.goto(server["url"])
     page.locator("#navDuplicates").click()
+    enable_visual_scan(page)
     page.locator("#dedupScanBtn").click()
 
     expect(page.locator(".dedup-group-card")).to_have_count(2)
@@ -414,9 +488,69 @@ def test_deduplicate_dismiss(server, page: Page):
 
     assert len(dismiss_payloads) == 1
     assert dismiss_payloads[0]["pairs"] == [[1, 2]]
-
-    # Remaining groups is 1
     expect(page.locator(".dedup-group-card")).to_have_count(1)
+
+
+def test_rescan_disables_resolve_during_load_and_after_failure(server, page: Page):
+    pending_scans = []
+    resolve_requests = []
+
+    def handle_scan(route):
+        if not pending_scans:
+            pending_scans.append(None)
+            route.fulfill(json=SAMPLE_DUPLICATE_SCAN_RESPONSE)
+        else:
+            pending_scans.append(route)
+
+    def handle_resolve(route):
+        resolve_requests.append(route.request.post_data_json)
+        route.fulfill(json={'groups': []})
+
+    page.route('**/api/media/duplicates/scan', handle_scan)
+    page.route('**/api/media/duplicates/resolve', handle_resolve)
+    page.goto(server['url'])
+    page.locator('#navDuplicates').click()
+    scan = page.locator('#dedupScanBtn')
+    resolve = page.locator('#dedupResolveBtn')
+    scan.click()
+    expect(resolve).to_be_enabled()
+
+    with page.expect_request('**/api/media/duplicates/scan'):
+        scan.click()
+    expect(page.locator('#dedupLoading')).to_be_visible()
+    expect(resolve).to_be_disabled()
+    pending_scans[-1].fulfill(status=500, json={'error': 'Scan failed'})
+    expect(page.locator('#dedupError')).to_be_visible()
+    expect(resolve).to_be_disabled()
+    assert not resolve_requests
+
+
+def test_concurrent_dismissals_remove_the_requested_groups(server, page: Page):
+    pending_dismissals = []
+    mock_clip_ready(page)
+    page.route('**/api/media/duplicates/scan', lambda route: route.fulfill(json=SAMPLE_DUPLICATE_SCAN_RESPONSE))
+    page.route('**/api/media/duplicates/dismiss', lambda route: pending_dismissals.append(route))
+
+    page.goto(server['url'])
+    page.locator('#navDuplicates').click()
+    enable_visual_scan(page)
+    page.locator('#dedupScanBtn').click()
+    dismiss_buttons = page.locator('.dedup-dismiss-group-btn')
+    expect(dismiss_buttons).to_have_count(2)
+    with page.expect_request('**/api/media/duplicates/dismiss'):
+        dismiss_buttons.nth(0).click()
+    with page.expect_request('**/api/media/duplicates/dismiss'):
+        dismiss_buttons.nth(1).click()
+    expect(page.locator('#dedupResolveBtn')).to_be_disabled()
+
+    assert [route.request.post_data_json['pairs'] for route in pending_dismissals] == [[[1, 2]], [[3, 4]]]
+    pending_dismissals[0].fulfill(json={'dismissed': 1})
+    groups = page.locator('.dedup-group-card')
+    expect(groups).to_have_count(1)
+    expect(groups).to_contain_text('beach.jpg')
+    pending_dismissals[1].fulfill(json={'dismissed': 1})
+    expect(page.locator('#dedupEmpty')).to_be_visible()
+    expect(page.locator('#dedupResolveBtn')).to_be_disabled()
 
 
 def test_deduplicate_escape_key(server, page: Page):
@@ -511,6 +645,7 @@ def test_deduplicate_thumbnails_from_items_schema_and_fallback(server, page: Pag
 
 def test_deduplicate_reset_dismissals(server, page: Page):
     """Test clicking Reset Dismissals calls the reset API endpoint and triggers a scan."""
+    mock_clip_ready(page)
     reset_called = {"count": 0}
     scan_called = {"count": 0}
 
@@ -527,6 +662,7 @@ def test_deduplicate_reset_dismissals(server, page: Page):
 
     page.goto(server["url"])
     page.locator("#navDuplicates").click()
+    enable_visual_scan(page)
 
     reset_btn = page.locator("#dedupResetDismissalsBtn")
     expect(reset_btn).to_be_visible()
@@ -564,6 +700,8 @@ def test_deduplicate_thumb_opens_loupe_in_foreground_with_group_navigation(serve
     """Clicking a thumb in deduplication dialog opens Loupe in foreground and scopes navigation
 
     to the duplicate group (Behavior A)."""
+    mock_clip_ready(page)
+
     def handle_scan(route):
         route.fulfill(status=200, content_type="application/json", body=json.dumps(SAMPLE_DUPLICATE_SCAN_RESPONSE))
 
@@ -574,6 +712,7 @@ def test_deduplicate_thumb_opens_loupe_in_foreground_with_group_navigation(serve
 
     page.goto(server["url"])
     page.locator("#navDuplicates").click()
+    enable_visual_scan(page)
 
     page.locator("#dedupScanBtn").click()
     expect(page.locator("#dedupReviewContainer")).to_be_visible()
@@ -628,6 +767,8 @@ def test_deduplicate_loupe_disables_actions_and_hides_controls(server, page: Pag
     """When Loupe is opened from the deduplicate dialog, delete, quick edit, star rating,
 
     pick, reject, and show boxes controls (and their shortcuts) are completely disabled and hidden."""
+    mock_clip_ready(page)
+
     def handle_scan(route):
         route.fulfill(status=200, content_type="application/json", body=json.dumps(SAMPLE_DUPLICATE_SCAN_RESPONSE))
 
@@ -638,6 +779,7 @@ def test_deduplicate_loupe_disables_actions_and_hides_controls(server, page: Pag
 
     page.goto(server["url"])
     page.locator("#navDuplicates").click()
+    enable_visual_scan(page)
     page.locator("#dedupScanBtn").click()
 
     expect(page.locator("#dedupReviewContainer")).to_be_visible()

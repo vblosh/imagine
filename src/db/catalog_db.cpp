@@ -433,7 +433,11 @@ Status CatalogDb::updateMedia(const MediaItem& item) {
         Status invalidated = invalidateFaceAnalysis(conn_, item.id);
         if (!invalidated.isOk()) return invalidated;
     }
-    return tx.commit();
+    Status commit = tx.commit();
+    if (commit.isOk() && geometryChangedRes.value() && invalidateSemanticVector_) {
+        invalidateSemanticVector_(item.id);
+    }
+    return commit;
 }
 
 Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) {
@@ -470,6 +474,7 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
 
     int64_t now = currentUnixTime();
     size_t updatedCount = 0;
+    std::vector<MediaId> invalidatedIds;
 
     for (const auto& item : items) {
         geomStmt.reset();
@@ -532,12 +537,16 @@ Result<size_t> CatalogDb::updateMediaBatch(const std::vector<MediaItem>& items) 
         if (geometryChanged) {
             Status invalidated = invalidateFaceAnalysis(conn_, item.id);
             if (!invalidated.isOk()) return invalidated;
+            invalidatedIds.push_back(item.id);
         }
     }
 
     Status commitStatus = tx.commit();
     if (!commitStatus.isOk()) {
         return commitStatus;
+    }
+    if (invalidateSemanticVector_) {
+        for (MediaId id : invalidatedIds) invalidateSemanticVector_(id);
     }
 
     return updatedCount;
@@ -656,6 +665,112 @@ Result<MediaItem> CatalogDb::getMediaByHash(const std::string& hash) {
         return m;
     }
     return Status::notFound("Media item not found with hash: " + hash);
+}
+
+Result<size_t> CatalogDb::updateImportedMediaBatch(std::span<const ImportedMediaUpdate> updates) {
+    if (updates.empty()) return size_t{0};
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    Transaction tx(conn_);
+    if (!tx.isActive()) {
+        return Status::databaseError("Failed to start import update transaction: " + conn_.lastErrorMessage());
+    }
+
+    auto prepared = conn_.prepare(R"SQL(
+        UPDATE media_items SET
+            file_size = ?, file_modified_time = ?, content_hash = ?,
+            width = ?, height = ?, date_taken = ?, date_taken_str = ?,
+            camera_make = ?, camera_model = ?, lens = ?, exposure_time = ?, f_number = ?, iso = ?,
+            focal_length = ?, orientation = ?, has_gps = ?, latitude = ?, longitude = ?, altitude = ?,
+            thumb_small = ?, thumb_large = ?, updated_at = ?,
+            media_type = ?, duration = ?, audio_artist = ?, audio_title = ?, audio_album = ?,
+            audio_genre = ?, codec = ?, bitrate = ?, channels = ?, sample_rate = ?
+        WHERE id = ? AND file_path = ? AND file_name = ?
+            AND COALESCE(file_size, 0) = ? AND COALESCE(file_modified_time, 0) = ?
+            AND COALESCE(content_hash, '') = ?
+            AND COALESCE(date_taken, 0) = ? AND COALESCE(date_taken_str, '') = ?
+            AND COALESCE(has_gps, 0) = ? AND COALESCE(latitude, 0.0) = ?
+            AND COALESCE(longitude, 0.0) = ? AND COALESCE(altitude, 0.0) = ?;
+    )SQL");
+    if (!prepared.isOk()) return prepared.status();
+    auto stmt = std::move(prepared.value());
+    const auto now = currentUnixTime();
+    std::vector<MediaId> invalidatedIds;
+
+    for (const auto& update : updates) {
+        const auto& item = update.item;
+        const auto& expected = update.expected;
+        if (item.id <= 0 || item.id != expected.id) {
+            return Status::invalidArgument("Import update needs a matching media ID");
+        }
+        auto geometryChanged = mediaFaceGeometryChanged(conn_, item);
+        if (!geometryChanged.isOk()) return geometryChanged.status();
+
+        int parameter = 1;
+        stmt.bind(parameter++, item.file_size);
+        stmt.bind(parameter++, item.file_modified_time);
+        stmt.bind(parameter++, item.content_hash);
+        stmt.bind(parameter++, item.width);
+        stmt.bind(parameter++, item.height);
+        stmt.bind(parameter++, item.date_taken);
+        stmt.bind(parameter++, item.exif.date_taken_str);
+        stmt.bind(parameter++, item.exif.camera_make);
+        stmt.bind(parameter++, item.exif.camera_model);
+        stmt.bind(parameter++, item.exif.lens);
+        stmt.bind(parameter++, item.exif.exposure_time);
+        stmt.bind(parameter++, item.exif.f_number);
+        stmt.bind(parameter++, item.exif.iso);
+        stmt.bind(parameter++, item.exif.focal_length);
+        stmt.bind(parameter++, item.exif.orientation);
+        stmt.bind(parameter++, item.exif.has_gps ? 1 : 0);
+        stmt.bind(parameter++, item.exif.latitude);
+        stmt.bind(parameter++, item.exif.longitude);
+        stmt.bind(parameter++, item.exif.altitude);
+        stmt.bind(parameter++, item.thumb_small);
+        stmt.bind(parameter++, item.thumb_large);
+        stmt.bind(parameter++, now);
+        stmt.bind(parameter++, item.media_type);
+        stmt.bind(parameter++, item.duration);
+        stmt.bind(parameter++, item.audio_artist);
+        stmt.bind(parameter++, item.audio_title);
+        stmt.bind(parameter++, item.audio_album);
+        stmt.bind(parameter++, item.audio_genre);
+        stmt.bind(parameter++, item.codec);
+        stmt.bind(parameter++, item.bitrate);
+        stmt.bind(parameter++, item.channels);
+        stmt.bind(parameter++, item.sample_rate);
+        stmt.bind(parameter++, expected.id);
+        stmt.bind(parameter++, expected.file_path);
+        stmt.bind(parameter++, expected.file_name);
+        stmt.bind(parameter++, expected.file_size);
+        stmt.bind(parameter++, expected.file_modified_time);
+        stmt.bind(parameter++, expected.content_hash);
+        stmt.bind(parameter++, expected.date_taken);
+        stmt.bind(parameter++, expected.exif.date_taken_str);
+        stmt.bind(parameter++, expected.exif.has_gps ? 1 : 0);
+        stmt.bind(parameter++, expected.exif.latitude);
+        stmt.bind(parameter++, expected.exif.longitude);
+        stmt.bind(parameter, expected.exif.altitude);
+
+        if (stmt.step() != StepResult::Done) {
+            return Status::databaseError("Failed to update imported media: " + conn_.lastErrorMessage());
+        }
+        if (conn_.changes() != 1) {
+            return Status::alreadyExists("Catalog file changed during import: " + expected.file_path);
+        }
+        stmt.reset();
+        if (geometryChanged.value()) {
+            auto status = invalidateFaceAnalysis(conn_, item.id);
+            if (!status.isOk()) return status;
+            invalidatedIds.push_back(item.id);
+        }
+    }
+
+    auto committed = tx.commit();
+    if (!committed.isOk()) return committed;
+    if (invalidateSemanticVector_) {
+        for (MediaId id : invalidatedIds) invalidateSemanticVector_(id);
+    }
+    return updates.size();
 }
 
 Status CatalogDb::updateRating(MediaId id, int32_t rating) {
@@ -1428,6 +1543,14 @@ Status CatalogDb::replaceSmartTags(
         return Status::databaseError("Failed to start transaction: " + conn_.lastErrorMessage());
     }
 
+    auto verifyMediaRes = conn_.prepare("SELECT 1 FROM media_items WHERE id = ? AND content_hash = ? AND media_type = 'photo';");
+    if (!verifyMediaRes.isOk()) return verifyMediaRes.status();
+    auto verifyMedia = std::move(verifyMediaRes.value());
+
+    auto rejectionRes = conn_.prepare("SELECT 1 FROM smart_tag_rejections WHERE media_id = ? AND tag_id = ?;");
+    if (!rejectionRes.isOk()) return rejectionRes.status();
+    auto rejection = std::move(rejectionRes.value());
+
     auto delMediaTagsRes = conn_.prepare(R"SQL(
         DELETE FROM media_tags
         WHERE media_id = ? AND tag_id IN (
@@ -1468,6 +1591,18 @@ Status CatalogDb::replaceSmartTags(
     int64_t now = currentUnixTime();
 
     for (const auto& rec : records) {
+        verifyMedia.reset();
+        verifyMedia.bind(1, rec.mediaId);
+        verifyMedia.bind(2, rec.contentHash);
+        const auto mediaResult = verifyMedia.step();
+        if (mediaResult == StepResult::Error) {
+            return Status::databaseError("Failed to verify smart-tag media: " + conn_.lastErrorMessage());
+        }
+        if (mediaResult != StepResult::Row) {
+            return Status::notFound("Media changed before smart tags could be saved");
+        }
+        verifyMedia.reset();
+
         delMediaTags.reset();
         delMediaTags.bind(1, rec.mediaId);
         delMediaTags.bind(2, rec.mediaId);
@@ -1481,7 +1616,17 @@ Status CatalogDb::replaceSmartTags(
             return Status::databaseError("Failed to delete old clip tag provenance: " + conn_.lastErrorMessage());
         }
 
+        int64_t labelCount = 0;
         for (TagId tagId : rec.tagIds) {
+            rejection.reset();
+            rejection.bind(1, rec.mediaId);
+            rejection.bind(2, tagId);
+            const auto rejectionResult = rejection.step();
+            if (rejectionResult == StepResult::Error) {
+                return Status::databaseError("Failed to verify smart-tag rejection: " + conn_.lastErrorMessage());
+            }
+            if (rejectionResult == StepResult::Row) continue;
+
             insMediaTag.reset();
             insMediaTag.bind(1, rec.mediaId);
             insMediaTag.bind(2, tagId);
@@ -1495,7 +1640,9 @@ Status CatalogDb::replaceSmartTags(
             if (insProv.step() != StepResult::Done) {
                 return Status::databaseError("Failed to insert smart tag provenance: " + conn_.lastErrorMessage());
             }
+            ++labelCount;
         }
+        rejection.reset();
 
         upsertState.reset();
         upsertState.bind(1, rec.mediaId);
@@ -1503,7 +1650,7 @@ Status CatalogDb::replaceSmartTags(
         upsertState.bind(3, modelId);
         upsertState.bind(4, modelRevision);
         upsertState.bind(5, taxonomyVersion);
-        upsertState.bind(6, static_cast<int64_t>(rec.tagIds.size()));
+        upsertState.bind(6, labelCount);
         upsertState.bind(7, now);
         if (upsertState.step() != StepResult::Done) {
             return Status::databaseError("Failed to upsert smart tag state: " + conn_.lastErrorMessage());
@@ -2419,10 +2566,21 @@ Status CatalogDb::mergeMediaMetadata(MediaId keeperId, MediaId sourceId) {
         if (!s.isOk()) return s;
     }
 
-    // 6. Union tags and provenance (following getTagsForMediaBatch pattern)
-    auto tagsBatchRes = getTagsForMediaBatch({keeperId, sourceId});
-    if (!tagsBatchRes.isOk()) return tagsBatchRes.status();
+    // Older assignments without provenance are treated as manual.
+    {
+        auto legacyRes = conn_.prepare(
+            "INSERT OR IGNORE INTO media_tag_provenance (media_id, tag_id, manual, source) "
+            "SELECT media_id, tag_id, 1, 'manual' FROM media_tags WHERE media_id IN (?, ?);");
+        if (!legacyRes.isOk()) return legacyRes.status();
+        auto legacy = std::move(legacyRes.value());
+        legacy.bind(1, keeperId);
+        legacy.bind(2, sourceId);
+        if (legacy.step() != StepResult::Done) {
+            return Status::databaseError("Failed to preserve legacy tag provenance: " + conn_.lastErrorMessage());
+        }
+    }
 
+    // 6. Union tags and provenance.
     {
         auto tagInsertRes = conn_.prepare(
             "INSERT OR IGNORE INTO media_tags (media_id, tag_id) "
@@ -2438,9 +2596,13 @@ Status CatalogDb::mergeMediaMetadata(MediaId keeperId, MediaId sourceId) {
 
     {
         auto provRes = conn_.prepare(
-            "INSERT INTO media_tag_provenance (media_id, tag_id, manual) "
-            "SELECT ?, tag_id, manual FROM media_tag_provenance WHERE media_id = ? "
-            "ON CONFLICT(media_id, tag_id) DO UPDATE SET manual = MAX(media_tag_provenance.manual, excluded.manual);");
+            "INSERT INTO media_tag_provenance (media_id, tag_id, manual, source) "
+            "SELECT ?, p.tag_id, p.manual, CASE WHEN p.manual = 1 THEN 'manual' ELSE p.source END "
+            "FROM media_tag_provenance p JOIN media_tags t ON (p.media_id, p.tag_id) = (t.media_id, t.tag_id) "
+            "WHERE p.media_id = ? "
+            "ON CONFLICT(media_id, tag_id) DO UPDATE SET manual = 1, source = 'manual' "
+            "WHERE media_tag_provenance.manual = 1 OR media_tag_provenance.source = 'manual' "
+            "OR excluded.manual = 1 OR excluded.source = 'manual';");
         if (!provRes.isOk()) return provRes.status();
         auto prov = std::move(provRes.value());
         prov.bind(1, keeperId);

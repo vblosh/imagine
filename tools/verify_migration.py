@@ -37,14 +37,14 @@ def audit(pse_db, imagine_db):
     icur.execute("SELECT COUNT(*) FROM media_items")
     im_media_count = icur.fetchone()[0]
 
-    pcur.execute("SELECT COUNT(*) FROM media_table WHERE volume_id NOT IN (184, 2)")
+    pcur.execute("SELECT COUNT(*) FROM media_table")
     pse_media_count = pcur.fetchone()[0]
 
     print(f"\n[1/6] Media Items Audit:")
-    print(f"  PSE Candidates (excluding system assets): {pse_media_count:,}")
+    print(f"  PSE Catalog Media Items:                  {pse_media_count:,}")
     print(f"  Imagine Migrated Media Items:             {im_media_count:,}")
     coverage = (im_media_count / pse_media_count) * 100 if pse_media_count else 0
-    print(f"  Coverage: {coverage:.2f}% (Expected ~99.95% due to 27 offline/missing files)")
+    print(f"  Coverage: {coverage:.2f}%")
 
     # 2. Tag Counts by Category
     print(f"\n[2/6] Tag Taxonomy Audit:")

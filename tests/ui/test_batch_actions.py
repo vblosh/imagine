@@ -4,7 +4,43 @@ Deterministic UI tests for Batch Actions.
 
 import os
 import re
+from datetime import datetime, timezone
+
+import pytest
 from playwright.sync_api import Page, expect
+
+
+@pytest.mark.parametrize('shift', [False, True])
+def test_batch_date_dialog_saves_selected_photos(server, page: Page, shift: bool):
+    page.goto(server['url'])
+    cards = page.locator('.photo-card')
+    expect(cards).to_have_count(6)
+    ids = [int(cards.nth(i).get_attribute('data-id')) for i in range(2)]
+    previous_dates = {
+        media_id: page.request.get(f"{server['url']}/api/media/{media_id}").json()['date_taken']
+        for media_id in ids
+    }
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=['Control'])
+    page.locator('#batchDateBtn').click()
+    if shift:
+        page.locator('#shiftPlus1Btn').click()
+        expected_dates = {media_id: timestamp + 3600 for media_id, timestamp in previous_dates.items()}
+    else:
+        page.locator('#batchDateModeExact').check()
+        page.locator('#batchDateInput').fill('2025-03-15T12:30')
+        timestamp = int(datetime(2025, 3, 15, 12, 30, tzinfo=timezone.utc).timestamp())
+        expected_dates = dict.fromkeys(ids, timestamp)
+
+    with page.expect_response('**/api/media/batch-date') as save:
+        page.locator('#confirmBatchDateBtn').click()
+    assert save.value.ok
+    expect(page.locator('#batchDateModal')).to_be_hidden()
+    actual_dates = {
+        media_id: page.request.get(f"{server['url']}/api/media/{media_id}").json()['date_taken']
+        for media_id in ids
+    }
+    assert actual_dates == expected_dates
 
 
 def test_batch_action_bar_visibility_and_selection_count(server, page: Page):
