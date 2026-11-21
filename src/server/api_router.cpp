@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <cmath>
+#include <limits>
 
 namespace imagine::server {
 
@@ -1939,12 +1940,14 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 }
             }
 
+            const std::optional<double> batchAltitude = hasGps && body.value("preserve_altitude", false)
+                ? std::nullopt : std::optional<double>{altitude};
             int updatedCount = 0;
             std::vector<MediaId> failedIds;
             auto& database = db();
             Status batchStatus = database.runInTransaction([&]() -> Status {
                 for (MediaId id : ids) {
-                    Status s = database.updateGps(id, hasGps, latitude, longitude, altitude);
+                    Status s = database.updateGps(id, hasGps, latitude, longitude, batchAltitude);
                     if (s.isOk()) {
                         auto placeStatus = database.applyGpsPlaceTags(id, hasGps, latitude, longitude);
                             if (!placeStatus.isOk()) {
@@ -2059,6 +2062,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             auto body = nlohmann::json::parse(req.body);
             std::vector<std::pair<MediaId, int64_t>> updates;
             std::unordered_map<MediaId, std::string> customStrs;
+            std::optional<int64_t> shiftSeconds;
 
             if (body.contains("items") && body["items"].is_array()) {
                 auto itemsJson = body["items"];
@@ -2099,14 +2103,10 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
 
                 if (body.contains("shift_seconds")) {
-                    int64_t shiftSec = body["shift_seconds"].get<int64_t>();
+                    shiftSeconds = body["shift_seconds"].get<int64_t>();
+                    std::unordered_set<MediaId> seen;
                     for (MediaId id : ids) {
-                        auto mRes = catalog_ ? catalog_->getMedia(id) : db().getMediaById(id);
-                        if (mRes.isOk()) {
-                            int64_t origTs = mRes.value().date_taken;
-                            int64_t newTs = (origTs != 0) ? (origTs + shiftSec) : 0;
-                            updates.emplace_back(id, newTs);
-                        }
+                        if (seen.insert(id).second) updates.emplace_back(id, 0);
                     }
                 } else if (body.contains("date_taken")) {
                     int64_t ts = 0;
@@ -2142,7 +2142,24 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             nlohmann::json updatedItems = nlohmann::json::array();
             auto& database = db();
             Status batchStatus = database.runInTransaction([&]() -> Status {
-                for (const auto& [id, dateTaken] : updates) {
+                for (auto [id, dateTaken] : updates) {
+                    if (shiftSeconds) {
+                        auto current = database.getMediaById(id);
+                        if (!current.isOk()) {
+                            failedIds.push_back(id);
+                            continue;
+                        }
+                        dateTaken = current.value().date_taken;
+                        if (dateTaken != 0) {
+                            const auto shift = *shiftSeconds;
+                            if ((shift > 0 && dateTaken > std::numeric_limits<int64_t>::max() - shift) ||
+                                (shift < 0 && dateTaken < std::numeric_limits<int64_t>::min() - shift)) {
+                                failedIds.push_back(id);
+                                continue;
+                            }
+                            dateTaken += shift;
+                        }
+                    }
                     std::string dateTakenStr = customStrs.count(id) ? customStrs[id] : "";
                     if (dateTakenStr.empty() && dateTaken != 0) {
                         dateTakenStr = formatTimestampToDateString(dateTaken);

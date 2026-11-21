@@ -470,6 +470,10 @@ def test_close_semantic_search_restores_normal_grid(server, page: Page):
     expect(page.locator(".photo-card")).to_have_count(6)
     expect(page.locator(".date-group")).to_have_count(3)
     expect(page.locator(".similarity-rank-badge")).to_have_count(0)
+    assert page.evaluate("localStorage.getItem('imagine_search_text')") is None
+    page.reload()
+    expect(page.locator('#searchInput')).to_have_value('')
+    expect(page.locator('.photo-card')).to_have_count(6)
 
 
 def test_escape_key_closes_semantic_search_grid(server, page: Page):

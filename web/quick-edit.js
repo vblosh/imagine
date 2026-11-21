@@ -20,7 +20,7 @@
 import { normalizeMediaItem, getOriginalMediaUrl, getAuthHeaders } from "./api.js";
 import { state, invalidateGpsCache } from "./state.js";
 import { dom, showToast } from "./dom.js";
-import { renderGrid } from "./grid.js";
+import { loadMedia, loadMetadata, renderGrid } from "./grid.js";
 import { t } from "./i18n.js";
 import { showModal, hideModal } from "./modals.js";
 
@@ -57,6 +57,8 @@ export const FILTERS = {
 
 export const quickEditState = {
   isOpen: false,
+  session: null,
+  pendingSave: null,
   isDirty: false,
   isOriginalLoaded: false,
   photoId: null,
@@ -471,10 +473,13 @@ export function cancelMode() {
 /* Open / Close Quick Edit */
 export function openQuickEdit() {
   if (state.loupeIndex < 0 || state.loupeIndex >= state.mediaItems.length) return;
-  const item = state.mediaItems[state.loupeIndex];
+  const item = state.mediaItems.find(m => m.id === state.loupeMediaId);
   if (!item || item.media_type === "video" || item.media_type === "audio" || (item.media_type && item.media_type !== "photo")) return;
 
   quickEditState.isOpen = true;
+  const session = {};
+  quickEditState.session = session;
+  quickEditState.pendingSave = null;
   quickEditState.isDirty = false;
   quickEditState.isOriginalLoaded = false;
   quickEditState.photoId = item.id;
@@ -548,7 +553,7 @@ export function openQuickEdit() {
   let fullImageLoaded = false;
   const onImageReady = (loadedImg) => {
     if (fullImageLoaded) return;
-    if (!quickEditState.isOpen || quickEditState.photoId !== item.id) {
+    if (!quickEditState.isOpen || quickEditState.session !== session) {
       if (rejectImageLoaded) {
         try { rejectImageLoaded(new Error("Quick edit cancelled")); } catch (_) {}
       }
@@ -563,61 +568,60 @@ export function openQuickEdit() {
     fullResUncropped.height = loadedImg.naturalHeight || loadedImg.height;
     fullResUncropped.getContext("2d").drawImage(loadedImg, 0, 0);
 
+    // Each history entry can contain a different baked crop of the preview.
+    // Rebuild each distinct canvas from its own crop recipe before undo/redo
+    // can restore it. Preserve shared canvas identity for mode comparisons.
+    const rebuilt = new Map([[initialCanvas, fullResUncropped]]);
     const replaceCanvas = (snap) => {
-      if (snap && snap.workingCanvas === initialCanvas) {
-        snap.workingCanvas = fullResUncropped;
+      if (!snap || !snap.workingCanvas) return;
+      if (!rebuilt.has(snap.workingCanvas)) {
+        let curCanvas = fullResUncropped;
+        const steps = snap.normalizedCrop?.steps || [];
+        for (const step of steps) {
+          const is90or270 = step.rotation === 90 || step.rotation === 270;
+          const rotW = is90or270 ? curCanvas.height : curCanvas.width;
+          const rotH = is90or270 ? curCanvas.width : curCanvas.height;
+
+          const transformed = document.createElement("canvas");
+          transformed.width = rotW;
+          transformed.height = rotH;
+          const tCtx = transformed.getContext("2d");
+          tCtx.save();
+          tCtx.translate(rotW / 2, rotH / 2);
+          const totalAngleDeg = (step.rotation || 0) + (step.straighten || 0);
+          tCtx.rotate((totalAngleDeg * Math.PI) / 180);
+          const rad = Math.abs(((step.straighten || 0) * Math.PI) / 180);
+          const sFactor = step.straighten
+            ? Math.cos(rad) + Math.max(rotH / rotW, rotW / rotH) * Math.sin(rad)
+            : 1;
+          tCtx.scale((step.flipH ? -1 : 1) * sFactor, (step.flipV ? -1 : 1) * sFactor);
+          tCtx.drawImage(curCanvas, -curCanvas.width / 2, -curCanvas.height / 2);
+          tCtx.restore();
+
+          const cropX = Math.round(step.rx * rotW);
+          const cropY = Math.round(step.ry * rotH);
+          const cropW = Math.max(1, Math.round(step.rw * rotW));
+          const cropH = Math.max(1, Math.round(step.rh * rotH));
+
+          const nextCanvas = document.createElement("canvas");
+          nextCanvas.width = cropW;
+          nextCanvas.height = cropH;
+          nextCanvas.getContext("2d").drawImage(transformed, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+          curCanvas = nextCanvas;
+        }
+        rebuilt.set(snap.workingCanvas, curCanvas);
       }
+      snap.workingCanvas = rebuilt.get(snap.workingCanvas);
     };
+    const current = captureStateSnapshot();
     quickEditState.history.forEach(replaceCanvas);
     quickEditState.redoStack.forEach(replaceCanvas);
-    if (quickEditState.modeEntrySnapshot) replaceCanvas(quickEditState.modeEntrySnapshot);
-
-    if (!quickEditState.hasCropped) {
-      initWorkingCanvas(loadedImg);
-    } else if (quickEditState.normalizedCrop?.steps?.length) {
-      let curCanvas = document.createElement("canvas");
-      curCanvas.width = loadedImg.naturalWidth || loadedImg.width;
-      curCanvas.height = loadedImg.naturalHeight || loadedImg.height;
-      curCanvas.getContext("2d").drawImage(loadedImg, 0, 0);
-
-      for (const step of quickEditState.normalizedCrop.steps) {
-        const is90or270 = step.rotation === 90 || step.rotation === 270;
-        const rotW = is90or270 ? curCanvas.height : curCanvas.width;
-        const rotH = is90or270 ? curCanvas.width : curCanvas.height;
-
-        const transformed = document.createElement("canvas");
-        transformed.width = rotW;
-        transformed.height = rotH;
-        const tCtx = transformed.getContext("2d");
-        tCtx.save();
-        tCtx.translate(rotW / 2, rotH / 2);
-        const totalAngleDeg = (step.rotation || 0) + (step.straighten || 0);
-        tCtx.rotate((totalAngleDeg * Math.PI) / 180);
-        const rad = Math.abs(((step.straighten || 0) * Math.PI) / 180);
-        const sFactor = step.straighten
-          ? Math.cos(rad) + Math.max(rotH / rotW, rotW / rotH) * Math.sin(rad)
-          : 1;
-        tCtx.scale((step.flipH ? -1 : 1) * sFactor, (step.flipV ? -1 : 1) * sFactor);
-        tCtx.drawImage(curCanvas, -curCanvas.width / 2, -curCanvas.height / 2);
-        tCtx.restore();
-
-        const cropX = Math.round(step.rx * rotW);
-        const cropY = Math.round(step.ry * rotH);
-        const cropW = Math.max(1, Math.round(step.rw * rotW));
-        const cropH = Math.max(1, Math.round(step.rh * rotH));
-
-        const nextCanvas = document.createElement("canvas");
-        nextCanvas.width = cropW;
-        nextCanvas.height = cropH;
-        nextCanvas.getContext("2d").drawImage(transformed, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-        curCanvas = nextCanvas;
-      }
-
-      quickEditState.workingCanvas = curCanvas;
-      quickEditState.workingCtx = curCanvas.getContext("2d");
-      quickEditState.smartFixLUT = null;
-      quickEditState.previewCanvas = null;
-    }
+    replaceCanvas(quickEditState.modeEntrySnapshot);
+    replaceCanvas(current);
+    quickEditState.workingCanvas = current.workingCanvas;
+    quickEditState.workingCtx = current.workingCanvas.getContext("2d");
+    quickEditState.smartFixLUT = null;
+    quickEditState.previewCanvas = null;
     renderQuickEditCanvas();
     quickEditState.imageLoadedReject = null;
     if (resolveImageLoaded) resolveImageLoaded(loadedImg);
@@ -625,7 +629,7 @@ export function openQuickEdit() {
 
   const onImageError = (err) => {
     if (fullImageLoaded) return;
-    if (!quickEditState.isOpen || quickEditState.photoId !== item.id) {
+    if (!quickEditState.isOpen || quickEditState.session !== session) {
       if (rejectImageLoaded) {
         try { rejectImageLoaded(new Error("Quick edit cancelled")); } catch (_) {}
       }
@@ -689,6 +693,8 @@ export function performCloseQuickEdit() {
   }
 
   quickEditState.isOpen = false;
+  quickEditState.session = null;
+  quickEditState.pendingSave = null;
   quickEditState.isDirty = false;
   quickEditState.isOriginalLoaded = false;
   quickEditState.cropActive = false;
@@ -725,6 +731,7 @@ export function performCloseQuickEdit() {
   quickEditState.workingCtx = null;
   quickEditState.smartFixLUT = null;
   quickEditState.previewCanvas = null;
+  window.dispatchEvent(new CustomEvent('imagine:quickEditClosed'));
 }
 
 function initWorkingCanvas(img) {
@@ -1516,6 +1523,7 @@ function applyVignetteOverlay(ctx, w, h, amount) {
   grad.addColorStop(1, `rgba(${color},${alpha})`);
 
   ctx.save();
+  ctx.globalCompositeOperation = "source-atop";
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
   ctx.restore();
@@ -1785,7 +1793,11 @@ export function getFullResolutionExportCanvas() {
 
 /* Save Edits (Overwrite or Save Copy) */
 export async function saveEdits(mode = "overwrite") {
-  if (!quickEditState.isOpen || !dom.quickEditCanvas) return;
+  if (!quickEditState.isOpen || !dom.quickEditCanvas || quickEditState.pendingSave) return;
+  const session = quickEditState.session;
+  const operation = {};
+  quickEditState.pendingSave = operation;
+  const isCurrentSession = () => quickEditState.isOpen && quickEditState.session === session;
 
   // Saving applies the open mode as one undo step so nothing is lost.
   if (quickEditState.activeMode) applyMode();
@@ -1797,6 +1809,7 @@ export async function saveEdits(mode = "overwrite") {
   const id = quickEditState.photoId;
   const currentItem = state.mediaItems.find(m => m.id === id);
   if (currentItem && (currentItem.media_type === "video" || currentItem.media_type === "audio")) {
+    quickEditState.pendingSave = null;
     return;
   }
   const { exportType, originalContentHash } = quickEditState;
@@ -1811,7 +1824,7 @@ export async function saveEdits(mode = "overwrite") {
       await quickEditState.imageLoadedPromise;
     }
 
-    if (!quickEditState.isOpen || !dom.quickEditCanvas || quickEditState.photoId !== id) {
+    if (!isCurrentSession() || !dom.quickEditCanvas) {
       return;
     }
 
@@ -1820,36 +1833,33 @@ export async function saveEdits(mode = "overwrite") {
     }
 
     const canvas = getFullResolutionExportCanvas();
+    const savedSnapshot = captureStateSnapshot();
 
-    let res;
+    // Only fall back when encoding fails. A failed fetch may already have
+    // reached the server, so retrying it could create a second copy.
+    let blob = null;
     if (typeof canvas.toBlob === "function") {
       try {
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, exportType, 0.95));
-        if (blob) {
-          res = await fetch(`/api/photos/${id}/edit?mode=${encodeURIComponent(mode)}`, {
-            method: "POST",
-            headers: {
-              ...headers,
-              "Content-Type": exportType,
-              "X-Edit-Mode": mode,
-            },
-            body: blob,
-          });
-        }
+        blob = await new Promise((resolve) => canvas.toBlob(resolve, exportType, 0.95));
       } catch (blobErr) {
         console.warn("Failed to create blob from canvas, falling back to data URL:", blobErr);
       }
     }
+    if (!isCurrentSession()) return;
 
-    if (!res) {
+    let res;
+    if (blob) {
+      res = await fetch(`/api/photos/${id}/edit?mode=${encodeURIComponent(mode)}`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": exportType, "X-Edit-Mode": mode },
+        body: blob,
+      });
+    } else {
       const dataUrl = canvas.toDataURL(exportType, 0.95);
       res = await fetch(`/api/photos/${id}/edit`, {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          image_data: dataUrl,
-        }),
+        body: JSON.stringify({ mode, image_data: dataUrl }),
       });
     }
 
@@ -1872,6 +1882,9 @@ export async function saveEdits(mode = "overwrite") {
       updatedItem._cacheBuster = ts;
     }
     const cacheBuster = `?t=${ts}`;
+    const sameSession = isCurrentSession();
+    const unchanged = sameSession && !quickEditState.activeMode
+      && snapshotsEqual(savedSnapshot, captureStateSnapshot());
 
     if (mode === "overwrite") {
       const idx = state.mediaItems.findIndex(m => m.id === id);
@@ -1879,7 +1892,7 @@ export async function saveEdits(mode = "overwrite") {
         state.mediaItems[idx] = updatedItem;
       }
       const newOriginalUrl = getOriginalMediaUrl(updatedItem);
-      if (dom.loupeImg) {
+      if (unchanged && dom.loupeImg) {
         dom.loupeImg.src = newOriginalUrl;
         dom.loupeImg.dataset.originalUrl = newOriginalUrl;
         dom.loupeImg.dataset.isOriginal = "true";
@@ -1891,6 +1904,7 @@ export async function saveEdits(mode = "overwrite") {
       if (dom.inspectorImg && state.selectedIds.has(id)) {
         dom.inspectorImg.src = newOriginalUrl;
       }
+      if (sameSession) quickEditState.originalContentHash = updatedItem.content_hash;
       showToast(t("quick_edit_saved"));
       if (state.selectedIds && state.selectedIds.has(id)) {
         if (window.imagineUI?.updateInspector) {
@@ -1898,12 +1912,19 @@ export async function saveEdits(mode = "overwrite") {
         }
       }
     } else {
+      if (!sameSession) {
+        // The active filter or loupe list may have changed during the upload.
+        await Promise.all([loadMedia(false, { preserveScroll: true }), loadMetadata()]);
+        showToast(t("quick_edit_saved_copy", { name: updatedItem.file_name }));
+        return;
+      }
+      const displayedId = state.loupeMediaId;
       state.mediaItems.unshift(updatedItem);
       invalidateGpsCache();
       state.totalCount++;
       if (dom.totalMediaCount) dom.totalMediaCount.textContent = state.totalCount;
-      if (state.loupeIndex >= 0) {
-        const newIdx = state.mediaItems.findIndex(m => m.id === id);
+      if (state.loupeIndex >= 0 && !state.loupeMediaMissing) {
+        const newIdx = state.mediaItems.findIndex(m => m.id === displayedId);
         if (newIdx !== -1) {
           state.loupeIndex = newIdx;
         } else {
@@ -1927,18 +1948,23 @@ export async function saveEdits(mode = "overwrite") {
       }
     }
 
-    quickEditState.isDirty = false;
-    closeQuickEdit(false);
+    if (unchanged) {
+      quickEditState.isDirty = false;
+      closeQuickEdit(false);
+    }
   } catch (err) {
-    if (err.message !== "Quick edit cancelled" && quickEditState.isOpen) {
+    if (err.message !== "Quick edit cancelled" && isCurrentSession()) {
       showToast(t("toast_failed_save_edits", { error: err.message }), "error");
       try {
         alert(`Error saving edits: ${err.message}`);
       } catch (_) {}
     }
   } finally {
-    if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = false;
-    if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.disabled = false;
+    if (isCurrentSession() && quickEditState.pendingSave === operation) {
+      quickEditState.pendingSave = null;
+      if (dom.quickEditSaveBtn) dom.quickEditSaveBtn.disabled = false;
+      if (dom.quickEditSaveCopyBtn) dom.quickEditSaveCopyBtn.disabled = false;
+    }
   }
 }
 

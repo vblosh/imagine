@@ -69,7 +69,8 @@ export function handleCardSelection(id, event) {
     }
   } else if (event.shiftKey && state.lastSelectedId !== null) {
     // Shift-range selection
-    const ids = state.mediaItems.map(m => m.id);
+    const ids = Array.from(dom.mediaGrid?.querySelectorAll('.photo-card[data-id]') || [],
+      card => Number(card.dataset.id));
     const startIdx = ids.indexOf(state.lastSelectedId);
     const endIdx = ids.indexOf(id);
     if (startIdx !== -1 && endIdx !== -1) {

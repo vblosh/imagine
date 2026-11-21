@@ -722,6 +722,7 @@ export default {
     toast_tag_deleted_named: 'Etiqueta "{name}" eliminada.',
     toast_failed_delete_tag: 'Error al eliminar la etiqueta: {error}',
     toast_specify_valid_datetime: 'Por favor especifique una fecha y hora válidas',
+    toast_updated_date_partial: 'Fecha actualizada en {count} fotos. Error al actualizar {failed}.',
     toast_updated_date_single: 'Fecha actualizada para 1 foto',
     toast_updated_date_count: 'Fecha actualizada para {count} fotos',
     toast_failed_change_dates: 'Error al cambiar las fechas: {error}',

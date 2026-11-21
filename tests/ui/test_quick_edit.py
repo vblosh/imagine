@@ -2,6 +2,7 @@
 Deterministic UI tests for Quick Edit mode in the Original (Loupe) view.
 """
 
+import base64
 import re
 from playwright.sync_api import Page, expect
 
@@ -533,3 +534,109 @@ def test_smart_fix_high_resolution_scaled_preview_and_deferred_export(server, pa
 
 
 
+
+
+def test_crop_redo_while_original_loads_uses_original_pixels(server, page: Page):
+    page.goto(server["url"])
+    png = page.evaluate("""() => {
+        const c = document.createElement('canvas'); c.width = 1920; c.height = 1080;
+        const ctx = c.getContext('2d'); ctx.fillStyle = '#12ab34'; ctx.fillRect(0, 0, c.width, c.height);
+        return c.toDataURL('image/png').split(',')[1];
+    }""")
+    pending = []
+    page.route("**/api/photos/*/original", lambda route: pending.append(route))
+    page.locator('.photo-card', has_text='mountain.bmp').dblclick()
+    page.locator('#loupeQuickEditBtn').click()
+    page.locator('#quickEditCropBtn').click()
+    page.locator('#cropAspectRatioSelect').select_option('1:1')
+    page.locator('#modeApplyBtn').click()
+    page.locator('#editorUndoBtn').click()
+    page.wait_for_function('() => !window.imagineUI.quickEdit.quickEditState.isOriginalLoaded')
+    assert pending
+    for route in pending:
+        route.fulfill(status=200, content_type='image/png', body=base64.b64decode(png))
+    page.wait_for_function('() => window.imagineUI.quickEdit.quickEditState.isOriginalLoaded')
+    page.locator('#editorRedoBtn').click()
+    pixel = page.evaluate("""() => {
+        const c = window.imagineUI.quickEdit.getFullResolutionExportCanvas();
+        return Array.from(c.getContext('2d').getImageData(c.width / 2, c.height / 2, 1, 1).data);
+    }""")
+    assert pixel == [18, 171, 52, 255]
+
+
+def test_save_completion_preserves_new_edits_and_new_editor(server, page: Page):
+    page.goto(server['url'])
+    page.locator('.photo-card', has_text='birthday.bmp').dblclick()
+    page.locator('#loupeQuickEditBtn').click()
+    page.wait_for_function('() => window.imagineUI.quickEdit.quickEditState.isOriginalLoaded')
+    page.evaluate("""() => {
+        const realFetch = window.fetch; window.completedSaves = 0;
+        window.fetch = (url, options) => String(url).includes('/edit?')
+            ? new Promise(resolve => { window.finishEdit = () => resolve({ok: true, json: async () => {
+                window.completedSaves++; return window.savedItem;
+            }}); })
+            : realFetch(url, options);
+    }""")
+    media_id = page.locator('.photo-card', has_text='birthday.bmp').get_attribute('data-id')
+    item = page.request.get(f"{server['url']}/api/media/{media_id}").json()
+    page.evaluate('(item) => { window.savedItem = item; }', item)
+    page.locator('#quickEditRotateRightBtn').click()
+    page.locator('#quickEditSaveBtn').click()
+    page.wait_for_function('() => typeof window.finishEdit === "function"')
+    page.locator('#quickEditRotateRightBtn').click()
+    page.evaluate('() => window.finishEdit()')
+    expect(page.locator('#quickEditSaveBtn')).to_be_enabled()
+    assert page.evaluate('() => window.imagineUI.quickEdit.quickEditState.rotation') == 180
+    expect(page.locator('#loupeModal')).to_have_class(re.compile(r'\bis-quick-editing\b'))
+
+    page.evaluate('() => { window.finishEdit = null; }')
+    page.locator('#quickEditSaveBtn').click()
+    page.wait_for_function('() => typeof window.finishEdit === "function"')
+    page.locator('#quickEditCancelBtn').click()
+    page.locator('#confirmDiscardChangesBtn').click()
+    page.locator('#loupeNextBtn').click()
+    page.locator('#loupeQuickEditBtn').click()
+    current_id = page.evaluate('() => window.imagineUI.quickEdit.quickEditState.photoId')
+    page.evaluate('() => window.finishEdit()')
+    page.wait_for_function('() => window.completedSaves === 2')
+    assert page.evaluate('() => window.imagineUI.quickEdit.quickEditState.photoId') == current_id
+    expect(page.locator('#loupeModal')).to_have_class(re.compile(r'\bis-quick-editing\b'))
+
+
+def test_save_copy_network_failure_does_not_retry(server, page: Page):
+    page.goto(server['url'])
+    page.locator('.photo-card', has_text='birthday.bmp').dblclick()
+    page.locator('#loupeQuickEditBtn').click()
+    page.wait_for_function('() => window.imagineUI.quickEdit.quickEditState.isOriginalLoaded')
+    page.evaluate("""() => {
+        const realFetch = window.fetch; window.editRequests = 0;
+        window.fetch = (url, options) => {
+            if (String(url).includes('/edit')) { window.editRequests++; return Promise.reject(new Error('connection lost')); }
+            return realFetch(url, options);
+        };
+    }""")
+    messages = []
+    page.on('dialog', lambda dialog: (messages.append(dialog.message), dialog.accept()))
+    page.locator('#quickEditSaveCopyBtn').click()
+    page.wait_for_function('() => window.imagineUI.quickEdit.quickEditState.pendingSave === null')
+    assert page.evaluate('() => window.editRequests') == 1
+    assert messages and 'connection lost' in messages[0]
+
+
+def test_vignette_preserves_transparent_and_partial_alpha(server, page: Page):
+    page.goto(server['url'])
+    page.locator('.photo-card', has_text='birthday.bmp').dblclick()
+    page.locator('#loupeQuickEditBtn').click()
+    page.wait_for_function('() => window.imagineUI.quickEdit.quickEditState.isOriginalLoaded')
+    result = page.evaluate("""() => {
+        const qe = window.imagineUI.quickEdit, s = qe.quickEditState;
+        const c = document.createElement('canvas'); c.width = c.height = 20;
+        const ctx = c.getContext('2d'); ctx.fillStyle = 'rgba(200,100,50,0.5)'; ctx.fillRect(0, 0, 10, 20);
+        s.workingCanvas = c; s.workingCtx = ctx;
+        const before = Array.from(ctx.getImageData(0, 0, 20, 20).data).filter((_, i) => i % 4 === 3);
+        qe.setAdjustment('vignette', 100);
+        const exp = qe.getFullResolutionExportCanvas();
+        const after = Array.from(exp.getContext('2d').getImageData(0, 0, 20, 20).data).filter((_, i) => i % 4 === 3);
+        return {before, after};
+    }""")
+    assert result['after'] == result['before']

@@ -53,7 +53,7 @@ public:
     Status updateFileNameAndPath(MediaId id, const std::string& newFileName, const std::string& newFilePath);
     Status updateDateTaken(MediaId id, int64_t dateTaken, const std::string& dateTakenStr);
     Status updateThumbnails(MediaId id, const std::string& smallPath, const std::string& largePath);
-    Status updateGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude = 0.0);
+    Status updateGps(MediaId id, bool hasGps, double latitude, double longitude, std::optional<double> altitude = 0.0);
     Status applyGpsPlaceTags(MediaId id, bool hasGps, double latitude, double longitude);
     Status deleteMedia(MediaId id);
     Result<int64_t> makePathsRelative(const std::string& photosDir, const std::string& thumbsDir = "");

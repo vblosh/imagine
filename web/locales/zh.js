@@ -722,6 +722,7 @@ export default {
     toast_tag_deleted_named: '标签 "{name}" 已删除。',
     toast_failed_delete_tag: '删除标签失败: {error}',
     toast_specify_valid_datetime: '请指定有效的日期和时间',
+    toast_updated_date_partial: '已更新 {count} 张照片的日期，{failed} 张更新失败。',
     toast_updated_date_single: '已更新 1 张照片的日期',
     toast_updated_date_count: '已更新 {count} 张照片的日期',
     toast_failed_change_dates: '更改日期失败: {error}',

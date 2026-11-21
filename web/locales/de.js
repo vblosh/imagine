@@ -722,6 +722,7 @@ export default {
     toast_tag_deleted_named: 'Schlagwort "{name}" gelöscht.',
     toast_failed_delete_tag: 'Fehler beim Löschen des Schlagworts: {error}',
     toast_specify_valid_datetime: 'Bitte geben Sie ein gültiges Datum und eine Uhrzeit an',
+    toast_updated_date_partial: 'Datum für {count} Fotos aktualisiert. Bei {failed} Fotos fehlgeschlagen.',
     toast_updated_date_single: 'Datum für 1 Foto aktualisiert',
     toast_updated_date_count: 'Datum für {count} Fotos aktualisiert',
     toast_failed_change_dates: 'Fehler beim Ändern der Daten: {error}',

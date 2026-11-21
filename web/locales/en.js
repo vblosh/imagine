@@ -722,6 +722,7 @@ export default {
     toast_tag_deleted_named: 'Tag "{name}" deleted.',
     toast_failed_delete_tag: 'Failed to delete tag: {error}',
     toast_specify_valid_datetime: 'Please specify a valid date and time',
+    toast_updated_date_partial: 'Date changes succeeded for {count} and failed for {failed}.',
     toast_updated_date_single: 'Updated date for 1 photo',
     toast_updated_date_count: 'Updated date for {count} photos',
     toast_failed_change_dates: 'Failed to change dates: {error}',

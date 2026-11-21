@@ -569,10 +569,13 @@ TEST_F(ServerTest, BatchRatingFlagTagsGps) {
     EXPECT_EQ(get2["date_taken"].get<int64_t>(), 1700000000);
 
     // Batch date shift
-    nlohmann::json shiftDateBody = {{"ids", {id1, id2}}, {"shift_seconds", 3600}};
+    nlohmann::json shiftDateBody = {{"ids", {id1, id2, id1, 999999999}}, {"shift_seconds", 3600}};
     auto sDateRes = client.Post("/api/media/batch-date", shiftDateBody.dump(), "application/json");
     ASSERT_TRUE(sDateRes);
     EXPECT_EQ(sDateRes->status, 200);
+    const auto shifted = nlohmann::json::parse(sDateRes->body);
+    EXPECT_EQ(shifted["updated_count"], 2);
+    EXPECT_EQ(shifted["failed_ids"], nlohmann::json::array({999999999}));
     get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
     get2 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id2))->body);
     EXPECT_EQ(get1["date_taken"].get<int64_t>(), 1700003600);

@@ -722,6 +722,7 @@ export default {
     toast_tag_deleted_named: 'Тег "{name}" удален.',
     toast_failed_delete_tag: 'Не удалось удалить тег: {error}',
     toast_specify_valid_datetime: 'Пожалуйста, укажите корректную дату и время',
+    toast_updated_date_partial: 'Дата обновлена для {count} фото. Не удалось обновить {failed}.',
     toast_updated_date_single: 'Дата обновлена для 1 фото',
     toast_updated_date_count: 'Дата обновлена для {count} фото',
     toast_failed_change_dates: 'Не удалось изменить даты: {error}',

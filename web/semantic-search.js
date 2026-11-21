@@ -53,7 +53,7 @@ export async function findSimilarMedia(mediaId, limit = 50, options = {}) {
     }
 }
 
-const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'cancelled', 'interrupted']);
 
 let currentSemanticJob = null;
 let currentSemanticRequest = null;

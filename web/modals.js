@@ -17,7 +17,7 @@ import {
 } from './api.js';
 import { state } from './state.js';
 import { dom, showToast } from './dom.js';
-import { loadMetadata, loadMedia, updateBatchBar, batchUpdateDates, renderGrid, expandTagCategory } from './media-grid.js';
+import { loadMetadata, loadMedia, updateBatchBar, batchUpdateDates, expandTagCategory } from './media-grid.js';
 import { updateInspector } from './inspector.js';
 import { t } from './i18n.js';
 import { checkSemanticStatus } from './semantic-status.js';
@@ -32,6 +32,7 @@ export function setModalLoupeDeleteHandler(fn) {
 let pendingAddToAlbumIds = [];
 let pendingTagTargetMediaIds = [];
 let pendingTagModalMode = 'add';
+let tagCategoryChosen = false;
 let pendingRemoveTagOptions = [];
 let pendingDeleteMediaIds = [];
 let deletingMedia = false;
@@ -656,7 +657,7 @@ export function openTagModal(targetMediaIds = null, mode = 'add') {
   if (removeMode && !pendingRemoveTagOptions.some(tag => tag.category === initialCat)) {
     initialCat = ['people', 'places', 'events', 'keyword'].find(cat => pendingRemoveTagOptions.some(tag => tag.category === cat)) || 'keyword';
   }
-  setModalCategory(initialCat);
+  setModalCategory(initialCat, false);
 
   if (removeMode) {
     renderRemoveTagOptions();
@@ -684,7 +685,8 @@ export function closeTagModal() {
   pendingRemoveTagOptions = [];
 }
 
-export function setModalCategory(category) {
+export function setModalCategory(category, chosen = true) {
+  tagCategoryChosen = chosen;
   const cat = (category || 'keyword').toLowerCase();
   if (dom.tagCategorySelect && dom.tagCategorySelect.value !== cat) {
     dom.tagCategorySelect.value = cat;
@@ -765,16 +767,18 @@ export function renderModalSearchHelp() {
   } else {
     // Mode 2: Query present -> Search help across all tags
     const matchingTags = state.tags.filter(t => t.name.toLowerCase().includes(query));
-    const exactMatch = state.tags.find(t => t.name.toLowerCase() === query);
+    const exactMatches = matchingTags.filter(tag => tag.name.toLowerCase() === query);
+    const exactMatch = exactMatches.find(tag => tag.category.toLowerCase() === currentCat);
+    if (!tagCategoryChosen && !exactMatch && exactMatches.length === 1) {
+      setModalCategory(exactMatches[0].category, false);
+      return;
+    }
 
     if (exactMatch) {
       if (dom.tagDetectedBadge) {
         dom.tagDetectedBadge.style.display = 'inline-block';
         dom.tagDetectedBadge.textContent = t('tag_help_existing_in', { category: getCategoryDisplayName(exactMatch.category) });
         dom.tagDetectedBadge.style.borderLeft = `2px solid ${getCategoryColor(exactMatch.category)}`;
-      }
-      if (dom.tagCategorySelect && dom.tagCategorySelect.value !== exactMatch.category.toLowerCase()) {
-        setModalCategory(exactMatch.category.toLowerCase());
       }
     } else {
       if (dom.tagDetectedBadge) {
@@ -1118,7 +1122,8 @@ export function updateBatchDatePreview() {
     const unit = Math.abs(shiftHours) === 1 ? t('hour_singular') : t('hour_plural');
     const formattedShift = `${sign}${shiftHours} ${unit}`;
     const newRefTs = batchDateRefTs ? (batchDateRefTs + Math.round(shiftHours * 3600)) : inputTs;
-    const newDateStr = newRefTs ? formatDateTime(newRefTs) : '-';
+    const reference = state.mediaItems.find(item => item.id === pendingBatchDateIds[0]);
+    const newDateStr = reference?.date_taken ? formatDateTime(newRefTs) : t('no_date_set');
 
     if (Math.abs(shiftHours) < 0.001) {
       const text = count === 1 ? t('preview_no_shift_single') : t('preview_no_shift_n', { count });
@@ -1284,44 +1289,17 @@ export async function submitBatchDateChange() {
   if (dom.confirmBatchDateBtn) dom.confirmBatchDateBtn.disabled = true;
 
   try {
-    const updates = [];
-    for (const id of pendingBatchDateIds) {
-      const item = state.mediaItems.find(m => m.id === id);
-      let targetTs = inputTs;
-      if (isShiftMode) {
-        if (item && item.date_taken !== null && item.date_taken !== undefined && !isNaN(item.date_taken)) {
-          targetTs = item.date_taken + shiftSeconds;
-        } else {
-          targetTs = inputTs;
-        }
-      }
-      updates.push({ id, date_taken: targetTs });
+    const ids = pendingBatchDateIds;
+    const result = await batchUpdateDates(isShiftMode
+      ? { ids, shift_seconds: shiftSeconds }
+      : { ids, date_taken: inputTs });
+    await Promise.all([loadMedia(false, { preserveScroll: true }), loadMetadata()]);
+    if (result.failed_ids.length) {
+      showToast(t('toast_updated_date_partial', { count: result.updated_count, failed: result.failed_ids.length }), 'error');
+    } else {
+      showToast(result.updated_count === 1 ? t('toast_updated_date_single') : t('toast_updated_date_count', { count: result.updated_count }), 'success');
     }
-
-    await batchUpdateDates(updates);
-
-    if (state.sortBy === 'date_taken') {
-      state.mediaItems.sort((a, b) => {
-        const da = (a.date_taken !== undefined && a.date_taken !== null) ? a.date_taken : 0;
-        const db = (b.date_taken !== undefined && b.date_taken !== null) ? b.date_taken : 0;
-        if (da !== db) {
-          return state.sortDesc ? (db - da) : (da - db);
-        }
-        const idA = a.id || 0;
-        const idB = b.id || 0;
-        return state.sortDesc ? (idB - idA) : (idA - idB);
-      });
-    }
-
-    const prevScroll = dom.gridScrollContainer ? dom.gridScrollContainer.scrollTop : 0;
-    renderGrid();
-    if (dom.gridScrollContainer) dom.gridScrollContainer.scrollTop = prevScroll;
-
-    await loadMetadata();
-    updateInspector();
-
-    showToast(updates.length === 1 ? t('toast_updated_date_single') : t('toast_updated_date_count', { count: updates.length }), 'success');
-    closeBatchDateModal();
+    if (pendingBatchDateIds === ids) closeBatchDateModal();
   } catch (err) {
     console.error('Failed to change dates:', err);
     showToast(t('toast_failed_change_dates', { error: err.message || 'Server error' }), 'error');

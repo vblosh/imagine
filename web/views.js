@@ -21,7 +21,7 @@ import {
   updateMapMarkerSelections,
   setMapViewActionHooks,
 } from './map-view.js';
-import { openLoupeForMedia, updateLoupeControls, closeLoupe, updateLoupeView, updateLoupePosition } from './loupe.js';
+import { openLoupeForMedia, updateLoupeControls, closeLoupe, updateLoupeView, updateLoupePosition, reconcileLoupeAfterMediaLoad } from './loupe.js';
 import {
   renderCategoryView,
   setCategoryViewActionHooks,
@@ -195,7 +195,6 @@ export function refreshAfterMetadataLoad() {
 }
 
 export async function loadMedia(append = false, options = {}) {
-  const previousItems = options.preserveLoupe ? state.mediaItems : null;
   const result = await loadMediaData(append, options);
   if (!result) return;
   if (result.isCategoryView) {
@@ -204,19 +203,7 @@ export async function loadMedia(append = false, options = {}) {
     return;
   }
   if (result.success) {
-    if (previousItems && state.loupeIndex >= 0 && !state.loupeDisabledActions) {
-      const currentId = previousItems[state.loupeIndex]?.id;
-      const index = state.mediaItems.findIndex(item => item.id === currentId);
-      if (index >= 0) {
-        state.loupeIndex = index;
-        updateLoupePosition();
-      } else if (state.mediaItems.length > 0) {
-        state.loupeIndex = Math.min(state.loupeIndex, state.mediaItems.length - 1);
-        updateLoupeView();
-      } else {
-        closeLoupe();
-      }
-    }
+    reconcileLoupeAfterMediaLoad();
     refreshAfterMediaLoad({ shouldPreserveScroll: result.shouldPreserveScroll });
   }
 }
@@ -286,7 +273,7 @@ function applyLoupeDeletion(deletedIds) {
     if (state.mediaItems !== remaining) return;
     refreshAfterMediaLoad({ shouldPreserveScroll: true });
     if (state.semanticSearchActive) {
-      void loadMedia(false, { preserveScroll: true, preserveLoupe: true });
+      void loadMedia(false, { preserveScroll: true });
     } else if (remaining.length === 0 && state.totalCount > 0) {
       void loadMoreMedia();
     }

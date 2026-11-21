@@ -206,6 +206,7 @@ def test_camera_exposure_panel_resize_drag_and_reset(server, page: Page):
     initial_height = initial_bb["height"]
 
     # Drag down by 50px to expand
+    resizer.scroll_into_view_if_needed()
     r_bb = resizer.bounding_box()
     assert r_bb is not None
     page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2)
@@ -423,6 +424,70 @@ def test_inspector_change_caption(server, page: Page):
     page.reload()
     page.locator(".photo-card", has_text="mountain.bmp").click()
     expect(page.locator("#infoCaption")).to_have_text("Majestic snow capped peak")
+
+
+def test_inspector_rename_refreshes_paginated_sort_and_search(server, page: Page):
+    page.goto(server["url"])
+    page.evaluate("""async () => {
+      const {state} = await import('./state.js');
+      const {loadMedia} = await import('./grid.js');
+      state.mediaLimit = 2; state.sortBy = 'file_name'; state.sortDesc = false;
+      await loadMedia();
+    }""")
+    first = page.locator('.photo-card').first
+    old_name = first.locator('.card-filename').inner_text()
+    first.click()
+    page.locator('#renameFileBtn').click()
+    page.locator('#renameFileInput').fill('zzzz-renamed.bmp')
+    with page.expect_response(lambda r: '/api/media?' in r.url and r.request.method == 'GET'):
+        page.locator('#saveRenameBtn').click(force=True)
+    expect(page.locator('.photo-card', has_text='zzzz-renamed.bmp')).to_have_count(0)
+    expect(page.locator('.photo-card')).to_have_count(2)
+    assert old_name not in page.locator('.card-filename').all_inner_texts()
+
+    page.evaluate("""async () => {
+      const {state} = await import('./state.js');
+      const {loadMedia} = await import('./grid.js');
+      state.searchText = 'zzzz-renamed'; await loadMedia();
+    }""")
+    page.locator('.photo-card').first.click()
+    page.locator('#renameFileBtn').click()
+    page.locator('#renameFileInput').fill('new-name.bmp')
+    with page.expect_response(lambda r: '/api/media?' in r.url and r.request.method == 'GET'):
+        page.locator('#saveRenameBtn').click(force=True)
+    expect(page.locator('.photo-card')).to_have_count(0)
+
+
+def test_inspector_tag_removal_refreshes_filtered_membership(server, page: Page):
+    page.goto(server["url"])
+    page.evaluate("""async () => {
+      const {state} = await import('./state.js');
+      const {loadMedia} = await import('./grid.js');
+      state.activeTagId = state.tags.find(tag => tag.name === 'Alps').id;
+      await loadMedia();
+    }""")
+    page.locator('.photo-card', has_text='mountain.bmp').click()
+    page.locator('#inspectorTags .tag-badge', has_text='Alps').locator('.remove-tag').click()
+    expect(page.locator('.photo-card', has_text='mountain.bmp')).to_have_count(0)
+
+
+def test_inspector_date_change_refills_sorted_page(server, page: Page):
+    page.goto(server["url"])
+    page.evaluate("""async () => {
+      const {state} = await import('./state.js');
+      const {loadMedia} = await import('./grid.js');
+      state.mediaLimit = 2; state.sortBy = 'date_taken'; state.sortDesc = true;
+      await loadMedia();
+    }""")
+    first = page.locator('.photo-card').first
+    old_name = first.locator('.card-filename').inner_text()
+    first.click()
+    page.locator('#editDateTakenBtn').click()
+    page.locator('#editDateTakenInput').fill('1990-01-01T12:00')
+    with page.expect_response(lambda r: '/api/media?' in r.url and r.request.method == 'GET'):
+        page.locator('#saveDateTakenBtn').click()
+    expect(page.locator('.photo-card')).to_have_count(2)
+    expect(page.locator('.photo-card', has_text=old_name)).to_have_count(0)
 
 
 def test_inspector_move_button_and_outside_rejection(server, page: Page):

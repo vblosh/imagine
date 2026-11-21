@@ -63,6 +63,29 @@ def test_shift_range_selection(server, page: Page):
     expect(page.locator("#batchSelectedCount")).to_have_text("4 selected")
 
 
+def test_shift_range_uses_visible_date_group_order(server, page: Page):
+    page.goto(server["url"])
+    expect(page.locator('.photo-card')).to_have_count(6)
+    page.evaluate('''async () => {
+        const { state } = await import('./state.js');
+        const { renderGrid } = await import('./grid.js');
+        // Interleave months in the underlying sort order: rendered order groups
+        // the first and third items together ahead of the second.
+        state.mediaItems = state.mediaItems.slice(0, 3);
+        state.mediaItems[0].date_taken = 1704067200;
+        state.mediaItems[1].date_taken = 1706745600;
+        state.mediaItems[2].date_taken = 1704067200;
+        renderGrid();
+    }''')
+    cards = page.locator('.photo-card')
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=['Shift'])
+    expect(cards.nth(0)).to_have_class(re.compile(r'\bselected\b'))
+    expect(cards.nth(1)).to_have_class(re.compile(r'\bselected\b'))
+    expect(cards.nth(2)).not_to_have_class(re.compile(r'\bselected\b'))
+    expect(page.locator('#batchSelectedCount')).to_have_text('2 selected')
+
+
 def test_keyboard_select_all_and_deselect(server, page: Page):
     """Pressing Ctrl+A selects all cards; pressing Escape deselects all cards."""
     page.goto(server["url"])

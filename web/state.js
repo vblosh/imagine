@@ -75,6 +75,8 @@ export const state = {
   timelineData: [],
   stats: {},
   loupeIndex: -1,
+  loupeMediaId: null,
+  loupeMediaMissing: false,
   loupeZoom: 1.0,
   loupePanX: 0,
   loupePanY: 0,

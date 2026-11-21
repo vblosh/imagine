@@ -43,6 +43,27 @@ def test_batch_date_dialog_saves_selected_photos(server, page: Page, shift: bool
     assert actual_dates == expected_dates
 
 
+def test_batch_shift_keeps_undated_photo_and_reports_deleted_target(server, page: Page):
+    page.goto(server['url'])
+    cards = page.locator('.photo-card')
+    expect(cards).to_have_count(6)
+    first, second = [int(cards.nth(i).get_attribute('data-id')) for i in range(2)]
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=['Control'])
+    page.locator('#batchDateBtn').click()
+    page.locator('#shiftPlus1Btn').click()
+
+    # Change the catalog after the dialog opens, as another client could.
+    assert page.request.post(f"{server['url']}/api/media/{first}/date", data={'date_taken': 0}).ok
+    assert page.request.delete(f"{server['url']}/api/media/{second}").ok
+    with page.expect_response('**/api/media/batch-date') as save:
+        page.locator('#confirmBatchDateBtn').click()
+    assert save.value.json()['failed_ids'] == [second]
+    expect(page.get_by_text('Date changes succeeded for 1 and failed for 1.')).to_be_visible()
+    expect(cards).to_have_count(5)
+    assert page.request.get(f"{server['url']}/api/media/{first}").json()['date_taken'] == 0
+
+
 def test_batch_action_bar_visibility_and_selection_count(server, page: Page):
     """Batch action bar appears when >= 2 cards are selected and updates count."""
     page.goto(server["url"])

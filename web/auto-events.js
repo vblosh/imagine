@@ -97,17 +97,17 @@ function renderReview() {
       const id = Number(photo.id);
       const complete = group.completedIds.has(id);
       return `<label class="auto-event-photo${complete ? ' completed' : ''}" data-media-id="${id}">
-        <input class="auto-event-photo-checkbox" type="checkbox" data-media-id="${id}" ${photo.included ? 'checked' : ''} ${complete ? 'disabled' : ''}>
+        <input class="auto-event-photo-checkbox" type="checkbox" data-media-id="${id}" ${photo.included ? 'checked' : ''} ${complete || review.applying ? 'disabled' : ''}>
         ${thumbUrl(photo) ? `<img src="${escapeHtml(thumbUrl(photo))}" alt="${escapeHtml(photo.file_name || '')}" loading="lazy">` : ''}
         <span>${escapeHtml(photo.file_name || String(id))}</span>
       </label>`;
     }).join('');
     return `<section class="auto-event-group${checked ? '' : ' disabled'}" data-group-index="${index}">
       <div class="auto-event-group-header">
-        <input class="auto-event-group-checkbox" type="checkbox" ${checked ? 'checked' : ''} ${available.length ? '' : 'disabled'} aria-label="${escapeHtml(t('auto_event_include'))}">
-        <input class="auto-event-name${invalid ? ' invalid' : ''}" type="text" value="${escapeHtml(group.name)}" maxlength="100" ${locked ? 'disabled' : ''} aria-label="${escapeHtml(t('auto_event_group'))}">
+        <input class="auto-event-group-checkbox" type="checkbox" ${checked ? 'checked' : ''} ${available.length && !review.applying ? '' : 'disabled'} aria-label="${escapeHtml(t('auto_event_include'))}">
+        <input class="auto-event-name${invalid ? ' invalid' : ''}" type="text" value="${escapeHtml(group.name)}" maxlength="100" ${locked || review.applying ? 'disabled' : ''} aria-label="${escapeHtml(t('auto_event_group'))}">
         <span class="auto-event-count">${escapeHtml(t('auto_event_photos', { count: included.length }))}</span>
-        <button type="button" class="btn btn-xs btn-secondary auto-event-toggle-photos">${escapeHtml(t(group.expanded ? 'auto_event_hide_photos' : 'auto_event_show_photos'))}</button>
+        <button type="button" class="btn btn-xs btn-secondary auto-event-toggle-photos" ${review.applying ? 'disabled' : ''}>${escapeHtml(t(group.expanded ? 'auto_event_hide_photos' : 'auto_event_show_photos'))}</button>
       </div>
       <div class="auto-event-meta">${escapeHtml(dateLabel(group.start_date))}${group.end_date !== group.start_date ? ` – ${escapeHtml(dateLabel(group.end_date))}` : ''} · ${escapeHtml(t('auto_event_reason', { source: sourceLabel(group.name_source) }))}</div>
       <div class="auto-event-evidence">${[...(group.people || []).map(x => `${t('cat_people')}: ${x}`), ...(group.places || []).map(x => `${t('cat_places')}: ${x}`), ...(group.keywords || []).map(x => `${t('cat_keyword')}: ${x}`)].map(x => `<span>${escapeHtml(x)}</span>`).join('')}</div>
@@ -169,14 +169,14 @@ function rerenderReview(focusSource = null) {
 
 function updateApplyButton(groups = review ? review.groups : []) {
   const pending = groups.some(group => group.enabled && groupPhotoIds(group).length > 0);
-  const partial = groups.some(group => group.enabled && group.completedIds.size > 0 && groupPhotoIds(group).length > 0);
+  const partial = pending && groups.some(group => group.completedIds.size > 0);
   dom.applyAutoEventsBtn.style.display = pending && !partial ? 'inline-flex' : 'none';
-  dom.applyAutoEventsBtn.disabled = !pending || groups.some(group => {
+  dom.applyAutoEventsBtn.disabled = Boolean(review?.applying) || !pending || groups.some(group => {
     const idsForGroup = groupPhotoIds(group);
     return group.enabled && idsForGroup.length > 0 && (byteLength(group.name.trim()) === 0 || byteLength(group.name.trim()) > 100);
   });
   dom.retryAutoEventsBtn.style.display = partial ? 'inline-flex' : 'none';
-  dom.retryAutoEventsBtn.disabled = !partial || groups.some(group => {
+  dom.retryAutoEventsBtn.disabled = Boolean(review?.applying) || !partial || groups.some(group => {
     const idsForGroup = groupPhotoIds(group);
     return group.enabled && idsForGroup.length > 0 && (byteLength(group.name.trim()) === 0 || byteLength(group.name.trim()) > 100);
   });
@@ -213,21 +213,21 @@ function bindReviewEvents() {
 async function applyGroups() {
   if (!review || review.applying) return;
   review.applying = true;
-  dom.applyAutoEventsBtn.disabled = true;
-  dom.retryAutoEventsBtn.disabled = true;
+  const pending = review.groups.filter(group => group.enabled).map(group => ({
+    group, ids: groupPhotoIds(group), name: group.name.trim()
+  })).filter(entry => entry.ids.length);
+  rerenderReview();
   dom.cancelAutoEventsBtn.disabled = true;
   const failures = [];
   try {
-    for (const group of review.groups) {
-      const ids = groupPhotoIds(group);
-      if (!group.enabled || !ids.length) continue;
+    for (const { group, ids, name } of pending) {
       try {
-        const result = await api.post('/api/media/batch-tags', { ids, name: group.name.trim(), category: 'events' });
+        const result = await api.post('/api/media/batch-tags', { ids, name, category: 'events' });
         const failed = new Set((result.failed_ids || []).map(Number));
         ids.forEach(id => { if (!failed.has(id)) group.completedIds.add(id); });
-        if (failed.size) failures.push(`${group.name}: ${failed.size}`);
+        if (failed.size) failures.push(`${name}: ${failed.size}`);
       } catch (error) {
-        failures.push(`${group.name}: ${error.message}`);
+        failures.push(`${name}: ${error.message}`);
       }
     }
     if (failures.length) {
@@ -316,7 +316,7 @@ export function setupAutoEventListeners() {
   });
   dom.applyAutoEventsBtn?.addEventListener('click', applyGroups);
   dom.retryAutoEventsBtn?.addEventListener('click', applyGroups);
-  dom.cancelAutoEventsBtn?.addEventListener('click', closeReview);
+  dom.cancelAutoEventsBtn?.addEventListener('click', () => { if (!review?.applying) closeReview(); });
   dom.closeAutoEventModalBtn?.addEventListener('click', () => { if (!review?.applying) closeReview(); });
   dom.autoEventBackdrop?.addEventListener('click', () => { if (!review?.applying) closeReview(); });
   onLanguageChange(() => { if (review && !review.applying) rerenderReview(); });
