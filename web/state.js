@@ -94,6 +94,7 @@ export const state = {
   inspectorMiniMarker: null,
   placementMediaId: null,
   placementMediaIds: new Set(),
+  mapMoveIds: null,
   lastUnmappedClickedId: null,
   unmappedTrayOpen: false,
   mapSearchResults: [],

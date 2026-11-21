@@ -349,6 +349,12 @@ export default {
     place_selected_photo_here: '将选中的照片放置在此处',
     place_photo_name_here: '将“{name}”放置在此处',
     place_n_photos_here: '将选中的 {count} 张照片放置在此处',
+    map_move_all: '移动全部 {count} 张照片',
+    map_move_prompt_one: '点击地图以移动此照片。',
+    map_move_prompt_many: '点击地图以移动 {count} 张照片。',
+    map_move_saving: '正在保存位置…',
+    map_move_here: '移到此处',
+    toast_geotag_incomplete: '无法更新 {count} 张照片的位置。',
 
     // Timeline
     timeline: '时间线',

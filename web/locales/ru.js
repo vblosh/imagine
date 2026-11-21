@@ -349,6 +349,12 @@ export default {
     place_selected_photo_here: 'Разместить выбранное фото здесь',
     place_photo_name_here: 'Разместить «{name}» здесь',
     place_n_photos_here: 'Разместить {count} выбранных фото здесь',
+    map_move_all: 'Переместить все ({count})',
+    map_move_prompt_one: 'Нажмите на карту, чтобы переместить это фото.',
+    map_move_prompt_many: 'Нажмите на карту, чтобы переместить выбранные фото ({count}).',
+    map_move_saving: 'Сохранение местоположения…',
+    map_move_here: 'Переместить сюда',
+    toast_geotag_incomplete: 'Не удалось обновить местоположение фото ({count}).',
 
     // Timeline
     timeline: 'Временная шкала',

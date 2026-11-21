@@ -349,6 +349,12 @@ export default {
     place_selected_photo_here: 'Ubicar foto seleccionada aquí',
     place_photo_name_here: 'Ubicar "{name}" aquí',
     place_n_photos_here: 'Ubicar {count} fotos seleccionadas aquí',
+    map_move_all: 'Mover las {count} fotos',
+    map_move_prompt_one: 'Haz clic en el mapa para mover esta foto.',
+    map_move_prompt_many: 'Haz clic en el mapa para mover {count} fotos.',
+    map_move_saving: 'Guardando ubicación…',
+    map_move_here: 'Mover aquí',
+    toast_geotag_incomplete: 'No se pudo actualizar la ubicación de {count} fotos.',
 
     // Timeline
     timeline: 'Línea de tiempo',

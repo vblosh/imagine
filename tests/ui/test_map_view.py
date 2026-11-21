@@ -5,6 +5,7 @@ Deterministic UI tests for Map View, Photo Pins, Leaflet Popups, Inspector Mini-
 import re
 import json
 import urllib.request
+from pytest import approx
 from playwright.sync_api import Page, expect
 
 
@@ -87,6 +88,89 @@ def test_map_markers_and_popup(server, page: Page):
     page.locator("#loupeCloseBtn").click()
     expect(page.locator("#loupeModal")).to_be_hidden()
     expect(page.locator("#mapViewContainer")).to_be_visible()
+
+
+def open_movable_cluster(server, page: Page):
+    photos = {}
+    for name, lon in [("sunset.bmp", 2.2945), ("birthday.bmp", 2.3376)]:
+        photo_id = next(item["id"] for item in server["env"]["items"] if item["file_name"] == name)
+        coords = {"latitude": 48.8584, "longitude": lon}
+        response = page.request.post(f"{server['url']}/api/media/{photo_id}/gps", data=coords)
+        assert response.ok
+        photos[name] = (photo_id, coords)
+
+    page.goto(server["url"])
+    expect(page.locator(".photo-card")).to_have_count(6)
+    page.locator("#viewMapBtn").click()
+    expect(page.locator("#mapPhotoCount")).to_have_text("4")
+    page.evaluate("window.imagineUI.state.mapInstance.setView([48.8584, 2.316], 10, { animate: false })")
+    cluster = page.locator(".custom-photo-pin", has=page.locator(".photo-pin-count", has_text="2"))
+    cluster.click()
+    return photos, cluster
+
+
+def test_map_move_current_photo_in_cluster(server, page: Page):
+    photos, cluster = open_movable_cluster(server, page)
+    popup = page.locator(".map-popup-card:visible")
+    popup.locator("#popNextBtn").click()
+    active_name = popup.locator(".map-popup-title").inner_text()
+    photo_id, _ = photos[active_name]
+
+    requests = []
+    page.on("request", lambda request: requests.append(request.url))
+    popup.get_by_role("button", name="Move", exact=True).click()
+    prompt = page.locator("#mapMovePrompt")
+    expect(prompt).to_contain_text("Click the map to move this photo.")
+    page.keyboard.press("Escape")
+    expect(prompt).to_be_hidden()
+    assert page.evaluate("window.imagineUI.state.mapMoveIds") is None
+    assert not any(url.endswith("/api/media/batch-gps") for url in requests)
+
+    cluster.click()
+    expect(popup.locator(".map-popup-title")).to_have_text(active_name)
+    popup.get_by_role("button", name="Move", exact=True).click()
+
+    position = {"x": 220, "y": 220}
+    expected = page.evaluate(
+        "([x, y]) => window.imagineUI.state.mapInstance.containerPointToLatLng([x, y])",
+        [position["x"], position["y"]],
+    )
+    with page.expect_response("**/api/media/batch-gps") as result:
+        page.locator("#leafletMap").click(position=position)
+    assert result.value.ok
+    assert result.value.request.post_data_json["ids"] == [photo_id]
+    expect(prompt).to_be_hidden()
+    expect(page.locator("#mapPhotoCount")).to_have_text("4")
+
+    for name, (item_id, original) in photos.items():
+        exif = page.request.get(f"{server['url']}/api/media/{item_id}").json()["exif"]
+        assert exif["latitude"] == approx(expected["lat"] if name == active_name else original["latitude"])
+        assert exif["longitude"] == approx(expected["lng"] if name == active_name else original["longitude"])
+
+
+def test_map_move_entire_cluster_to_search_result(server, page: Page):
+    photos, _ = open_movable_cluster(server, page)
+    popup = page.locator(".map-popup-card:visible")
+    popup.get_by_role("button", name="Move all 2").click()
+    prompt = page.locator("#mapMovePrompt")
+    expect(prompt).to_contain_text("Click the map to move 2 photos.")
+
+    page.locator("#mapSearchInput").fill("51.5, -0.12")
+    page.locator("#mapSearchResults .map-search-item").click()
+    destination = page.locator(".search-result-popup").get_by_role("button", name="Move here")
+    with page.expect_response("**/api/media/batch-gps") as result:
+        destination.click()
+    assert result.value.ok
+    assert sorted(result.value.request.post_data_json["ids"]) == sorted(item[0] for item in photos.values())
+    expect(prompt).to_be_hidden()
+    expect(page.locator(".search-location-pin")).to_be_hidden()
+    expect(page.locator("#mapPhotoCount")).to_have_text("4")
+    expect(page.locator(".custom-photo-pin", has=page.locator(".photo-pin-count", has_text="2"))).to_be_visible()
+
+    for photo_id, _ in photos.values():
+        exif = page.request.get(f"{server['url']}/api/media/{photo_id}").json()["exif"]
+        assert exif["latitude"] == approx(51.5)
+        assert exif["longitude"] == approx(-0.12)
 
 
 def test_inspector_show_on_map(server, page: Page):
