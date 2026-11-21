@@ -124,6 +124,8 @@ public:
     Importer& importer();
 
 private:
+    struct OriginalPathIndex;
+
     void closeInternal();
     void syncPhotosDirFromImporter();
     void setPhotosDirInternal(std::string photosDir);
@@ -138,6 +140,7 @@ private:
     std::unique_ptr<thumbnail::Cache> cache_;
     std::unique_ptr<concurrency::ThreadPool> threadPool_;
     std::unique_ptr<Importer> importer_;
+    std::unique_ptr<OriginalPathIndex> originalPaths_;
     std::string photosDir_;
     std::string dbPath_;
     bool isOpen_{false};

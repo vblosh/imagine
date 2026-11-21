@@ -230,7 +230,7 @@ TEST_F(CatalogClassTest, DeletePreservesAnOriginalReferencedWithDifferentPathCas
     ASSERT_TRUE(imported.isOk());
 
     auto alias = imported.value();
-    alias.file_path = uppercase.string();
+    alias.file_path = uppercase.filename().string();
     ASSERT_TRUE(cat.db().insertMedia(alias).isOk());
 
     auto deleted = cat.deleteMediaWithResult(imported.value().id, true);
@@ -238,6 +238,58 @@ TEST_F(CatalogClassTest, DeletePreservesAnOriginalReferencedWithDifferentPathCas
     EXPECT_FALSE(deleted.value().deleted_from_disk);
     EXPECT_TRUE(cat.getMedia(alias.id).isOk());
     EXPECT_TRUE(std::filesystem::exists(sampleImg));
+}
+
+TEST_F(CatalogClassTest, DeleteRefreshesOriginalReferencesAfterAnotherConnectionAddsAnAlias) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    const auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+    const auto warmupPath = testDir / "warmup.jpg";
+    std::filesystem::copy_file(sampleImg, warmupPath);
+    const auto warmup = cat.importFile(warmupPath.string());
+    ASSERT_TRUE(warmup.isOk());
+    ASSERT_TRUE(cat.deleteMedia(warmup.value().id, true).isOk());
+
+    db::CatalogDb writer;
+    ASSERT_TRUE(writer.open(dbPath).isOk());
+    auto alias = imported.value();
+    alias.file_path = sampleImg;
+    ASSERT_TRUE(writer.insertMedia(alias).isOk());
+
+    const auto deleted = cat.deleteMediaWithResult(imported.value().id, true);
+    ASSERT_TRUE(deleted.isOk()) << deleted.status().message();
+    EXPECT_FALSE(deleted.value().deleted_from_disk);
+    EXPECT_TRUE(cat.getMedia(alias.id).isOk());
+    EXPECT_TRUE(std::filesystem::exists(sampleImg));
+}
+
+TEST_F(CatalogClassTest, DeleteChecksForFilesystemAliasesCreatedAfterIndexing) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    const auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+    const auto aliasDir = testDir / "aliases";
+    std::filesystem::create_directory(aliasDir);
+    const auto aliasPath = aliasDir / "reference.jpg";
+    auto alias = imported.value();
+    alias.file_path = "aliases/reference.jpg";
+    ASSERT_TRUE(cat.db().insertMedia(alias).isOk());
+    const auto warmupPath = testDir / "warmup.jpg";
+    std::filesystem::copy_file(sampleImg, warmupPath);
+    const auto warmup = cat.importFile(warmupPath.string());
+    ASSERT_TRUE(warmup.isOk());
+    ASSERT_TRUE(cat.deleteMedia(warmup.value().id, true).isOk());
+
+    std::error_code ec;
+    std::filesystem::create_symlink(sampleImg, aliasPath, ec);
+    if (ec) GTEST_SKIP() << "Cannot create a file symlink: " << ec.message();
+
+    const auto deleted = cat.deleteMediaWithResult(imported.value().id, true);
+    ASSERT_TRUE(deleted.isOk()) << deleted.status().message();
+    EXPECT_FALSE(deleted.value().deleted_from_disk);
+    EXPECT_TRUE(cat.getMedia(alias.id).isOk());
+    EXPECT_TRUE(std::filesystem::exists(aliasPath));
 }
 
 TEST_F(CatalogClassTest, DeleteDoesNotGuessAnOfflineOriginalsLocation) {

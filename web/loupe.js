@@ -268,24 +268,28 @@ export function updateLoupeView() {
     dom.loupeFileName.textContent = item.file_path || item.file_name || '-';
     dom.loupeFileName.title = item.file_path || item.file_name || '';
   }
-  if (dom.loupeIndex) {
-    if (loupeCustomItems) {
-      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${items.length}`;
-    } else if (state.semanticSearchActive) {
-      const rank = item.rank || (state.loupeIndex + 1);
-      const queryStr = state.semanticSearchQuery ? ` • "${state.semanticSearchQuery}"` : '';
-      const formatted = t('rank_loupe_format', { rank, total: items.length });
-      dom.loupeIndex.textContent = `${formatted}${queryStr}`;
-    } else if (state.totalCount > items.length) {
-      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${items.length} (${state.totalCount} ${t('total')})`;
-    } else {
-      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${items.length}`;
-    }
-  }
+  updateLoupePosition();
 
   resetLoupeZoomToFit();
   updateLoupeControls();
   window.dispatchEvent(new CustomEvent('imagine:loupeChanged', { detail: { mediaId: item.id } }));
+}
+
+export function updateLoupePosition() {
+  const items = getLoupeItems();
+  const item = items[state.loupeIndex];
+  if (!dom.loupeIndex || !item) return;
+
+  const position = `${state.loupeIndex + 1} / ${items.length}`;
+  if (!loupeCustomItems && state.semanticSearchActive) {
+    const rank = item.rank || (state.loupeIndex + 1);
+    const query = state.semanticSearchQuery ? ` • "${state.semanticSearchQuery}"` : '';
+    dom.loupeIndex.textContent = t('rank_loupe_format', { rank, total: items.length }) + query;
+  } else if (!loupeCustomItems && state.totalCount > items.length) {
+    dom.loupeIndex.textContent = `${position} (${state.totalCount} ${t('total')})`;
+  } else {
+    dom.loupeIndex.textContent = position;
+  }
 }
 
 export function toggleLoupePlayback() {

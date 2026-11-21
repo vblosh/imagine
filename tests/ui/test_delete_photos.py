@@ -574,6 +574,30 @@ def test_loupe_delete_first_photo_switches_to_next(server, page: Page):
     expect(page.locator(".photo-card", has_text="mountain.bmp")).to_have_count(0)
 
 
+def test_loupe_delete_advances_while_catalog_stats_are_loading(server, page: Page):
+    page.goto(server["url"])
+    count = page.locator("#totalMediaCount")
+    expect(count).to_have_text("6")
+    page.locator(".photo-card", has_text="mountain.bmp").dblclick()
+
+    pending_stats = []
+    page.route("**/api/stats", lambda route: pending_stats.append(route))
+    try:
+        page.locator("#loupeDeleteBtn").click()
+        with page.expect_request("**/api/stats"):
+            page.locator("#confirmDeleteMediaBtn").click()
+
+        expect(page.locator("#loupeFileName")).to_contain_text("sunset.bmp")
+        expect(page.locator(".photo-card", has_text="mountain.bmp")).to_have_count(0)
+        expect(count).to_have_text("6")
+        assert len(pending_stats) == 1
+    finally:
+        for route in pending_stats:
+            route.continue_()
+
+    expect(count).to_have_text("5")
+
+
 def test_loupe_delete_only_photo_switches_to_grid(server, page: Page):
     """Deleting a photo in Loupe view switches to grid mode only if it was the only photo."""
     page.goto(server["url"])

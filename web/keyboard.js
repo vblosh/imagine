@@ -384,6 +384,10 @@ export function setupKeyboardShortcuts() {
 
     // Delete Media Modal shortcuts (Space toggles "Also delete from disk", Enter performs deletion)
     if (dom.deleteMediaModal && (dom.deleteMediaModal.style.display === 'flex' || (dom.deleteMediaModal.style.display !== 'none' && dom.deleteMediaModal.style.display !== ''))) {
+      if (dom.confirmDeleteMediaBtn?.disabled) {
+        e.preventDefault();
+        return;
+      }
       if (!hasModifier && (e.key === ' ' || e.key === 'Spacebar' || e.code === 'Space')) {
         e.preventDefault();
         if (dom.deleteFromDiskCheckbox) {

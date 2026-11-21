@@ -21,6 +21,7 @@ import { restoreSemanticSnapshot } from './semantic-status.js';
 import { saveActiveFoldersPreference, saveActiveTagIdsPreference } from './persistence.js';
 
 let currentLoadMediaId = 0;
+let currentLoadMetadataId = 0;
 let loadMediaAbortController = null;
 let loadMoreAbortController = null;
 
@@ -52,6 +53,7 @@ export function abortCurrentLoadMore() {
   if (loadMoreAbortController) {
     loadMoreAbortController.abort();
     loadMoreAbortController = null;
+    state.isLoadingMore = false;
   }
 }
 
@@ -330,14 +332,15 @@ export async function loadMoreMediaData() {
     }
     return null;
   } finally {
-    state.isLoadingMore = false;
     if (loadMoreAbortController === abortController) {
+      state.isLoadingMore = false;
       loadMoreAbortController = null;
     }
   }
 }
 
 export async function loadMetadataData() {
+  const fetchId = ++currentLoadMetadataId;
   try {
     const [tags, albums, folders, timeline, stats] = await Promise.all([
       api.get('/api/tags'),
@@ -349,6 +352,7 @@ export async function loadMetadataData() {
       api.get('/api/timeline'),
       api.get('/api/stats'),
     ]);
+    if (fetchId !== currentLoadMetadataId) return null;
 
     state.tags = Array.isArray(tags) ? tags.map(normalizeTag).filter(Boolean) : [];
     state.albums = Array.isArray(albums) ? albums.map(normalizeAlbum).filter(Boolean) : [];
@@ -385,6 +389,7 @@ export async function loadMetadataData() {
 
     return { success: true };
   } catch (err) {
+    if (fetchId !== currentLoadMetadataId) return null;
     console.error('Failed to load catalog metadata:', err);
     showToast(t('toast_failed_load_metadata', { error: err.message || 'Server error' }), 'error');
     return null;

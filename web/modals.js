@@ -23,14 +23,9 @@ import { t } from './i18n.js';
 import { checkSemanticStatus } from './semantic-status.js';
 import { refreshFaceStatus } from './face-analysis.js';
 
-let modalCloseLoupeHandler = null;
-export function setModalCloseLoupeHandler(fn) {
-  modalCloseLoupeHandler = fn;
-}
-
-let modalUpdateLoupeHandler = null;
-export function setModalUpdateLoupeHandler(fn) {
-  modalUpdateLoupeHandler = fn;
+let modalLoupeDeleteHandler = null;
+export function setModalLoupeDeleteHandler(fn) {
+  modalLoupeDeleteHandler = fn;
 }
 
 // Internal pending state
@@ -39,6 +34,7 @@ let pendingTagTargetMediaIds = [];
 let pendingTagModalMode = 'add';
 let pendingRemoveTagOptions = [];
 let pendingDeleteMediaIds = [];
+let deletingMedia = false;
 let pendingDeleteTag = null;
 let pendingBatchMoveIds = [];
 
@@ -917,7 +913,7 @@ export async function submitRemoveTag() {
 
 // --- Delete Media Modal ---
 export function openDeleteMediaModal(mediaIds) {
-  if (!mediaIds || mediaIds.length === 0) return;
+  if (deletingMedia || !mediaIds || mediaIds.length === 0) return;
   pendingDeleteMediaIds = mediaIds;
   const count = mediaIds.length;
   if (dom.deleteMediaPromptText) {
@@ -939,6 +935,7 @@ export function openDeleteMediaModal(mediaIds) {
 }
 
 export function closeDeleteMediaModal() {
+  if (deletingMedia) return;
   hideModal(dom.deleteMediaModal);
   if (dom.deleteFromDiskCheckbox) {
     dom.deleteFromDiskCheckbox.checked = false;
@@ -954,6 +951,7 @@ export function closeDeleteMediaModal() {
 }
 
 export async function submitDeleteMedia() {
+  if (deletingMedia) return;
   if (pendingDeleteMediaIds.length === 0) {
     closeDeleteMediaModal();
     return;
@@ -964,6 +962,11 @@ export async function submitDeleteMedia() {
   const failedIds = new Set();
   const diskDeletedIds = new Set();
   const diskFailedIds = new Set();
+  const controls = [
+    dom.confirmDeleteMediaBtn, dom.cancelDeleteMediaBtn, dom.closeDeleteMediaModalBtn, dom.deleteFromDiskCheckbox
+  ].filter(Boolean);
+  deletingMedia = true;
+  controls.forEach(control => { control.disabled = true; });
   try {
     const result = await api.post('/api/media/batch-delete', { ids: idsToDelete, delete_from_disk: deleteFromDisk });
     for (const id of result?.failed_ids || []) failedIds.add(Number(id));
@@ -989,115 +992,36 @@ export async function submitDeleteMedia() {
         failedIds.add(id);
       }
     }
+  } finally {
+    deletingMedia = false;
+    controls.forEach(control => { control.disabled = false; });
   }
 
   pendingDeleteMediaIds = [];
 
-  const actuallyDeletedIds = idsToDelete.filter(id => !failedIds.has(id));
+  const actuallyDeletedIds = new Set(idsToDelete.filter(id => !failedIds.has(id)));
   if (failedIds.size > 0) {
     showToast(t('toast_photos_not_deleted', { count: failedIds.size }), 'error');
   }
   if (deleteFromDisk) {
-    const diskDeletedCount = actuallyDeletedIds.filter(id => diskDeletedIds.has(id) && !diskFailedIds.has(id)).length;
+    const diskDeletedCount = [...actuallyDeletedIds].filter(id => diskDeletedIds.has(id) && !diskFailedIds.has(id)).length;
     if (diskDeletedCount > 0) {
       showToast(diskDeletedCount === 1 ? t('toast_deleted_photo_disk') : t('toast_deleted_photos_disk', { count: diskDeletedCount }), 'success');
     }
-    const incompleteDiskCount = actuallyDeletedIds.length - diskDeletedCount;
+    const incompleteDiskCount = actuallyDeletedIds.size - diskDeletedCount;
     if (incompleteDiskCount > 0) {
       showToast(t('toast_disk_delete_incomplete', { count: incompleteDiskCount }), 'error');
     }
   }
 
-  const isLoupeActive = state.loupeIndex >= 0 || (dom.loupeModal && dom.loupeModal.style.display === 'flex');
-  let targetLoupeMediaId = null;
-  let shouldCloseLoupe = false;
-  let activeLoupeItem = null;
-
-  if (isLoupeActive && state.loupeIndex >= 0) {
-    const curIndex = state.loupeIndex;
-    activeLoupeItem = state.mediaItems[curIndex] || null;
-    if (activeLoupeItem && actuallyDeletedIds.includes(activeLoupeItem.id)) {
-      const remainingItems = state.mediaItems.filter(item => !actuallyDeletedIds.includes(item.id));
-      const isOnlyPhoto = remainingItems.length === 0 && (state.totalCount <= actuallyDeletedIds.length || state.totalCount <= 1);
-
-      if (isOnlyPhoto) {
-        shouldCloseLoupe = true;
-      } else if (curIndex === 0) {
-        // First image -> switch to next
-        const nextItems = state.mediaItems.slice(curIndex + 1).filter(item => !actuallyDeletedIds.includes(item.id));
-        if (nextItems.length > 0) {
-          targetLoupeMediaId = nextItems[0].id;
-        } else if (remainingItems.length > 0) {
-          targetLoupeMediaId = remainingItems[0].id;
-        } else {
-          shouldCloseLoupe = true;
-        }
-      } else {
-        // Not first image -> switch to previous
-        const prevItems = state.mediaItems.slice(0, curIndex).filter(item => !actuallyDeletedIds.includes(item.id));
-        if (prevItems.length > 0) {
-          targetLoupeMediaId = prevItems[prevItems.length - 1].id;
-        } else if (remainingItems.length > 0) {
-          targetLoupeMediaId = remainingItems[0].id;
-        } else {
-          shouldCloseLoupe = true;
-        }
-      }
-    }
-  }
-
-  if (shouldCloseLoupe) {
-    if (modalCloseLoupeHandler) {
-      modalCloseLoupeHandler();
-    } else if (window.imagineUI?.closeLoupe) {
-      window.imagineUI.closeLoupe();
-    }
-  }
-
   actuallyDeletedIds.forEach(id => state.selectedIds.delete(id));
-  if (isLoupeActive && targetLoupeMediaId !== null) {
-    state.selectedIds.clear();
-    state.selectedIds.add(targetLoupeMediaId);
-    state.lastSelectedId = targetLoupeMediaId;
-  }
-
   closeDeleteMediaModal();
+  if (actuallyDeletedIds.size === 0 || modalLoupeDeleteHandler?.(actuallyDeletedIds)) return;
 
   await loadMedia();
   await loadMetadata();
   updateBatchBar();
   updateInspector();
-
-  if (isLoupeActive && !shouldCloseLoupe) {
-    if (state.mediaItems.length === 0) {
-      if (modalCloseLoupeHandler) {
-        modalCloseLoupeHandler();
-      } else if (window.imagineUI?.closeLoupe) {
-        window.imagineUI.closeLoupe();
-      }
-    } else {
-      let nextIndex = -1;
-      if (targetLoupeMediaId !== null) {
-        nextIndex = state.mediaItems.findIndex(m => m.id === targetLoupeMediaId);
-      } else if (activeLoupeItem) {
-        nextIndex = state.mediaItems.findIndex(m => m.id === activeLoupeItem.id);
-      }
-      if (nextIndex === -1) {
-        nextIndex = Math.max(0, Math.min(state.loupeIndex >= 0 ? state.loupeIndex : 0, state.mediaItems.length - 1));
-      }
-      state.loupeIndex = nextIndex;
-      if (modalUpdateLoupeHandler) {
-        modalUpdateLoupeHandler();
-      } else if (window.imagineUI?.updateLoupeView) {
-        window.imagineUI.updateLoupeView();
-      }
-      if (document.activeElement && typeof document.activeElement.blur === 'function') {
-        try {
-          document.activeElement.blur();
-        } catch (_) {}
-      }
-    }
-  }
 }
 
 // --- Delete Tag Modal ---
