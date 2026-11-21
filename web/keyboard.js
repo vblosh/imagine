@@ -212,6 +212,11 @@ export function handleEscapeKey() {
     return true;
   }
 
+  if (state.mapMoveIds) {
+    dom.mapMoveCancelBtn?.click();
+    return true;
+  }
+
   // 4. Map active popups
   if (state.viewMode === 'map' && state.mapInstance && document.querySelector('.leaflet-popup')) {
     state.mapInstance.closePopup();

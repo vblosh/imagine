@@ -11,6 +11,7 @@ import { icon } from './icons.js';
 import { enterAlbumOrderMode, clearTimelineSelection } from './media-params.js';
 import { saveActiveTagIdsPreference } from './persistence.js';
 import { clearCardMap } from './media-cards.js';
+import { cancelMapMove } from './map-view.js';
 
 let categoryActionHooks = {
   updateSidebarActive: () => {},
@@ -344,6 +345,7 @@ export function renderCategoryView(category) {
   if (dom.contentToolbar) dom.contentToolbar.style.display = 'none';
   if (dom.categoryToolbar) dom.categoryToolbar.style.display = 'flex';
   if (dom.gridScrollContainer) dom.gridScrollContainer.style.display = 'none';
+  cancelMapMove();
   if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
   if (dom.emptyState) dom.emptyState.style.display = 'none';
   if (dom.categoryBackBtn) dom.categoryBackBtn.style.display = 'none';

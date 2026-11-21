@@ -349,6 +349,12 @@ export default {
     place_selected_photo_here: 'Place Selected Photo Here',
     place_photo_name_here: 'Place "{name}" Here',
     place_n_photos_here: 'Place {count} Selected Photos Here',
+    map_move_all: 'Move all {count}',
+    map_move_prompt_one: 'Click the map to move this photo.',
+    map_move_prompt_many: 'Click the map to move {count} photos.',
+    map_move_saving: 'Saving location…',
+    map_move_here: 'Move here',
+    toast_geotag_incomplete: 'Could not update the location of {count} photos.',
 
     // Timeline
     timeline: 'Timeline',

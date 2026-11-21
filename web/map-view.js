@@ -38,6 +38,8 @@ let mapSearchAbortController = null;
 const geocodeCache = new Map();
 let currentMapSearchId = 0;
 let lastNominatimRequestTime = 0;
+let gpsUpdatePending = false;
+const GPS_BATCH_SIZE = 1000; // Server limit for /api/media/batch-gps
 
 export async function switchViewMode(mode) {
   hideUnmappedTooltip();
@@ -78,6 +80,7 @@ export async function switchViewMode(mode) {
     if (dom.viewGridBtn) dom.viewGridBtn.classList.add('active');
     if (dom.viewMapBtn) dom.viewMapBtn.classList.remove('active');
     if (dom.mapViewContainer) dom.mapViewContainer.style.display = 'none';
+    cancelMapMove();
     exitPlacementMode();
     if (state.activeTab && state.activeTab !== 'media' && !state.activeTagId && !state.activeAlbumId) {
       if (dom.categoryViewContainer) dom.categoryViewContainer.style.display = 'flex';
@@ -114,6 +117,7 @@ export async function initMap() {
     }).addTo(state.mapInstance);
 
     state.markerLayerGroup = L.layerGroup().addTo(state.mapInstance);
+    dom.mapMoveCancelBtn?.addEventListener('click', cancelMapMove);
 
     let mapZoomDebounceTimer = null;
     state.mapInstance.on('zoomend', () => {
@@ -125,12 +129,13 @@ export async function initMap() {
 
     state.mapInstance.on('click', async (e) => {
       if (e && e.originalEvent && e.originalEvent._pinClicked) return;
-      if (state.placementMediaIds && state.placementMediaIds.size > 0) {
-        const { lat, lng } = e.latlng;
+      const { lat, lng } = state.mapInstance.wrapLatLng(e.latlng);
+      if (state.mapMoveIds) {
+        await applyGeotagBatch(state.mapMoveIds, lat, lng);
+      } else if (state.placementMediaIds && state.placementMediaIds.size > 0) {
         const ids = Array.from(state.placementMediaIds);
         await applyGeotagBatch(ids, lat, lng);
       } else if (state.placementMediaId) {
-        const { lat, lng } = e.latlng;
         await applyGeotag(state.placementMediaId, lat, lng);
       }
     });
@@ -272,6 +277,10 @@ export function renderMapMarkers(force = false) {
   }
 
   const gpsItems = getGpsMediaItems();
+  if (state.mapMoveIds) {
+    const gpsIds = new Set(gpsItems.map(item => item.id));
+    if (state.mapMoveIds.some(id => !gpsIds.has(id))) cancelMapMove();
+  }
 
   if (dom.mapPhotoCount) {
     dom.mapPhotoCount.textContent = gpsItems.length;
@@ -397,6 +406,7 @@ export function renderMapMarkers(force = false) {
 }
 
 export function getSelectedUnmappedMedia() {
+  if (state.mapMoveIds) return [];
   const ids = [];
   if (state.placementMediaIds && state.placementMediaIds.size > 0) {
     state.placementMediaIds.forEach(id => ids.push(id));
@@ -546,6 +556,10 @@ export function createMapPopupElement(items, initialItemId) {
         <span class="map-popup-coords">📍 ${lat}, ${lon}</span>
       </div>
       ${placePhotoBtnHtml}
+      <div class="map-popup-move-actions">
+        <button type="button" class="btn btn-xs btn-secondary map-move-photo-btn">${escapeHtml(t('move'))}</button>
+        ${items.length > 1 ? `<button type="button" class="btn btn-xs btn-secondary map-move-group-btn">${escapeHtml(t('map_move_all', { count: items.length }))}</button>` : ''}
+      </div>
       <div class="map-popup-actions">
         <div class="map-popup-rating" data-id="${item.id}">
           ${starsHtml}
@@ -556,6 +570,12 @@ export function createMapPopupElement(items, initialItemId) {
         </div>
       </div>
     `;
+
+    body.querySelector('.map-move-photo-btn').onclick = (e) => startMapMove(e, [item.id]);
+    const moveGroupBtn = body.querySelector('.map-move-group-btn');
+    if (moveGroupBtn) {
+      moveGroupBtn.onclick = (e) => startMapMove(e, items.map(photo => photo.id));
+    }
 
     const placeBtn = body.querySelector('#popPlaceHereBtn') || body.querySelector('.place-here-btn');
     if (placeBtn) {
@@ -670,6 +690,7 @@ export function updatePlacementModeState() {
   state.placementMediaId = count > 0 ? Array.from(state.placementMediaIds)[0] : null;
 
   if (count > 0) {
+    cancelMapMove();
     if (dom.mapViewContainer) dom.mapViewContainer.classList.add('placement-mode');
     if (dom.unmappedSelectedCount) {
       dom.unmappedSelectedCount.textContent = t('n_selected', { count });
@@ -915,37 +936,84 @@ export function exitPlacementMode() {
   }
 }
 
+function startMapMove(event, ids) {
+  event.stopPropagation();
+  if (gpsUpdatePending) return;
+  state.mapInstance?.closePopup();
+  exitPlacementMode();
+  state.mapMoveIds = ids;
+  updateMapMovePrompt();
+  dom.mapMoveCancelBtn?.focus();
+}
+
+export function cancelMapMove() {
+  if (!state.mapMoveIds) return;
+  state.mapMoveIds = null;
+  updateMapMovePrompt();
+  state.searchMarker?.closePopup();
+}
+
+function updateMapMovePrompt() {
+  const count = state.mapMoveIds?.length || 0;
+  dom.mapViewContainer?.classList.toggle('move-mode', count > 0);
+  if (dom.mapMovePrompt) dom.mapMovePrompt.hidden = count === 0;
+  if (dom.mapMoveCancelBtn) dom.mapMoveCancelBtn.disabled = gpsUpdatePending;
+  if (dom.mapMoveMessage && count > 0) {
+    const promptKey = count === 1 ? 'map_move_prompt_one' : 'map_move_prompt_many';
+    dom.mapMoveMessage.textContent = t(gpsUpdatePending ? 'map_move_saving' : promptKey, { count });
+  }
+}
+
 export async function applyGeotagBatch(ids, lat, lon, alt = 0.0) {
-  if (!ids || ids.length === 0) return;
+  if (!ids?.length || gpsUpdatePending) return false;
+  gpsUpdatePending = true;
+  if (state.mapMoveIds) updateMapMovePrompt();
+  const updatedIds = new Set();
+  let requestError = null;
   try {
-    await api.post('/api/media/batch-gps', {
-      ids,
-      has_gps: true,
-      latitude: lat,
-      longitude: lon,
-      altitude: alt
+    for (let offset = 0; offset < ids.length; offset += GPS_BATCH_SIZE) {
+      const batch = ids.slice(offset, offset + GPS_BATCH_SIZE);
+      const result = await api.post('/api/media/batch-gps', {
+        ids: batch,
+        has_gps: true,
+        latitude: lat,
+        longitude: lon,
+        altitude: alt
+      });
+      const failedIds = new Set(result.failed_ids);
+      batch.forEach(id => {
+        if (!failedIds.has(id)) updatedIds.add(id);
+      });
+    }
+  } catch (err) {
+    requestError = err;
+    console.error('Failed to batch geotag media:', err);
+  } finally {
+    gpsUpdatePending = false;
+    if (state.mapMoveIds) updateMapMovePrompt();
+  }
+
+  if (updatedIds.size > 0) {
+    state.mediaItems.forEach(item => {
+      if (!updatedIds.has(item.id)) return;
+      item.exif = { ...item.exif, has_gps: true, latitude: lat, longitude: lon, altitude: alt };
     });
 
-    ids.forEach(mediaId => {
-      const item = state.mediaItems.find(i => i.id === mediaId);
-      if (item) {
-        item.exif = item.exif || {};
-        item.exif.has_gps = true;
-        item.exif.latitude = lat;
-        item.exif.longitude = lon;
-        item.exif.altitude = alt;
-      }
-    });
-
+    cancelMapMove();
     exitPlacementMode();
     invalidateGpsCache();
     renderMapMarkers(true);
     renderUnmappedTray();
     mapActionHooks.updateInspector();
-  } catch (err) {
-    console.error('Failed to batch geotag media:', err);
-    showToast(t('toast_failed_geotag', { error: err.message || 'Server error' }), 'error');
   }
+
+  const failedCount = ids.length - updatedIds.size;
+  if (requestError && updatedIds.size === 0) {
+    showToast(t('toast_failed_geotag', { error: requestError.message || 'Server error' }), 'error');
+  } else if (failedCount > 0) {
+    showToast(t('toast_geotag_incomplete', { count: failedCount }), 'error');
+  }
+  return updatedIds.size > 0;
 }
 
 export async function applyGeotag(mediaId, lat, lon, alt = 0.0) {
@@ -1035,31 +1103,30 @@ export function createSearchPopupElement(title, subtitle, lat, lng) {
   const latStr = latNum !== null ? latNum.toFixed(5) : (lat || '-');
   const lngStr = lngNum !== null ? lngNum.toFixed(5) : (lng || '-');
 
-  let placePhotoBtnHtml = '';
+  const moveIds = state.mapMoveIds;
   const selectedCount = state.placementMediaIds.size;
-  if (selectedCount > 0) {
-    let label = t('place_n_photos_here', { count: selectedCount });
+  let placeLabel = '';
+  if (moveIds) {
+    placeLabel = t('map_move_here');
+  } else if (selectedCount > 0) {
+    placeLabel = t('place_n_photos_here', { count: selectedCount });
     if (selectedCount === 1) {
       const firstId = Array.from(state.placementMediaIds)[0];
       const item = state.mediaItems.find(m => m.id === firstId);
-      label = item ? t('place_photo_name_here', { name: escapeHtml(item.file_name) }) : t('place_selected_photo_here');
+      placeLabel = item ? t('place_photo_name_here', { name: item.file_name }) : t('place_selected_photo_here');
     }
-    placePhotoBtnHtml = `
-      <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;" title="${t('place_here')}">
-        📍 ${label}
-      </button>
-    `;
   } else if (state.selectedIds.size === 1) {
     const targetId = Array.from(state.selectedIds)[0];
     const targetItem = state.mediaItems.find(m => m.id === targetId);
     if (targetItem) {
-      placePhotoBtnHtml = `
-        <button class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;" title="${t('place_here')}">
-          📍 ${t('place_photo_name_here', { name: escapeHtml(targetItem.file_name) })}
-        </button>
-      `;
+      placeLabel = t('place_photo_name_here', { name: targetItem.file_name });
     }
   }
+  const placePhotoBtnHtml = placeLabel ? `
+    <button type="button" class="btn btn-xs btn-primary place-here-btn" style="width: 100%; margin-top: 8px;">
+      📍 ${escapeHtml(placeLabel)}
+    </button>
+  ` : '';
 
   const safeTitle = escapeHtml(title);
   const safeSubtitle = escapeHtml(subtitle);
@@ -1075,16 +1142,16 @@ export function createSearchPopupElement(title, subtitle, lat, lng) {
 
   const placeBtn = container.querySelector('.place-here-btn');
   if (placeBtn) {
-    placeBtn.onclick = async () => {
-      if (state.placementMediaIds.size > 0) {
-        const ids = Array.from(state.placementMediaIds);
-        await applyGeotagBatch(ids, parseFloat(lat), parseFloat(lng));
-      } else if (state.selectedIds.size === 1) {
-        const targetId = Array.from(state.selectedIds)[0];
-        await applyGeotag(targetId, parseFloat(lat), parseFloat(lng));
-      }
-      if (state.searchMarker) {
-        state.searchMarker.remove();
+    placeBtn.onclick = async (e) => {
+      e.stopPropagation();
+      if (state.mapMoveIds !== moveIds) return;
+      const ids = moveIds || (state.placementMediaIds.size > 0
+        ? Array.from(state.placementMediaIds)
+        : state.selectedIds.size === 1 ? Array.from(state.selectedIds) : []);
+      const searchMarker = state.searchMarker;
+      const updated = await applyGeotagBatch(ids, latNum, lngNum);
+      if (updated && searchMarker && state.searchMarker === searchMarker) {
+        searchMarker.remove();
         state.searchMarker = null;
       }
     };

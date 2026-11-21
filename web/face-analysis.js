@@ -1172,10 +1172,10 @@ async function loadGridVisiblePages() {
 }
 
 function scheduleGridVisiblePages() {
-  if (gridScrollFrame || gridIsLoading || gridActionBusy || !gridSnapshot) return;
+  if (gridScrollFrame || gridIsLoading || !gridSnapshot) return;
   gridScrollFrame = requestAnimationFrame(() => {
     gridScrollFrame = 0;
-    if (gridIsLoading || gridActionBusy || !gridSnapshot) return;
+    if (gridIsLoading || !gridSnapshot) return;
     const group = gridGroups[gridGroupIndex];
     const list = byId('faceGridList');
     const cards = list?.querySelector('.face-grid-group-cards');
@@ -1242,14 +1242,12 @@ function updateGridSelectionUi() {
   const hasIdentity = selected.some(face => face.person_tag_id != null);
   const hasRejectedSuggestion = suggestionTargets.length > 0;
   const hasDismissed = selected.some(face => face.dismissed);
-  for (const id of ['faceGridApplyNameBtn', 'faceGridDismissBtn']) {
-    const button = byId(id);
-    if (button) button.disabled = !hasSelection || gridIsLoading || gridActionBusy;
-  }
   const setEnabled = (id, enabled) => {
     const button = byId(id);
     if (button) button.disabled = !enabled || gridIsLoading || gridActionBusy;
   };
+  setEnabled('faceGridApplyNameBtn', hasSelection);
+  setEnabled('faceGridDismissBtn', selected.some(face => !face.dismissed));
   setEnabled('faceGridAcceptBtn', commonSuggestion);
   setEnabled('faceGridClearBtn', hasIdentity);
   setEnabled('faceGridRejectBtn', hasRejectedSuggestion);
@@ -1430,13 +1428,9 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
     const groups = Array.isArray(result.groups) ? result.groups : [];
     const snapshot = String(result.snapshot || '');
     if (!snapshot && groups.length) throw new Error(t('face_grid_snapshot_changed'));
-    gridSnapshot = snapshot;
-    gridGroups = groups;
-    gridTotal = Math.max(0, Number(result.total) || 0);
-    gridLastQuerySignature = querySignature;
     if (preserveSelection && gridPendingFaceIds.size) {
       const pendingIds = Array.from(gridPendingFaceIds);
-      const pendingFaces = await getFailedFaceDetails(pendingIds.map(id => ({ id })), gridViewToken, controller.signal);
+      const pendingFaces = await lookupGridFaces(pendingIds, gridViewToken, controller.signal);
       if (token !== gridLoadToken || controller.signal.aborted) return false;
       for (const [id, face] of pendingFaces) {
         if (faceMatchesGridFilters(face)) {
@@ -1447,10 +1441,17 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
         }
       }
       for (const id of pendingIds) {
-        if (!pendingFaces.has(id)) gridSelection.delete(id);
+        if (!pendingFaces.has(id)) {
+          gridSelection.delete(id);
+          gridSelectedFaceById.delete(id);
+        }
         gridPendingFaceIds.delete(id);
       }
     }
+    gridSnapshot = snapshot;
+    gridGroups = groups;
+    gridTotal = Math.max(0, Number(result.total) || 0);
+    gridLastQuerySignature = querySignature;
     if (preserveSelection) pruneGridSelectionToGroups(groups);
     const preservedIndex = previousGroupKey ? groups.findIndex(group => String(group.key) === String(previousGroupKey)) : -1;
     gridGroupIndex = preservedIndex >= 0 ? preservedIndex : Math.min(previousGroupIndex, Math.max(0, groups.length - 1));
@@ -1468,7 +1469,7 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
       const maxScrollTop = Math.max(0, scrollAnchorState.cardsTop + nextTotalRows * scrollAnchorState.rowHeight - list.clientHeight);
 
       if (nextFacesCount < scrollAnchorState.totalBefore) {
-        if (scrollAnchorState.removedIndices.length > 0) {
+        if (previousScrollTop > scrollAnchorState.cardsTop && scrollAnchorState.removedIndices.length > 0) {
           const removedSet = new Set(scrollAnchorState.removedIndices);
           let anchorIndex = scrollAnchorState.firstVisibleIndex;
           while (anchorIndex < scrollAnchorState.totalBefore && removedSet.has(anchorIndex)) {
@@ -1490,7 +1491,8 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
         targetScrollTop = Math.min(previousScrollTop, maxScrollTop);
       }
     }
-    if (list) list.scrollTop = targetScrollTop;
+    // Keep a newer user scroll when the group survives a slow summary request.
+    if (list && (preservedIndex < 0 || list.scrollTop === previousScrollTop)) list.scrollTop = targetScrollTop;
     if (groups.length) {
       clearGridGroupWindow();
       renderFaceGrid(false);
@@ -1524,7 +1526,7 @@ async function loadFaceGroups({ jobId = gridJobId, preserveSelection = false, pr
     if (gridLoadController === controller) gridLoadController = null;
     if (token === gridLoadToken) {
       updateFaceGridLoading(false);
-      renderFaceGrid(false);
+      renderFaceGrid();
     }
   }
 }
@@ -1561,6 +1563,8 @@ function openFaceGrid({ jobId = null, includeDismissed = false, showNamed = fals
   if (includeDismissedToggle) includeDismissedToggle.checked = includeDismissed;
   const confirmedPersonFilter = byId('faceGridConfirmedPersonFilter');
   if (confirmedPersonFilter) confirmedPersonFilter.value = '';
+  byId('faceGridNameInput').value = '';
+  byId('faceGridPersonSelect').value = '';
   const subtitle = byId('faceGridSubtitle');
   if (subtitle) subtitle.textContent = title || (jobId ? t('face_grid_job_scope', { job: jobId }) : t('face_grid_catalog_scope'));
   modal.style.display = 'flex';
@@ -1797,11 +1801,7 @@ async function refreshAfterFaceChanges(updatedFaces, { refreshCurrentInspector =
 async function refreshOpenFaceGrid() {
   const modal = byId('faceGridModal');
   if (modal?.style.display !== 'flex') return;
-  const viewToken = gridViewToken;
-  const jobId = gridJobId;
-  const groupKey = gridGroups[gridGroupIndex]?.key || null;
-  await loadFaceGroups({ jobId, preserveSelection: true, preserveGroupKey: groupKey, preserveGroupIndex: true });
-  if (viewToken !== gridViewToken || modal.style.display !== 'flex') return;
+  return loadFaceGroups({ preserveSelection: true, preserveGroupIndex: true });
 }
 
 async function applyFaceBatch(action, faces, fields = {}) {
@@ -1840,14 +1840,19 @@ async function applyFaceBatch(action, faces, fields = {}) {
     const refreshPromise = successFaces.length ? refreshAfterFaceChanges(successFaces) : Promise.resolve();
     let gridRefreshPromise = Promise.resolve(false);
     if (actionViewToken === gridViewToken && byId('faceGridModal')?.style.display === 'flex') {
-      gridSelection = new Set(failures.map(item => String(item.id)));
-      gridSelectedFaceById = new Map(failures.map(item => {
-        const face = item.face || targetFaces.find(target => String(target.id) === String(item.id));
-        return face ? [String(item.id), face] : null;
-      }).filter(Boolean));
+      for (const face of successFaces) gridSelection.delete(String(face.id));
+      for (const failure of failures) gridSelection.add(String(failure.id));
+      // A changed exemplar can also change suggestions on skipped selections.
+      // Resolve all remaining IDs against the new catalog before allowing retry.
+      gridPendingFaceIds = new Set(gridSelection);
+      gridSelectedFaceById.clear();
       gridGroupIndex = actionGroupIndex;
-      const removedFaceIds = new Set(successFaces.map(item => String(item.id)));
+      const removedFaceIds = new Set(successFaces
+        .filter(face => !faceMatchesGridFilters(face) || faceGridGroupInfo(face).key !== actionGroupKey)
+        .map(face => String(face.id)));
       gridRefreshPromise = loadFaceGroups({ jobId: actionJobId, preserveSelection: true, preserveGroupKey: actionGroupKey, preserveGroupIndex: true, removedFaceIds });
+    } else {
+      gridRefreshPromise = refreshOpenFaceGrid();
     }
     const [, gridLoaded] = await Promise.all([refreshPromise, gridRefreshPromise]);
     populateFaceGridPeople();
@@ -1899,13 +1904,17 @@ async function applySelectedIdentity() {
     byId('faceGridNameInput')?.focus();
     return;
   }
-  if (!tagId && utf8ByteLength(name) > 100) {
+  if (utf8ByteLength(name) > 100) {
     showToast(t('face_name_too_long'), 'error');
     byId('faceGridNameInput')?.focus();
     return;
   }
-  const result = await applyFaceBatch('identity', selected, tagId ? { tag_id: Number(tagId) } : { name });
-  if (result?.failures.length === 0 && byId('faceGridNameInput')) byId('faceGridNameInput').value = '';
+  const viewToken = gridViewToken;
+  const result = await applyFaceBatch('identity', selected, name ? { name } : { tag_id: Number(tagId) });
+  if (viewToken === gridViewToken && result?.failures.length === 0) {
+    byId('faceGridNameInput').value = '';
+    byId('faceGridPersonSelect').value = '';
+  }
 }
 
 function applySelectedSuggestion() {
@@ -1933,29 +1942,18 @@ function toggleAllLoadedFaces() {
   updateGridSelectionUi();
 }
 
-async function getFailedFaceDetails(failures, actionViewToken, signal = null) {
+async function lookupGridFaces(faceIds, actionViewToken, signal) {
   const details = new Map();
-  const missing = [];
-  for (const failure of failures) {
-    const id = String(failure.id);
-    const face = failure.face || null;
-    if (face) details.set(id, face);
-    else missing.push(id);
-  }
   const chunks = [];
-  for (let offset = 0; offset < missing.length; offset += 200) chunks.push(missing.slice(offset, offset + 200));
+  for (let offset = 0; offset < faceIds.length; offset += 200) chunks.push(faceIds.slice(offset, offset + 200));
   let cursor = 0;
   const workers = Array.from({ length: Math.min(4, chunks.length) }, async () => {
     while (cursor < chunks.length && actionViewToken === gridViewToken && !signal?.aborted) {
       const ids = chunks[cursor++];
-      try {
-        const result = await api.get('/api/faces/lookup', { ids: ids.join(',') }, { signal });
-        for (const face of result?.items || []) {
-          const id = String(face.id);
-          if (ids.includes(id)) details.set(id, face);
-        }
-      } catch (_) {
-        // Missing or inaccessible faces remain in the action summary but cannot be selected.
+      const result = await api.get('/api/faces/lookup', { ids: ids.join(',') }, { signal });
+      for (const face of result.items) {
+        const id = String(face.id);
+        if (ids.includes(id)) details.set(id, face);
       }
     }
   });
@@ -1979,7 +1977,10 @@ async function acceptSuggestionGroup(groupKey) {
     const result = await api.post('/api/faces/groups/accept', { snapshot: actionSnapshot, key: group.key });
     const updatedCount = Math.max(0, Number(result.updated_count) || 0);
     if (actionViewToken !== gridViewToken || byId('faceGridModal')?.style.display !== 'flex') {
-      if (updatedCount) await refreshAfterFaceChanges([], { refreshCurrentInspector: true, refreshLoupe: true });
+      if (updatedCount) await Promise.all([
+        refreshAfterFaceChanges([], { refreshCurrentInspector: true, refreshLoupe: true }),
+        refreshOpenFaceGrid()
+      ]);
       return;
     }
     const failures = Array.isArray(result.failed) ? result.failed : [];
@@ -2054,7 +2055,7 @@ async function updateGridPage(delta) {
   } finally {
     if (viewToken === gridViewToken && requestToken === gridGroupRequestToken) {
       updateFaceGridLoading(false);
-      renderFaceGrid(false);
+      renderFaceGrid();
     }
   }
 }
@@ -2195,6 +2196,12 @@ function bindFaceActions() {
     if (restore && !restore.disabled) restoreDismissedGroup(restore.dataset.faceGroupRestore);
   });
   byId('faceGridApplyNameBtn')?.addEventListener('click', applySelectedIdentity);
+  byId('faceGridNameInput')?.addEventListener('input', event => {
+    if (event.target.value.trim()) byId('faceGridPersonSelect').value = '';
+  });
+  byId('faceGridPersonSelect')?.addEventListener('change', event => {
+    if (event.target.value) byId('faceGridNameInput').value = '';
+  });
   byId('faceGridNameInput')?.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
       event.preventDefault();
