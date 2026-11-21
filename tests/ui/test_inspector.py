@@ -191,7 +191,7 @@ def test_file_info_panel_resize_drag_and_reset(server, page: Page):
 
 
 def test_camera_exposure_panel_resize_drag_and_reset(server, page: Page):
-    """Dragging Camera & Exposure resizer expands height; double-click resets."""
+    """Camera & Exposure can shrink and expand while keeping its content accessible."""
     page.goto(server["url"])
 
     card = page.locator(".photo-card", has_text="mountain.bmp")
@@ -217,6 +217,25 @@ def test_camera_exposure_panel_resize_drag_and_reset(server, page: Page):
     expanded_bb = exif_sec.bounding_box()
     assert expanded_bb is not None
     assert expanded_bb["height"] > initial_height + 35
+
+    # Shrink below the content height and verify the grip stays inside the panel.
+    resizer.scroll_into_view_if_needed()
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    x = r_bb["x"] + r_bb["width"] / 2
+    y = r_bb["y"] + r_bb["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x, y - 100)
+    page.mouse.up()
+
+    shrunk_bb = exif_sec.bounding_box()
+    assert shrunk_bb is not None
+    assert shrunk_bb["height"] < initial_height
+    assert page.locator("#exifBody").evaluate("el => el.scrollHeight > el.clientHeight")
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    assert r_bb["y"] + r_bb["height"] <= shrunk_bb["y"] + shrunk_bb["height"]
 
     # Double-click to reset
     resizer.dblclick()

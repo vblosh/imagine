@@ -187,7 +187,7 @@ export function renderInspectorContent(item) {
 
   // EXIF properties
   if (dom.exifSection) {
-    dom.exifSection.style.display = (item.media_type === 'audio') ? 'none' : 'block';
+    dom.exifSection.style.display = item.media_type === 'audio' ? 'none' : '';
   }
   const exif = item.exif || {};
   const cameraStr = [exif.camera_make, exif.camera_model].filter(Boolean).join(' ') || '-';
