@@ -577,7 +577,12 @@ def test_group_acceptance_and_shared_selected_face_controls(server, page: Page):
     bounds = page.locator("#faceGridModal .modal-dialog").bounding_box()
     assert bounds["x"] >= 0 and bounds["x"] + bounds["width"] <= 391
     name = page.locator("#faceGridNameInput")
+    person = page.locator("#faceGridPersonSelect")
+    name.fill("First draft")
+    person.select_option(str(alice["id"]))
+    expect(name).to_have_value("")
     name.fill("é" * 51)
+    expect(person).to_have_value("")
     page.locator("#faceGridApplyNameBtn").click()
     expect(page.locator(".toast-error, #faceGridActionError").filter(has_text="100 UTF-8 bytes").first).to_be_visible()
     assert len(api.group_accepts) == 1
@@ -595,6 +600,116 @@ def test_group_acceptance_and_shared_selected_face_controls(server, page: Page):
     assert api.batches[-1][0]["dismissed"] is True
     assert all(header == "Bearer face-ui-test-token" for _, header in api.batches)
     expect(photo).to_have_class(re.compile(r"\bselected\b"))
+
+
+@pytest.mark.parametrize(("button", "submitted"), [
+    ("Accept", {1}), ("Reject", {1}), ("Clear", {2}),
+    ("Dismiss", {1, 2}), ("Restore", {3}),
+])
+def test_side_action_preserves_skipped_selection(server, page: Page, button, submitted):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {i: _face(i, media_id) for i in (1, 2, 3)}
+    api.faces[1]["suggestions"] = [dict(tag_id=7, name="Alice", score=.9)]
+    api.faces[2].update(person_tag_id=7, person_name="Alice")
+    api.faces[3]["dismissed"] = True
+    _open_existing_grid(page)
+    page.locator("#faceGridShowNamed").check()
+    page.locator("#faceGridIncludeDismissed").check()
+    page.locator("#faceGridNextBtn").click()
+    page.locator('[data-face-id="3"] input').check()
+    expect(page.locator("#faceGridDismissBtn")).to_be_disabled()
+    page.locator("#faceGridPrevBtn").click()
+    for face_id in (1, 2):
+        page.locator(f'[data-face-id="{face_id}"] input').check()
+    page.locator(f"#faceGrid{button}Btn").click()
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
+    assert {face["id"] for face in api.batches[-1][0]["faces"]} == submitted
+    remaining = set(api.faces) - submitted
+    expect(page.locator("#faceGridSelectedCount")).to_contain_text(str(len(remaining)))
+    seen = set()
+    while True:
+        seen.update(map(int, page.locator("#faceGridList input:checked").evaluate_all(
+            "inputs => inputs.map(input => input.value)")))
+        if page.locator("#faceGridNextBtn").is_disabled():
+            break
+        page.locator("#faceGridNextBtn").click()
+        expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
+    assert seen == remaining
+
+
+def test_reopened_review_refreshes_after_pending_save(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {1: _face(1, media_id)}
+    pending = []
+    page.route("**/api/faces/batch", lambda route: pending.append(route))
+    page.locator('.tab-btn[data-tab="people"]').click()
+    review = page.locator("#faceReviewBtn")
+    review.click()
+    page.locator("#faceGridShowNamed").check()
+    card = page.locator('[data-face-id="1"] input')
+    card.check()
+    page.locator("#faceGridNameInput").fill("Charlie")
+    with page.expect_request("**/api/faces/batch"):
+        page.locator("#faceGridApplyNameBtn").click()
+    page.locator("#faceGridCloseBtn").click()
+    with page.expect_response("**/api/faces/group?**"):
+        review.click()
+    expect(card).to_be_attached()
+    expect(page.locator("#faceGridShowNamed")).not_to_be_checked()
+    api.route(pending.pop())
+    expect(page.locator("#faceGridEmpty")).to_be_visible()
+    expect(card).to_have_count(0)
+    assert api.group_queries[-1]["show_named"] == ["false"]
+
+
+def test_retry_offscreen_face_uses_current_revision(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {1: _face(1, media_id, [dict(tag_id=7, name="Alice", score=.9)]),
+                 2: _face(2, media_id), 3: _face(3, media_id)}
+    _open_existing_grid(page)
+    page.locator('[data-face-id="1"] input').check()
+    page.locator("#faceGridNextBtn").click()
+    page.locator('[data-face-id="2"] input').check()
+    api.faces[1]["revision"] += 1
+    dismiss = page.locator("#faceGridDismissBtn")
+    dismiss.click()
+    expect(page.locator("#faceGridActionError")).to_be_visible()
+    expect(page.locator('[data-face-id="3"]')).to_be_visible()
+    assert api.face_lookup_reads == [[1]]
+    dismiss.click()
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
+    assert api.batches[-1][0]["faces"] == [dict(id=1, revision=2)]
+    assert api.faces[1]["dismissed"]
+
+
+def test_dismiss_keeps_header_and_loads_scroll_during_metadata_refresh(server, page: Page):
+    api = FaceApi(page)
+    page.goto(server["url"])
+    media_id = int(page.locator(".photo-card").first.get_attribute("data-id"))
+    api.faces = {i: _face(i, media_id) for i in range(1, 501)}
+    _open_existing_grid(page)
+    grid = page.locator("#faceGridList")
+    grid.locator('[data-face-id="1"] input').check()
+    assert grid.evaluate("list => list.scrollTop") == 0
+    pending = []
+    page.route("**/api/tags", lambda route: pending.append(route))
+    with page.expect_request("**/api/tags"):
+        page.locator("#faceGridDismissBtn").click()
+    try:
+        expect(grid.locator('[data-face-id="1"]')).to_have_count(0)
+        expect(grid.locator('[data-face-id="2"]:not(.face-grid-card-stale)')).to_be_visible()
+        assert grid.evaluate("list => list.scrollTop") == 0
+        grid.evaluate("list => { list.scrollTop = list.scrollHeight; }")
+        expect(grid.locator('[data-face-id="500"]')).to_be_visible()
+    finally:
+        pending.pop().continue_()
+    expect(page.locator("#faceGridIncludeDismissed")).to_be_enabled()
 
 
 def test_accept_refreshes_review_grid_while_metadata_is_pending(server, page: Page):
