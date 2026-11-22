@@ -454,5 +454,24 @@ def test_inspector_open_tag_modal_btn_opens_dialog(server, page: Page):
     expect(modal).to_be_hidden()
 
 
+def test_tag_modal_preserves_explicit_category_for_same_name(server, page: Page):
+    page.goto(server["url"])
+    expect(page.locator(".photo-card")).to_have_count(6)
+    page.locator("#newTagBtn").click()
+    page.locator("#tagNameInput").fill("Alice")
+    expect(page.locator("#tagCategorySelect")).to_have_value("people")
+    page.locator("#catBtnPlaces").click()
+    with page.expect_response("**/api/tags") as created:
+        page.locator("#createTagSubmitBtn").click()
+    assert created.value.ok
+    expect(page.locator("#newTagModal")).to_be_hidden()
+
+    page.locator("#newTagBtn").click()
+    page.locator("#tagNameInput").fill("Alice")
+    page.locator('.tag-help-chip[data-tag-name="Alice"][data-category="places"]').click()
+    expect(page.locator("#tagCategorySelect")).to_have_value("places")
+    expect(page.locator("#tagDetectedBadge")).to_contain_text("Existing in Places")
+
+
 
 

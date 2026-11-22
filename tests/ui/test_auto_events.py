@@ -97,3 +97,64 @@ def test_auto_event_apply_creates_event_tags(server, page: Page):
     with sqlite3.connect(server["env"]["db_path"]) as conn:
         applied_event_count = conn.execute("SELECT COUNT(*) FROM tags WHERE category = 'events'").fetchone()[0]
     assert applied_event_count > initial_event_count
+
+
+def test_auto_event_locks_review_while_applying_and_retries_failed_group(server, page: Page):
+    page.goto(server["url"])
+    page.evaluate("""async () => {
+      const { api } = await import('./api.js');
+      const original = api.post;
+      window.eventCalls = [];
+      api.post = async (url, body, ...rest) => {
+        if (url.endsWith('/event-suggestions')) return { groups: [
+          { name_source: 'event', name_value: 'First', start_date: 1700000000, end_date: 1700000000, photos: [{id: 1}] },
+          { name_source: 'event', name_value: 'Second', start_date: 1700000000, end_date: 1700000000, photos: [{id: 2}] }
+        ] };
+        if (url.endsWith('/batch-tags')) {
+          window.eventCalls.push(body);
+          if (window.eventCalls.length === 1) return await new Promise(resolve => { window.finishFirstEvent = resolve; });
+          if (window.eventCalls.length === 2) return { failed_ids: body.ids };
+          return { failed_ids: [] };
+        }
+        return original(url, body, ...rest);
+      };
+      const events = await import('./auto-events.js');
+      await events.openAutoEventForIds([1, 2]);
+    }""")
+    page.locator("#applyAutoEventsBtn").click()
+    expect(page.locator(".auto-event-name")).to_have_count(2)
+    for name in page.locator(".auto-event-name").all():
+        expect(name).to_be_disabled()
+    for checkbox in page.locator(".auto-event-group-checkbox").all():
+        expect(checkbox).to_be_disabled()
+    expect(page.locator("#cancelAutoEventsBtn")).to_be_disabled()
+    page.evaluate("window.finishFirstEvent({failed_ids: []})")
+    expect(page.locator("#retryAutoEventsBtn")).to_be_visible()
+    expect(page.locator(".auto-event-name").first).to_be_disabled()
+    page.locator(".auto-event-name").nth(1).fill("Second reviewed")
+    page.locator("#retryAutoEventsBtn").click()
+    expect(page.locator("#autoEventModal")).to_be_hidden()
+    calls = page.evaluate("window.eventCalls")
+    assert [(call["ids"], call["name"]) for call in calls] == [([1], "First"), ([2], "Second"), ([2], "Second reviewed")]
+
+
+def test_interrupted_semantic_job_allows_new_scan(server, page: Page):
+    page.goto(server["url"])
+    result = page.evaluate("""async () => {
+      const sem = await import('./semantic-search.js');
+      const { api } = await import('./api.js');
+      const { state } = await import('./state.js');
+      const { dom } = await import('./dom.js');
+      state.semanticSearchAvailable = true;
+      let starts = 0;
+      api.post = async url => url === '/api/semantic/jobs' ? {job_id: `job-${++starts}`} : {};
+      api.get = async () => ({id: 'job-1', state: 'interrupted', total: 2, processed: 1});
+      await sem.startSemanticIndexing();
+      await sem.getSemanticJobProgress('job-1');
+      const stopHidden = dom.semanticJobStopBtn.hidden;
+      sem.openSemanticIndexModal();
+      const startVisible = !dom.semanticJobStartBtn.hidden;
+      await sem.startSemanticScan();
+      return {stopHidden, startVisible, starts};
+    }""")
+    assert result == {"stopHidden": True, "startVisible": True, "starts": 2}

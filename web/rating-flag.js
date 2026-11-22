@@ -189,40 +189,20 @@ export function toggleFlagsForIds(ids, targetFlag) {
   return nextFlag;
 }
 
-export async function batchUpdateDates(updates) {
-  if (!updates || updates.length === 0) return;
-  const prevDates = new Map();
-  updates.forEach(({ id, date_taken, date_taken_str }) => {
-    const item = state.mediaItems.find(m => m.id === id);
-    if (item) {
-      prevDates.set(id, {
-        date_taken: item.date_taken,
-        exif_date_taken: item.exif?.date_taken,
-        date_taken_str: item.exif?.date_taken_str,
-      });
-      item.date_taken = date_taken;
+export async function batchUpdateDates(request) {
+  const payload = Array.isArray(request) ? { items: request } : request;
+  if (!payload || !(payload.items?.length || payload.ids?.length)) return;
+  const result = await api.post('/api/media/batch-date', payload);
+  const updated = new Map(result.items.map(item => [item.id, item]));
+  for (const item of state.mediaItems) {
+    const saved = updated.get(item.id);
+    if (saved) {
+      item.date_taken = saved.date_taken;
       if (item.exif) {
-        item.exif.date_taken = date_taken;
-        item.exif.date_taken_str = date_taken_str;
+        item.exif.date_taken = saved.date_taken;
+        item.exif.date_taken_str = saved.date_taken_str;
       }
     }
-  });
-  try {
-    await api.post('/api/media/batch-date', { items: updates });
-    metadataReloadCallback();
-  } catch (err) {
-    console.error('Failed to batch update dates:', err);
-    prevDates.forEach((oldDates, id) => {
-      const item = state.mediaItems.find(m => m.id === id);
-      if (item) {
-        item.date_taken = oldDates.date_taken;
-        if (item.exif) {
-          item.exif.date_taken = oldDates.exif_date_taken;
-          item.exif.date_taken_str = oldDates.date_taken_str;
-        }
-      }
-    });
-    showToast(t('toast_failed_batch_dates', { error: err.message || 'Server error' }), 'error');
-    throw err;
   }
+  return result;
 }

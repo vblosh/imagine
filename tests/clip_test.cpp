@@ -622,6 +622,23 @@ TEST(ClipServiceTest, IndexingSkipsAlreadyIndexedUnlessForce) {
         EXPECT_EQ(r5.value()["processed"], 2);
         EXPECT_EQ(r5.value()["skipped"], 0);
 
+        // A cache miss after external replacement must not publish a new embedding under the old hash.
+        ASSERT_TRUE(imagine::thumbnail::Generator::saveJpeg(img2, p1).isOk());
+        int64_t replacedJob = 0;
+        ASSERT_TRUE(svc.startJob("selected", {id1}, true, replacedJob).isOk());
+        auto replaced = waitForJob(replacedJob);
+        ASSERT_TRUE(replaced.isOk());
+        EXPECT_EQ(replaced.value()["failed"], 1);
+        {
+            auto result = db.connection().prepare("SELECT embedding IS NULL, error_text FROM semantic_index_state WHERE media_id = ?;");
+            ASSERT_TRUE(result.isOk());
+            auto row = std::move(result.value());
+            row.bind(1, id1);
+            ASSERT_EQ(row.step(), imagine::db::StepResult::Row);
+            EXPECT_EQ(row.getInt64(0), 1);
+            EXPECT_EQ(row.getString(1), "Original changed since import");
+        }
+
         db.close();
     }
 

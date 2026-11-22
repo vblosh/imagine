@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <future>
+#include <limits>
 
 using namespace imagine;
 using namespace imagine::core;
@@ -85,6 +86,143 @@ protected:
     std::unique_ptr<Catalog> catalog_;
     std::unique_ptr<WebServer> server_;
 };
+
+TEST_F(ServerTest, InvalidBatchMutationsLeaveMetadataAndFilesUntouched) {
+    httplib::Client client("127.0.0.1", port_);
+    const auto path = testDir_ / "validation.jpg";
+    { std::ofstream out(path); out << "original"; }
+    MediaItem item;
+    item.file_path = path.string();
+    item.file_name = "validation.jpg";
+    item.content_hash = "validation_hash";
+    item.date_taken = 1700000000;
+    item.exif.has_gps = true;
+    item.exif.latitude = 12;
+    item.exif.longitude = 34;
+    const auto id = catalog_->db().insertMedia(item).value();
+    const auto post = [&](const std::string& url, const nlohmann::json& body) {
+        return client.Post(url, body.dump(), "application/json");
+    };
+    for (const auto& bad : {nlohmann::json(-1), nlohmann::json(0), nlohmann::json(1.5),
+                            nlohmann::json("1"), nlohmann::json(UINT64_MAX)}) {
+        auto res = post("/api/media/batch-delete", {{"ids", nlohmann::json::array({id, bad})}, {"delete_from_disk", true}});
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+        EXPECT_TRUE(std::filesystem::exists(path));
+        EXPECT_TRUE(catalog_->db().getMediaById(id).isOk());
+        auto gps = post("/api/media/batch-gps", {{"ids", nlohmann::json::array({id, bad})}, {"latitude", 1}, {"longitude", 2}});
+        ASSERT_TRUE(gps);
+        EXPECT_EQ(gps->status, 400);
+        auto date = post("/api/media/batch-date", {{"ids", nlohmann::json::array({id, bad})}, {"date_taken", 1700000001}});
+        ASSERT_TRUE(date);
+        EXPECT_EQ(date->status, 400);
+    }
+    for (const auto& body : {nlohmann::json{{"ids", {id}}}, nlohmann::json{{"ids", {id}}, {"latitude", 1}},
+                             nlohmann::json{{"ids", {id}}, {"latitude", 1}, {"longitude", "bad"}}}) {
+        auto res = post("/api/media/batch-gps", body);
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+    }
+    const auto singleUrl = "/api/media/" + std::to_string(id) + "/date";
+    for (const auto& body : {nlohmann::json::object(), nlohmann::json{{"date_taken", true}},
+                             nlohmann::json{{"date_taken", "garbage"}}, nlohmann::json{{"date_taken", "2024-02-30"}},
+                             nlohmann::json{{"date_taken", "2024-01-01 trailing"}}}) {
+        auto res = post(singleUrl, body);
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+    }
+    for (const auto& body : {nlohmann::json{{"ids", {id}}, {"date_taken", false}},
+                             nlohmann::json{{"ids", {id}}, {"date_taken", "invalid"}},
+                             nlohmann::json{{"items", {{{"id", id}, {"date_taken", 1700001000}}, {{"id", id}}}}}}) {
+        auto res = post("/api/media/batch-date", body);
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 400);
+    }
+    const auto unchanged = catalog_->db().getMediaById(id);
+    ASSERT_TRUE(unchanged.isOk());
+    EXPECT_EQ(unchanged.value().date_taken, 1700000000);
+    EXPECT_TRUE(unchanged.value().exif.has_gps);
+    EXPECT_DOUBLE_EQ(unchanged.value().exif.latitude, 12);
+    auto clearDate = post(singleUrl, {{"date_taken", 0}});
+    ASSERT_TRUE(clearDate);
+    EXPECT_EQ(clearDate->status, 200);
+    auto clearGps = post("/api/media/batch-gps", {{"ids", {id}}, {"has_gps", false}});
+    ASSERT_TRUE(clearGps);
+    EXPECT_EQ(clearGps->status, 200);
+}
+
+TEST_F(ServerTest, ThumbnailMissRejectsChangedSource) {
+    const auto path = (testDir_ / "changed.jpg").string();
+    ImageBuffer image;
+    image.width = 20; image.height = 20; image.channels = 3;
+    image.data.resize(20 * 20 * 3, 32);
+    ASSERT_TRUE(Generator::saveJpeg(image, path).isOk());
+    MediaItem item;
+    item.file_path = path;
+    item.file_name = "changed.jpg";
+    item.content_hash = metadata::Hasher::computeFileSha256(path).value();
+    ASSERT_TRUE(catalog_->db().insertMedia(item).isOk());
+    image.data.assign(image.data.size(), 220);
+    ASSERT_TRUE(Generator::saveJpeg(image, path).isOk());
+    httplib::Client client("127.0.0.1", port_);
+    auto response = client.Get("/api/thumbnails/" + item.content_hash + "/256");
+    ASSERT_TRUE(response);
+    EXPECT_EQ(response->status, 404);
+    EXPECT_FALSE(catalog_->cache().hasThumbnail(item.content_hash, 256));
+}
+
+TEST_F(ServerTest, ThumbnailUsesCachedLargeWhenOriginalIsOffline) {
+    const auto path = (testDir_ / "offline.jpg").string();
+    ImageBuffer image;
+    image.width = 20; image.height = 20; image.channels = 3;
+    image.data.resize(20 * 20 * 3, 32);
+    ASSERT_TRUE(Generator::saveJpeg(image, path).isOk());
+    MediaItem item;
+    item.file_path = path;
+    item.file_name = "offline.jpg";
+    item.content_hash = metadata::Hasher::computeFileSha256(path).value();
+    ASSERT_TRUE(catalog_->db().insertMedia(item).isOk());
+    ASSERT_TRUE(catalog_->cache().ensureThumbnail(path, item.content_hash, Cache::LargeSize).isOk());
+    ASSERT_TRUE(std::filesystem::remove(path));
+    httplib::Client client("127.0.0.1", port_);
+    auto response = client.Get("/api/thumbnails/" + item.content_hash + "/256");
+    ASSERT_TRUE(response);
+    EXPECT_EQ(response->status, 200);
+    EXPECT_TRUE(catalog_->cache().hasThumbnail(item.content_hash, 256));
+}
+
+TEST_F(ServerTest, BatchDateShiftRejectsIntegerOverflow) {
+    MediaItem item;
+    item.file_path = (testDir_ / "overflow.jpg").string();
+    item.file_name = "overflow.jpg";
+    item.content_hash = "overflow_hash";
+    item.date_taken = std::numeric_limits<int64_t>::max();
+    const auto id = catalog_->db().insertMedia(item).value();
+    httplib::Client client("127.0.0.1", port_);
+    const nlohmann::json body = {{"ids", {id}}, {"shift_seconds", 1}};
+    auto response = client.Post("/api/media/batch-date", body.dump(), "application/json");
+    ASSERT_TRUE(response);
+    ASSERT_EQ(response->status, 200);
+    auto result = nlohmann::json::parse(response->body);
+    EXPECT_EQ(result["updated_count"], 0);
+    EXPECT_EQ(result["failed_ids"], nlohmann::json::array({id}));
+    EXPECT_EQ(catalog_->db().getMediaById(id).value().date_taken, std::numeric_limits<int64_t>::max());
+}
+
+TEST_F(ServerTest, ConcurrentStopAndStartLeavesUsableListener) {
+    for (int i = 0; i < 5; ++i) {
+        std::thread stopping([this] { server_->stop(); });
+        std::thread starting([this] { EXPECT_TRUE(server_->start("127.0.0.1", port_).isOk()); });
+        stopping.join();
+        starting.join();
+        // Either operation may win; the next start must always reclaim the port.
+        ASSERT_TRUE(server_->start("127.0.0.1", port_).isOk());
+        httplib::Client client("127.0.0.1", port_);
+        auto res = client.Get("/api/stats");
+        ASSERT_TRUE(res);
+        EXPECT_EQ(res->status, 200);
+    }
+}
 
 TEST_F(ServerTest, CorsPreflightAndHeaders) {
     httplib::Client client("127.0.0.1", port_);
@@ -569,10 +707,13 @@ TEST_F(ServerTest, BatchRatingFlagTagsGps) {
     EXPECT_EQ(get2["date_taken"].get<int64_t>(), 1700000000);
 
     // Batch date shift
-    nlohmann::json shiftDateBody = {{"ids", {id1, id2}}, {"shift_seconds", 3600}};
+    nlohmann::json shiftDateBody = {{"ids", {id1, id2, id1, 999999999}}, {"shift_seconds", 3600}};
     auto sDateRes = client.Post("/api/media/batch-date", shiftDateBody.dump(), "application/json");
     ASSERT_TRUE(sDateRes);
     EXPECT_EQ(sDateRes->status, 200);
+    const auto shifted = nlohmann::json::parse(sDateRes->body);
+    EXPECT_EQ(shifted["updated_count"], 2);
+    EXPECT_EQ(shifted["failed_ids"], nlohmann::json::array({999999999}));
     get1 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id1))->body);
     get2 = nlohmann::json::parse(client.Get("/api/media/" + std::to_string(id2))->body);
     EXPECT_EQ(get1["date_taken"].get<int64_t>(), 1700003600);
@@ -640,8 +781,11 @@ TEST_F(ServerTest, MoveMediaSingleAndBatch) {
     auto check1 = client.Get("/api/media/" + std::to_string(id1));
     ASSERT_TRUE(check1);
     auto cJson1 = nlohmann::json::parse(check1->body);
-    EXPECT_TRUE(cJson1["file_path"].get<std::string>() == "archive/move1.jpg" ||
-                cJson1["file_path"].get<std::string>() == (testDir_ / "archive" / "move1.jpg").generic_string());
+    const auto storedPath = pathFromUtf8(cJson1["file_path"].get<std::string>());
+    const auto movedFile = testDir_ / "archive" / "move1.jpg";
+    std::error_code pathError;
+    EXPECT_TRUE(std::filesystem::equivalent(testDir_ / storedPath, movedFile, pathError))
+        << "Stored path: " << storedPath << ", expected file: " << movedFile << ", error: " << pathError.message();
 
     // 2. Batch move endpoint POST /api/media/batch-move
     nlohmann::json batchMoveBody = {

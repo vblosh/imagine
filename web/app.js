@@ -1173,8 +1173,8 @@ export function setupEventListeners() {
       openBatchMoveModal(Array.from(state.selectedIds));
     } else if (state.lastSelectedId) {
       openBatchMoveModal([state.lastSelectedId]);
-    } else if (state.loupeIndex >= 0 && state.mediaItems[state.loupeIndex]) {
-      openBatchMoveModal([state.mediaItems[state.loupeIndex].id]);
+    } else if (getCurrentLoupeItem()) {
+      openBatchMoveModal([getCurrentLoupeItem().id]);
     }
   };
 
@@ -1190,8 +1190,8 @@ export function setupEventListeners() {
     dom.inspectorDeleteBtn.addEventListener('click', () => {
       if (state.selectedIds.size > 0) {
         openDeleteMediaModal(Array.from(state.selectedIds));
-      } else if (state.loupeIndex >= 0 && state.mediaItems[state.loupeIndex]) {
-        openDeleteMediaModal([state.mediaItems[state.loupeIndex].id]);
+      } else if (getCurrentLoupeItem()) {
+        openDeleteMediaModal([getCurrentLoupeItem().id]);
       }
     });
   }
@@ -1211,7 +1211,7 @@ export function setupEventListeners() {
     dom.loupeQuickEditBtn.addEventListener('click', () => {
       if (isLoupeActionDisabled()) return;
       const item = getCurrentLoupeItem();
-      if (item && (item.media_type === 'video' || item.media_type === 'audio')) {
+      if (!item || item.media_type === 'video' || item.media_type === 'audio') {
         return;
       }
       if (quickEditState.isOpen) {

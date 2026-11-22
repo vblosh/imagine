@@ -5,7 +5,7 @@
  * this module orchestrates inspector, map-view, loupe, category-view, and modals.
  */
 
-import { state } from './state.js';
+import { state, invalidateGpsCache, pruneMediaSelection } from './state.js';
 import { dom } from './dom.js';
 import {
   openInspector,
@@ -21,7 +21,7 @@ import {
   updateMapMarkerSelections,
   setMapViewActionHooks,
 } from './map-view.js';
-import { openLoupeForMedia, updateLoupeControls, closeLoupe, updateLoupeView } from './loupe.js';
+import { openLoupeForMedia, updateLoupeControls, closeLoupe, updateLoupeView, updateLoupePosition, reconcileLoupeAfterMediaLoad } from './loupe.js';
 import {
   renderCategoryView,
   setCategoryViewActionHooks,
@@ -32,8 +32,7 @@ import {
   openDeleteTagModal,
   openTagModal,
   openAlbumModal,
-  setModalCloseLoupeHandler,
-  setModalUpdateLoupeHandler,
+  setModalLoupeDeleteHandler,
 } from './modals.js';
 import {
   renderGrid,
@@ -63,7 +62,7 @@ import {
   updateItemRating,
 } from './rating-flag.js';
 import { updateRovingTabindex } from './grid-a11y.js';
-import { loadMediaData, loadMoreMediaData, loadMetadataData } from './media-fetch.js';
+import { cancelInFlightMediaLoads, loadMediaData, loadMoreMediaData, loadMetadataData } from './media-fetch.js';
 import { clearFilterPreferences } from './persistence.js';
 import { setDeduplicateActionHooks, openDeduplicateModal } from './deduplicate.js';
 
@@ -204,6 +203,7 @@ export async function loadMedia(append = false, options = {}) {
     return;
   }
   if (result.success) {
+    reconcileLoupeAfterMediaLoad();
     refreshAfterMediaLoad({ shouldPreserveScroll: result.shouldPreserveScroll });
   }
 }
@@ -234,6 +234,54 @@ export async function loadMetadata() {
   }
 }
 
+function applyLoupeDeletion(deletedIds) {
+  const currentIndex = state.loupeIndex;
+  if (currentIndex < 0 || state.loupeDisabledActions) return false;
+
+  const items = state.mediaItems;
+  const current = items[currentIndex];
+  if (!current) return false;
+
+  const remaining = items.filter(item => !deletedIds.has(item.id));
+  const currentDeleted = deletedIds.has(current.id);
+  const preceding = items.slice(0, currentIndex).filter(item => !deletedIds.has(item.id)).length;
+  cancelInFlightMediaLoads();
+  state.mediaItems = remaining;
+  state.mediaOffset = remaining.length;
+  state.totalCount = Math.max(remaining.length, state.totalCount - (items.length - remaining.length));
+  invalidateGpsCache();
+  pruneMediaSelection();
+
+  if (state.semanticSearchActive) {
+    remaining.forEach((item, index) => { item.rank = index + 1; });
+  }
+  if (remaining.length === 0) {
+    closeLoupe();
+  } else {
+    state.loupeIndex = currentDeleted ? Math.max(0, preceding - 1) : preceding;
+    if (currentDeleted) {
+      state.lastSelectedId = remaining[state.loupeIndex].id;
+      state.selectedIds.clear();
+      state.selectedIds.add(state.lastSelectedId);
+      updateLoupeView();
+    } else {
+      updateLoupePosition();
+    }
+  }
+
+  setTimeout(() => {
+    if (state.mediaItems !== remaining) return;
+    refreshAfterMediaLoad({ shouldPreserveScroll: true });
+    if (state.semanticSearchActive) {
+      void loadMedia(false, { preserveScroll: true });
+    } else if (remaining.length === 0 && state.totalCount > 0) {
+      void loadMoreMedia();
+    }
+  }, 0);
+  void loadMetadata();
+  return true;
+}
+
 export function initViews() {
   setViewsOrchestrator({
     loadMedia,
@@ -243,8 +291,7 @@ export function initViews() {
   });
 
   setGridOpenLoupeHandler(openLoupeForMedia);
-  setModalCloseLoupeHandler(closeLoupe);
-  setModalUpdateLoupeHandler(updateLoupeView);
+  setModalLoupeDeleteHandler(applyLoupeDeletion);
 
   setMapViewActionHooks({
     loadMoreMedia,

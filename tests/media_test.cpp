@@ -1553,6 +1553,89 @@ TEST(MediaTest, OggVorbisBitrate) {
     EXPECT_EQ(info.bitrate, 192000);
 }
 
+TEST(MediaTest, OggTruncatedSegmentTable) {
+    TempDir tmp;
+    for (int segmentCount : {1, 255}) {
+        auto path = tmp.path() / ("truncated_" + std::to_string(segmentCount) + ".ogg");
+        std::vector<uint8_t> data(27, 0);
+        data[0] = 'O'; data[1] = 'g'; data[2] = 'g'; data[3] = 'S';
+        data[26] = static_cast<uint8_t>(segmentCount);
+        {
+            std::ofstream out(path, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(data.data()), data.size());
+        }
+        auto result = MediaReader::readMetadata(path.string());
+        ASSERT_TRUE(result.isOk()); // Invalid containers fall back to basic metadata.
+        EXPECT_EQ(result.value().media_type, "audio");
+        EXPECT_TRUE(result.value().codec.empty());
+    }
+}
+
+TEST(MediaTest, Mp4ExcessiveContainerNesting) {
+    TempDir tmp;
+    auto path = tmp.path() / "nested.mp4";
+    std::vector<uint8_t> data;
+    constexpr uint32_t depth = 20000;
+    for (uint32_t i = 0; i < depth; ++i) {
+        writeBe32(data, (depth - i) * 8);
+        writeString(data, "moov");
+    }
+    // A top-level sibling must still be read after the deep branch is skipped.
+    writeBe32(data, 28);
+    writeString(data, "mvhd");
+    writeBe32(data, 0); // version and flags
+    writeBe32(data, 0); // creation time
+    writeBe32(data, 0); // modification time
+    writeBe32(data, 1000); // timescale
+    writeBe32(data, 5000); // duration
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+    auto result = MediaReader::readMetadata(path.string());
+    ASSERT_TRUE(result.isOk());
+    EXPECT_DOUBLE_EQ(result.value().duration, 5.0);
+}
+
+TEST(MediaTest, WebmParsesAfterEbmlHeader) {
+    TempDir tmp;
+    auto path = tmp.path() / "header.webm";
+    const std::vector<uint8_t> data = {
+        0x1a, 0x45, 0xdf, 0xa3, 0x84, // EBML header, four-byte payload
+        0x42, 0x86, 0x81, 0x01,       // EBMLVersion = 1
+        0x18, 0x53, 0x80, 0x67, 0xff, // Segment, unknown size
+        0x15, 0x49, 0xa9, 0x66, 0x87, // Info
+        0x44, 0x89, 0x84, 0x41, 0x20, 0x00, 0x00, // Duration = 10
+        0x16, 0x54, 0xae, 0x6b, 0x89, // Tracks
+        0xae, 0x87,                   // TrackEntry
+        0x86, 0x85, 'V', '_', 'V', 'P', '8'
+    };
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+    auto result = MediaReader::readMetadata(path.string());
+    ASSERT_TRUE(result.isOk());
+    EXPECT_EQ(result.value().codec, "vp8");
+    EXPECT_NEAR(result.value().duration, 0.01, 1e-9);
+}
+
+TEST(MediaTest, WebmRejectsTruncatedEbmlHeader) {
+    TempDir tmp;
+    auto path = tmp.path() / "truncated_header.webm";
+    const std::vector<uint8_t> data = {
+        0x1a, 0x45, 0xdf, 0xa3, 0x90, // claims 16 header bytes
+        0x42, 0x86, 0x81, 0x01        // only four are present
+    };
+    {
+        std::ofstream out(path, std::ios::binary);
+        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+    auto result = MediaReader::readMetadata(path.string());
+    ASSERT_TRUE(result.isOk()); // Invalid containers fall back to basic metadata.
+    EXPECT_TRUE(result.value().codec.empty());
+}
+
 // 17. Test FFmpeg Helper shell-metacharacter policy.
 // POSIX still goes through a shell, so metacharacters must be rejected outright.
 // Windows uses CreateProcessW, where those characters are legal in file names;

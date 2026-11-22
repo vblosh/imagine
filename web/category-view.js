@@ -12,6 +12,12 @@ import { enterAlbumOrderMode, clearTimelineSelection } from './media-params.js';
 import { saveActiveTagIdsPreference } from './persistence.js';
 import { clearCardMap } from './media-cards.js';
 import { cancelMapMove } from './map-view.js';
+import { timelinePeriodContainsMonth } from './timeline-range.js';
+
+const TIMELINE_TAG_FIELDS = new Map([
+  ['events', 'event_tag_ids'],
+  ['places', 'place_tag_ids'],
+]);
 
 let categoryActionHooks = {
   updateSidebarActive: () => {},
@@ -36,6 +42,7 @@ export function getCategoryConfig(cat) {
       addLabel: t('add_place'),
       emptyTitle: t('no_places_found'),
       emptyText: t('tag_places_prompt'),
+      timelineEmptyText: t('places_timeline_empty'),
       iconSvg: icon('map-pin', { width: 48, height: 48, strokeWidth: 1.5 }),
       thumbPlaceholderSvg: icon('map-pin', { width: 36, height: 36, strokeWidth: 1.5 })
     };
@@ -49,6 +56,7 @@ export function getCategoryConfig(cat) {
       addLabel: t('add_event'),
       emptyTitle: t('no_events_found'),
       emptyText: t('tag_events_prompt'),
+      timelineEmptyText: t('events_timeline_empty'),
       iconSvg: icon('calendar', { width: 48, height: 48, strokeWidth: 1.5 }),
       thumbPlaceholderSvg: icon('calendar', { width: 36, height: 36, strokeWidth: 1.5 })
     };
@@ -359,6 +367,15 @@ export function renderCategoryView(category) {
     ? [...(state.albums || [])]
     : (state.tags || []).filter(t => (t.category || 'keyword').toLowerCase() === cat);
 
+  const timelineTagField = TIMELINE_TAG_FIELDS.get(cat);
+  const timelinePeriod = timelineTagField ? state.activeTimelinePeriod : null;
+  if (timelinePeriod) {
+    const matchingTagIds = new Set(state.timelineData
+      .filter(({ year, month }) => timelinePeriodContainsMonth(timelinePeriod, year, month))
+      .flatMap(entry => entry[timelineTagField] ?? []));
+    items = items.filter(item => matchingTagIds.has(item.id));
+  }
+
   // Search query filtering
   if (state.searchText) {
     const q = state.searchText.toLowerCase().trim();
@@ -395,8 +412,13 @@ export function renderCategoryView(category) {
       dom.categoryEmptyState.style.display = 'flex';
       if (dom.categoryEmptyIcon) dom.categoryEmptyIcon.innerHTML = config.iconSvg;
       if (dom.categoryEmptyTitle) dom.categoryEmptyTitle.textContent = config.emptyTitle;
-      if (dom.categoryEmptyText) dom.categoryEmptyText.textContent = config.emptyText;
-      if (dom.categoryEmptyActionBtn) dom.categoryEmptyActionBtn.textContent = config.addLabel;
+      if (dom.categoryEmptyText) {
+        dom.categoryEmptyText.textContent = timelinePeriod ? config.timelineEmptyText : config.emptyText;
+      }
+      if (dom.categoryEmptyActionBtn) {
+        dom.categoryEmptyActionBtn.hidden = Boolean(timelinePeriod);
+        dom.categoryEmptyActionBtn.textContent = config.addLabel;
+      }
     }
     return;
   }
@@ -544,7 +566,7 @@ export function selectCategoryItem(tag) {
   saveActiveTagIdsPreference(state.activeTagIds);
   state.activeTagIds.add(Number(tag.id));
   state.activeFolders.clear();
-  clearTimelineSelection();
+  if (!TIMELINE_TAG_FIELDS.has(state.activeTab)) clearTimelineSelection();
   state.activeAlbumId = null;
   state.activeMediaType = 'all';
   state.activeStatusFilter = null;

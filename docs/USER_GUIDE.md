@@ -209,6 +209,7 @@ At the bottom of the screen is a compact year and month scrub bar:
 - Click a month bar to filter to that month. Shift-click another month to filter the inclusive interval between the two months.
 - Use the year selector before **"Reset"** to filter January through December of a specific year, or choose **"All years"** to clear the timeline filter.
 - Click **"Reset"** to clear the selected month or interval without changing other active filters.
+- In **Places** or **Events**, choose a year or month to see cards with at least one tagged item taken during that period. The date filter stays active as you open a card and return to the list.
 
 ### Language & Internationalization (i18n)
 Imagine features native multi-language internationalization supporting 5 languages:
@@ -691,7 +692,7 @@ When `IMAGINE_API_TOKEN` is configured, catalog-changing `POST` and `DELETE` end
 | `POST` | `/api/albums/:id/order` | Save the complete ordered list of album media IDs (`{"media_ids": [N, ...]}`) |
 | `DELETE` | `/api/albums/:id/media` | Remove one or more photos from an album (`{"media_id": N}` or `{"media_ids": [N, ...]}`) |
 | `POST` | `/api/albums/:id/cover` | Set an album member photo as its cover (`{"media_id": N}`) |
-| `GET` | `/api/timeline` | Get photo counts grouped by year and month |
+| `GET` | `/api/timeline` | Get photo counts by year and month, with `place_tag_ids` and `event_tag_ids` for months containing those tags |
 | `GET` | `/api/stats` | Get catalog statistics |
 | `POST` | `/api/import` | Start asynchronous background folder import |
 | `GET` | `/api/import/progress` | Check ongoing import status and metrics |

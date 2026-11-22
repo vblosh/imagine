@@ -828,15 +828,24 @@ Status CatalogDb::updateThumbnails(MediaId id, const std::string& smallPath, con
     return Status::ok();
 }
 
-Status CatalogDb::updateGps(MediaId id, bool hasGps, double latitude, double longitude, double altitude) {
+Status CatalogDb::updateGpsWithPlaceTags(MediaId id, bool hasGps, double latitude, double longitude,
+                                         std::optional<double> altitude) {
+    return runInTransaction([&]() -> Status {
+        auto status = updateGps(id, hasGps, latitude, longitude, altitude);
+        if (!status.isOk()) return status;
+        return applyGpsPlaceTags(id, hasGps, latitude, longitude);
+    });
+}
+
+Status CatalogDb::updateGps(MediaId id, bool hasGps, double latitude, double longitude, std::optional<double> altitude) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    auto stmtRes = conn_.prepare("UPDATE media_items SET has_gps = ?, latitude = ?, longitude = ?, altitude = ?, updated_at = ? WHERE id = ?;");
+    auto stmtRes = conn_.prepare("UPDATE media_items SET has_gps = ?, latitude = ?, longitude = ?, altitude = COALESCE(?, altitude), updated_at = ? WHERE id = ?;");
     if (!stmtRes.isOk()) return stmtRes.status();
     auto stmt = std::move(stmtRes.value());
     stmt.bind(1, hasGps ? 1 : 0);
     stmt.bind(2, latitude);
     stmt.bind(3, longitude);
-    stmt.bind(4, altitude);
+    stmt.bindOptional(4, altitude);
     stmt.bind(5, currentUnixTime());
     stmt.bind(6, id);
 
@@ -1965,15 +1974,28 @@ Result<std::vector<MediaItem>> CatalogDb::getMediaInAlbum(AlbumId albumId) {
 
 Result<std::vector<TimelineEntry>> CatalogDb::getTimeline() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    // Group by strftime year and month from unix timestamp date_taken
     const char* sql = R"SQL(
-        SELECT CAST(strftime('%Y', date_taken, 'unixepoch') AS INTEGER) AS y,
-               CAST(strftime('%m', date_taken, 'unixepoch') AS INTEGER) AS m,
-               COUNT(*) AS cnt
-        FROM media_items
-        WHERE date_taken != 0
-        GROUP BY y, m
-        ORDER BY y DESC, m DESC;
+        WITH months AS (
+            SELECT CAST(strftime('%Y', date_taken, 'unixepoch') AS INTEGER) AS year,
+                   CAST(strftime('%m', date_taken, 'unixepoch') AS INTEGER) AS month,
+                   COUNT(*) AS count
+            FROM media_items
+            WHERE date_taken != 0
+            GROUP BY year, month
+        ), category_months AS (
+            SELECT DISTINCT CAST(strftime('%Y', m.date_taken, 'unixepoch') AS INTEGER) AS year,
+                   CAST(strftime('%m', m.date_taken, 'unixepoch') AS INTEGER) AS month,
+                   t.id AS tag_id,
+                   t.category COLLATE NOCASE = 'events' AS is_event
+            FROM tags t
+            JOIN media_tags mt ON mt.tag_id = t.id
+            JOIN media_items m ON m.id = mt.media_id
+            WHERE t.category COLLATE NOCASE IN ('events', 'places') AND m.date_taken != 0
+        )
+        SELECT months.year, months.month, months.count, category_months.tag_id, category_months.is_event
+        FROM months
+        LEFT JOIN category_months USING (year, month)
+        ORDER BY months.year DESC, months.month DESC, category_months.tag_id ASC;
     )SQL";
 
     auto stmtRes = conn_.prepare(sql);
@@ -1983,11 +2005,16 @@ Result<std::vector<TimelineEntry>> CatalogDb::getTimeline() {
     std::vector<TimelineEntry> timeline;
     StepResult stepRes = StepResult::Done;
     while ((stepRes = stmt.step()) == StepResult::Row) {
-        TimelineEntry entry;
-        entry.year = stmt.getInt(0);
-        entry.month = stmt.getInt(1);
-        entry.count = stmt.getInt64(2);
-        timeline.push_back(entry);
+        const auto year = stmt.getInt(0);
+        const auto month = stmt.getInt(1);
+        if (timeline.empty() || timeline.back().year != year || timeline.back().month != month) {
+            timeline.push_back({year, month, stmt.getInt64(2), {}, {}});
+        }
+        if (!stmt.isNull(3)) {
+            auto& entry = timeline.back();
+            auto& tagIds = stmt.getInt(4) ? entry.event_tag_ids : entry.place_tag_ids;
+            tagIds.push_back(stmt.getInt64(3));
+        }
     }
     if (stepRes == StepResult::Error) {
         return Status::databaseError("Failed to read timeline: " + conn_.lastErrorMessage());

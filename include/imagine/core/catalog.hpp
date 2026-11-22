@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -124,20 +125,29 @@ public:
     Importer& importer();
 
 private:
-    void closeInternal();
-    void syncPhotosDirFromImporter();
+    struct OriginalPathIndex;
+    struct ImportResources;
+
+    std::shared_ptr<ImportResources> closeInternal();
+    void syncPhotosDirFromImporter(const std::shared_ptr<ImportResources>& resources);
     void setPhotosDirInternal(std::string photosDir);
     std::string resolvePhotoPathInternal(const std::string& recordedPath) const;
     std::string resolveRecordedPathInternal(const std::string& recordedPath) const;
+    Status checkOriginalCanMove(MediaId id, const std::filesystem::path& source);
+    Status excludeReferencedPaths(std::unordered_set<std::filesystem::path>& pathsToRemove,
+                                  const std::unordered_set<MediaId>& removedIds,
+                                  const std::filesystem::path& rootPath);
     Result<std::vector<DeleteResult>> removeMedia(
         const ReviewedMedia* keeper, const std::vector<ReviewedMedia>& remove,
         bool deleteFromDisk, bool mergeMetadata);
 
     size_t threadCount_{1};
-    std::unique_ptr<db::CatalogDb> db_;
-    std::unique_ptr<thumbnail::Cache> cache_;
-    std::unique_ptr<concurrency::ThreadPool> threadPool_;
-    std::unique_ptr<Importer> importer_;
+    std::shared_ptr<db::CatalogDb> db_;
+    std::shared_ptr<thumbnail::Cache> cache_;
+    std::shared_ptr<concurrency::ThreadPool> threadPool_;
+    std::shared_ptr<Importer> importer_;
+    std::shared_ptr<ImportResources> importResources_;
+    std::unique_ptr<OriginalPathIndex> originalPaths_;
     std::string photosDir_;
     std::string dbPath_;
     bool isOpen_{false};

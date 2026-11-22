@@ -7,7 +7,130 @@
 #include <thread>
 #include <unordered_set>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace imagine::core {
+
+namespace fs = std::filesystem;
+
+struct Catalog::ImportResources {
+    std::shared_ptr<db::CatalogDb> db;
+    std::shared_ptr<thumbnail::Cache> cache;
+    std::shared_ptr<concurrency::ThreadPool> pool;
+    std::shared_ptr<Importer> importer;
+};
+
+struct Catalog::OriginalPathIndex {
+    using Folder = std::unordered_multimap<fs::path, MediaId>;
+    std::unordered_map<fs::path, Folder> folders;
+    std::unordered_map<MediaId, std::string> legacy;
+
+    Status refresh(db::Connection& connection) {
+        // Local triggers track only reference changes. data_version covers commits
+        // made through other connections, including older versions of Imagine.
+        if (!initialized_) {
+            auto status = connection.execute(R"SQL(
+                CREATE TEMP TABLE IF NOT EXISTS imagine_path_revision (revision INTEGER NOT NULL);
+                INSERT INTO imagine_path_revision
+                    SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM imagine_path_revision);
+                CREATE TEMP TRIGGER IF NOT EXISTS imagine_path_insert AFTER INSERT ON main.media_items
+                BEGIN UPDATE imagine_path_revision SET revision = revision + 1; END;
+                CREATE TEMP TRIGGER IF NOT EXISTS imagine_path_update AFTER UPDATE OF id, file_path ON main.media_items
+                WHEN OLD.id != NEW.id OR OLD.file_path != NEW.file_path
+                BEGIN UPDATE imagine_path_revision SET revision = revision + 1; END;
+                CREATE TEMP TRIGGER IF NOT EXISTS imagine_path_delete AFTER DELETE ON main.media_items
+                BEGIN UPDATE imagine_path_revision SET revision = revision + 1; END;
+            )SQL");
+            if (!status.isOk()) return status;
+            initialized_ = true;
+        }
+
+        auto version = readVersion(connection, "PRAGMA main.data_version;");
+        if (!version.isOk()) return version.status();
+        auto revision = readVersion(connection, "SELECT revision FROM temp.imagine_path_revision;");
+        if (!revision.isOk()) return revision.status();
+        if (version.value() == dataVersion_ && revision.value() == revision_) return Status::ok();
+
+        auto query = connection.prepare("SELECT id, file_path FROM media_items;");
+        if (!query.isOk()) return query.status();
+        auto stmt = std::move(query.value());
+        folders.clear();
+        legacy.clear();
+        db::StepResult step;
+        while ((step = stmt.step()) == db::StepResult::Row) {
+            const auto id = stmt.getInt64(0);
+            auto recorded = stmt.getString(1);
+            const auto path = pathFromUtf8(recorded);
+            if (isOrdinaryRelativePath(path)) {
+                folders[path.parent_path()].emplace(path.filename(), id);
+            } else {
+                legacy.emplace(id, std::move(recorded));
+            }
+        }
+        if (step == db::StepResult::Error) {
+            return Status::databaseError("Failed to index original-file references: " + connection.lastErrorMessage());
+        }
+        dataVersion_ = version.value();
+        revision_ = revision.value();
+        return Status::ok();
+    }
+
+    void removeDeleted(db::Connection& connection, const std::vector<MediaItem>& items) {
+        const auto revision = readVersion(connection, "SELECT revision FROM temp.imagine_path_revision;");
+        if (!revision.isOk() || revision.value() != revision_ + static_cast<int64_t>(items.size())) return;
+        for (const auto& item : items) {
+            const auto path = pathFromUtf8(item.file_path);
+            if (!isOrdinaryRelativePath(path)) {
+                legacy.erase(item.id);
+                continue;
+            }
+            auto folder = folders.find(path.parent_path());
+            if (folder == folders.end()) continue;
+            auto [first, last] = folder->second.equal_range(path.filename());
+            for (auto ref = first; ref != last; ++ref) {
+                if (ref->second != item.id) continue;
+                folder->second.erase(ref);
+                break;
+            }
+            if (folder->second.empty()) folders.erase(folder);
+        }
+        revision_ = revision.value();
+    }
+
+private:
+    static bool isOrdinaryRelativePath(const fs::path& path) {
+        if (path.has_root_path() || !path.has_filename()) return false;
+        for (const auto& part : path) {
+            if (part == "." || part == "..") return false;
+            const auto& name = part.native();
+            if (name.find(fs::path::value_type{}) != fs::path::string_type::npos) return false;
+#ifdef _WIN32
+            if (name.empty() || name.back() == L'.' || name.back() == L' ' ||
+                name.find(L':') != std::wstring::npos) return false;
+#endif
+        }
+        return true;
+    }
+
+    static Result<int64_t> readVersion(db::Connection& connection, const char* sql) {
+        auto query = connection.prepare(sql);
+        if (!query.isOk()) return query.status();
+        auto stmt = std::move(query.value());
+        if (stmt.step() != db::StepResult::Row) {
+            return Status::databaseError("Failed to read original-path index version: " + connection.lastErrorMessage());
+        }
+        return stmt.getInt64(0);
+    }
+
+    bool initialized_{false};
+    int64_t dataVersion_{-1};
+    int64_t revision_{-1};
+};
 
 Catalog::Catalog(size_t threadPoolThreads)
     : threadCount_(std::max<size_t>(1, threadPoolThreads)) {}
@@ -17,12 +140,13 @@ Catalog::~Catalog() {
 }
 
 Status Catalog::open(const std::string& dbPath, const std::string& cacheDir, const std::string& photosDir) {
+    std::shared_ptr<ImportResources> retired;
     std::unique_lock<std::shared_mutex> lock(rwMutex_);
     if (isOpen_) {
-        closeInternal();
+        retired = closeInternal();
     }
 
-    db_ = std::make_unique<db::CatalogDb>();
+    db_ = std::make_shared<db::CatalogDb>();
     Status s = db_->open(dbPath);
     if (!s.isOk()) {
         db_.reset();
@@ -32,9 +156,10 @@ Status Catalog::open(const std::string& dbPath, const std::string& cacheDir, con
     photosDir_ = photosDir;
     dbPath_ = dbPath;
 
-    cache_ = std::make_unique<thumbnail::Cache>(cacheDir);
-    threadPool_ = std::make_unique<concurrency::ThreadPool>(threadCount_);
-    importer_ = std::make_unique<Importer>(*db_, *cache_, threadPool_.get(), photosDir_);
+    cache_ = std::make_shared<thumbnail::Cache>(cacheDir);
+    threadPool_ = std::make_shared<concurrency::ThreadPool>(threadCount_);
+    importer_ = std::make_shared<Importer>(*db_, *cache_, threadPool_.get(), photosDir_);
+    importResources_ = std::make_shared<ImportResources>(ImportResources{db_, cache_, threadPool_, importer_});
 
     isOpen_ = true;
     IMAGINE_LOG_INFO("Catalog opened successfully with DB: " + dbPath + ", photosDir: " + photosDir_);
@@ -42,43 +167,28 @@ Status Catalog::open(const std::string& dbPath, const std::string& cacheDir, con
 }
 
 void Catalog::close() {
-    {
-        std::shared_lock<std::shared_mutex> rlock(rwMutex_);
-        if (importer_) {
-            importer_->cancel();
-        }
-    }
+    std::shared_ptr<ImportResources> retired;
     std::unique_lock<std::shared_mutex> lock(rwMutex_);
-    closeInternal();
+    retired = closeInternal();
 }
 
-void Catalog::closeInternal() {
+std::shared_ptr<Catalog::ImportResources> Catalog::closeInternal() {
     if (!isOpen_) {
-        return;
+        return {};
     }
 
-    if (importer_) {
-        importer_->cancel();
-        while (importer_->isRunning()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
-
-    if (threadPool_) {
-        threadPool_->stop();
-    }
+    if (importer_) importer_->retire();
 
     importer_.reset();
     threadPool_.reset();
     cache_.reset();
-
-    if (db_) {
-        db_->close();
-        db_.reset();
-    }
+    originalPaths_.reset();
+    db_.reset();
+    auto retired = std::move(importResources_);
 
     isOpen_ = false;
     IMAGINE_LOG_INFO("Catalog closed successfully");
+    return retired;
 }
 
 bool Catalog::isOpen() const {
@@ -201,9 +311,9 @@ Result<int64_t> Catalog::makePathsRelative(const std::string& photosDir, const s
     return res;
 }
 
-void Catalog::syncPhotosDirFromImporter() {
+void Catalog::syncPhotosDirFromImporter(const std::shared_ptr<ImportResources>& resources) {
     std::unique_lock<std::shared_mutex> lock(rwMutex_);
-    if (photosDir_.empty() && importer_ && !importer_->photosDir().empty()) {
+    if (importResources_ == resources && photosDir_.empty() && importer_ && !importer_->photosDir().empty()) {
         photosDir_ = importer_->photosDir();
     }
 }
@@ -214,44 +324,38 @@ Result<ImportProgress> Catalog::importDirectory(
     Importer::ProgressCallback progressCb,
     bool useDirectoryAsRoot
 ) {
-    Importer* imp = nullptr;
+    std::shared_ptr<ImportResources> resources;
     {
         std::shared_lock<std::shared_mutex> lock(rwMutex_);
         if (!isOpen_ || !importer_) {
             return Status::internal("Catalog is not open");
         }
-        imp = importer_.get();
+        resources = importResources_;
     }
-    auto res = imp->importDirectory(path, recursive, std::move(progressCb), useDirectoryAsRoot);
-    syncPhotosDirFromImporter();
+    auto res = resources->importer->importDirectory(path, recursive, std::move(progressCb), useDirectoryAsRoot);
+    syncPhotosDirFromImporter(resources);
     return res;
 }
 
 Result<MediaItem> Catalog::importFile(const std::string& path) {
-    Importer* imp = nullptr;
+    std::shared_ptr<ImportResources> resources;
     {
         std::shared_lock<std::shared_mutex> lock(rwMutex_);
         if (!isOpen_ || !importer_) {
             return Status::internal("Catalog is not open");
         }
-        imp = importer_.get();
+        resources = importResources_;
     }
-    auto res = imp->importFile(path);
+    auto res = resources->importer->importFile(path);
     if (res.isOk()) {
-        syncPhotosDirFromImporter();
+        syncPhotosDirFromImporter(resources);
     }
     return res;
 }
 
 void Catalog::cancelImport() {
-    Importer* imp = nullptr;
-    {
-        std::shared_lock<std::shared_mutex> lock(rwMutex_);
-        imp = importer_.get();
-    }
-    if (imp) {
-        imp->cancel();
-    }
+    std::shared_lock<std::shared_mutex> lock(rwMutex_);
+    if (importer_) importer_->cancel();
 }
 
 Result<QueryResult> Catalog::query(const QueryCriteria& criteria) {
@@ -400,6 +504,9 @@ Status Catalog::renameMedia(MediaId id, const std::string& newFileName, std::str
             return Status::alreadyExists("A file with this name already exists on disk: " + pathToUtf8(newDiskFs));
         }
     }
+    std::lock_guard dbLock(db_->mutex());
+    auto movable = checkOriginalCanMove(id, oldDiskFs);
+    if (!movable.isOk()) return movable;
     std::filesystem::rename(oldDiskFs, newDiskFs, ec);
     if (ec) {
         return Status::ioError("Failed to rename file on disk: " + ec.message());
@@ -539,46 +646,15 @@ Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::s
         targetDirFs = destFs;
     }
 
-    // Enforce that move destination must reside inside the photos root directory
-    std::filesystem::path normTarget = stripExtendedPrefix(targetDirFs).lexically_normal();
-    std::filesystem::path normRoot = stripExtendedPrefix(photosDirFs).lexically_normal();
-
-    bool isSameDir = false;
-    std::error_code ecEq;
-    if (std::filesystem::equivalent(normTarget, normRoot, ecEq) && !ecEq) {
-        isSameDir = true;
-    }
-    if (!isSameDir) {
-        std::string sTarget = normTarget.generic_string();
-        std::string sRoot = normRoot.generic_string();
-        while (sTarget.size() > 1 && sTarget.back() == '/') sTarget.pop_back();
-        while (sRoot.size() > 1 && sRoot.back() == '/') sRoot.pop_back();
-#if defined(_WIN32)
-        auto toLower = [](std::string s) {
-            for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            return s;
-        };
-        isSameDir = (toLower(sTarget) == toLower(sRoot));
-#else
-        isSameDir = (sTarget == sRoot);
-#endif
-    }
-
-    bool insidePhotosDir = isSameDir || Importer::isInsideRootDir(normTarget, normRoot);
-    if (!insidePhotosDir) {
-        std::error_code ecCan;
-        std::filesystem::path canTarget = stripExtendedPrefix(std::filesystem::weakly_canonical(targetDirFs, ecCan));
-        std::filesystem::path canRoot = stripExtendedPrefix(std::filesystem::weakly_canonical(photosDirFs, ecCan));
-        if (canTarget == canRoot || Importer::isInsideRootDir(canTarget, canRoot)) {
-            insidePhotosDir = true;
-        }
-    }
-
-    if (!insidePhotosDir) {
+    const auto canonicalRoot = stripExtendedPrefix(fs::canonical(photosDirFs, ec));
+    if (ec) return Status::ioError("Cannot resolve photos directory: " + ec.message());
+    const auto canonicalTarget = stripExtendedPrefix(fs::weakly_canonical(targetDirFs, ec));
+    if (ec) return Status::ioError("Cannot resolve destination directory: " + ec.message());
+    if (canonicalTarget != canonicalRoot && !Importer::isInsideRootDir(canonicalTarget, canonicalRoot)) {
         return Status::invalidArgument("Move destination must be inside the photos directory (" +
-                                      pathToUtf8(normRoot) + "): " + pathToUtf8(normTarget));
+                                       pathToUtf8(canonicalRoot) + "): " + pathToUtf8(canonicalTarget));
     }
-
+    targetDirFs = canonicalTarget;
 
     std::filesystem::path newDiskFs = targetDirFs / pathFromUtf8(item.file_name);
 
@@ -608,6 +684,9 @@ Status Catalog::moveMedia(MediaId id, const std::string& destinationPath, std::s
         return Status::alreadyExists("A media item with path already exists in the catalog: " + newStoredPath);
     }
 
+    std::lock_guard dbLock(db_->mutex());
+    auto movable = checkOriginalCanMove(id, oldDiskFs);
+    if (!movable.isOk()) return movable;
     bool diskMoved = false;
 
     if (!oldDiskPath.empty()) {
@@ -702,7 +781,7 @@ Status Catalog::setDateTaken(MediaId id, int64_t dateTaken, const std::string& d
             days += 719468;
             const int64_t era = (days >= 0 ? days : days - 146096) / 146097;
             const unsigned doe = static_cast<unsigned>(days - era * 146097);
-            const unsigned yoe = (doe - doe / 1024 + doe / 1460 - doe / 36524) / 365;
+            const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
             const int64_t y = static_cast<int64_t>(yoe) + era * 400;
             const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
             const unsigned mp = (5 * doy + 2) / 153;
@@ -733,21 +812,44 @@ Status Catalog::setGps(MediaId id, bool hasGps, double latitude, double longitud
     if (!isOpen_ || !db_) {
         return Status::internal("Catalog is not open");
     }
-    Status updateStatus = db_->updateGps(id, hasGps, latitude, longitude, altitude);
-    if (!updateStatus.isOk()) {
-        return updateStatus;
-    }
-    Status tagStatus = db_->applyGpsPlaceTags(id, hasGps, latitude, longitude);
-    if (!tagStatus.isOk()) {
-        IMAGINE_LOG_WARN("Failed to apply GPS place tags for media " + std::to_string(id) + ": " + tagStatus.message());
-    }
-    return updateStatus;
+    return db_->updateGpsWithPlaceTags(id, hasGps, latitude, longitude, altitude);
 }
 
 namespace {
 std::function<void(MediaId)> gClipEvictionHook = nullptr;
 
-namespace fs = std::filesystem;
+// Check live directory entries in bulk. Every reparse point is treated as a possible
+// alias, including Windows reparse tags that std::filesystem reports as regular.
+bool inspectOriginalDirectory(const fs::path& directory, std::unordered_set<fs::path>* ordinaryNames) {
+#ifdef _WIN32
+    struct FindHandle {
+        HANDLE value;
+        ~FindHandle() { if (value != INVALID_HANDLE_VALUE) FindClose(value); }
+    };
+    WIN32_FIND_DATAW entry;
+    FindHandle handle{FindFirstFileExW((directory / L"*").c_str(), FindExInfoBasic,
+                                      &entry, FindExSearchNameMatch, nullptr, 0)};
+    if (handle.value == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND;
+    do {
+        const auto attributes = entry.dwFileAttributes;
+        if (attributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            if (!ordinaryNames) return false;
+        } else if (ordinaryNames && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            ordinaryNames->emplace(entry.cFileName);
+        }
+    } while (FindNextFileW(handle.value, &entry));
+    return GetLastError() == ERROR_NO_MORE_FILES;
+#else
+    std::error_code ec;
+    const fs::directory_iterator end;
+    for (fs::directory_iterator it(directory, ec); !ec && it != end; it.increment(ec)) {
+        const auto type = it->symlink_status(ec).type();
+        if (ec || (type == fs::file_type::symlink && !ordinaryNames)) return false;
+        if (ordinaryNames && type == fs::file_type::regular) ordinaryNames->insert(it->path().filename());
+    }
+    return !ec;
+#endif
+}
 
 bool isSha256(std::string_view hash) {
     return hash.size() == 64 && hash.find_first_not_of("0123456789abcdef") == std::string_view::npos;
@@ -878,6 +980,78 @@ Result<std::vector<DeleteResult>> Catalog::resolveDuplicateGroup(
     return removeMedia(&keeper, remove, deleteFromDisk, mergeMetadata);
 }
 
+Status Catalog::excludeReferencedPaths(std::unordered_set<fs::path>& pathsToRemove,
+                                       const std::unordered_set<MediaId>& removedIds,
+                                       const fs::path& rootPath) {
+    std::error_code ec;
+    if (!originalPaths_) originalPaths_ = std::make_unique<OriginalPathIndex>();
+    auto indexed = originalPaths_->refresh(db_->connection());
+    if (!indexed.isOk()) return indexed;
+
+    // Canonical names identify entries, so sibling hardlinks have distinct paths.
+    const auto protect = [&](const fs::path& canonical) {
+        pathsToRemove.erase(canonical);
+    };
+    const auto checkPath = [&](const fs::path& path) {
+        const auto canonical = fs::canonical(path, ec);
+        if (!ec) protect(stripExtendedPrefix(canonical));
+    };
+    for (const auto& [id, path] : originalPaths_->legacy) {
+        if (pathsToRemove.empty()) break;
+        if (!removedIds.contains(id)) checkPath(pathFromUtf8(resolvePhotoPathInternal(path)));
+    }
+
+    std::unordered_set<fs::path> targetFolders;
+    for (const auto& path : pathsToRemove) targetFolders.insert(path.parent_path());
+    for (const auto& [folder, names] : originalPaths_->folders) {
+        if (pathsToRemove.empty()) break;
+        const auto directory = folder.empty() ? rootPath : rootPath / folder;
+        fs::path canonicalDirectory;
+        std::unordered_set<fs::path> ordinaryNames;
+        if (!photosDir_.empty()) {
+            const auto resolved = folder.empty() ? rootPath : fs::canonical(directory, ec);
+            if (folder.empty() || !ec) {
+                canonicalDirectory = stripExtendedPrefix(resolved);
+                // A different physical folder can refer to a target only
+                // through an alias, which the live listing checks for.
+                if (!targetFolders.contains(canonicalDirectory) &&
+                    inspectOriginalDirectory(resolved, nullptr)) {
+                    continue;
+                }
+                if (!inspectOriginalDirectory(resolved, &ordinaryNames)) ordinaryNames.clear();
+            }
+        }
+        for (const auto& [name, id] : names) {
+            if (pathsToRemove.empty()) break;
+            if (removedIds.contains(id)) continue;
+            if (ordinaryNames.contains(name)) {
+                protect(canonicalDirectory / name);
+            } else if (photosDir_.empty()) {
+                checkPath(pathFromUtf8(resolvePhotoPathInternal(pathToUtf8(folder / name))));
+            } else {
+                checkPath(directory / name);
+            }
+        }
+    }
+    return Status::ok();
+}
+
+Status Catalog::checkOriginalCanMove(MediaId id, const fs::path& source) {
+    std::error_code ec;
+    const auto canonical = stripExtendedPrefix(fs::canonical(source, ec));
+    if (ec) return Status::ioError("Cannot resolve original: " + ec.message());
+    std::unordered_set<fs::path> paths{canonical};
+    fs::path root;
+    if (!photosDir_.empty()) {
+        root = fs::canonical(pathFromUtf8(photosDir_), ec);
+        if (ec) return Status::ioError("Cannot resolve photos directory: " + ec.message());
+    }
+    auto status = excludeReferencedPaths(paths, {id}, root);
+    if (!status.isOk()) return status;
+    if (paths.empty()) return Status::alreadyExists("Another catalog entry uses this original");
+    return Status::ok();
+}
+
 Result<std::vector<DeleteResult>> Catalog::removeMedia(
     const ReviewedMedia* keeper, const std::vector<ReviewedMedia>& remove,
     bool deleteFromDisk, bool mergeMetadata) {
@@ -935,7 +1109,7 @@ Result<std::vector<DeleteResult>> Catalog::removeMedia(
                 return Status::invalidArgument("A reachable photos directory is required to delete files");
             }
 
-            std::unordered_map<fs::path, size_t> pathsToRemove;
+            std::unordered_set<fs::path> pathsToRemove;
             for (size_t i = 0; i < items.size(); ++i) {
                 const auto path = pathFromUtf8(resolveRecordedPathInternal(items[i].file_path));
                 const auto fileStatus = fs::symlink_status(path, ec);
@@ -951,30 +1125,15 @@ Result<std::vector<DeleteResult>> Catalog::removeMedia(
                     return Status::ioError("Cannot delete read-only file: " + pathToUtf8(path));
                 }
 #endif
-                if (pathsToRemove.emplace(canonical, i).second) {
+                if (pathsToRemove.insert(canonical).second) {
                     files[i].original = canonical;
                 }
             }
 
-            // Canonical names identify entries, so sibling hardlinks keep their distinct paths.
-            auto query = db_->connection().prepare("SELECT id, file_path FROM media_items;");
-            if (!query.isOk()) return query.status();
-            auto stmt = std::move(query.value());
-            auto step = db::StepResult::Done;
-            while (!pathsToRemove.empty() && (step = stmt.step()) == db::StepResult::Row) {
-                if (removedIds.contains(stmt.getInt64(0))) continue;
-                const auto recorded = stmt.getString(1);
-                const auto path = pathFromUtf8(resolvePhotoPathInternal(recorded));
-                const auto canonical = stripExtendedPrefix(fs::canonical(path, ec));
-                if (ec) continue;
-                const auto match = pathsToRemove.find(canonical);
-                if (match != pathsToRemove.end()) {
-                    files[match->second].original.clear();
-                    pathsToRemove.erase(match);
-                }
-            }
-            if (!pathsToRemove.empty() && step == db::StepResult::Error) {
-                return Status::databaseError("Failed to check original-file references: " + db_->connection().lastErrorMessage());
+            auto checked = excludeReferencedPaths(pathsToRemove, removedIds, rootPath);
+            if (!checked.isOk()) return checked;
+            for (auto& file : files) {
+                if (!pathsToRemove.contains(file.original)) file.original.clear();
             }
         }
 
@@ -993,10 +1152,12 @@ Result<std::vector<DeleteResult>> Catalog::removeMedia(
             auto deleted = db_->deleteMedia(item.id);
             if (!deleted.isOk()) return deleted;
         }
+        if (originalPaths_) originalPaths_->removeDeleted(db_->connection(), items);
         return Status::ok();
     });
 
     if (!status.isOk()) {
+        originalPaths_.reset();
         auto message = status.message();
         for (auto& file : files) {
             auto restored = file.restore();

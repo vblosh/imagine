@@ -6,6 +6,112 @@ import re
 from playwright.sync_api import Page, expect
 
 
+def test_loupe_tracks_displayed_item_during_reordered_refresh(server, page: Page):
+    page.goto(server['url'])
+    expect(page.locator('.photo-card')).to_have_count(6)
+    page.locator('.photo-card').nth(0).dblclick()
+    result = page.evaluate('''async () => {
+        const { state } = await import('./state.js');
+        const { loadMedia } = await import('./views.js');
+        const { loupeNext, getCurrentLoupeItem } = await import('./loupe.js');
+        const originalFetch = window.fetch;
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        const items = [...state.mediaItems].reverse();
+        window.fetch = async (url, options) => {
+            if (new URL(url, location.href).pathname === '/api/media') {
+                await gate;
+                return new Response(JSON.stringify({ items, total: items.length }),
+                    { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            return originalFetch(url, options);
+        };
+        try {
+            const pending = loadMedia(false);
+            await loupeNext();
+            const displayedId = state.loupeMediaId;
+            release();
+            await pending;
+            return { displayedId, currentId: getCurrentLoupeItem()?.id,
+                     indexedId: state.mediaItems[state.loupeIndex]?.id };
+        } finally { window.fetch = originalFetch; }
+    }''')
+    assert result['displayedId'] == result['currentId'] == result['indexedId']
+    expect(page.locator('#loupeModal')).to_be_visible()
+
+
+def test_loupe_closes_when_displayed_item_disappears_on_refresh(server, page: Page):
+    page.goto(server['url'])
+    expect(page.locator('.photo-card')).to_have_count(6)
+    page.locator('.photo-card').nth(0).dblclick()
+    result = page.evaluate('''async () => {
+        const { state } = await import('./state.js');
+        const { loadMedia } = await import('./views.js');
+        const { getCurrentLoupeItem } = await import('./loupe.js');
+        const originalFetch = window.fetch;
+        const items = state.mediaItems.filter(item => item.id !== state.loupeMediaId);
+        window.fetch = async (url, options) => {
+            if (new URL(url, location.href).pathname === '/api/media') {
+                return new Response(JSON.stringify({ items, total: items.length }),
+                    { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            return originalFetch(url, options);
+        };
+        try {
+            await loadMedia();
+            return { index: state.loupeIndex, current: getCurrentLoupeItem() };
+        } finally { window.fetch = originalFetch; }
+    }''')
+    assert result == {'index': -1, 'current': None}
+    expect(page.locator('#loupeModal')).to_be_hidden()
+
+
+def test_missing_loupe_item_keeps_dirty_editor_until_discard(server, page: Page):
+    page.goto(server['url'])
+    expect(page.locator('.photo-card')).to_have_count(6)
+    page.locator('.photo-card').nth(0).dblclick()
+    page.locator('#loupeQuickEditBtn').click()
+    page.locator('#quickEditRotateRightBtn').click()
+    result = page.evaluate('''async () => {
+        const { state } = await import('./state.js');
+        const { loadMedia } = await import('./views.js');
+        const { getCurrentLoupeItem } = await import('./loupe.js');
+        const { quickEditState } = await import('./quick-edit.js');
+        const originalFetch = window.fetch;
+        const displayedId = state.loupeMediaId;
+        const items = state.mediaItems.filter(item => item.id !== displayedId);
+        window.fetch = async (url, options) => {
+            if (new URL(url, location.href).pathname === '/api/media') {
+                return new Response(JSON.stringify({ items, total: items.length }),
+                    { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            return originalFetch(url, options);
+        };
+        try {
+            await loadMedia();
+            return { index: state.loupeIndex, displayedId: state.loupeMediaId,
+                     current: getCurrentLoupeItem(), missing: state.loupeMediaMissing,
+                     editorId: quickEditState.photoId, dirty: quickEditState.isDirty };
+        } finally { window.fetch = originalFetch; }
+    }''')
+    assert result['index'] >= 0
+    assert result['displayedId'] == result['editorId']
+    assert result['current'] is None and result['missing'] and result['dirty']
+    expect(page.locator('#loupeModal')).to_be_visible()
+    expect(page.locator('#quickEditContainer')).to_be_visible()
+    page.locator('#quickEditCancelBtn').click()
+    expect(page.locator('#discardChangesModal')).to_be_visible()
+    page.locator('#cancelDiscardChangesBtn').click()
+    expect(page.locator('#quickEditContainer')).to_be_visible()
+    selected = page.evaluate('Array.from(window.imagineUI.state.selectedIds)')
+    page.keyboard.press('Control+a')
+    assert page.evaluate('Array.from(window.imagineUI.state.selectedIds)') == selected
+    page.locator('#quickEditCancelBtn').click()
+    page.locator('#confirmDiscardChangesBtn').click()
+    expect(page.locator('#loupeModal')).to_be_hidden()
+    assert page.evaluate("window.imagineUI.state.loupeIndex") == -1
+
+
 def test_open_loupe_via_double_click_and_inspector_overlay(server, page: Page):
     """Opening loupe modal via card double-click and via the inspector overlay button."""
     page.goto(server["url"])

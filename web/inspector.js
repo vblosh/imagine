@@ -18,10 +18,9 @@ import {
 import { dom, showToast } from './dom.js';
 import { state } from './state.js';
 import { updateItemRating, renderStarWidget } from './rating-flag.js';
-import { loadMetadata, renderGrid, loadMedia } from './grid.js';
+import { loadMetadata, loadMedia } from './grid.js';
 import { t } from './i18n.js';
 import { saveInspectorCollapsedState } from './persistence.js';
-import { timelinePeriodContainsTimestamp } from './timeline-range.js';
 import { ensureLeafletLoaded } from './leaflet-loader.js';
 
 let currentInspectorFetchId = 0;
@@ -188,7 +187,7 @@ export function renderInspectorContent(item) {
 
   // EXIF properties
   if (dom.exifSection) {
-    dom.exifSection.style.display = (item.media_type === 'audio') ? 'none' : 'block';
+    dom.exifSection.style.display = item.media_type === 'audio' ? 'none' : '';
   }
   const exif = item.exif || {};
   const cameraStr = [exif.camera_make, exif.camera_model].filter(Boolean).join(' ') || '-';
@@ -319,8 +318,7 @@ export function renderInspectorTags(item) {
     badge.querySelector('.remove-tag').addEventListener('click', async () => {
       try {
         await api.del(`/api/media/${item.id}/tags/${tag.id}`);
-        updateInspector();
-        loadMetadata();
+        await Promise.all([loadMedia(false, { preserveScroll: true }), loadMetadata()]);
       } catch (err) {
         console.error('Failed to remove tag:', err);
         showToast(t('toast_failed_remove_tag', { error: err.message || 'Error' }), 'error');
@@ -756,7 +754,6 @@ export async function handleSaveRename() {
   const targetItemId = currentInspectorItem.id;
   try {
     const res = await api.post(`/api/media/${targetId}/rename`, { name: finalName });
-    if (currentInspectorItem?.id !== targetItemId) return;
     if (res && res.file_name) {
       targetItem.file_name = res.file_name;
       if (res.file_path) targetItem.file_path = res.file_path;
@@ -772,37 +769,10 @@ export async function handleSaveRename() {
         if (dom.infoFilePath) dom.infoFilePath.textContent = res.file_path || targetItem.file_path || '-';
       }
 
-      const grid = dom.mediaGrid || document.getElementById('mediaGrid');
-      if (grid) {
-        const card = grid.querySelector(`.photo-card[data-id="${CSS.escape(String(targetId))}"]`);
-        if (card) {
-          const fnEl = card.querySelector('.card-filename');
-          if (fnEl) {
-            fnEl.textContent = res.file_name;
-            fnEl.title = res.file_name;
-          }
-        }
-      }
-
-      if (state.sortBy === 'file_name') {
-        state.mediaItems.sort((a, b) => {
-          const fa = (a.file_name || '').toLowerCase();
-          const fb = (b.file_name || '').toLowerCase();
-          if (fa !== fb) {
-            return state.sortDesc ? fb.localeCompare(fa) : fa.localeCompare(fb);
-          }
-          const idA = a.id || 0;
-          const idB = b.id || 0;
-          return state.sortDesc ? (idB - idA) : (idA - idB);
-        });
-        const prevScroll = dom.gridScrollContainer ? dom.gridScrollContainer.scrollTop : 0;
-        renderGrid();
-        if (dom.gridScrollContainer) dom.gridScrollContainer.scrollTop = prevScroll;
-      }
-
-      if (currentInspectorItem && currentInspectorItem.id === targetId) {
+      if (currentInspectorItem && currentInspectorItem.id === targetItemId) {
         closeRenameForm();
       }
+      await loadMedia(false, { preserveScroll: true });
       showToast(t('toast_file_renamed_to', { name: res.file_name }), 'success');
     }
   } catch (err) {
@@ -869,7 +839,6 @@ export async function handleSaveDateTaken() {
   const targetItemId = currentInspectorItem.id;
   try {
     const res = await api.post(`/api/media/${targetId}/date`, { date_taken: ts });
-    if (currentInspectorItem?.id !== targetItemId) return;
     if (res && res.date_taken !== undefined) {
       targetItem.date_taken = res.date_taken;
       if (targetItem.exif) {
@@ -890,45 +859,10 @@ export async function handleSaveDateTaken() {
         if (dom.infoDateTaken) dom.infoDateTaken.textContent = formatDateTime(res.date_taken);
       }
 
-      // If active timeline filter is set and item moved outside the period, reload media
-      if (state.activeTimelinePeriod) {
-        if (!timelinePeriodContainsTimestamp(state.activeTimelinePeriod, res.date_taken)) {
-          if (currentInspectorItem && currentInspectorItem.id === targetId) {
-            closeDateTakenForm();
-          }
-          showToast(t('toast_date_updated_short'), 'success');
-          await Promise.all([loadMedia(), loadMetadata()]);
-          return;
-        }
-      }
-
-      // Re-sort media items if sorted by date_taken (default)
-      if (state.sortBy === 'date_taken') {
-        state.mediaItems.sort((a, b) => {
-          const da = (a.date_taken !== undefined && a.date_taken !== null) ? a.date_taken : 0;
-          const db = (b.date_taken !== undefined && b.date_taken !== null) ? b.date_taken : 0;
-          if (da !== db) {
-            return state.sortDesc ? (db - da) : (da - db);
-          }
-          const idA = a.id || 0;
-          const idB = b.id || 0;
-          return state.sortDesc ? (idB - idA) : (idA - idB);
-        });
-      }
-
-      if (state.loupeIndex >= 0) {
-        state.loupeIndex = state.mediaItems.findIndex(m => m.id === targetId);
-      }
-
-      const prevScroll = dom.gridScrollContainer ? dom.gridScrollContainer.scrollTop : 0;
-      renderGrid();
-      if (dom.gridScrollContainer) dom.gridScrollContainer.scrollTop = prevScroll;
-
-      loadMetadata();
-
-      if (currentInspectorItem && currentInspectorItem.id === targetId) {
+      if (currentInspectorItem && currentInspectorItem.id === targetItemId) {
         closeDateTakenForm();
       }
+      await Promise.all([loadMedia(false, { preserveScroll: true }), loadMetadata()]);
       showToast(t('toast_date_updated_short'), 'success');
     }
   } catch (err) {

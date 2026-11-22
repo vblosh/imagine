@@ -92,9 +92,9 @@ def test_map_markers_and_popup(server, page: Page):
 
 def open_movable_cluster(server, page: Page):
     photos = {}
-    for name, lon in [("sunset.bmp", 2.2945), ("birthday.bmp", 2.3376)]:
+    for name, lon, altitude in [("sunset.bmp", 2.2945, 32.5), ("birthday.bmp", 2.3376, 41.0)]:
         photo_id = next(item["id"] for item in server["env"]["items"] if item["file_name"] == name)
-        coords = {"latitude": 48.8584, "longitude": lon}
+        coords = {"latitude": 48.8584, "longitude": lon, "altitude": altitude}
         response = page.request.post(f"{server['url']}/api/media/{photo_id}/gps", data=coords)
         assert response.ok
         photos[name] = (photo_id, coords)
@@ -146,6 +146,7 @@ def test_map_move_current_photo_in_cluster(server, page: Page):
         exif = page.request.get(f"{server['url']}/api/media/{item_id}").json()["exif"]
         assert exif["latitude"] == approx(expected["lat"] if name == active_name else original["latitude"])
         assert exif["longitude"] == approx(expected["lng"] if name == active_name else original["longitude"])
+        assert exif["altitude"] == approx(original["altitude"])
 
 
 def test_map_move_entire_cluster_to_search_result(server, page: Page):
@@ -167,10 +168,11 @@ def test_map_move_entire_cluster_to_search_result(server, page: Page):
     expect(page.locator("#mapPhotoCount")).to_have_text("4")
     expect(page.locator(".custom-photo-pin", has=page.locator(".photo-pin-count", has_text="2"))).to_be_visible()
 
-    for photo_id, _ in photos.values():
+    for photo_id, original in photos.values():
         exif = page.request.get(f"{server['url']}/api/media/{photo_id}").json()["exif"]
         assert exif["latitude"] == approx(51.5)
         assert exif["longitude"] == approx(-0.12)
+        assert exif["altitude"] == approx(original["altitude"])
 
 
 def test_inspector_show_on_map(server, page: Page):

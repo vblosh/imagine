@@ -191,7 +191,7 @@ def test_file_info_panel_resize_drag_and_reset(server, page: Page):
 
 
 def test_camera_exposure_panel_resize_drag_and_reset(server, page: Page):
-    """Dragging Camera & Exposure resizer expands height; double-click resets."""
+    """Camera & Exposure can shrink and expand while keeping its content accessible."""
     page.goto(server["url"])
 
     card = page.locator(".photo-card", has_text="mountain.bmp")
@@ -206,6 +206,7 @@ def test_camera_exposure_panel_resize_drag_and_reset(server, page: Page):
     initial_height = initial_bb["height"]
 
     # Drag down by 50px to expand
+    resizer.scroll_into_view_if_needed()
     r_bb = resizer.bounding_box()
     assert r_bb is not None
     page.mouse.move(r_bb["x"] + r_bb["width"] / 2, r_bb["y"] + r_bb["height"] / 2)
@@ -216,6 +217,25 @@ def test_camera_exposure_panel_resize_drag_and_reset(server, page: Page):
     expanded_bb = exif_sec.bounding_box()
     assert expanded_bb is not None
     assert expanded_bb["height"] > initial_height + 35
+
+    # Shrink below the content height and verify the grip stays inside the panel.
+    resizer.scroll_into_view_if_needed()
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    x = r_bb["x"] + r_bb["width"] / 2
+    y = r_bb["y"] + r_bb["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x, y - 100)
+    page.mouse.up()
+
+    shrunk_bb = exif_sec.bounding_box()
+    assert shrunk_bb is not None
+    assert shrunk_bb["height"] < initial_height
+    assert page.locator("#exifBody").evaluate("el => el.scrollHeight > el.clientHeight")
+    r_bb = resizer.bounding_box()
+    assert r_bb is not None
+    assert r_bb["y"] + r_bb["height"] <= shrunk_bb["y"] + shrunk_bb["height"]
 
     # Double-click to reset
     resizer.dblclick()
@@ -423,6 +443,70 @@ def test_inspector_change_caption(server, page: Page):
     page.reload()
     page.locator(".photo-card", has_text="mountain.bmp").click()
     expect(page.locator("#infoCaption")).to_have_text("Majestic snow capped peak")
+
+
+def test_inspector_rename_refreshes_paginated_sort_and_search(server, page: Page):
+    page.goto(server["url"])
+    cards = page.locator('.photo-card')
+    expect(cards.first).to_be_visible()
+    page.evaluate("""async () => {
+      const {state} = await import('./state.js');
+      const {loadMedia} = await import('./grid.js');
+      state.mediaLimit = 2; state.sortBy = 'file_name'; state.sortDesc = false;
+      await loadMedia();
+    }""")
+    expect(cards).to_have_count(2)
+    first = cards.first
+    old_name = first.locator('.card-filename').inner_text()
+    first.click()
+    page.locator('#renameFileBtn').click()
+    page.locator('#renameFileInput').fill('zzzz-renamed.bmp')
+    page.locator('#saveRenameBtn').click()
+    expect(cards.filter(has_text=old_name)).to_have_count(0)
+    expect(cards.filter(has_text='zzzz-renamed.bmp')).to_have_count(0)
+    expect(cards).to_have_count(2)
+
+    page.evaluate("""async () => {
+      const {state} = await import('./state.js');
+      const {loadMedia} = await import('./grid.js');
+      state.searchText = 'zzzz-renamed'; await loadMedia();
+    }""")
+    cards.filter(has_text='zzzz-renamed.bmp').click()
+    page.locator('#renameFileBtn').click()
+    page.locator('#renameFileInput').fill('new-name.bmp')
+    page.locator('#saveRenameBtn').click()
+    expect(cards).to_have_count(0)
+
+
+def test_inspector_tag_removal_refreshes_filtered_membership(server, page: Page):
+    page.goto(server["url"])
+    cards = page.locator('.photo-card')
+    expect(cards.first).to_be_visible()
+    page.locator('.tag-category-group[data-category="places"] .category-header').click()
+    page.locator('#tagCategoryPlaces .tag-item', has_text='Alps').click()
+    expect(cards).to_have_count(1)
+    cards.filter(has_text='mountain.bmp').click()
+    page.locator('#inspectorTags .tag-badge', has_text='Alps').locator('.remove-tag').click()
+    expect(cards).to_have_count(0)
+
+
+def test_inspector_date_change_refills_sorted_page(server, page: Page):
+    page.goto(server["url"])
+    page.evaluate("""async () => {
+      const {state} = await import('./state.js');
+      const {loadMedia} = await import('./grid.js');
+      state.mediaLimit = 2; state.sortBy = 'date_taken'; state.sortDesc = true;
+      await loadMedia();
+    }""")
+    first = page.locator('.photo-card').first
+    old_name = first.locator('.card-filename').inner_text()
+    first.click()
+    page.locator('#editDateTakenBtn').click()
+    page.locator('#editDateTakenInput').fill('1990-01-01T12:00')
+    with page.expect_response(lambda r: '/api/media?' in r.url and r.request.method == 'GET'):
+        page.locator('#saveDateTakenBtn').click()
+    expect(page.locator('.photo-card')).to_have_count(2)
+    expect(page.locator('.photo-card', has_text=old_name)).to_have_count(0)
 
 
 def test_inspector_move_button_and_outside_rejection(server, page: Page):

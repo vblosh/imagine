@@ -131,7 +131,7 @@ export async function initMap() {
       if (e && e.originalEvent && e.originalEvent._pinClicked) return;
       const { lat, lng } = state.mapInstance.wrapLatLng(e.latlng);
       if (state.mapMoveIds) {
-        await applyGeotagBatch(state.mapMoveIds, lat, lng);
+        await applyGeotagBatch(state.mapMoveIds, lat, lng, null);
       } else if (state.placementMediaIds && state.placementMediaIds.size > 0) {
         const ids = Array.from(state.placementMediaIds);
         await applyGeotagBatch(ids, lat, lng);
@@ -978,7 +978,7 @@ export async function applyGeotagBatch(ids, lat, lon, alt = 0.0) {
         has_gps: true,
         latitude: lat,
         longitude: lon,
-        altitude: alt
+        ...(alt === null ? { preserve_altitude: true } : { altitude: alt })
       });
       const failedIds = new Set(result.failed_ids);
       batch.forEach(id => {
@@ -996,7 +996,8 @@ export async function applyGeotagBatch(ids, lat, lon, alt = 0.0) {
   if (updatedIds.size > 0) {
     state.mediaItems.forEach(item => {
       if (!updatedIds.has(item.id)) return;
-      item.exif = { ...item.exif, has_gps: true, latitude: lat, longitude: lon, altitude: alt };
+      item.exif = { ...item.exif, has_gps: true, latitude: lat, longitude: lon };
+      if (alt !== null) item.exif.altitude = alt;
     });
 
     cancelMapMove();
@@ -1149,7 +1150,7 @@ export function createSearchPopupElement(title, subtitle, lat, lng) {
         ? Array.from(state.placementMediaIds)
         : state.selectedIds.size === 1 ? Array.from(state.selectedIds) : []);
       const searchMarker = state.searchMarker;
-      const updated = await applyGeotagBatch(ids, latNum, lngNum);
+      const updated = await applyGeotagBatch(ids, latNum, lngNum, moveIds ? null : 0);
       if (updated && searchMarker && state.searchMarker === searchMarker) {
         searchMarker.remove();
         state.searchMarker = null;

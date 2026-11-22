@@ -16,6 +16,11 @@ export const LOUPE_MAX_ZOOM = 5.0;
 export const LOUPE_ZOOM_STEPS = [1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0];
 
 let loupeCustomItems = null;
+let actionsDisabledBeforeMissing = false;
+
+window.addEventListener('imagine:quickEditClosed', () => {
+  if (state.loupeMediaMissing) closeLoupe();
+});
 
 export function isLoupeActionDisabled() {
   return Boolean(state.loupeDisabledActions);
@@ -28,11 +33,32 @@ export function getLoupeItems() {
 }
 
 export function getCurrentLoupeItem() {
-  const items = getLoupeItems();
-  if (state.loupeIndex >= 0 && state.loupeIndex < items.length) {
-    return items[state.loupeIndex];
+  if (state.loupeIndex < 0 || state.loupeMediaId === null || state.loupeMediaMissing) return null;
+  return getLoupeItems().find(item => item.id === state.loupeMediaId) || null;
+}
+
+// A reload can reorder or remove items while the loupe is displaying one.
+export function reconcileLoupeAfterMediaLoad() {
+  if (state.loupeIndex < 0 || loupeCustomItems || state.loupeMediaId === null) return;
+  const index = state.mediaItems.findIndex(item => item.id === state.loupeMediaId);
+  if (index < 0) {
+    if (quickEditState.isOpen) {
+      // Keep the editor and loupe active, but prevent actions against the old index.
+      if (!state.loupeMediaMissing) actionsDisabledBeforeMissing = state.loupeDisabledActions;
+      state.loupeMediaMissing = true;
+      state.loupeDisabledActions = true;
+    } else {
+      closeLoupe();
+    }
+    return;
   }
-  return null;
+  if (state.loupeMediaMissing) {
+    state.loupeMediaMissing = false;
+    state.loupeDisabledActions = actionsDisabledBeforeMissing;
+  }
+  state.loupeIndex = index;
+  updateLoupePosition();
+  updateLoupeControls();
 }
 
 export function openLoupeForMedia(id, options = {}) {
@@ -59,7 +85,9 @@ export function closeLoupe() {
       closeQuickEdit(true);
       return;
     }
+    const wasMissing = state.loupeMediaMissing;
     closeQuickEdit(false);
+    if (wasMissing) return; // The close event already closed the loupe.
   }
   loupeCustomItems = null;
   state.loupeDisabledActions = false;
@@ -85,6 +113,8 @@ export function closeLoupe() {
     dom.loupeFaceOverlay.style.display = '';
   }
   state.loupeIndex = -1;
+  state.loupeMediaId = null;
+  state.loupeMediaMissing = false;
   state.loupeShowOriginal = false;
   resetLoupeZoomToFit();
   if (dom.loupeImg) {
@@ -135,6 +165,8 @@ export function updateLoupeView() {
   const items = getLoupeItems();
   if (state.loupeIndex < 0 || state.loupeIndex >= items.length) return;
   const item = items[state.loupeIndex];
+
+  state.loupeMediaId = item.id;
 
   // Stop previous video/audio
   if (dom.loupeVideo) {
@@ -268,24 +300,28 @@ export function updateLoupeView() {
     dom.loupeFileName.textContent = item.file_path || item.file_name || '-';
     dom.loupeFileName.title = item.file_path || item.file_name || '';
   }
-  if (dom.loupeIndex) {
-    if (loupeCustomItems) {
-      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${items.length}`;
-    } else if (state.semanticSearchActive) {
-      const rank = item.rank || (state.loupeIndex + 1);
-      const queryStr = state.semanticSearchQuery ? ` • "${state.semanticSearchQuery}"` : '';
-      const formatted = t('rank_loupe_format', { rank, total: items.length });
-      dom.loupeIndex.textContent = `${formatted}${queryStr}`;
-    } else if (state.totalCount > items.length) {
-      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${items.length} (${state.totalCount} ${t('total')})`;
-    } else {
-      dom.loupeIndex.textContent = `${state.loupeIndex + 1} / ${items.length}`;
-    }
-  }
+  updateLoupePosition();
 
   resetLoupeZoomToFit();
   updateLoupeControls();
   window.dispatchEvent(new CustomEvent('imagine:loupeChanged', { detail: { mediaId: item.id } }));
+}
+
+export function updateLoupePosition() {
+  const items = getLoupeItems();
+  const item = items[state.loupeIndex];
+  if (!dom.loupeIndex || !item) return;
+
+  const position = `${state.loupeIndex + 1} / ${items.length}`;
+  if (!loupeCustomItems && state.semanticSearchActive) {
+    const rank = item.rank || (state.loupeIndex + 1);
+    const query = state.semanticSearchQuery ? ` • "${state.semanticSearchQuery}"` : '';
+    dom.loupeIndex.textContent = t('rank_loupe_format', { rank, total: items.length }) + query;
+  } else if (!loupeCustomItems && state.totalCount > items.length) {
+    dom.loupeIndex.textContent = `${position} (${state.totalCount} ${t('total')})`;
+  } else {
+    dom.loupeIndex.textContent = position;
+  }
 }
 
 export function toggleLoupePlayback() {

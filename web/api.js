@@ -271,7 +271,9 @@ export function normalizeTimelineEntry(raw) {
     ...raw,
     year,
     month,
-    count: Number.isFinite(Number(raw.count)) ? Number(raw.count) : 0
+    count: Number.isFinite(Number(raw.count)) ? Number(raw.count) : 0,
+    event_tag_ids: Array.isArray(raw.event_tag_ids) ? raw.event_tag_ids.filter(Number.isInteger) : [],
+    place_tag_ids: Array.isArray(raw.place_tag_ids) ? raw.place_tag_ids.filter(Number.isInteger) : []
   };
 }
 

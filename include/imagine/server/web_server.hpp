@@ -55,6 +55,8 @@ public:
 private:
     void setupStaticFileServing();
 
+    // Serialize complete start/stop operations, including listener teardown and join.
+    std::recursive_mutex lifecycleOperationMutex_;
     mutable std::mutex lifecycleMutex_;
     std::condition_variable cv_;
     core::Catalog& catalog_;

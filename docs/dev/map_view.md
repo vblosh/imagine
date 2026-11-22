@@ -112,6 +112,7 @@ Content-Type: application/json
 
 #### Parameter Constraints
 - `ids`: Non-empty array of integer media IDs (maximum batch size: `1,000` items).
+- Set `preserve_altitude` to `true` when moving pins to keep each photo’s recorded elevation while updating latitude and longitude.
 - `has_gps`: Boolean indicating whether coordinates are being applied or cleared.
 - `latitude`: Floating point between `-90.0` and `90.0` (validated when `has_gps` is `true`).
 - `longitude`: Floating point between `-180.0` and `180.0` (validated when `has_gps` is `true`).

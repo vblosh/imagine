@@ -37,6 +37,19 @@ bool jsonBoolOr(const nlohmann::json& j, const char* key, bool defaultVal = fals
     return defaultVal;
 }
 
+std::vector<TagId> jsonTagIds(const nlohmann::json& j, const char* key) {
+    std::vector<TagId> ids;
+    const auto entries = j.find(key);
+    if (entries != j.end() && entries->is_array()) {
+        for (const auto& id : *entries) {
+            if (id.is_number_integer()) {
+                ids.push_back(id.get<TagId>());
+            }
+        }
+    }
+    return ids;
+}
+
 } // namespace
 
 void to_json(nlohmann::json& j, const ExifData& e) {
@@ -294,12 +307,20 @@ void to_json(nlohmann::json& j, const TimelineEntry& t) {
         {"month", t.month},
         {"count", t.count}
     };
+    if (!t.event_tag_ids.empty()) {
+        j["event_tag_ids"] = t.event_tag_ids;
+    }
+    if (!t.place_tag_ids.empty()) {
+        j["place_tag_ids"] = t.place_tag_ids;
+    }
 }
 
 void from_json(const nlohmann::json& j, TimelineEntry& t) {
     t.year = jsonIntOr<int32_t>(j, "year", int32_t{0});
     t.month = jsonIntOr<int32_t>(j, "month", int32_t{0});
     t.count = jsonIntOr<int64_t>(j, "count", int64_t{0});
+    t.event_tag_ids = jsonTagIds(j, "event_tag_ids");
+    t.place_tag_ids = jsonTagIds(j, "place_tag_ids");
 }
 
 } // namespace imagine

@@ -440,6 +440,7 @@ export async function closeSemanticSearch() {
     state.searchDebounceTimer = null;
   }
   state.searchText = '';
+  saveSearchPreference('');
   if (dom.searchInput) {
     dom.searchInput.value = '';
   }

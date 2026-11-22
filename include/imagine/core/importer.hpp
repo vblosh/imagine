@@ -139,6 +139,8 @@ public:
     concurrency::ThreadPool* threadPool() const noexcept { return pool_; }
 
     void cancel() noexcept;
+    // Permanently prevent new work and persistence for a closed catalog.
+    void retire() noexcept;
     bool isCancelled() const noexcept;
     bool isRunning() const noexcept;
     ImportProgress currentProgress() const;
@@ -174,6 +176,8 @@ private:
 
     std::atomic<bool> cancelled_{false};
     std::atomic<bool> running_{false};
+    std::atomic<bool> retired_{false};
+    std::mutex commit_mutex_;
     mutable std::mutex progress_mutex_;
     ImportProgress current_progress_;
 

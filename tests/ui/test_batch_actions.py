@@ -4,6 +4,7 @@ Deterministic UI tests for Batch Actions.
 
 import os
 import re
+import subprocess
 from datetime import datetime, timezone
 
 import pytest
@@ -41,6 +42,27 @@ def test_batch_date_dialog_saves_selected_photos(server, page: Page, shift: bool
         for media_id in ids
     }
     assert actual_dates == expected_dates
+
+
+def test_batch_shift_keeps_undated_photo_and_reports_deleted_target(server, page: Page):
+    page.goto(server['url'])
+    cards = page.locator('.photo-card')
+    expect(cards).to_have_count(6)
+    first, second = [int(cards.nth(i).get_attribute('data-id')) for i in range(2)]
+    cards.nth(0).click()
+    cards.nth(1).click(modifiers=['Control'])
+    page.locator('#batchDateBtn').click()
+    page.locator('#shiftPlus1Btn').click()
+
+    # Change the catalog after the dialog opens, as another client could.
+    assert page.request.post(f"{server['url']}/api/media/{first}/date", data={'date_taken': 0}).ok
+    assert page.request.delete(f"{server['url']}/api/media/{second}").ok
+    with page.expect_response('**/api/media/batch-date') as save:
+        page.locator('#confirmBatchDateBtn').click()
+    assert save.value.json()['failed_ids'] == [second]
+    expect(page.get_by_text('Date changes succeeded for 1 and failed for 1.')).to_be_visible()
+    expect(cards).to_have_count(5)
+    assert page.request.get(f"{server['url']}/api/media/{first}").json()['date_taken'] == 0
 
 
 def test_batch_action_bar_visibility_and_selection_count(server, page: Page):
@@ -297,8 +319,20 @@ def test_batch_move_photos_to_new_path(server, page: Page):
     assert not os.path.exists(os.path.join(photos_dir, "nature", "sunset.bmp"))
 
 
-def test_batch_move_outside_photos_dir_is_rejected(server, page: Page):
+@pytest.mark.parametrize("linked_folder", [False, True], ids=["parent", "linked-folder"])
+def test_batch_move_outside_photos_dir_is_rejected(server, page: Page, linked_folder: bool):
     """Batch move rejects paths outside the photos directory."""
+    photos_dir = server["env"]["photos_dir"]
+    outside = os.path.join(server["env"]["tmpdir"], "outside")
+    destination = "../../outside_dir"
+    if linked_folder:
+        os.mkdir(outside)
+        if os.name == "nt":
+            subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", "linked", r"..\outside"],
+                           cwd=photos_dir, check=True, capture_output=True)
+        else:
+            os.symlink(outside, os.path.join(photos_dir, "linked"), target_is_directory=True)
+        destination = "linked/new-folder"
     page.goto(server["url"])
 
     card1 = page.locator(".photo-card", has_text="sunset.bmp")
@@ -313,11 +347,14 @@ def test_batch_move_outside_photos_dir_is_rejected(server, page: Page):
     expect(modal).to_be_visible()
 
     # Enter path that navigates outside photos directory
-    page.locator("#batchMovePathInput").fill("../../outside_dir")
+    page.locator("#batchMovePathInput").fill(destination)
     page.locator("#confirmBatchMoveBtn").click()
 
     expect(page.locator(".toast-error")).to_be_visible()
     expect(page.locator(".toast-error")).to_contain_text("inside the photos directory")
+    if linked_folder:
+        assert os.listdir(outside) == []
+        assert os.path.isfile(os.path.join(photos_dir, "nature", "sunset.bmp"))
 
     # Modal stays open so user can fix the input without losing their work
     expect(modal).to_be_visible()
