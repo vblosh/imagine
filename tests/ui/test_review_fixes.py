@@ -1134,7 +1134,9 @@ def test_semantic_search_code_review_fixes(server, page: Page):
 def test_inspection_editing_subsystem_review_fixes(server, page: Page):
     """Verify code review findings (REV-01 through REV-12) for the inspection & editing subsystem."""
     page.goto(server["url"])
-    expect(page.locator("#mediaGrid")).to_be_visible()
+    page.locator(".photo-card", has_text="mountain.bmp").dblclick()
+    page.locator("#loupeQuickEditBtn").click()
+    expect(page.locator("#quickEditCanvas")).to_be_visible()
 
     results = page.evaluate("""async () => {
         const qe = window._imagineQuickEdit;
@@ -1142,8 +1144,6 @@ def test_inspection_editing_subsystem_review_fixes(server, page: Page):
         const dom = window.imagineUI.dom;
 
         // --- REV-02: Slider setters push history state when value changes ---
-        state.loupeIndex = 0;
-        qe.openQuickEdit();
         const initialHistLen = qe.quickEditState.history.length;
         qe.setAdjustment('brightness', 20);
         const histLenAfterAdjust = qe.quickEditState.history.length;

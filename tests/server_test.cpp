@@ -781,8 +781,11 @@ TEST_F(ServerTest, MoveMediaSingleAndBatch) {
     auto check1 = client.Get("/api/media/" + std::to_string(id1));
     ASSERT_TRUE(check1);
     auto cJson1 = nlohmann::json::parse(check1->body);
-    EXPECT_TRUE(cJson1["file_path"].get<std::string>() == "archive/move1.jpg" ||
-                cJson1["file_path"].get<std::string>() == (testDir_ / "archive" / "move1.jpg").generic_string());
+    const auto storedPath = pathFromUtf8(cJson1["file_path"].get<std::string>());
+    const auto movedFile = testDir_ / "archive" / "move1.jpg";
+    std::error_code pathError;
+    EXPECT_TRUE(std::filesystem::equivalent(testDir_ / storedPath, movedFile, pathError))
+        << "Stored path: " << storedPath << ", expected file: " << movedFile << ", error: " << pathError.message();
 
     // 2. Batch move endpoint POST /api/media/batch-move
     nlohmann::json batchMoveBody = {

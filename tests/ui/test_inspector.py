@@ -447,47 +447,47 @@ def test_inspector_change_caption(server, page: Page):
 
 def test_inspector_rename_refreshes_paginated_sort_and_search(server, page: Page):
     page.goto(server["url"])
+    cards = page.locator('.photo-card')
+    expect(cards.first).to_be_visible()
     page.evaluate("""async () => {
       const {state} = await import('./state.js');
       const {loadMedia} = await import('./grid.js');
       state.mediaLimit = 2; state.sortBy = 'file_name'; state.sortDesc = false;
       await loadMedia();
     }""")
-    first = page.locator('.photo-card').first
+    expect(cards).to_have_count(2)
+    first = cards.first
     old_name = first.locator('.card-filename').inner_text()
     first.click()
     page.locator('#renameFileBtn').click()
     page.locator('#renameFileInput').fill('zzzz-renamed.bmp')
-    with page.expect_response(lambda r: '/api/media?' in r.url and r.request.method == 'GET'):
-        page.locator('#saveRenameBtn').click(force=True)
-    expect(page.locator('.photo-card', has_text='zzzz-renamed.bmp')).to_have_count(0)
-    expect(page.locator('.photo-card')).to_have_count(2)
-    assert old_name not in page.locator('.card-filename').all_inner_texts()
+    page.locator('#saveRenameBtn').click()
+    expect(cards.filter(has_text=old_name)).to_have_count(0)
+    expect(cards.filter(has_text='zzzz-renamed.bmp')).to_have_count(0)
+    expect(cards).to_have_count(2)
 
     page.evaluate("""async () => {
       const {state} = await import('./state.js');
       const {loadMedia} = await import('./grid.js');
       state.searchText = 'zzzz-renamed'; await loadMedia();
     }""")
-    page.locator('.photo-card').first.click()
+    cards.filter(has_text='zzzz-renamed.bmp').click()
     page.locator('#renameFileBtn').click()
     page.locator('#renameFileInput').fill('new-name.bmp')
-    with page.expect_response(lambda r: '/api/media?' in r.url and r.request.method == 'GET'):
-        page.locator('#saveRenameBtn').click(force=True)
-    expect(page.locator('.photo-card')).to_have_count(0)
+    page.locator('#saveRenameBtn').click()
+    expect(cards).to_have_count(0)
 
 
 def test_inspector_tag_removal_refreshes_filtered_membership(server, page: Page):
     page.goto(server["url"])
-    page.evaluate("""async () => {
-      const {state} = await import('./state.js');
-      const {loadMedia} = await import('./grid.js');
-      state.activeTagId = state.tags.find(tag => tag.name === 'Alps').id;
-      await loadMedia();
-    }""")
-    page.locator('.photo-card', has_text='mountain.bmp').click()
+    cards = page.locator('.photo-card')
+    expect(cards.first).to_be_visible()
+    page.locator('.tag-category-group[data-category="places"] .category-header').click()
+    page.locator('#tagCategoryPlaces .tag-item', has_text='Alps').click()
+    expect(cards).to_have_count(1)
+    cards.filter(has_text='mountain.bmp').click()
     page.locator('#inspectorTags .tag-badge', has_text='Alps').locator('.remove-tag').click()
-    expect(page.locator('.photo-card', has_text='mountain.bmp')).to_have_count(0)
+    expect(cards).to_have_count(0)
 
 
 def test_inspector_date_change_refills_sorted_page(server, page: Page):
