@@ -197,6 +197,8 @@ struct TimelineEntry {
     int32_t year{0};
     int32_t month{0}; // 1 - 12
     int64_t count{0};
+    std::vector<TagId> event_tag_ids;
+    std::vector<TagId> place_tag_ids;
 };
 
 // JSON conversions

@@ -3,7 +3,9 @@ Deterministic UI tests for People, Places, and Events Grid views and photo drill
 inspired by Photoshop Elements Organizer.
 """
 
+from datetime import datetime, timezone
 import re
+import sqlite3
 from playwright.sync_api import Page, expect
 
 
@@ -156,6 +158,108 @@ def test_places_and_events_grid_views(server, page: Page):
     expect(content_toolbar).to_be_hidden()
     expect(category_toolbar).to_be_visible()
     expect(page.locator(".category-card-item")).to_have_count(1)
+
+
+def test_places_timeline_filters_place_cards_and_drilldown(server, page: Page):
+    with sqlite3.connect(server["env"]["db_path"]) as conn:
+        start = int(datetime(2023, 1, 1, tzinfo=timezone.utc).timestamp())
+        end = int(datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp()) - 1
+        conn.execute("UPDATE media_items SET date_taken = ? WHERE file_name = 'beach.bmp'", (start,))
+        conn.execute("UPDATE media_items SET date_taken = ? WHERE file_name = 'mountain.bmp'", (end,))
+        conn.execute("INSERT INTO tags (name, category) VALUES ('Studio', 'places')")
+        conn.execute(
+            "INSERT INTO media_tags (media_id, tag_id) "
+            "SELECT m.id, t.id FROM media_items m CROSS JOIN tags t "
+            "WHERE m.file_name = 'birthday.bmp' AND t.category = 'places' AND t.name IN ('Alps', 'Studio')"
+        )
+
+    page.goto(server["url"])
+    page.locator('.tab-btn[data-tab="places"]').click()
+    names = page.locator("#categoryCardsGrid .category-card-name")
+    expect(names).to_have_text(["Alps", "Beach", "Studio"])
+
+    year_select = page.locator("#timelineYearSelect")
+    year_select.select_option("2023")
+    expect(names).to_have_text(["Alps", "Beach"])
+    expect(page.locator("#categoryViewSubtitle")).to_have_text("2 places")
+
+    names.filter(has_text="Alps").click()
+    expect(page.locator("#mediaGrid .photo-card .card-filename")).to_have_text(["mountain.bmp"])
+    page.locator("#categoryBackBtn").click()
+    expect(year_select).to_have_value("2023")
+    expect(names).to_have_text(["Alps", "Beach"])
+
+    page.locator('.timeline-bar-wrap[data-year="2023"][data-month="1"]').click()
+    expect(names).to_have_text(["Beach"])
+    year_select.select_option("2026")
+    expect(names).to_have_text(["Alps", "Studio"])
+
+    # Alps has tagged photos on either side of 2025, with none taken that year.
+    year_select.select_option("2025")
+    expect(names).to_have_count(0)
+    expect(page.locator("#categoryEmptyText")).to_have_text("No places match the selected dates.")
+    page.locator("#resetTimelineBtn").click()
+    expect(year_select).to_have_value("all")
+    expect(names).to_have_text(["Alps", "Beach", "Studio"])
+
+
+def test_events_timeline_filters_event_cards_and_drilldown(server, page: Page):
+    with sqlite3.connect(server["env"]["db_path"]) as conn:
+        start = int(datetime(2023, 1, 1, tzinfo=timezone.utc).timestamp())
+        end = int(datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp()) - 1
+        conn.execute("UPDATE media_items SET date_taken = ? WHERE file_name = 'beach.bmp'", (start,))
+        conn.execute("UPDATE media_items SET date_taken = ? WHERE file_name IN ('mountain.bmp', 'sunset.bmp')", (end,))
+        reunion = conn.execute("INSERT INTO tags (name, category) VALUES ('Reunion', 'events')").lastrowid
+        new_year = conn.execute("INSERT INTO tags (name, category) VALUES ('New Year', 'events')").lastrowid
+        conn.execute("INSERT INTO tags (name, category) VALUES ('Undated', 'events')")
+        conn.execute(
+            "INSERT INTO media_tags (media_id, tag_id) SELECT id, ? FROM media_items "
+            "WHERE file_name IN ('mountain.bmp', 'sunset.bmp', 'birthday.bmp')",
+            (reunion,),
+        )
+        conn.execute(
+            "INSERT INTO media_tags (media_id, tag_id) SELECT id, ? FROM media_items WHERE file_name = 'beach.bmp'",
+            (new_year,),
+        )
+
+    page.goto(server["url"])
+    page.locator('.tab-btn[data-tab="events"]').click()
+    names = page.locator("#categoryCardsGrid .category-card-name")
+    expect(names).to_have_count(4)
+
+    year_select = page.locator("#timelineYearSelect")
+    year_select.select_option("2023")
+    expect(names).to_have_text(["Reunion", "New Year"])
+    expect(page.locator("#categoryViewSubtitle")).to_have_text("2 events")
+
+    names.filter(has_text="Reunion").click()
+    photos = page.locator("#mediaGrid .photo-card .card-filename")
+    expect(photos).to_have_count(2)
+    assert set(photos.all_text_contents()) == {"mountain.bmp", "sunset.bmp"}
+    page.locator("#categoryBackBtn").click()
+    expect(year_select).to_have_value("2023")
+    expect(names).to_have_text(["Reunion", "New Year"])
+
+    page.locator('.timeline-bar-wrap[data-year="2023"][data-month="12"]').click()
+    expect(names).to_have_text(["Reunion"])
+    page.locator('.timeline-bar-wrap[data-year="2026"][data-month="1"]').click(modifiers=["Shift"])
+    expect(names).to_have_text(["Birthday 2026", "Reunion"])
+
+    # Reunion has photos before and after 2025, with none taken that year.
+    year_select.select_option("2025")
+    expect(names).to_have_count(0)
+    expect(page.locator("#categoryEmptyText")).to_have_text("No events match the selected dates.")
+    page.locator("#resetTimelineBtn").click()
+    expect(year_select).to_have_value("all")
+    expect(names).to_have_count(4)
+
+    year_select.select_option("2023")
+    year_select.select_option("all")
+    expect(names).to_have_count(4)
+    year_select.select_option("2023")
+    page.locator('.tab-btn[data-tab="media"]').click()
+    expect(year_select).to_have_value("all")
+    expect(photos).to_have_count(6)
 
 
 def test_category_grid_search_filter(server, page: Page):
