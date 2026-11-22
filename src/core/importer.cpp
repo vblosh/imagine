@@ -213,9 +213,18 @@ void Importer::cancel() noexcept {
     memory_cv_.notify_all();
 }
 
+void Importer::retire() noexcept {
+    // Synchronize with persistence so no old job can write after close returns.
+    std::lock_guard commitLock(commit_mutex_);
+    std::lock_guard memoryLock(memory_mutex_);
+    retired_.store(true);
+    cancelled_.store(true);
+    memory_cv_.notify_all();
+}
+
 bool Importer::tryStartJob() {
     std::lock_guard lock(memory_mutex_);
-    if (running_.load()) return false;
+    if (retired_.load() || running_.load()) return false;
     cancelled_.store(false);
     running_.store(true);
     return true;
@@ -576,11 +585,12 @@ Status Importer::validatePreparedFile(PreparedFile& prepared, MediaItem& expecte
     item.rating = current.rating;
     item.flag = current.flag;
     item.caption = current.caption;
-    if (current.date_taken != previous.date_taken || current.exif.date_taken_str != previous.exif.date_taken_str) {
+    if (item.content_hash == current.content_hash || current.date_taken != previous.date_taken ||
+        current.exif.date_taken_str != previous.exif.date_taken_str) {
         item.date_taken = current.date_taken;
         item.exif.date_taken_str = current.exif.date_taken_str;
     }
-    if (current.exif.has_gps != previous.exif.has_gps || current.exif.latitude != previous.exif.latitude ||
+    if (item.content_hash == current.content_hash || current.exif.has_gps != previous.exif.has_gps || current.exif.latitude != previous.exif.latitude ||
         current.exif.longitude != previous.exif.longitude || current.exif.altitude != previous.exif.altitude) {
         item.exif.has_gps = current.exif.has_gps;
         item.exif.latitude = current.exif.latitude;
@@ -616,14 +626,18 @@ Result<MediaItem> Importer::importFile(const std::string& filePath) {
     }
     PreparedFile prepared;
     ProcessStatus st = processFileInternal(filePath, prepared, false);
+    if (st != ProcessStatus::Failed && file_hook_ && !retired_.load()) file_hook_(filePath);
     if (st == ProcessStatus::Failed) {
         if (autoAssignedRoot) {
             setPhotosDir("");
         }
         return Status::internal("Failed to import media file: " + filePath);
     }
+    if (retired_.load()) return Status::internal("Catalog closed during import");
     if (st == ProcessStatus::Skipped) return prepared.item;
 
+    std::lock_guard commitLock(commit_mutex_);
+    if (retired_.load()) return Status::internal("Catalog closed during import");
     std::lock_guard lock(db_.mutex());
     MediaItem expected;
     auto status = validatePreparedFile(prepared, expected);
@@ -803,7 +817,7 @@ Result<ImportProgress> Importer::importDirectory(
     constexpr auto kProgressThrottleInterval = std::chrono::milliseconds(100);
 
     auto emitProgress = [&](bool force = false) {
-        if (!progressCb) return;
+        if (!progressCb || retired_.load()) return;
 
         std::unique_lock<std::mutex> cbLock(callbackMutex, std::defer_lock);
         if (force) {
@@ -825,7 +839,7 @@ Result<ImportProgress> Importer::importDirectory(
         }
 
         lastCallbackTime = std::chrono::steady_clock::now();
-        progressCb(snapshot);
+        if (!retired_.load()) progressCb(snapshot);
     };
 
     emitProgress(true); // Emit initial state
@@ -842,6 +856,14 @@ Result<ImportProgress> Importer::importDirectory(
         BatchFlushResult result;
         if (pendingFiles.empty()) return result;
 
+        std::lock_guard commitLock(commit_mutex_);
+        if (retired_.load()) {
+            std::lock_guard<std::mutex> progressLock(progress_mutex_);
+            current_progress_.cancelled_files += static_cast<int64_t>(pendingFiles.size());
+            current_progress_.processed_files += static_cast<int64_t>(pendingFiles.size());
+            pendingFiles.clear();
+            return result;
+        }
         std::lock_guard dbLock(db_.mutex());
         std::vector<db::ImportedMediaUpdate> updates;
         std::vector<MediaItem> inserts;
@@ -962,7 +984,7 @@ Result<ImportProgress> Importer::importDirectory(
             }
         }
 
-        if (file_hook_) {
+        if (file_hook_ && !retired_.load()) {
             file_hook_(file);
         }
 
@@ -1084,15 +1106,18 @@ Result<ImportProgress> Importer::importDirectory(
 
     // Publish the completed import atomically. Empty rescans and cancelled imports
     // intentionally preserve the previous Last Imported tag assignments.
-    if (!cancelled_.load() && !newlyInsertedIds.empty()) {
-        auto tagRes = db_.replaceTagAssignments(
-            kLastImportedTagName,
-            kLastImportedTagCategory,
-            newlyInsertedIds
-        );
-        if (!tagRes.isOk()) {
-            IMAGINE_LOG_ERROR("Failed to update Last Imported tag: " + tagRes.status().message());
-            return tagRes.status();
+    {
+        std::lock_guard commitLock(commit_mutex_);
+        if (!retired_.load() && !cancelled_.load() && !newlyInsertedIds.empty()) {
+            auto tagRes = db_.replaceTagAssignments(
+                kLastImportedTagName,
+                kLastImportedTagCategory,
+                newlyInsertedIds
+            );
+            if (!tagRes.isOk()) {
+                IMAGINE_LOG_ERROR("Failed to update Last Imported tag: " + tagRes.status().message());
+                return tagRes.status();
+            }
         }
     }
 

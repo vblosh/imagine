@@ -172,27 +172,77 @@ bool constantTimeEquals(std::string_view a, std::string_view b) noexcept {
     return diff == 0;
 }
 
-int64_t parseDateStringToTimestamp(const std::string& dateStr) {
-    if (dateStr.empty()) return 0;
+std::optional<int64_t> parseDateStringToTimestamp(const std::string& dateStr) {
     int year = 0, month = 0, day = 0, hour = 0, min = 0, sec = 0;
     char sep1 = 0, sep2 = 0, sep3 = 0, sep4 = 0, sep5 = 0;
-    if (std::sscanf(dateStr.c_str(), "%d%c%d%c%d%c%d%c%d%c%d",
-                    &year, &sep1, &month, &sep2, &day, &sep3, &hour, &sep4, &min, &sep5, &sec) >= 9) {
-        // Parsed at least year, month, day, hour, min
-    } else if (std::sscanf(dateStr.c_str(), "%d%c%d%c%d", &year, &sep1, &month, &sep2, &day) == 5) {
-        hour = 0; min = 0; sec = 0;
-    } else {
-        return 0;
+    int consumed = 0;
+    int count = std::sscanf(dateStr.c_str(), "%d%c%d%c%d%c%d%c%d%c%d%n",
+                            &year, &sep1, &month, &sep2, &day, &sep3, &hour, &sep4, &min, &sep5, &sec, &consumed);
+    if (count != 11 || consumed != static_cast<int>(dateStr.size())) {
+        sec = 0; consumed = 0;
+        count = std::sscanf(dateStr.c_str(), "%d%c%d%c%d%c%d%c%d%n",
+                            &year, &sep1, &month, &sep2, &day, &sep3, &hour, &sep4, &min, &consumed);
+        if (count != 9 || consumed != static_cast<int>(dateStr.size())) {
+            hour = min = 0; consumed = 0;
+            count = std::sscanf(dateStr.c_str(), "%d%c%d%c%d%n", &year, &sep1, &month, &sep2, &day, &consumed);
+            if (count != 5 || consumed != static_cast<int>(dateStr.size())) return std::nullopt;
+        }
     }
+    const bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    const int monthDays[] = {31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (year < 1800 || year > 9999 || month < 1 || month > 12 || day < 1 ||
+        day > monthDays[month - 1] || (sep1 != '-' && sep1 != ':') || sep2 != sep1 ||
+        (count >= 9 && ((sep3 != ' ' && sep3 != 'T') || sep4 != ':')) ||
+        (count == 11 && sep5 != ':') || hour > 23 || min > 59 || sec > 59 ||
+        hour < 0 || min < 0 || sec < 0) return std::nullopt;
+    return daysFromCivil(year, month, day) * 86400 + static_cast<int64_t>(hour) * 3600 + min * 60 + sec;
+}
 
-    if (year < 1800 || year > 9999 || month < 1 || month > 12 || day < 1 || day > 31 ||
-        hour < 0 || hour > 23 || min < 0 || min > 59 || sec < 0 || sec > 60) {
-        return 0;
+bool parseDateUpdate(const nlohmann::json& body, int64_t& timestamp, std::string& text) {
+    if (!body.is_object() || (!body.contains("date_taken") && !body.contains("date_taken_str"))) return false;
+    timestamp = 0;
+    text.clear();
+    if (body.contains("date_taken")) {
+        const auto& value = body["date_taken"];
+        if (value.is_number_unsigned()) {
+            auto v = value.get<uint64_t>();
+            if (v > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) return false;
+            timestamp = static_cast<int64_t>(v);
+        } else if (value.is_number_integer()) {
+            timestamp = value.get<int64_t>();
+        } else if (value.is_string()) {
+            text = value.get<std::string>();
+            if (!text.empty()) {
+                auto parsed = parseDateStringToTimestamp(text);
+                if (!parsed) return false;
+                timestamp = *parsed;
+            }
+        } else if (!value.is_null()) return false;
     }
+    if (body.contains("date_taken_str")) {
+        const auto& value = body["date_taken_str"];
+        if (!value.is_string()) return false;
+        const auto custom = value.get<std::string>();
+        if (!custom.empty()) {
+            auto parsed = parseDateStringToTimestamp(custom);
+            if (!parsed) return false;
+            text = custom;
+            if (timestamp == 0) timestamp = *parsed;
+        }
+    }
+    return true;
+}
 
-    const int64_t days = daysFromCivil(year, month, day);
-    return days * 86400 + static_cast<int64_t>(hour) * 3600 +
-           static_cast<int64_t>(min) * 60 + static_cast<int64_t>(sec);
+bool parsePositiveMediaId(const nlohmann::json& value, MediaId& id) {
+    if (value.is_number_unsigned()) {
+        const auto v = value.get<uint64_t>();
+        if (v == 0 || v > static_cast<uint64_t>(std::numeric_limits<MediaId>::max())) return false;
+        id = static_cast<MediaId>(v);
+    } else if (value.is_number_integer()) {
+        id = value.get<MediaId>();
+        if (id <= 0) return false;
+    } else return false;
+    return true;
 }
 
 std::string formatTimestampToDateString(int64_t timestamp) {
@@ -1337,22 +1387,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             int64_t dateTaken = 0;
             std::string dateTakenStr;
 
-            if (body.contains("date_taken")) {
-                if (body["date_taken"].is_number_integer()) {
-                    dateTaken = body["date_taken"].get<int64_t>();
-                } else if (body["date_taken"].is_string()) {
-                    dateTakenStr = body["date_taken"].get<std::string>();
-                    dateTaken = parseDateStringToTimestamp(dateTakenStr);
-                }
-            }
-            if (body.contains("date_taken_str") && body["date_taken_str"].is_string()) {
-                std::string customStr = body["date_taken_str"].get<std::string>();
-                if (!customStr.empty()) {
-                    dateTakenStr = customStr;
-                    if (dateTaken == 0) {
-                        dateTaken = parseDateStringToTimestamp(dateTakenStr);
-                    }
-                }
+            if (!parseDateUpdate(body, dateTaken, dateTakenStr)) {
+                sendError(res, "Missing or invalid date", 400);
+                return;
             }
 
             if (dateTakenStr.empty() && dateTaken != 0) {
@@ -1423,7 +1460,7 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             }
 
             Status s = catalog_ ? catalog_->setGps(id, hasGps, latitude, longitude, altitude)
-                                : db().updateGps(id, hasGps, latitude, longitude, altitude);
+                                : db().updateGpsWithPlaceTags(id, hasGps, latitude, longitude, altitude);
             if (!s.isOk()) {
                 sendStatusError(res, s);
                 return;
@@ -1566,7 +1603,15 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                 std::string val = req.get_param_value("delete_from_disk");
                 deleteFromDisk = (val == "true" || val == "1");
             }
-            std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+            std::vector<MediaId> ids;
+            for (const auto& value : body["ids"]) {
+                MediaId id;
+                if (!parsePositiveMediaId(value, id)) {
+                    sendError(res, "Each media ID must be a positive integer in range", 400);
+                    return;
+                }
+                ids.push_back(id);
+            }
             int deletedCount = 0;
             std::vector<MediaId> failedIds;
             std::vector<MediaId> diskDeletedIds;
@@ -1914,12 +1959,32 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                     sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
                     return;
                 }
-                ids = body["ids"].get<std::vector<MediaId>>();
+                for (const auto& value : body["ids"]) {
+                    MediaId id;
+                    if (!parsePositiveMediaId(value, id)) {
+                        sendError(res, "Each media ID must be a positive integer in range", 400);
+                        return;
+                    }
+                    ids.push_back(id);
+                }
             } else {
                 sendError(res, "Missing or invalid 'ids' array");
                 return;
             }
 
+            if ((body.contains("has_gps") && !body["has_gps"].is_boolean()) ||
+                (body.contains("preserve_altitude") && !body["preserve_altitude"].is_boolean())) {
+                sendError(res, "Invalid GPS options", 400);
+                return;
+            }
+            const bool requestedGps = body.value("has_gps", true);
+            if ((requestedGps && (!body.contains("latitude") || !body.contains("longitude"))) ||
+                (body.contains("latitude") && !body["latitude"].is_number()) ||
+                (body.contains("longitude") && !body["longitude"].is_number()) ||
+                (body.contains("altitude") && !body["altitude"].is_number())) {
+                sendError(res, "Missing or invalid GPS coordinates", 400);
+                return;
+            }
             bool hasGps = body.value("has_gps", true);
             double latitude = body.value("latitude", 0.0);
             double longitude = body.value("longitude", 0.0);
@@ -1947,14 +2012,9 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
             auto& database = db();
             Status batchStatus = database.runInTransaction([&]() -> Status {
                 for (MediaId id : ids) {
-                    Status s = database.updateGps(id, hasGps, latitude, longitude, batchAltitude);
+                    Status s = database.updateGpsWithPlaceTags(id, hasGps, latitude, longitude, batchAltitude);
                     if (s.isOk()) {
-                        auto placeStatus = database.applyGpsPlaceTags(id, hasGps, latitude, longitude);
-                            if (!placeStatus.isOk()) {
-                                IMAGINE_LOG_WARN("Failed to apply GPS place tags for media " +
-                                    std::to_string(id) + ": " + placeStatus.message());
-                            }
-                            updatedCount++;
+                        updatedCount++;
                     } else {
                         failedIds.push_back(id);
                     }
@@ -2071,24 +2131,13 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                     return;
                 }
                 for (const auto& itm : itemsJson) {
-                    if (!itm.contains("id")) continue;
-                    MediaId id = itm["id"].get<MediaId>();
+                    MediaId id;
                     int64_t ts = 0;
                     std::string strVal;
-                    if (itm.contains("date_taken")) {
-                        if (itm["date_taken"].is_number_integer()) {
-                            ts = itm["date_taken"].get<int64_t>();
-                        } else if (itm["date_taken"].is_string()) {
-                            strVal = itm["date_taken"].get<std::string>();
-                            ts = parseDateStringToTimestamp(strVal);
-                        }
-                    }
-                    if (itm.contains("date_taken_str") && itm["date_taken_str"].is_string()) {
-                        std::string custom = itm["date_taken_str"].get<std::string>();
-                        if (!custom.empty()) {
-                            strVal = custom;
-                            if (ts == 0) ts = parseDateStringToTimestamp(strVal);
-                        }
+                    if (!itm.is_object() || !itm.contains("id") || !parsePositiveMediaId(itm["id"], id) ||
+                        !parseDateUpdate(itm, ts, strVal)) {
+                        sendError(res, "Missing or invalid item ID or date", 400);
+                        return;
                     }
                     updates.emplace_back(id, ts);
                     if (!strVal.empty()) {
@@ -2100,29 +2149,34 @@ void ApiRouter::registerMediaRoutes(httplib::Server& server) {
                     sendError(res, "Batch size exceeds maximum limit of " + std::to_string(kMaxBatchSize) + " items", 400);
                     return;
                 }
-                std::vector<MediaId> ids = body["ids"].get<std::vector<MediaId>>();
+                std::vector<MediaId> ids;
+                for (const auto& value : body["ids"]) {
+                    MediaId id;
+                    if (!parsePositiveMediaId(value, id)) {
+                        sendError(res, "Each media ID must be a positive integer in range", 400);
+                        return;
+                    }
+                    ids.push_back(id);
+                }
 
                 if (body.contains("shift_seconds")) {
-                    shiftSeconds = body["shift_seconds"].get<int64_t>();
+                    const auto& shift = body["shift_seconds"];
+                    if (!shift.is_number_integer() || (shift.is_number_unsigned() &&
+                        shift.get<uint64_t>() > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))) {
+                        sendError(res, "Invalid shift_seconds", 400);
+                        return;
+                    }
+                    shiftSeconds = shift.get<int64_t>();
                     std::unordered_set<MediaId> seen;
                     for (MediaId id : ids) {
                         if (seen.insert(id).second) updates.emplace_back(id, 0);
                     }
-                } else if (body.contains("date_taken")) {
+                } else if (body.contains("date_taken") || body.contains("date_taken_str")) {
                     int64_t ts = 0;
                     std::string strVal;
-                    if (body["date_taken"].is_number_integer()) {
-                        ts = body["date_taken"].get<int64_t>();
-                    } else if (body["date_taken"].is_string()) {
-                        strVal = body["date_taken"].get<std::string>();
-                        ts = parseDateStringToTimestamp(strVal);
-                    }
-                    if (body.contains("date_taken_str") && body["date_taken_str"].is_string()) {
-                        std::string custom = body["date_taken_str"].get<std::string>();
-                        if (!custom.empty()) {
-                            strVal = custom;
-                            if (ts == 0) ts = parseDateStringToTimestamp(strVal);
-                        }
+                    if (!parseDateUpdate(body, ts, strVal)) {
+                        sendError(res, "Missing or invalid date", 400);
+                        return;
                     }
                     for (MediaId id : ids) {
                         updates.emplace_back(id, ts);
@@ -2456,10 +2510,8 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
                     }
                 } else {
                     std::string photoPath = resolvePhotoPath(item.file_path);
-                    auto genRes = cache().ensureThumbnail(photoPath, hash, size, item.exif.orientation);
-                    if (genRes.isOk()) {
-                        thumbPath = genRes.value();
-                    }
+                    auto genRes = cache().ensureThumbnail(photoPath, hash, size, item.exif.orientation, true);
+                    if (genRes.isOk()) thumbPath = genRes.value();
                 }
             }
         }
@@ -2468,7 +2520,10 @@ void ApiRouter::registerThumbnailRoutes(httplib::Server& server) {
         ec.clear();
         if (std::filesystem::is_regular_file(thumbFsPath, ec) && !ec) {
             auto fsize = std::filesystem::file_size(thumbFsPath, ec);
-            if (ec) { fsize = 0; ec.clear(); }
+            if (ec || fsize == 0) {
+                sendError(res, "Thumbnail not found", 404);
+                return;
+            }
             auto mtime = std::filesystem::last_write_time(thumbFsPath, ec);
             int64_t mtimeSec = ec ? 0 : std::chrono::duration_cast<std::chrono::seconds>(mtime.time_since_epoch()).count();
             std::string etag = "\"thumb-v2-" + hash + "_" + std::to_string(size) + "-" + std::to_string(fsize) + "-" + std::to_string(mtimeSec) + "\"";

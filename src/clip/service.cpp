@@ -1104,6 +1104,10 @@ void Service::runJob(int64_t jobId, std::string scope, std::vector<MediaId> medi
                     continue;
                 }
 
+                if (metadata::Hasher::computeBytesSha256(bytes.value().data(), bytes.value().size()) != media.content_hash) {
+                    recordFailure(media, "Original changed since import");
+                    continue;
+                }
                 auto loaded = thumbnail::Generator::loadImageFromMemory(bytes.value().data(), bytes.value().size());
                 if (!loaded.isOk()) {
                     recordFailure(media, "Failed to decode image");

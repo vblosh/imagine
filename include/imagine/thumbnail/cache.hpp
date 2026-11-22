@@ -28,7 +28,8 @@ public:
         const std::string& sourceImagePath,
         const std::string& hash,
         int size,
-        int orientation = 1
+        int orientation = 1,
+        bool verifySourceHash = false
     );
 
     /// Ensures both small and large thumbnails exist for a file on disk.

@@ -705,8 +705,12 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
 
     std::unordered_map<uint32_t, std::string> metaKeys;
 
-    std::function<void(uint64_t, uint64_t, TrackContext*)> parseContainer;
-    parseContainer = [&](uint64_t startPos, uint64_t endPos, TrackContext* trackCtx) {
+    // Corrupt files can contain arbitrarily nested containers. Bound stack use
+    // while still allowing ordinary MP4 track and metadata hierarchies.
+    constexpr unsigned kMaxContainerDepth = 64;
+    std::function<void(uint64_t, uint64_t, TrackContext*, unsigned)> parseContainer;
+    parseContainer = [&](uint64_t startPos, uint64_t endPos, TrackContext* trackCtx, unsigned depth) {
+        if (depth >= kMaxContainerDepth || startPos >= endPos) return;
         file.seekg(startPos, std::ios::beg);
         while (static_cast<uint64_t>(file.tellg()) < endPos && file.good()) {
             uint64_t currentBoxPos = file.tellg();
@@ -720,10 +724,10 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
             uint64_t nextBoxPos = (boxSize > endPos - currentBoxPos) ? endPos : (currentBoxPos + boxSize);
 
             if (boxType == "moov") {
-                parseContainer(dataPos, std::min(nextBoxPos, endPos), nullptr);
+                parseContainer(dataPos, std::min(nextBoxPos, endPos), nullptr, depth + 1);
             } else if (boxType == "trak") {
                 TrackContext ctx;
-                parseContainer(dataPos, std::min(nextBoxPos, endPos), &ctx);
+                parseContainer(dataPos, std::min(nextBoxPos, endPos), &ctx, depth + 1);
                 if ((ctx.handlerType == "vide" || (ctx.handlerType.empty() && ctx.width > 0)) && info.media_type == "video") {
                     if (info.width == 0 && ctx.width > 0) {
                         info.width = ctx.width;
@@ -745,7 +749,7 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                     }
                 }
             } else if (boxType == "mdia" || boxType == "minf" || boxType == "stbl" || boxType == "udta") {
-                parseContainer(dataPos, std::min(nextBoxPos, endPos), trackCtx);
+                parseContainer(dataPos, std::min(nextBoxPos, endPos), trackCtx, depth + 1);
             } else if (boxType == "mvhd") {
                 uint8_t ver = file.get();
                 file.seekg(3, std::ios::cur); // flags
@@ -894,7 +898,7 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
                     }
                 }
                 uint64_t startOfInner = dataPos + (isFullBox ? 4 : 0);
-                parseContainer(startOfInner, std::min(nextBoxPos, endPos), trackCtx);
+                parseContainer(startOfInner, std::min(nextBoxPos, endPos), trackCtx, depth + 1);
             } else if (boxType == "keys" && nextBoxPos - dataPos >= 8) {
                 uint8_t verFlags[4];
                 if (file.read(reinterpret_cast<char*>(verFlags), 4)) {
@@ -1057,7 +1061,7 @@ Result<MediaFileInfo> MediaReader::readMp4(const std::string& filePath) {
         }
     };
 
-    parseContainer(0, fileSize, nullptr);
+    parseContainer(0, fileSize, nullptr, 0);
 
     if (info.codec.empty()) {
         info.codec = (info.media_type == "audio") ? "aac" : "h264";
@@ -1126,6 +1130,22 @@ Result<MediaFileInfo> MediaReader::readWebm(const std::string& filePath) {
         }
         return true;
     };
+
+    // The magic above is the EBML header's element ID, not a complete
+    // element. Consume its size and payload before looking for the Segment.
+    uint64_t headerSizeRaw = 0;
+    uint32_t headerSizeLen = 0;
+    if (!readVInt(headerSizeRaw, headerSizeLen)) {
+        return Status::parseError("Truncated EBML header: " + filePath);
+    }
+    const uint64_t headerSizeMask = (1ULL << (7 * headerSizeLen)) - 1;
+    const uint64_t headerSize = headerSizeRaw & headerSizeMask;
+    const uint64_t headerDataPos = static_cast<uint64_t>(file.tellg());
+    if (headerSize == headerSizeMask || headerDataPos > fileSize ||
+        headerSize > fileSize - headerDataPos) {
+        return Status::parseError("Invalid EBML header size: " + filePath);
+    }
+    file.seekg(headerDataPos + headerSize, std::ios::beg);
 
     uint64_t timecodeScale = 1000000; // default 1ms
     double durationUnits = 0.0;
@@ -1647,7 +1667,13 @@ Result<MediaFileInfo> MediaReader::readOgg(const std::string& filePath) {
     if (file.read(reinterpret_cast<char*>(oggHdr), 27)) {
         uint8_t numSegments = oggHdr[26];
         uint32_t payloadSize = 0;
-        for (int s = 0; s < numSegments; ++s) payloadSize += file.get();
+        for (int s = 0; s < numSegments; ++s) {
+            const int segmentSize = file.get();
+            if (segmentSize == EOF) {
+                return Status::parseError("Truncated OGG segment table: " + filePath);
+            }
+            payloadSize += static_cast<uint8_t>(segmentSize);
+        }
 
         std::vector<uint8_t> payload(payloadSize);
         if (file.read(reinterpret_cast<char*>(payload.data()), payloadSize)) {

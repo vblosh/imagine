@@ -192,9 +192,15 @@ httplib::Server& WebServer::server() {
 }
 
 Status WebServer::start(const std::string& host, int port, const std::string& webRoot) {
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::lock_guard<std::recursive_mutex> operationLock(lifecycleOperationMutex_);
+    std::unique_lock<std::mutex> lock(lifecycleMutex_);
     if (isRunning_) {
         return Status::ok();
+    }
+    if (server_ || thread_ || router_) {
+        lock.unlock();
+        stop();
+        lock.lock();
     }
     if (!catalog_.isOpen()) {
         return Status::internal("Catalog is not open");
@@ -262,6 +268,7 @@ Status WebServer::start(const std::string& host, int port, const std::string& we
         cv_.notify_all();
     });
 
+    lock.unlock(); // Allow the listener to report an early exit.
     auto readyStart = std::chrono::steady_clock::now();
     while (!server_->is_running() && isRunning_) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -270,10 +277,15 @@ Status WebServer::start(const std::string& host, int port, const std::string& we
         }
     }
 
+    if (!server_->is_running()) {
+        stop();
+        return Status::ioError("Web server listener failed to start");
+    }
     return Status::ok();
 }
 
 void WebServer::stop() {
+    std::lock_guard<std::recursive_mutex> operationLock(lifecycleOperationMutex_);
     IMAGINE_LOG_INFO("Web server shutting down...");
     std::unique_ptr<std::thread> t;
     std::unique_ptr<httplib::Server> s;
@@ -337,10 +349,12 @@ void WebServer::wait() {
     cv_.wait(lock, [this]() {
         return !isRunning_ && !stopping_;
     });
-    if (thread_) {
-        lock.unlock();
-        stop();
-    }
+    lock.unlock();
+    std::lock_guard<std::recursive_mutex> operationLock(lifecycleOperationMutex_);
+    lock.lock();
+    const bool shouldReap = !isRunning_ && (thread_ || server_ || router_);
+    lock.unlock();
+    if (shouldReap) stop();
 }
 
 Status WebServer::run(const std::string& host, int port, const std::string& webRoot) {

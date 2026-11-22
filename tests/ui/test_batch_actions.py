@@ -4,6 +4,7 @@ Deterministic UI tests for Batch Actions.
 
 import os
 import re
+import subprocess
 from datetime import datetime, timezone
 
 import pytest
@@ -318,8 +319,20 @@ def test_batch_move_photos_to_new_path(server, page: Page):
     assert not os.path.exists(os.path.join(photos_dir, "nature", "sunset.bmp"))
 
 
-def test_batch_move_outside_photos_dir_is_rejected(server, page: Page):
+@pytest.mark.parametrize("linked_folder", [False, True], ids=["parent", "linked-folder"])
+def test_batch_move_outside_photos_dir_is_rejected(server, page: Page, linked_folder: bool):
     """Batch move rejects paths outside the photos directory."""
+    photos_dir = server["env"]["photos_dir"]
+    outside = os.path.join(server["env"]["tmpdir"], "outside")
+    destination = "../../outside_dir"
+    if linked_folder:
+        os.mkdir(outside)
+        if os.name == "nt":
+            subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", "linked", r"..\outside"],
+                           cwd=photos_dir, check=True, capture_output=True)
+        else:
+            os.symlink(outside, os.path.join(photos_dir, "linked"), target_is_directory=True)
+        destination = "linked/new-folder"
     page.goto(server["url"])
 
     card1 = page.locator(".photo-card", has_text="sunset.bmp")
@@ -334,11 +347,14 @@ def test_batch_move_outside_photos_dir_is_rejected(server, page: Page):
     expect(modal).to_be_visible()
 
     # Enter path that navigates outside photos directory
-    page.locator("#batchMovePathInput").fill("../../outside_dir")
+    page.locator("#batchMovePathInput").fill(destination)
     page.locator("#confirmBatchMoveBtn").click()
 
     expect(page.locator(".toast-error")).to_be_visible()
     expect(page.locator(".toast-error")).to_contain_text("inside the photos directory")
+    if linked_folder:
+        assert os.listdir(outside) == []
+        assert os.path.isfile(os.path.join(photos_dir, "nature", "sunset.bmp"))
 
     # Modal stays open so user can fix the input without losing their work
     expect(modal).to_be_visible()

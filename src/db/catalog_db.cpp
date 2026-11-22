@@ -828,6 +828,15 @@ Status CatalogDb::updateThumbnails(MediaId id, const std::string& smallPath, con
     return Status::ok();
 }
 
+Status CatalogDb::updateGpsWithPlaceTags(MediaId id, bool hasGps, double latitude, double longitude,
+                                         std::optional<double> altitude) {
+    return runInTransaction([&]() -> Status {
+        auto status = updateGps(id, hasGps, latitude, longitude, altitude);
+        if (!status.isOk()) return status;
+        return applyGpsPlaceTags(id, hasGps, latitude, longitude);
+    });
+}
+
 Status CatalogDb::updateGps(MediaId id, bool hasGps, double latitude, double longitude, std::optional<double> altitude) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     auto stmtRes = conn_.prepare("UPDATE media_items SET has_gps = ?, latitude = ?, longitude = ?, altitude = COALESCE(?, altitude), updated_at = ? WHERE id = ?;");

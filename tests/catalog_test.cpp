@@ -2,6 +2,8 @@
 #include "imagine/core/catalog.hpp"
 #include "imagine/core/deduplicator.hpp"
 #include "imagine/thumbnail/generator.hpp"
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 
@@ -480,6 +482,69 @@ TEST_F(CatalogClassTest, CancellingAFolderImportDoesNotCancelTheNextSingleFileIm
     EXPECT_TRUE(cat.importFile(sampleImg).isOk());
 }
 
+TEST_F(CatalogClassTest, RescanOfUnchangedContentPreservesManualDateAndGps) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+    const auto id = imported.value().id;
+    ASSERT_TRUE(cat.setDateTaken(id, 1234567890, "2009:02:13 23:31:30").isOk());
+    ASSERT_TRUE(cat.setGps(id, true, 48.123, 11.456, 321.0).isOk());
+
+    auto changedTime = std::filesystem::last_write_time(sampleImg) + std::chrono::seconds(10);
+    std::filesystem::last_write_time(sampleImg, changedTime);
+    auto rescanned = cat.importDirectory(testDir.string());
+    ASSERT_TRUE(rescanned.isOk());
+    ASSERT_EQ(rescanned.value().imported_files.load(), 1);
+    auto item = cat.getMedia(id);
+    ASSERT_TRUE(item.isOk());
+    EXPECT_EQ(item.value().content_hash, imported.value().content_hash);
+    EXPECT_EQ(item.value().date_taken, 1234567890);
+    EXPECT_EQ(item.value().exif.date_taken_str, "2009:02:13 23:31:30");
+    EXPECT_TRUE(item.value().exif.has_gps);
+    EXPECT_DOUBLE_EQ(item.value().exif.latitude, 48.123);
+    EXPECT_DOUBLE_EQ(item.value().exif.longitude, 11.456);
+    EXPECT_DOUBLE_EQ(item.value().exif.altitude, 321.0);
+
+    ASSERT_TRUE(cat.setGps(id, false, 0.0, 0.0).isOk());
+    std::filesystem::last_write_time(sampleImg, changedTime + std::chrono::seconds(10));
+    auto singleRescan = cat.importFile(sampleImg);
+    ASSERT_TRUE(singleRescan.isOk());
+    EXPECT_EQ(singleRescan.value().date_taken, 1234567890);
+    EXPECT_FALSE(singleRescan.value().exif.has_gps);
+}
+
+TEST_F(CatalogClassTest, ClosingAndReopeningFromImportWorkerRetiresOldJob) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir).isOk());
+    std::atomic<bool> reopened{false};
+    cat.importer().setFileHook([&](const std::string&) {
+        cat.close();
+        reopened.store(cat.open(dbPath, thumbsDir).isOk());
+    });
+    auto result = cat.importDirectory(testDir.string());
+    ASSERT_TRUE(result.isOk());
+    ASSERT_TRUE(reopened.load());
+    EXPECT_TRUE(cat.isOpen());
+    EXPECT_TRUE(cat.photosDir().empty());
+    EXPECT_FALSE(cat.getMediaByPath("photo.jpg").isOk());
+}
+
+TEST_F(CatalogClassTest, ClosingAndReopeningDuringSingleFileImportRetiresOldJob) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir).isOk());
+    bool reopened = false;
+    cat.importer().setFileHook([&](const std::string&) {
+        cat.close();
+        reopened = cat.open(dbPath, thumbsDir).isOk();
+    });
+    auto result = cat.importFile(sampleImg);
+    EXPECT_FALSE(result.isOk());
+    ASSERT_TRUE(reopened);
+    EXPECT_TRUE(cat.photosDir().empty());
+    EXPECT_FALSE(cat.getMediaByPath("photo.jpg").isOk());
+}
+
 TEST_F(CatalogClassTest, RescanPreservesCatalogEditsMadeAfterReading) {
     Catalog cat(1);
     ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
@@ -670,6 +735,58 @@ TEST_F(CatalogClassTest, RenameMediaValidationAndCaseOnly) {
     EXPECT_EQ(getRes.value().file_name, "PHOTO.jpg");
 }
 
+TEST_F(CatalogClassTest, RenameAndMoveProtectSharedOriginal) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+    auto alias = imported.value();
+    alias.file_path = sampleImg;
+    ASSERT_TRUE(cat.db().insertMedia(alias).isOk());
+
+    EXPECT_EQ(cat.renameMedia(imported.value().id, "renamed.jpg").code(), StatusCode::AlreadyExists);
+    EXPECT_EQ(cat.moveMedia(imported.value().id, "album").code(), StatusCode::AlreadyExists);
+    EXPECT_TRUE(std::filesystem::is_regular_file(sampleImg));
+    EXPECT_FALSE(std::filesystem::exists(testDir / "renamed.jpg"));
+    EXPECT_FALSE(std::filesystem::exists(testDir / "album" / "photo.jpg"));
+}
+
+TEST_F(CatalogClassTest, MoveRejectsDestinationThroughOutsideDirectoryLink) {
+    const auto library = testDir / "library";
+    const auto outside = testDir / "outside";
+    std::filesystem::create_directories(library);
+    std::filesystem::create_directories(outside);
+    std::error_code ec;
+    std::filesystem::create_directory_symlink(outside, library / "link", ec);
+    if (ec) GTEST_SKIP() << "Directory symlink unavailable: " << ec.message();
+    auto source = library / "photo.jpg";
+    std::filesystem::copy_file(sampleImg, source);
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, library.string()).isOk());
+    auto imported = cat.importFile(source.string());
+    ASSERT_TRUE(imported.isOk());
+    EXPECT_FALSE(cat.moveMedia(imported.value().id, "link/new-folder").isOk());
+    EXPECT_TRUE(std::filesystem::exists(source));
+    EXPECT_FALSE(std::filesystem::exists(outside / "new-folder"));
+}
+
+TEST_F(CatalogClassTest, GpsAndPlaceTagsRollBackTogether) {
+    Catalog cat(1);
+    ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
+    auto imported = cat.importFile(sampleImg);
+    ASSERT_TRUE(imported.isOk());
+    auto id = imported.value().id;
+    ASSERT_TRUE(cat.db().updateGps(id, true, 42.0, 24.0).isOk());
+    // Fail the tag refresh after the coordinates have been written.
+    ASSERT_TRUE(cat.db().connection().execute("DROP TABLE media_tag_provenance;").isOk());
+    EXPECT_FALSE(cat.setGps(id, false, 0.0, 0.0).isOk());
+    auto reloaded = cat.getMedia(id);
+    ASSERT_TRUE(reloaded.isOk());
+    EXPECT_TRUE(reloaded.value().exif.has_gps);
+    EXPECT_EQ(reloaded.value().exif.latitude, 42.0);
+    EXPECT_EQ(reloaded.value().exif.longitude, 24.0);
+}
+
 TEST_F(CatalogClassTest, Pre1970DateTakenFormatted) {
     Catalog cat(1);
     ASSERT_TRUE(cat.open(dbPath, thumbsDir, testDir.string()).isOk());
@@ -686,6 +803,10 @@ TEST_F(CatalogClassTest, Pre1970DateTakenFormatted) {
     ASSERT_TRUE(getRes.isOk());
     EXPECT_EQ(getRes.value().date_taken, pre1970);
     EXPECT_EQ(getRes.value().exif.date_taken_str, "1935:01:01 00:00:00");
+    ASSERT_TRUE(cat.setDateTaken(mid, -628473600).isOk());
+    auto february = cat.getMedia(mid);
+    ASSERT_TRUE(february.isOk());
+    EXPECT_EQ(february.value().exif.date_taken_str, "1950:02:01 00:00:00");
 }
 
 TEST_F(CatalogClassTest, ResolvePhotoPathSuffixPrecedence) {

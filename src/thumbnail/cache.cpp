@@ -1,6 +1,7 @@
 #include "imagine/thumbnail/cache.hpp"
 #include "imagine/thumbnail/generator.hpp"
 #include "imagine/common/types.hpp"
+#include "imagine/metadata/hasher.hpp"
 #include <cctype>
 #include <charconv>
 #include <cstdlib>
@@ -130,7 +131,8 @@ Result<std::string> Cache::ensureThumbnail(
     const std::string& sourceImagePath,
     const std::string& hash,
     int size,
-    int orientation
+    int orientation,
+    bool verifySourceHash
 ) {
     std::string targetPath = getThumbnailPath(hash, size);
     if (hasThumbnail(hash, size)) {
@@ -152,7 +154,12 @@ Result<std::string> Cache::ensureThumbnail(
         }
     }
 
-    auto loadRes = Generator::loadImage(sourceImagePath);
+    auto bytes = Generator::loadImageBytes(sourceImagePath);
+    if (!bytes.isOk()) return bytes.status();
+    if (verifySourceHash && metadata::Hasher::computeBytesSha256(bytes.value().data(), bytes.value().size()) != hash) {
+        return Status::notFound("Thumbnail source no longer matches catalog");
+    }
+    auto loadRes = Generator::loadImageFromMemory(bytes.value().data(), bytes.value().size());
     if (!loadRes.isOk()) {
         return loadRes.status();
     }
